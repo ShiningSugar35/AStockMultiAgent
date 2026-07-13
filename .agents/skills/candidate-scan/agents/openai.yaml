@@ -1,0 +1,4 @@
+interface:
+  display_name: "候选扫描"
+  short_description: "Scan evidence-backed A-share research candidates safely"
+  default_prompt: "Use $candidate-scan to build an evidence-backed candidate watchlist."

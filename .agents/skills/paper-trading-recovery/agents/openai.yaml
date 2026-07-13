@@ -1,0 +1,4 @@
+interface:
+  display_name: "模拟盘恢复"
+  short_description: "Recover and inspect the deterministic paper-trading ledger"
+  default_prompt: "Use $paper-trading-recovery to recover and inspect the paper account."

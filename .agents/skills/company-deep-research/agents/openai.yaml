@@ -1,0 +1,4 @@
+interface:
+  display_name: "公司深度研究"
+  short_description: "Build an evidence-linked deep company research pack"
+  default_prompt: "Use $company-deep-research to investigate this company with cited evidence."

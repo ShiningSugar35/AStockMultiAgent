@@ -1,0 +1,4 @@
+interface:
+  display_name: "财务可信度审计"
+  short_description: "Audit financial consistency and evidence-linked red flags"
+  default_prompt: "Use $financial-integrity-audit to audit this company financial evidence."

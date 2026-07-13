@@ -1,0 +1,4 @@
+interface:
+  display_name: "知识采集"
+  short_description: "Ingest approved sources with resumable audited checkpoints"
+  default_prompt: "Use $knowledge-ingest to ingest this approved source with checkpoints."

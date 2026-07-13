@@ -1,0 +1,339 @@
+"""Stable local CLI used directly and by project Repo Skills."""
+
+from __future__ import annotations
+
+import json
+import platform
+import sys
+from datetime import datetime, timedelta
+from decimal import Decimal
+from enum import Enum
+from pathlib import Path
+from typing import Annotated, Any
+from zoneinfo import ZoneInfo
+
+import typer
+from pydantic import BaseModel
+
+from astock import __version__
+from astock.core.codex_runs import CodexRunService, build_context_budget
+from astock.core.errors import AStockError
+from astock.core.object_store import ObjectStore
+from astock.core.state import StateStore
+from astock.market_data.storage import (
+    CanonicalMarketStore,
+    ParquetMarketStore,
+    canonical_manifest_path,
+)
+from astock.market_data.sync import MarketSyncService
+from astock.paper_trading import LedgerService, PaperReplayService, load_fee_schedule
+from astock.providers import EastMoney5mProvider, Sina5mProvider
+from astock.schemas import (
+    AdjustmentMode,
+    BarRequest,
+    InstrumentType,
+    Market,
+)
+from astock.settings import ProjectPaths
+
+app = typer.Typer(
+    name="astock",
+    help="Deterministic A-share research and paper-trading foundation.",
+    no_args_is_help=True,
+)
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+
+def _services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
+    paths = ProjectPaths.discover()
+    paths.ensure_directories()
+    state = StateStore(paths.state_db, paths.root / "migrations")
+    state.migrate()
+    return paths, state, ObjectStore(paths.objects)
+
+
+def _emit(value: Any) -> None:
+    typer.echo(json.dumps(_jsonable(value), ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return _jsonable(value.model_dump(mode="json"))
+    if isinstance(value, dict):
+        return {str(key): _jsonable(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(child) for child in value]
+    if isinstance(value, (datetime, Path, Decimal)):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def _parse_local_datetime(value: str, *, end_of_day: bool = False) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        if len(value) <= 10 and end_of_day:
+            parsed = parsed.replace(hour=23, minute=59, second=59)
+        parsed = parsed.replace(tzinfo=_SHANGHAI)
+    return parsed.astimezone(_SHANGHAI)
+
+
+def _request(symbol: str, market: Market, start: str | None, end: str | None) -> BarRequest:
+    now = datetime.now(_SHANGHAI)
+    requested_start = _parse_local_datetime(start) if start else now - timedelta(days=45)
+    requested_end = _parse_local_datetime(end, end_of_day=True) if end else now
+    return BarRequest(
+        symbol=symbol,
+        market=market,
+        instrument_type=(InstrumentType.INDEX if market == Market.INDEX else InstrumentType.STOCK),
+        requested_start=requested_start,
+        requested_end=requested_end,
+        adjustment_mode=AdjustmentMode.NONE,
+    )
+
+
+def _sync(symbol: str, market: Market, start: str | None, end: str | None) -> dict[str, Any]:
+    paths, state, objects = _services()
+    providers = [
+        EastMoney5mProvider(objects, state),
+        Sina5mProvider(objects, state),
+    ]
+    service = MarketSyncService(
+        providers,
+        state,
+        ParquetMarketStore(paths.parquet, "market_observation"),
+        CanonicalMarketStore(paths.parquet, paths.manifests),
+    )
+    result = service.sync_5m(_request(symbol, market, start, end))
+    return {
+        "job_id": result.job_id,
+        "providers": [
+            {
+                "provider_id": batch.provider_id,
+                "bar_count": batch.bar_count,
+                "actual_start": batch.actual_start,
+                "actual_end": batch.actual_end,
+                "raw_snapshot_id": batch.raw_snapshot_id,
+            }
+            for batch in result.batches
+        ],
+        "failures": result.failures,
+        "canonical_updated": result.canonical_updated,
+        "canonical_publish_reason": result.canonical_publish_reason,
+        "quality": result.canonical_report,
+        "canonical_manifest": result.canonical_manifest,
+    }
+
+
+@app.command("init")
+def initialize(
+    account_id: Annotated[str, typer.Option(help="Paper-account identifier.")] = "default",
+    initial_cash_yuan: Annotated[
+        str, typer.Option(help="Initial paper cash in yuan; only used on first initialization.")
+    ] = "1000000",
+) -> None:
+    """Create runtime directories, migrate state, and initialize a paper account."""
+
+    paths, state, _ = _services()
+    initial_cash_fen = int((Decimal(initial_cash_yuan) * 100).quantize(Decimal("1")))
+    result = LedgerService(state).initialize_account(account_id, initial_cash_fen)
+    _emit(
+        {
+            "project_root": str(paths.root),
+            "runtime_root": str(paths.runtime),
+            "database": str(paths.state_db),
+            "database_integrity": state.integrity_check(),
+            "account_id": account_id,
+            "account_initialized": bool(result and result.created),
+            "version": __version__,
+        }
+    )
+
+
+@app.command("probe")
+def probe() -> None:
+    """Report local deterministic capabilities without calling the network."""
+
+    paths, state, objects = _services()
+    providers = [EastMoney5mProvider(objects, state), Sina5mProvider(objects, state)]
+    _emit(
+        {
+            "version": __version__,
+            "python": platform.python_version(),
+            "python_supported": sys.version_info[:2] == (3, 12),
+            "project_root": str(paths.root),
+            "state_integrity": state.integrity_check(),
+            "modes": {
+                "CODEX_INTERACTIVE_MODE": "AVAILABLE",
+                "DETERMINISTIC_MODE": "AVAILABLE",
+                "OPENAI_COMPATIBLE_MODE": "OPTIONAL_DISABLED",
+                "QMT": "UNAVAILABLE",
+            },
+            "providers": [provider.capability() for provider in providers],
+        }
+    )
+
+
+@app.command("sync-5m")
+def sync_5m(
+    symbol: Annotated[str, typer.Argument(help="Six-digit stock or index code.")],
+    market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    start: Annotated[str | None, typer.Option(help="ISO local start date/time.")] = None,
+    end: Annotated[str | None, typer.Option(help="ISO local end date/time.")] = None,
+) -> None:
+    """Synchronize unadjusted 5m bars through both free providers when available."""
+
+    try:
+        _emit(_sync(symbol, market, start, end))
+    except AStockError as exc:
+        _emit(
+            {
+                "status": "FAILED",
+                "failure_class": exc.failure_class.value,
+                "retryable": exc.retryable,
+                "message": str(exc),
+                "details": exc.details,
+            }
+        )
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("sync-market")
+def sync_market(
+    symbol: Annotated[str, typer.Argument(help="Six-digit stock or index code.")],
+    market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    start: Annotated[str | None, typer.Option()] = None,
+    end: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    """M1 market sync entry; currently delegates to the verified 5m path."""
+
+    try:
+        result = _sync(symbol, market, start, end)
+        result["implemented_frequency"] = "5m"
+        _emit(result)
+    except AStockError as exc:
+        _emit({"status": "FAILED", "failure_class": exc.failure_class.value, "message": str(exc)})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("quality-report")
+def quality_report(
+    symbol: Annotated[str, typer.Argument()],
+    frequency: Annotated[str, typer.Option()] = "5m",
+    market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+) -> None:
+    """Read the latest protected canonical manifest; never synthesizes missing data."""
+
+    paths = ProjectPaths.discover()
+    path = canonical_manifest_path(paths.manifests, market, frequency, symbol)
+    if not path.is_file():
+        _emit({"status": "NOT_FOUND", "manifest": str(path)})
+        raise typer.Exit(code=3)
+    _emit(json.loads(path.read_text(encoding="utf-8")))
+
+
+@app.command("paper-status")
+def paper_status(
+    account_id: Annotated[str, typer.Option()] = "default",
+) -> None:
+    """Recover and report paper cash, frozen cash, positions, orders, and journal integrity."""
+
+    _, state, _ = _services()
+    service = LedgerService(state)
+    status = service.status(account_id)
+    status["nav"] = service.portfolio_nav(account_id)
+    _emit(status)
+
+
+@app.command("paper-replay")
+def paper_replay(
+    symbol: Annotated[str, typer.Argument()],
+    cursor: Annotated[str, typer.Option(help="Last verified 5m bar timestamp in ISO format.")],
+    account_id: Annotated[str, typer.Option()] = "default",
+    market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    fee_rules: Annotated[
+        Path | None,
+        typer.Option(help="Effective-dated YAML fee profile; defaults to configs/fee_rules.yaml."),
+    ] = None,
+    maximum_participation_rate: Annotated[
+        str,
+        typer.Option(help="Maximum share of a 5m bar volume usable by all paper fills."),
+    ] = "0.10",
+) -> None:
+    """Match open paper limit orders on canonical 5m bars and advance the checkpoint."""
+
+    paths, state, _ = _services()
+    parsed_cursor = _parse_local_datetime(cursor)
+    profile_path = fee_rules or paths.root / "configs" / "fee_rules.yaml"
+    schedule = load_fee_schedule(profile_path)
+    store = CanonicalMarketStore(paths.parquet, paths.manifests)
+    service = PaperReplayService(LedgerService(state), store)
+    try:
+        report = service.replay(
+            account_id=account_id,
+            request=_request(symbol, market, None, cursor),
+            requested_cursor=parsed_cursor,
+            fee_schedule=schedule,
+            maximum_participation_rate=Decimal(maximum_participation_rate),
+        )
+    except AStockError as exc:
+        _emit(
+            {
+                "status": "UNREPLAYABLE",
+                "failure_class": exc.failure_class.value,
+                "message": str(exc),
+                "details": exc.details,
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit({"status": "REPLAYED", "report": report})
+
+
+@app.command("context-plan")
+def context_plan(
+    skills: Annotated[list[str] | None, typer.Option("--skill")] = None,
+    artifacts: Annotated[list[Path] | None, typer.Option("--artifact")] = None,
+) -> None:
+    """Estimate local input size and duplicate reads before a Codex research run."""
+
+    report = build_context_budget(skills=skills or [], artifact_paths=artifacts or [])
+    _emit(report)
+
+
+@app.command("codex-run-init")
+def codex_run_init(
+    request: Annotated[str, typer.Argument(help="Natural-language task text.")],
+    skills: Annotated[list[str] | None, typer.Option("--skill")] = None,
+    artifacts: Annotated[list[Path] | None, typer.Option("--artifact")] = None,
+) -> None:
+    """Initialize an auditable Codex run directory and context budget."""
+
+    paths, state, objects = _services()
+    budget = build_context_budget(skills=skills or [], artifact_paths=artifacts or [])
+    manifest = CodexRunService(paths.runtime, objects, state).initialize(
+        {"request": request},
+        context_budget=budget,
+        input_manifest={"artifacts": budget.selected_artifacts},
+    )
+    _emit(manifest)
+
+
+@app.command("codex-run-import")
+def codex_run_import(
+    run_id: Annotated[str, typer.Argument()],
+    draft: Annotated[Path, typer.Argument(exists=True, file_okay=True, dir_okay=False)],
+) -> None:
+    """Stage and validate a Codex artifact draft; direct ledger commands are rejected."""
+
+    paths, state, objects = _services()
+    service = CodexRunService(paths.runtime, objects, state)
+    try:
+        service.stage_draft(run_id, draft)
+        report = service.import_draft(run_id)
+    except AStockError as exc:
+        _emit({"valid": False, "failure_class": exc.failure_class.value, "message": str(exc)})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
+    if not report.valid:
+        raise typer.Exit(code=2)

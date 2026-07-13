@@ -1,0 +1,4 @@
+interface:
+  display_name: "证据调查"
+  short_description: "Resolve explicit evidence gaps without inventing facts"
+  default_prompt: "Use $evidence-investigation to resolve this evidence gap."

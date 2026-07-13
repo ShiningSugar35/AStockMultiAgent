@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "astock-research"
+version = "0.1.0"
+description = "Deterministic A-share research, evidence, and paper-trading foundation for Codex"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+authors = [{ name = "AStockMultiAgent contributors" }]
+dependencies = [
+  "httpx>=0.28.1,<1",
+  "pyarrow>=25.0.0,<26",
+  "pydantic>=2.12.0,<3",
+  "pyyaml>=6.0.3,<7",
+  "typer>=0.21.0,<1",
+  "tzdata>=2025.2,<2027",
+]
+
+[project.scripts]
+astock = "astock.cli:app"
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.150.0,<7",
+  "pyright>=1.1.408,<2",
+  "pytest>=9.0.0,<10",
+  "pytest-cov>=7.0.0,<8",
+  "ruff>=0.14.0,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/astock"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "live: low-frequency tests that call external providers",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+include = ["src", "tests"]
+exclude = ["runtime", ".venv"]

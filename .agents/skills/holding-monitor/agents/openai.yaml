@@ -1,0 +1,4 @@
+interface:
+  display_name: "持仓监控"
+  short_description: "Review incremental evidence for open monitored positions"
+  default_prompt: "Use $holding-monitor to review what changed in my monitored positions."

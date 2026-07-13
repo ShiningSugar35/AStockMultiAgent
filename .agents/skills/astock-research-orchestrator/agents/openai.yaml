@@ -1,0 +1,4 @@
+interface:
+  display_name: "A股研究总控"
+  short_description: "Route A-share research through verified local artifacts"
+  default_prompt: "Use $astock-research-orchestrator to route this A-share research request."

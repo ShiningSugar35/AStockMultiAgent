@@ -7,7 +7,13 @@ from astock.core.hashing import content_hash
 from astock.core.state import StateStore
 from astock.documents.cninfo import CninfoDisclosureProvider
 from astock.documents.repository import DocumentRepository
-from astock.schemas import DisclosureSearchRequest, DisclosureSyncReport
+from astock.pit import PointInTimeRepository, PointInTimeService
+from astock.schemas import (
+    AvailabilityBasis,
+    DisclosureSearchRequest,
+    DisclosureSyncReport,
+    PointInTimeStatus,
+)
 
 
 class DisclosureSyncService:
@@ -16,10 +22,14 @@ class DisclosureSyncService:
         provider: CninfoDisclosureProvider,
         repository: DocumentRepository,
         state: StateStore,
+        pit_service: PointInTimeService | None = None,
     ) -> None:
         self.provider = provider
         self.repository = repository
         self.state = state
+        self.pit_service = pit_service or PointInTimeService(
+            PointInTimeRepository(state), state, provider.object_store
+        )
 
     def sync(
         self,
@@ -35,10 +45,30 @@ class DisclosureSyncService:
         try:
             batch = self.provider.search(request)
             downloaded = []
+            pit_metadata_ids = []
             for announcement in batch.announcements[:maximum_documents]:
                 item = self.provider.download(announcement)
                 self.repository.register(item.document, item.snapshot)
-                downloaded.append(item)
+                canonical_snapshot = self.repository.snapshot(item.snapshot.snapshot_id)
+                if canonical_snapshot is None:  # pragma: no cover - register guarantees lineage
+                    raise ValueError(f"Snapshot registration failed: {item.snapshot.snapshot_id}")
+                pit = self.pit_service.create(
+                    source_id=item.document.document_id,
+                    source_document_id=item.document.document_id,
+                    source_snapshot_id=canonical_snapshot.snapshot_id,
+                    published_at=item.document.published_at,
+                    effective_at=item.document.effective_at,
+                    ingested_at=canonical_snapshot.fetched_at,
+                    available_to_system_at=canonical_snapshot.available_to_system_at,
+                    point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
+                    availability_basis=AvailabilityBasis.FETCH_OBSERVED,
+                )
+                pit_metadata_ids.append(pit.pit_id)
+                downloaded.append(
+                    item.model_copy(
+                        update={"snapshot": canonical_snapshot, "pit_metadata": pit}
+                    )
+                )
             self.state.finish_attempt(attempt_id)
             attempt_open = False
             self.state.finish_job(job_id, "SUCCEEDED")
@@ -48,6 +78,7 @@ class DisclosureSyncService:
                 discovered_count=len(batch.announcements),
                 downloaded=downloaded,
                 skipped_count=max(0, len(batch.announcements) - len(downloaded)),
+                pit_metadata_ids=pit_metadata_ids,
             )
         except Exception as exc:
             retryable = isinstance(exc, AStockError) and exc.retryable

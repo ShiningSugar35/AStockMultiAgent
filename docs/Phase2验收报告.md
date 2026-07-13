@@ -92,8 +92,27 @@
 - `ruff check .`：通过。
 - `pyright`：0 errors、0 warnings。
 
+## M2.4 PIT 元数据与修订链
+
+### 实现
+
+- 公共 `PointInTimeMetadata` 明确分开保存：报告期末、发布时间、生效时间、摄入时间、系统可得时间、修订时间、被替代来源、PIT 等级和可得性依据。
+- PIT 等级固定为 `CERTIFIED`、`DOCUMENT_RECONSTRUCTED`、`APPROXIMATED`、`NOT_PIT_SAFE`；可得性依据固定为官方发布时间、实际抓取观察、用户声明或 Provider 当前值。
+- SQLite migration `0006_point_in_time.sql` 追加保存每个来源版本；更正版本以新的 `source_id` 和 `supersedes_source_id` 指向旧版本，不覆盖旧记录，并能恢复从原版到最新版的完整修订链。
+- 时间线校验拒绝“系统可得时间晚于摄入却声称已摄入”等不可能状态；官方文档重建必须同时具备文档、快照和发布时间。
+- 正式历史使用门只接受 `CERTIFIED` 和 `DOCUMENT_RECONSTRUCTED`；`APPROXIMATED` 必须显式放行并单独报告，`NOT_PIT_SAFE` 无法进入正式历史评测。
+- 使用时同时检查发布、生效和系统可得时间，未来发布、未来生效、未来才抓到的资料都不能进入更早时点。
+- `DisclosureSyncService` 已自动为官方 CNINFO 文档登记 `DOCUMENT_RECONSTRUCTED + FETCH_OBSERVED` PIT 元数据；重复同步复用第一次实际拿到该快照的时间。
+
+### 自动测试与真实官方样本
+
+- 覆盖不可能时间线、追加式修订链、未知前序版本、未来可得、未来生效、近似值显式放行、当前 Provider 值禁止正式回测，以及官方同步幂等。
+- 全量离线结果：`74 passed, 7 skipped`。
+- `ruff check .`：通过。
+- `pyright`：0 errors、0 warnings。
+- CNINFO live：`1 passed`；再次同步 `cninfo:1225022887` 后生成 PIT ID `pit:b807eb9e8b9077118d855b9a96ba08272d504f13f7ac4613e90778f6e0d7b1c7`，状态 `DOCUMENT_RECONSTRUCTED`，系统可得时间保持第一次成功摄入时点 `2026-07-13T12:02:50.572758Z`。
+
 ## 后续子里程碑
 
-- M2.4 PIT：待完成。
 - M2.5 私有书籍/PDF 摄入：待完成。
 - M2.6 代表性综合验收：待完成。

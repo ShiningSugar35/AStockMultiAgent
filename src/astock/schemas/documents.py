@@ -9,6 +9,7 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.evidence import SourceSnapshot
+from astock.schemas.pit import PointInTimeMetadata
 
 
 class DisclosureExchange(StrEnum):
@@ -144,6 +145,7 @@ class DocumentParseReport(AStockModel):
 class DownloadedDocument(AStockModel):
     document: SourceDocument
     snapshot: SourceSnapshot
+    pit_metadata: PointInTimeMetadata | None = None
 
 
 class DisclosureSyncReport(AStockModel):
@@ -152,3 +154,4 @@ class DisclosureSyncReport(AStockModel):
     discovered_count: int = Field(ge=0)
     downloaded: list[DownloadedDocument]
     skipped_count: int = Field(ge=0)
+    pit_metadata_ids: list[str] = Field(default_factory=list)

@@ -48,9 +48,14 @@ def test_disclosure_sync_is_recoverable_and_idempotent(tmp_path: Path, state) ->
     stored = repository.get("cninfo:1225022887")
     assert stored is not None
     assert stored["company_ids"] == ["000001"]
+    assert len(first.pit_metadata_ids) == 1
+    assert first.pit_metadata_ids == second.pit_metadata_ids
+    assert first.downloaded[0].pit_metadata is not None
+    assert first.downloaded[0].pit_metadata.point_in_time_status.value == "DOCUMENT_RECONSTRUCTED"
     with state.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_document").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM document_snapshot").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM point_in_time_metadata").fetchone()[0] == 1
         statuses = connection.execute(
             "SELECT status FROM job WHERE type='disclosure-sync' ORDER BY created_at"
         ).fetchall()

@@ -87,6 +87,7 @@ from astock.schemas.paper import (
     ReplayExecutionReport,
     ReplayFeeSchedule,
 )
+from astock.schemas.pit import AvailabilityBasis, PointInTimeMetadata, PointInTimeStatus
 from astock.schemas.runs import (
     CodexDraft,
     CommitteeAccessPolicy,
@@ -104,6 +105,7 @@ __all__ = [
     "AmountUnit",
     "AuthorCollectionCoverageReport",
     "AuthorSkillCoverage",
+    "AvailabilityBasis",
     "BarRequest",
     "Claim",
     "ClaimEvidenceBundle",
@@ -163,6 +165,8 @@ __all__ = [
     "PositionActionProposal",
     "PositionLifecycleSkillManifest",
     "PositionMonitoringPlan",
+    "PointInTimeMetadata",
+    "PointInTimeStatus",
     "ProviderStatus",
     "QualityStatus",
     "RateLimitState",

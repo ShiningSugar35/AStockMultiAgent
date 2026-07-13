@@ -25,6 +25,13 @@ class DocumentPageRepository:
             ).fetchone()
         return DocumentPage.model_validate_json(row["page_json"]) if row else None
 
+    def get_page_by_id(self, page_id: str) -> DocumentPage | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT page_json FROM document_page WHERE page_id=?", (page_id,)
+            ).fetchone()
+        return DocumentPage.model_validate_json(row["page_json"]) if row else None
+
     def register_page(self, page: DocumentPage) -> None:
         page_json = canonical_json_bytes(page.model_dump(mode="json")).decode("utf-8")
         manifest_hash = content_hash(page)

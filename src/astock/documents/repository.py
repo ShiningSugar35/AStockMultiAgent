@@ -104,3 +104,29 @@ class DocumentRepository:
             fetch_status=row["fetch_status"],
             rights_status=row["rights_status"],
         )
+
+    def snapshot(self, snapshot_id: str) -> SourceSnapshot | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT i.snapshot_id,i.source_id,i.object_hash,i.fetched_at,"
+                "i.availability_at,i.fetch_status,d.source_url,d.mime,d.byte_size,"
+                "d.headers_hash,d.rights_status FROM source_snapshot_index i "
+                "JOIN source_snapshot_detail d ON d.snapshot_id=i.snapshot_id "
+                "WHERE i.snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SourceSnapshot(
+            snapshot_id=row["snapshot_id"],
+            source_id=row["source_id"],
+            object_sha256=row["object_hash"],
+            fetched_at=row["fetched_at"],
+            available_to_system_at=row["availability_at"],
+            source_url=row["source_url"],
+            mime=row["mime"],
+            byte_size=row["byte_size"],
+            headers_hash=row["headers_hash"],
+            fetch_status=row["fetch_status"],
+            rights_status=row["rights_status"],
+        )

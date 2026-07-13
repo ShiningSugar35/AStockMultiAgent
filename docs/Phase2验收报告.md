@@ -71,9 +71,29 @@
 - report SHA-256：`794a937795fa7b271ea51e7a604eeae300f4eae99f7b22239562489dd5a03849`；
 - 第二次 CLI 运行的 page_id、parse_run_id 和 report hash 全部不变，耗时由约 4 秒降至约 0.9 秒。
 
+## M2.3 Claim—Evidence 关系
+
+### 实现
+
+- SQLite migration `0005_claim_evidence.sql` 建立 `evidence_record`、`claim_record`、`claim_evidence_link` 和 `evidence_conflict`，支持一个 Claim 连接多条 Evidence，也支持一条 Evidence 被多个 Claim 复用。
+- `EvidenceLocator` 固定页码、章节路径、字符起止位置和 parser version；证据正文片段单独进入 ObjectStore，SQLite 仅保存哈希与定位元数据，不保存正文副本。
+- Evidence ID 由文档/快照/页/定位/片段哈希/证据等级/事实状态/实体/有效期/系统可得时间共同决定；相同输入重复创建返回同一条记录。
+- Claim 创建前强制检查所有 Evidence 已存在，且 `available_to_system_at <= as_of`，同时检查可选的 `valid_from/valid_to`，拒绝把未来才拿到的资料用于过去时点的结论。
+- Claim 与全部 Evidence link 在同一 SQLite 事务中提交；同时出现 SUPPORT 和 REFUTE 时自动把 Claim 标记为 `CONFLICTED`，并创建状态为 `OPEN` 的 `EvidenceConflict`。
+- Evidence 和 Claim—Evidence Bundle 均形成内容寻址工件，可从 Claim 回到 Evidence、页码、解析版本、原文片段对象和原始 PDF 快照。
+
+### 自动测试
+
+- 原生 PDF 页的精确字符区间可生成 Evidence；重复调用 ID、记录和工件保持一致。
+- 明确检查证据片段原文不出现在 SQLite `evidence_json`，但可按哈希从 ObjectStore 原样取回。
+- 越界和空白片段被拒绝；未来证据被拒绝；一对多、多对多关系均可持久化。
+- SUPPORT/REFUTE 并存时自动生成开放冲突记录。
+- 全量离线结果：`69 passed, 7 skipped`。
+- `ruff check .`：通过。
+- `pyright`：0 errors、0 warnings。
+
 ## 后续子里程碑
 
-- M2.3 Claim—Evidence：待完成。
 - M2.4 PIT：待完成。
 - M2.5 私有书籍/PDF 摄入：待完成。
 - M2.6 代表性综合验收：待完成。

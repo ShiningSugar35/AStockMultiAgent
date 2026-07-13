@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
-    assert state.migrate() == ["0001", "0002", "0003", "0004"]
+    assert state.migrate() == ["0001", "0002", "0003", "0004", "0005"]
     assert state.migrate() == []
     with state.connect() as connection:
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1

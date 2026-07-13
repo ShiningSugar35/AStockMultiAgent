@@ -20,7 +20,13 @@ from astock.core.codex_runs import CodexRunService, build_context_budget
 from astock.core.errors import AStockError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.documents import CninfoDisclosureProvider, DisclosureSyncService, DocumentRepository
+from astock.documents import (
+    CninfoDisclosureProvider,
+    DisclosureSyncService,
+    DocumentPageRepository,
+    DocumentRepository,
+    PdfParseService,
+)
 from astock.market_data.storage import (
     CanonicalMarketStore,
     ParquetMarketStore,
@@ -345,6 +351,51 @@ def disclosure_sync(
             _emit({"status": "FAILED", "failure_class": "INVALID_INPUT", "message": str(exc)})
         raise typer.Exit(code=2) from exc
     _emit(result)
+
+
+@app.command("pdf-parse")
+def pdf_parse(
+    document_id: Annotated[str, typer.Argument(help="Registered SourceDocument identifier.")],
+    pages: Annotated[list[int] | None, typer.Option("--page", min=1)] = None,
+    ocr: Annotated[
+        bool,
+        typer.Option("--ocr/--no-ocr", help="OCR only pages below the native text threshold."),
+    ] = True,
+    text_threshold: Annotated[int, typer.Option(min=0, max=1000)] = 24,
+    ocr_dpi: Annotated[int, typer.Option(min=100, max=400)] = 200,
+) -> None:
+    """Parse registered PDF pages with native text first and selective OCR fallback."""
+
+    _, state, objects = _services()
+    documents = DocumentRepository(state)
+    document = documents.get_model(document_id)
+    snapshot = documents.latest_snapshot(document_id)
+    if document is None or snapshot is None:
+        _emit({"status": "NOT_FOUND", "document_id": document_id})
+        raise typer.Exit(code=3)
+    parser = PdfParseService(
+        objects,
+        state,
+        DocumentPageRepository(state),
+        text_threshold=text_threshold,
+        ocr_dpi=ocr_dpi,
+    )
+    try:
+        report = parser.parse(document, snapshot, page_numbers=pages, ocr_enabled=ocr)
+    except (AStockError, ValueError) as exc:
+        if isinstance(exc, AStockError):
+            _emit(
+                {
+                    "status": "FAILED",
+                    "failure_class": exc.failure_class.value,
+                    "message": str(exc),
+                    "details": exc.details,
+                }
+            )
+        else:
+            _emit({"status": "FAILED", "failure_class": "INVALID_INPUT", "message": str(exc)})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
 
 
 @app.command("paper-status")

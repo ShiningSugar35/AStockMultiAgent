@@ -32,6 +32,19 @@ class DocumentType(StrEnum):
     PRIVATE_PDF = "PRIVATE_PDF"
 
 
+class PageExtractionMethod(StrEnum):
+    NATIVE_TEXT = "NATIVE_TEXT"
+    OCR = "OCR"
+    EMPTY = "EMPTY"
+    OCR_FAILED = "OCR_FAILED"
+
+
+class ParseStatus(StrEnum):
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+
+
 class DisclosureSearchRequest(AStockModel):
     symbol: str = Field(pattern=r"^\d{6}$")
     exchange: DisclosureExchange
@@ -84,6 +97,48 @@ class SourceDocument(AStockModel):
     disclosure_id: str
     source_url: str
     rights_status: str
+
+
+class DocumentPage(AStockModel):
+    page_id: str
+    document_id: str
+    snapshot_id: str
+    page_number: int = Field(ge=1)
+    width_points: float = Field(gt=0)
+    height_points: float = Field(gt=0)
+    native_text_char_count: int = Field(ge=0)
+    text_char_count: int = Field(ge=0)
+    text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    text_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    extraction_method: PageExtractionMethod
+    ocr_applied: bool
+    ocr_engine: str | None = None
+    ocr_engine_version: str | None = None
+    ocr_average_confidence: float | None = Field(default=None, ge=0, le=1)
+    page_image_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    parser_name: str
+    parser_version: str
+    section_path: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DocumentParseReport(AStockModel):
+    parse_run_id: str
+    document_id: str
+    snapshot_id: str
+    parser_name: str
+    parser_version: str
+    source_page_count: int = Field(ge=0)
+    requested_pages: list[int]
+    processed_page_count: int = Field(ge=0)
+    native_page_count: int = Field(ge=0)
+    ocr_page_count: int = Field(ge=0)
+    empty_page_count: int = Field(ge=0)
+    failed_page_count: int = Field(ge=0)
+    total_text_char_count: int = Field(ge=0)
+    page_ids: list[str]
+    parse_status: ParseStatus
+    report_object_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class DownloadedDocument(AStockModel):

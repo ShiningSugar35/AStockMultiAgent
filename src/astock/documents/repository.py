@@ -55,3 +55,52 @@ class DocumentRepository:
         result = dict(row)
         result["company_ids"] = json.loads(str(result.pop("company_ids_json")))
         return result
+
+    def get_model(self, document_id: str) -> SourceDocument | None:
+        stored = self.get(document_id)
+        if stored is None:
+            return None
+        return SourceDocument.model_validate(
+            {
+                key: stored[key]
+                for key in (
+                    "document_id",
+                    "title",
+                    "publisher",
+                    "document_type",
+                    "company_ids",
+                    "published_at",
+                    "effective_at",
+                    "disclosure_id",
+                    "source_url",
+                    "rights_status",
+                )
+            }
+        )
+
+    def latest_snapshot(self, document_id: str) -> SourceSnapshot | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT i.snapshot_id,i.source_id,i.object_hash,i.fetched_at,"
+                "i.availability_at,i.fetch_status,d.source_url,d.mime,d.byte_size,"
+                "d.headers_hash,d.rights_status FROM document_snapshot ds "
+                "JOIN source_snapshot_index i ON i.snapshot_id=ds.snapshot_id "
+                "JOIN source_snapshot_detail d ON d.snapshot_id=ds.snapshot_id "
+                "WHERE ds.document_id=? ORDER BY ds.linked_at DESC,ds.snapshot_id DESC LIMIT 1",
+                (document_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SourceSnapshot(
+            snapshot_id=row["snapshot_id"],
+            source_id=row["source_id"],
+            object_sha256=row["object_hash"],
+            fetched_at=row["fetched_at"],
+            available_to_system_at=row["availability_at"],
+            source_url=row["source_url"],
+            mime=row["mime"],
+            byte_size=row["byte_size"],
+            headers_hash=row["headers_hash"],
+            fetch_status=row["fetch_status"],
+            rights_status=row["rights_status"],
+        )

@@ -1,0 +1,77 @@
+schema_version: "1.0"
+sources:
+  - source_id: zhihu:mr-dang-77
+    display_name: MR Dang
+    platform: zhihu
+    profile_url: https://www.zhihu.com/people/mr-dang-77
+    platform_user_id: null
+    url_token: mr-dang-77
+    identity_status: CONFIRMED
+    access_status: LOGGED_IN_ACCESS_VERIFIED
+    collection_scope:
+      history_mode: FULL_ACCESSIBLE_HISTORY
+      content_types: [answers, thoughts, articles]
+      include_question_context: true
+      include_required_comment_pages: true
+      include_nested_replies: true
+      derive_author_participation_chains: true
+      incremental_updates: true
+    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
+    enabled: true
+
+  - source_id: zhihu:pending:huang-yanzhen
+    display_name: 黄彦臻
+    platform: zhihu
+    profile_url: null
+    platform_user_id: null
+    url_token: null
+    identity_status: PENDING_IDENTITY_CONFIRMATION
+    access_status: PENDING_IDENTITY_CONFIRMATION
+    collection_scope:
+      history_mode: FULL_ACCESSIBLE_HISTORY
+      content_types: [answers, thoughts, articles]
+      include_question_context: true
+      include_required_comment_pages: true
+      include_nested_replies: true
+      derive_author_participation_chains: true
+      incremental_updates: true
+    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH_PENDING_IDENTITY
+    enabled: false
+
+  - source_id: zhihu:pending:paidaxing-pipi
+    display_name: 派大星皮皮
+    platform: zhihu
+    profile_url: null
+    platform_user_id: null
+    url_token: null
+    identity_status: PENDING_IDENTITY_CONFIRMATION
+    access_status: PENDING_IDENTITY_CONFIRMATION
+    collection_scope:
+      history_mode: FULL_ACCESSIBLE_HISTORY
+      content_types: [answers, thoughts, articles]
+      include_question_context: true
+      include_required_comment_pages: true
+      include_nested_replies: true
+      derive_author_participation_chains: true
+      incremental_updates: true
+    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH_PENDING_IDENTITY
+    enabled: false
+
+  - source_id: zhihu:pending:hanwuji-de-eyu
+    display_name: 寒武纪的鳄鱼
+    platform: zhihu
+    profile_url: null
+    platform_user_id: null
+    url_token: null
+    identity_status: PENDING_IDENTITY_CONFIRMATION
+    access_status: PENDING_IDENTITY_CONFIRMATION
+    collection_scope:
+      history_mode: FULL_ACCESSIBLE_HISTORY
+      content_types: [answers, thoughts, articles]
+      include_question_context: true
+      include_required_comment_pages: true
+      include_nested_replies: true
+      derive_author_participation_chains: true
+      incremental_updates: true
+    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH_PENDING_IDENTITY
+    enabled: false

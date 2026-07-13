@@ -1,0 +1,31 @@
+schema_version: "1.0"
+sources:
+  - source_id: book:mr-dang:value-investing-method
+    display_name: MR Dang《价值投资功法》
+    source_type: PRIVATE_BOOK_PDF
+    author_source_id: zhihu:mr-dang-77
+    rights_status: LOCAL_PRIVATE_RESEARCH
+    enabled: true
+    raw_source_policy:
+      git: EXCLUDED
+      external_republication: PROHIBITED
+      object_store: REQUIRED
+      immutable: true
+    phase2_scope:
+      - CONTENT_ADDRESSED_INGEST
+      - TEXT_LAYER_DETECTION
+      - PAGE_LEVEL_PARSE_OR_OCR
+      - CHAPTER_RECOVERY_INTERFACE
+      - PAGE_LEVEL_EVIDENCE_LOCATION
+      - PARSER_VERSIONING
+      - REPRESENTATIVE_PRIVATE_SAMPLE_TEST
+    phase5_scope:
+      - REPEAT_AND_NOISE_CLASSIFICATION
+      - CLEANING_CANDIDATE
+      - HUMAN_REVIEW
+      - VIEWPOINT_CARDS
+      - METHOD_RULES
+      - CANDIDATE_SELECTION_SKILL
+      - POSITION_LIFECYCLE_SKILL
+      - HISTORICAL_OR_FORWARD_EVALUATION
+      - APPROVAL_OR_REJECTION

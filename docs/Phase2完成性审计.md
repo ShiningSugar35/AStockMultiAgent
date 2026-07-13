@@ -40,3 +40,10 @@ Phase 2 六个子里程碑均已落地并通过自动、live 和本地私有样�
 ## 唯一待用户手工补充的信息
 
 Phase 5 开始前三位待确认作者各需一个唯一知乎主页 URL 或 url_token。它们已作为 OPEN 人工任务保留，不阻塞已经完成的 Phase 2。
+
+## GitHub 交付
+
+- `gh auth status` 的唯一活动账号为 `ShiningSugar35`；本地核验前没有 remote，目标仓库也不存在，因此没有错误账号仓库可删除。
+- 已创建私有仓库：`https://github.com/ShiningSugar35/AStockMultiAgent`，默认分支为 `main`。
+- `main` 冻结已完成的 M1；`feature/phase1-foundation` 和 `feature/phase2-evidence` 均已推送。
+- Phase 2 草稿 PR：`https://github.com/ShiningSugar35/AStockMultiAgent/pull/1`，base=`main`，head=`feature/phase2-evidence`。

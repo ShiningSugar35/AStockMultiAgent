@@ -1,0 +1,51 @@
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local runtime state and analytical data
+runtime/**
+!runtime/.gitkeep
+*.sqlite
+*.sqlite-*
+*.duckdb
+*.duckdb.wal
+*.parquet
+
+# Credentials, browser state, and local configuration
+.env
+.env.*
+!.env.example
+secrets/
+cookies/
+browser-profile/
+*.pem
+*.key
+
+# Private research source material stays local
+*.pdf
+sources/private/
+
+# Editors and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+~$*

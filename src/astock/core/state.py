@@ -415,6 +415,18 @@ class StateStore:
                     snapshot.fetch_status.value,
                 ),
             )
+            connection.execute(
+                "INSERT OR IGNORE INTO source_snapshot_detail(snapshot_id,source_url,mime,"
+                "byte_size,headers_hash,rights_status) VALUES(?,?,?,?,?,?)",
+                (
+                    snapshot.snapshot_id,
+                    snapshot.source_url,
+                    snapshot.mime,
+                    snapshot.byte_size,
+                    snapshot.headers_hash,
+                    snapshot.rights_status,
+                ),
+            )
 
     def record_source_decision(self, decision: SourceAccessDecision) -> None:
         with self.transaction() as connection:

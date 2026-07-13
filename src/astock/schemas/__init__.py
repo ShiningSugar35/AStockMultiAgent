@@ -1,5 +1,16 @@
 """Public schema surface for durable artifacts and local services."""
 
+from astock.schemas.documents import (
+    DisclosureAnnouncement,
+    DisclosureCategory,
+    DisclosureExchange,
+    DisclosureSearchBatch,
+    DisclosureSearchRequest,
+    DisclosureSyncReport,
+    DocumentType,
+    DownloadedDocument,
+    SourceDocument,
+)
 from astock.schemas.evidence import FetchStatus, SourceSnapshot
 from astock.schemas.knowledge import (
     AuthorCollectionCoverageReport,
@@ -83,6 +94,14 @@ __all__ = [
     "CoverageStatus",
     "DataProviderCapability",
     "DataQualityReport",
+    "DisclosureAnnouncement",
+    "DisclosureCategory",
+    "DisclosureExchange",
+    "DisclosureSearchBatch",
+    "DisclosureSearchRequest",
+    "DisclosureSyncReport",
+    "DocumentType",
+    "DownloadedDocument",
     "ExitReviewPack",
     "FetchStatus",
     "Fill",
@@ -119,6 +138,7 @@ __all__ = [
     "SourceAccessDecision",
     "SourceAccessRequest",
     "SourceSnapshot",
+    "SourceDocument",
     "TimestampSemantics",
     "TransportCapability",
     "ValidationReport",

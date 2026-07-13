@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import platform
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
@@ -20,6 +20,7 @@ from astock.core.codex_runs import CodexRunService, build_context_budget
 from astock.core.errors import AStockError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents import CninfoDisclosureProvider, DisclosureSyncService, DocumentRepository
 from astock.market_data.storage import (
     CanonicalMarketStore,
     ParquetMarketStore,
@@ -31,6 +32,9 @@ from astock.providers import EastMoney5mProvider, Sina5mProvider
 from astock.schemas import (
     AdjustmentMode,
     BarRequest,
+    DisclosureCategory,
+    DisclosureExchange,
+    DisclosureSearchRequest,
     InstrumentType,
     Market,
 )
@@ -124,6 +128,26 @@ def _sync(symbol: str, market: Market, start: str | None, end: str | None) -> di
         "quality": result.canonical_report,
         "canonical_manifest": result.canonical_manifest,
     }
+
+
+def _disclosure_request(
+    symbol: str,
+    exchange: DisclosureExchange,
+    start: str,
+    end: str,
+    category: DisclosureCategory,
+    keyword: str,
+    page_size: int,
+) -> DisclosureSearchRequest:
+    return DisclosureSearchRequest(
+        symbol=symbol,
+        exchange=exchange,
+        start_date=date.fromisoformat(start),
+        end_date=date.fromisoformat(end),
+        category=category,
+        keyword=keyword,
+        page_size=page_size,
+    )
 
 
 @app.command("init")
@@ -231,6 +255,96 @@ def quality_report(
         _emit({"status": "NOT_FOUND", "manifest": str(path)})
         raise typer.Exit(code=3)
     _emit(json.loads(path.read_text(encoding="utf-8")))
+
+
+@app.command("disclosure-search")
+def disclosure_search(
+    symbol: Annotated[str, typer.Argument(help="Six-digit A-share code.")],
+    start: Annotated[str, typer.Option(help="Inclusive date in YYYY-MM-DD format.")],
+    end: Annotated[str, typer.Option(help="Inclusive date in YYYY-MM-DD format.")],
+    exchange: Annotated[DisclosureExchange, typer.Option(case_sensitive=False)],
+    category: Annotated[
+        DisclosureCategory, typer.Option(case_sensitive=False)
+    ] = DisclosureCategory.ALL,
+    keyword: Annotated[str, typer.Option()] = "",
+    page_size: Annotated[int, typer.Option(min=1, max=100)] = 30,
+) -> None:
+    """Search CNINFO and immutably snapshot the official index response."""
+
+    paths, state, objects = _services()
+    del paths
+    provider = CninfoDisclosureProvider(objects, state)
+    try:
+        result = provider.search(
+            _disclosure_request(
+                symbol,
+                exchange,
+                start,
+                end,
+                category,
+                keyword,
+                page_size,
+            )
+        )
+    except (AStockError, ValueError) as exc:
+        if isinstance(exc, AStockError):
+            _emit(
+                {
+                    "status": "FAILED",
+                    "failure_class": exc.failure_class.value,
+                    "message": str(exc),
+                }
+            )
+        else:
+            _emit({"status": "FAILED", "failure_class": "INVALID_INPUT", "message": str(exc)})
+        raise typer.Exit(code=2) from exc
+    _emit(result)
+
+
+@app.command("disclosure-sync")
+def disclosure_sync(
+    symbol: Annotated[str, typer.Argument(help="Six-digit A-share code.")],
+    start: Annotated[str, typer.Option(help="Inclusive date in YYYY-MM-DD format.")],
+    end: Annotated[str, typer.Option(help="Inclusive date in YYYY-MM-DD format.")],
+    exchange: Annotated[DisclosureExchange, typer.Option(case_sensitive=False)],
+    category: Annotated[
+        DisclosureCategory, typer.Option(case_sensitive=False)
+    ] = DisclosureCategory.ANNUAL_REPORT,
+    keyword: Annotated[str, typer.Option()] = "",
+    maximum_documents: Annotated[int, typer.Option(min=0, max=20)] = 1,
+) -> None:
+    """Search, download, snapshot, and register official CNINFO PDFs."""
+
+    _, state, objects = _services()
+    provider = CninfoDisclosureProvider(objects, state)
+    service = DisclosureSyncService(provider, DocumentRepository(state), state)
+    try:
+        result = service.sync(
+            _disclosure_request(
+                symbol,
+                exchange,
+                start,
+                end,
+                category,
+                keyword,
+                max(maximum_documents, 1),
+            ),
+            maximum_documents=maximum_documents,
+        )
+    except (AStockError, ValueError) as exc:
+        if isinstance(exc, AStockError):
+            _emit(
+                {
+                    "status": "FAILED",
+                    "failure_class": exc.failure_class.value,
+                    "retryable": exc.retryable,
+                    "message": str(exc),
+                }
+            )
+        else:
+            _emit({"status": "FAILED", "failure_class": "INVALID_INPUT", "message": str(exc)})
+        raise typer.Exit(code=2) from exc
+    _emit(result)
 
 
 @app.command("paper-status")

@@ -41,6 +41,7 @@ packages = ["src/astock"]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 markers = [
+  "acceptance: expensive local real-OCR acceptance benchmarks",
   "live: low-frequency tests that call external providers",
 ]
 

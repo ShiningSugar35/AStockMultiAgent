@@ -145,6 +145,37 @@
 - parse report：`book-parse:700169f8735fc33124fef0c2bea40e0144aec6ad12c31392e90f1c245b544fd1`；对象 SHA-256 `27bd72624455a5917a69a21a7d8fd67721b2a35a7b4c8876ea6a4d1514d39e9a`。
 - 重复运行后 manifest ID、文件哈希、parse report ID、report hash、页 ID 和计数均保持不变。
 
-## 后续子里程碑
+## M2.6 代表性综合验收
 
-- M2.6 代表性综合验收：待完成。
+### 30 份受控标注文档基准
+
+为避免用“看起来成功”代替可量化结果，`scripts/phase2_acceptance.py` 会生成 15 份原生文本 PDF 和 15 份扫描 PDF。它们是明确标记为 `CONTROLLED_LABELED_NON_PRODUCTION` 的测试文档，不冒充真实上市公司公告；每份有固定标题、证券代码和关键字段，扫描组使用真实 RapidOCR，不使用 mock。
+
+- 文档数：30（原生 15、扫描 15）。
+- 原生文本字符召回：780/780，100%，门槛 98%。
+- 扫描页标题/关键字段召回：45/45，100%，门槛 95%。
+- 引用可追溯：30/30，100%；每条都验证原始 PDF 对象、SourceSnapshot、页文本对象、Evidence 片段对象、1-based 页码和 parser version。
+- 幂等：30/30，100%；相同 snapshot、解析版本和页范围的第二次结果完全一致。
+- 昂贵基准测试：`ASTOCK_RUN_ACCEPTANCE=1 uv run pytest tests/acceptance/test_phase2_document_benchmark.py -q`，结果 `1 passed`。
+
+受控集便于精确计算召回率，但不代表覆盖所有真实中文财报版式。因此最终报告同时要求真实 CNINFO 年报和真实私有书样本通过，不能只凭受控集宣布完成。
+
+### 冻结的真实验收工件
+
+- 官方样本 `cninfo:1225022887`：原始快照存在且哈希验证通过，3 条真实页解析记录全部可回溯，PIT 为 `DOCUMENT_RECONSTRUCTED`。
+- 《价值投资功法》：原始对象存在且哈希验证通过，249 页源文件只抽测 1、125、249 页，3/3 成功，状态保持 `SAMPLE_ONLY`。
+- Phase 2 AcceptanceReport：`phase2-acceptance:29e5a08de70afa7fec47301057494c4570f50a42b47bc2e2020b94283ea58f43`。
+- AcceptanceReport 对象 SHA-256：`5a49b3232873c74a17897f0ef8cfad43bc25ce0a6ee414b985337464668d81ad`。
+
+### 最终质量与泄漏门禁
+
+- 默认离线套件：`82 passed, 8 skipped`；跳过的是需显式开启的昂贵 acceptance 和 live Provider 测试。
+- 30 文档真实 OCR acceptance：`1 passed`。
+- CNINFO live：`1 passed`。
+- `ruff check .`：通过；`pyright`：0 errors、0 warnings。
+- Git 跟踪 PDF：0；全分支历史 PDF 路径：0；私有原文件名进入 tracked 文件：0；高风险凭据模式命中：0。
+- 私有 PDF 由 `.gitignore` 命中；其 SHA-256 对象在本地 ObjectStore 存在；`git diff --check` 通过。
+
+## Phase 2 结论
+
+M2.1–M2.6 全部完成。Phase 5 的知乎全集采集、整书清洗、人工审核、观点卡片和 Skill 蒸馏仍明确未运行、未标记完成；后三位知乎作者身份确认任务继续保持 OPEN。

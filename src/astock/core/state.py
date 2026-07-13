@@ -13,7 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
-from astock.schemas import SourceAccessDecision, SourceSnapshot
+from astock.schemas import CollectionCheckpoint, SourceAccessDecision, SourceSnapshot
 
 _MIGRATION_PATTERN = re.compile(r"^(?P<version>\d{4})_.+\.sql$")
 
@@ -207,6 +207,58 @@ class StateStore:
         result = dict(row)
         result["cursor"] = json.loads(result.pop("cursor_json"))
         return result
+
+    def set_collection_checkpoint(
+        self,
+        checkpoint: CollectionCheckpoint,
+        *,
+        status: str,
+        object_hash: str | None = None,
+        job_id: str | None = None,
+    ) -> str:
+        """Commit one listing/content/comment boundary using the shared checkpoint table."""
+
+        scope_key = self._collection_checkpoint_scope(
+            checkpoint.author,
+            checkpoint.content_type,
+            checkpoint.content_id,
+        )
+        return self.set_checkpoint(
+            scope_type="author-collection",
+            scope_key=scope_key,
+            cursor=checkpoint.model_dump(mode="json"),
+            status=status,
+            object_hash=object_hash,
+            job_id=job_id,
+        )
+
+    def get_collection_checkpoint(
+        self,
+        author: str,
+        content_type: str,
+        content_id: str | None = None,
+    ) -> CollectionCheckpoint | None:
+        scope_key = self._collection_checkpoint_scope(author, content_type, content_id)
+        stored = self.get_checkpoint("author-collection", scope_key)
+        if stored is None:
+            return None
+        return CollectionCheckpoint.model_validate(stored["cursor"])
+
+    @staticmethod
+    def _collection_checkpoint_scope(
+        author: str,
+        content_type: str,
+        content_id: str | None,
+    ) -> str:
+        return sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "author": author,
+                    "content_type": content_type,
+                    "content_id": content_id or "__listing__",
+                }
+            )
+        )
 
     def set_cursor(
         self,
@@ -426,6 +478,18 @@ class StateStore:
         input_hashes: list[str],
     ) -> None:
         with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT type,schema_version,object_hash,input_hashes_json "
+                "FROM artifact_registry WHERE artifact_id=?",
+                (artifact_id,),
+            ).fetchone()
+            serialized_inputs = json.dumps(input_hashes, separators=(",", ":"))
+            if existing is not None:
+                expected = (artifact_type, schema_version, object_hash, serialized_inputs)
+                actual = tuple(existing)
+                if actual != expected:
+                    raise ValueError(f"Artifact identity collision: {artifact_id}")
+                return
             connection.execute(
                 "INSERT INTO artifact_registry(artifact_id,type,schema_version,object_hash,"
                 "input_hashes_json,created_at) VALUES(?,?,?,?,?,?)",
@@ -434,7 +498,7 @@ class StateStore:
                     artifact_type,
                     schema_version,
                     object_hash,
-                    json.dumps(input_hashes, separators=(",", ":")),
+                    serialized_inputs,
                     utc_now_text(),
                 ),
             )

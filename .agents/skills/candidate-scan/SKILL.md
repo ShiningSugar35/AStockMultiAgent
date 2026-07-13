@@ -6,8 +6,8 @@ description: Build an evidence-bounded A-share candidate or watchlist from imple
 # 候选扫描
 
 1. Run `uv run astock probe` and inspect which candidate and evidence capabilities are implemented.
-2. Synchronize required symbols or universes through `astock sync-market`/`sync-5m`; reject failed quality batches.
-3. Generate a context budget before opening research artifacts.
+2. Synchronize required symbols through `uv run astock sync-market` or `uv run astock sync-5m`; reject failed quality batches.
+3. Run `uv run astock context-plan` before opening research artifacts.
 4. Use only implemented deterministic rules and frozen evidence.
 5. Separate “worth further research” from “paper eligible”.
 

@@ -4,6 +4,7 @@ from astock.schemas.evidence import FetchStatus, SourceSnapshot
 from astock.schemas.knowledge import (
     AuthorCollectionCoverageReport,
     AuthorSkillCoverage,
+    CollectionCheckpoint,
     CollectionTerminalCondition,
     CoverageStatus,
     ExitReviewPack,
@@ -56,6 +57,7 @@ from astock.schemas.paper import (
 )
 from astock.schemas.runs import (
     CodexDraft,
+    CommitteeAccessPolicy,
     ContextBudgetReport,
     RunManifest,
     RunMode,
@@ -72,7 +74,9 @@ __all__ = [
     "AuthorSkillCoverage",
     "BarRequest",
     "CodexDraft",
+    "CollectionCheckpoint",
     "CollectionTerminalCondition",
+    "CommitteeAccessPolicy",
     "ContextBudgetReport",
     "CorporateActionEvent",
     "CorporateActionType",

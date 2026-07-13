@@ -35,6 +35,11 @@ def test_all_repo_skills_have_valid_trigger_metadata_and_ui() -> None:
         assert set(metadata) == {"name", "description"}
         description = metadata["description"].lower()
         assert all(term in description for term in trigger_terms)
+        body = (folder / "SKILL.md").read_text(encoding="utf-8")
+        assert "uv run astock" in body
+        assert "## Output" in body
+        assert "## Prohibitions" in body
+        assert "1." in body
         ui = yaml.safe_load((folder / "agents" / "openai.yaml").read_text(encoding="utf-8"))
         assert 25 <= len(ui["interface"]["short_description"]) <= 64
         assert f"${name}" in ui["interface"]["default_prompt"]

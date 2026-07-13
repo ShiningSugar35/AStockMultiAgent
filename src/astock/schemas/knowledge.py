@@ -28,6 +28,20 @@ class CollectionTerminalCondition(StrEnum):
     PARTIAL = "PARTIAL"
 
 
+class CollectionCheckpoint(AStockModel):
+    """Fine-grained, resumable cursor for an allowlisted-author collection."""
+
+    author: str = Field(min_length=1)
+    content_type: str = Field(min_length=1)
+    listing_page: int = Field(ge=0)
+    listing_cursor: str | None = None
+    content_id: str | None = None
+    comment_page: int | None = Field(default=None, ge=0)
+    comment_cursor: str | None = None
+    nested_reply_cursor: str | None = None
+    terminal_condition: CollectionTerminalCondition | None = None
+
+
 class PositionAction(StrEnum):
     HOLD = "HOLD"
     ADD = "ADD"

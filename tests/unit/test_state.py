@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from astock.core.state import StateStore
+from astock.schemas import CollectionCheckpoint, CollectionTerminalCondition
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -90,6 +91,41 @@ def test_cursor_idempotency_and_collection_interfaces(state: StateStore) -> None
         ).fetchone()
     assert gap["retryable"] == 1
     assert gap["status"] == "OPEN"
+
+
+def test_collection_checkpoint_round_trips_every_required_cursor_level(
+    state: StateStore,
+) -> None:
+    checkpoint = CollectionCheckpoint(
+        author="mr-dang-77",
+        content_type="answers",
+        listing_page=3,
+        listing_cursor="offset:40",
+        content_id="answer-123",
+        comment_page=2,
+        comment_cursor="comment:20",
+        nested_reply_cursor="reply:8",
+        terminal_condition=CollectionTerminalCondition.PARTIAL,
+    )
+    checkpoint_id = state.set_collection_checkpoint(
+        checkpoint,
+        status="RUNNING",
+        object_hash="a" * 64,
+    )
+    state.set_collection_checkpoint(
+        checkpoint.model_copy(update={"comment_page": 3, "comment_cursor": "comment:40"}),
+        status="RUNNING",
+        object_hash="b" * 64,
+    )
+    recovered = state.get_collection_checkpoint("mr-dang-77", "answers", "answer-123")
+    assert recovered is not None
+    assert recovered.comment_page == 3
+    assert recovered.comment_cursor == "comment:40"
+    with state.connect() as connection:
+        rows = connection.execute(
+            "SELECT checkpoint_id FROM checkpoint WHERE scope_type='author-collection'"
+        ).fetchall()
+    assert [row["checkpoint_id"] for row in rows] == [checkpoint_id]
 
 
 def test_lease_lock_can_be_recovered_after_expiry(state: StateStore) -> None:

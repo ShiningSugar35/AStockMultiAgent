@@ -5,11 +5,12 @@ description: Resolve a specific, decision-relevant evidence gap using the audite
 
 # 证据调查
 
-1. State one claim or conflict and its decision impact.
+1. Run `uv run astock probe`, then state one claim or conflict and its decision impact.
 2. Reuse existing snapshots before requesting any source.
 3. Follow API/local -> MCP -> browser -> manual priority and record the SourceAccessDecision.
 4. Save raw material immutably and cite an exact page, section, DOM locator, or snapshot.
-5. Return support, refutation, context, conflict, or still-missing status.
+5. Use `uv run astock codex-run-init` for a durable investigation; import only an artifact Schema reported as supported by the probe.
+6. Return support, refutation, context, conflict, or still-missing status.
 
 ## Output
 

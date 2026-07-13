@@ -112,3 +112,31 @@ def test_batch_identity_ignores_non_bar_response_envelope(tmp_path: Path) -> Non
     second = EastMoney5mProvider(objects, state, client=second_client).fetch_bars(request())
     assert first.raw_snapshot_id != second.raw_snapshot_id
     assert first.batch_id == second.batch_id
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_class"),
+    [
+        ("connect", FailureClass.NETWORK),
+        ("timeout", FailureClass.TIMEOUT),
+    ],
+)
+def test_transport_failure_is_classified_and_retryable(
+    tmp_path: Path,
+    failure_kind: str,
+    expected_class: FailureClass,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        if failure_kind == "timeout":
+            raise httpx.ReadTimeout("recorded timeout", request=http_request)
+        raise httpx.ConnectError("recorded disconnect", request=http_request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = EastMoney5mProvider(ObjectStore(tmp_path / "objects"), state, client=client)
+    with pytest.raises(ProviderError) as error:
+        provider.fetch_bars(request())
+    assert error.value.failure_class is expected_class
+    assert error.value.retryable

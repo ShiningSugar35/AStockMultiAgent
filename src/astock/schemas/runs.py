@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, Field
 
@@ -49,6 +49,20 @@ class ContextBudgetReport(AStockModel):
     expected_mcp_calls: int = Field(default=0, ge=0)
     expected_api_calls: int = Field(default=0, ge=0)
     duplicate_inputs_avoided: list[str] = Field(default_factory=list)
+
+
+class CommitteeAccessPolicy(AStockModel):
+    """Frozen-input-only contract for an investment committee invocation."""
+
+    frozen_artifact_hashes: list[str] = Field(default_factory=list)
+    network_access: Literal[False] = False
+    api_access: Literal[False] = False
+    mcp_access: Literal[False] = False
+    browser_access: Literal[False] = False
+    full_document_access: Literal[False] = False
+    new_research_allowed: Literal[False] = False
+    missing_evidence_action: Literal["NEEDS_INFO"] = "NEEDS_INFO"
+    investigation_task_required: Literal[True] = True
 
 
 class CodexDraft(AStockModel):

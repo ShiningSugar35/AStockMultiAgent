@@ -5,12 +5,12 @@ description: Build a cited, point-in-time company research case from official do
 
 # 公司深度研究
 
-1. Probe capabilities and create a context budget.
+1. Run `uv run astock probe`, then `uv run astock context-plan` with only the frozen artifacts needed for this company.
 2. Reuse the latest frozen EvidencePack and BaseCasePack when their as-of time is valid.
 3. Fetch only incremental disclosures and market data through the source router.
 4. Build common analysis once, then load no more than three necessary specialist deltas.
 5. Resolve material conflicts or return `NEEDS_INFO` with an evidence investigation task.
-6. Submit the draft through the Codex run importer.
+6. Start durable work with `uv run astock codex-run-init`; submit only currently supported artifact Schemas with `uv run astock codex-run-import`.
 
 ## Output
 

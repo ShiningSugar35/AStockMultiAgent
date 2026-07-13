@@ -125,6 +125,28 @@ def test_one_provider_failure_preserves_existing_canonical(tmp_path: Path, state
         "PRESERVED_PREVIOUS_CANONICAL_DUE_TO_PROVIDER_FAILURE"
     )
     assert manifest_path.read_bytes() == before
+    def scope(provider_id: str) -> str:
+        return f"{provider_id}:XSHG:600519:5m"
+    degraded_checkpoints = {
+        provider_id: state.get_checkpoint("market-provider", scope(provider_id))
+        for provider_id in ("eastmoney-5m", "sina-5m")
+    }
+    assert all(
+        checkpoint is not None and checkpoint["job_id"] == initial.job_id
+        for checkpoint in degraded_checkpoints.values()
+    )
+
+    recovered = service(
+        tmp_path,
+        state,
+        [FakeProvider(east, provider_id="eastmoney-5m"), FakeProvider(sina, provider_id="sina-5m")],
+    ).sync_5m(east.request)
+    assert recovered.canonical_updated
+    assert recovered.failures == {}
+    assert all(
+        state.get_checkpoint("market-provider", scope(provider_id))["job_id"] == recovered.job_id
+        for provider_id in ("eastmoney-5m", "sina-5m")
+    )
 
 
 def test_checkpoint_drives_seven_day_overlap_request(tmp_path: Path, state) -> None:

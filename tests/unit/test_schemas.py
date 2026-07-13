@@ -12,6 +12,7 @@ from astock.schemas import (
     AuthorCollectionCoverageReport,
     BarRequest,
     CollectionTerminalCondition,
+    CommitteeAccessPolicy,
     CoverageStatus,
     LedgerEntry,
     Market,
@@ -72,3 +73,17 @@ def test_author_coverage_distinguishes_empty_from_failure() -> None:
         coverage_status=CoverageStatus.COMPLETE,
     )
     assert report.terminal_condition is CollectionTerminalCondition.CONFIRMED_EMPTY
+
+
+def test_committee_policy_is_frozen_input_and_offline_by_construction() -> None:
+    policy = CommitteeAccessPolicy(frozen_artifact_hashes=["a" * 64])
+    assert not policy.network_access
+    assert not policy.api_access
+    assert not policy.mcp_access
+    assert not policy.browser_access
+    assert not policy.full_document_access
+    assert not policy.new_research_allowed
+    assert policy.missing_evidence_action == "NEEDS_INFO"
+    assert policy.investigation_task_required
+    with pytest.raises(ValidationError):
+        CommitteeAccessPolicy.model_validate({"network_access": True})

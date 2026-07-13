@@ -112,7 +112,39 @@
 - `pyright`：0 errors、0 warnings。
 - CNINFO live：`1 passed`；再次同步 `cninfo:1225022887` 后生成 PIT ID `pit:b807eb9e8b9077118d855b9a96ba08272d504f13f7ac4613e90778f6e0d7b1c7`，状态 `DOCUMENT_RECONSTRUCTED`，系统可得时间保持第一次成功摄入时点 `2026-07-13T12:02:50.572758Z`。
 
+## M2.5 私有书籍/PDF 摄入接口
+
+### 实现与安全边界
+
+- `PrivatePdfIngestService` 和 `astock private-pdf-ingest` 提供通用本地 PDF 入口；整文件先验证大小、PDF 文件头和可打开性，再进入同一 SHA-256 ObjectStore。
+- 私有源与官方文档复用 SourceSnapshot、SourceDocument、PIT、PdfParseService、DocumentPage、Evidence 和解析版本；私有源固定为 `LOCAL_PRIVATE_RESEARCH + NOT_PIT_SAFE`，不能进入正式历史评测。
+- 本地路径、原始文件名和正文不会写入 SQLite、工件清单或 CLI 输出；只保留文件名哈希。CLI 只输出对象哈希、页码、提取方式、字符数和版本元数据。
+- 默认只登记原文件而不解析；只有显式传入页码才解析，单次样本上限 12 页，防止 Phase 2 误做整书粗切。原始对象永久保留，任何后续清洗必须可从原始对象和版本化派生工件重建。
+- SQLite migration `0007_private_books.sql` 保存 `BookSourceManifest` 和 `BookParseReport`；相同源、文件版本、文件字节和解析设置重复执行返回同一 manifest/report。
+- 已实现并导出 `BookSourceManifest`、`BookParseReport`、`BookCleaningReport`、`BookMethodCoverageReport`、`BookViewpointCard`、`BookSkillCandidate`、`HumanReviewDecision`。
+- `BookCleaningReport` 强制保留全部规定的降权类、保留类、九项统计指标字段、原始内容永久保留和可重建标记；未实际运行时指标为未测量，不能伪装为完成。
+- `BookMethodCoverageReport` 分别保存选股、建仓、持仓、加仓、减仓、退出、风险和复盘计数；样本不足只能标记 `INSUFFICIENT_SOURCE`。只有完整覆盖并经人工批准后才允许 `AUTHOR_SILENT`。
+- Viewpoint 和 Skill 候选必须同时引用 Evidence、1-based 页码和原文片段 SHA-256；人工批准也必须带证据引用。
+
+### 自动测试
+
+- 私有两页 fixture 验证整文件字节可按哈希原样恢复、只解析显式样本页、重复摄入幂等、PIT 正式使用被拒绝，以及样本页可直接进入统一 Evidence 服务。
+- 明确检查路径、文件名和正文不在 manifest/report/page/evidence 的 SQLite JSON 中；CLI 输出同样不含路径、文件名或正文。
+- 覆盖非 PDF 在登记前拒绝、默认零页解析、样本页上限、清洗未运行状态、虚假完成状态、无依据 `AUTHOR_SILENT`、无页码/片段引用的观点和 Skill 候选、无证据的人工批准。
+- 全量离线结果：`82 passed, 7 skipped`。
+- `ruff check .`：通过。
+- `pyright`：0 errors、0 warnings。
+
+### 《价值投资功法》真实本地样本
+
+- 原始文件：9,270,970 bytes，249 页；原文件继续由 `.gitignore` 排除，不进入 Git。
+- 文件与原始对象 SHA-256：`fd50555650b197d352d123d629697bcd4fa2428a6a7490b1dc00b56efbb623e0`。
+- manifest：`book-manifest:52dc08cfd59bb9893a280283343965cec8e26261fe152bd016c2ff0f28edc0d8`，版本 `v1-local-2026-07-13`，策略为 Git 排除、禁止外部再发布、永久保留、清洗可重建。
+- 只抽测物理页 1、125、249：3/3 成功，原生文本 2 页、OCR 1 页、失败 0 页，共提取 1,099 字符；未运行整书清洗、分类或 Skill 蒸馏。
+- parser：`pymupdf-1.28.0+rapidocr-1.4.4+dpi-200+threshold-24+rules-v1`。
+- parse report：`book-parse:700169f8735fc33124fef0c2bea40e0144aec6ad12c31392e90f1c245b544fd1`；对象 SHA-256 `27bd72624455a5917a69a21a7d8fd67721b2a35a7b4c8876ea6a4d1514d39e9a`。
+- 重复运行后 manifest ID、文件哈希、parse report ID、report hash、页 ID 和计数均保持不变。
+
 ## 后续子里程碑
 
-- M2.5 私有书籍/PDF 摄入：待完成。
 - M2.6 代表性综合验收：待完成。

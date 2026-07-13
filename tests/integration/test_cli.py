@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pymupdf
 from typer.testing import CliRunner
 
 from astock.cli import app
@@ -47,3 +48,43 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
     )
     assert planned.exit_code == 0, planned.output
     assert json.loads(planned.output)["artifact_byte_size"] == 2
+
+
+def test_private_pdf_cli_output_is_redacted(tmp_path: Path, monkeypatch) -> None:
+    runtime = tmp_path / "private-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+    private_text = "This private fixture sentence must never be emitted by the CLI."
+    pdf = pymupdf.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), private_text)
+    pdf_path = tmp_path / "secret-local-book.pdf"
+    pdf_path.write_bytes(pdf.tobytes())
+    pdf.close()
+
+    invoked = runner.invoke(
+        app,
+        [
+            "private-pdf-ingest",
+            str(pdf_path),
+            "--source-id",
+            "book:test:cli",
+            "--title",
+            "Private CLI fixture",
+            "--author-source-id",
+            "author:test",
+            "--file-version",
+            "v1",
+            "--page",
+            "1",
+            "--no-ocr",
+        ],
+    )
+    assert invoked.exit_code == 0, invoked.output
+    payload = json.loads(invoked.output)
+    assert payload["status"] == "INGESTED"
+    assert payload["manifest"]["source_page_count"] == 1
+    assert payload["parse"]["processed_page_count"] == 1
+    assert private_text not in invoked.output
+    assert str(pdf_path) not in invoked.output
+    assert pdf_path.name not in invoked.output

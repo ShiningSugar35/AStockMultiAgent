@@ -16,6 +16,7 @@ import typer
 from pydantic import BaseModel
 
 from astock import __version__
+from astock.books import PrivatePdfIngestService
 from astock.core.codex_runs import CodexRunService, build_context_budget
 from astock.core.errors import AStockError
 from astock.core.object_store import ObjectStore
@@ -41,6 +42,7 @@ from astock.schemas import (
     DisclosureCategory,
     DisclosureExchange,
     DisclosureSearchRequest,
+    DocumentType,
     InstrumentType,
     Market,
 )
@@ -396,6 +398,107 @@ def pdf_parse(
             _emit({"status": "FAILED", "failure_class": "INVALID_INPUT", "message": str(exc)})
         raise typer.Exit(code=2) from exc
     _emit(report)
+
+
+@app.command("private-pdf-ingest")
+def private_pdf_ingest(
+    path: Annotated[Path, typer.Argument(exists=True, file_okay=True, dir_okay=False)],
+    source_id: Annotated[str, typer.Option(help="Stable configured private-source id.")],
+    title: Annotated[str, typer.Option(help="Local research display title.")],
+    author_source_id: Annotated[str, typer.Option(help="Configured author source id.")],
+    file_version: Annotated[str, typer.Option(help="User-controlled immutable file version.")],
+    pages: Annotated[list[int] | None, typer.Option("--page", min=1)] = None,
+    book: Annotated[
+        bool,
+        typer.Option("--book/--generic-pdf", help="Register as private book or generic PDF."),
+    ] = True,
+    ocr: Annotated[
+        bool,
+        typer.Option("--ocr/--no-ocr", help="OCR only selected low-text sample pages."),
+    ] = True,
+) -> None:
+    """Ingest a private PDF without emitting its path, filename, headings, or text."""
+
+    _, state, objects = _services()
+    try:
+        result = PrivatePdfIngestService(objects, state).ingest(
+            path,
+            source_id=source_id,
+            display_name=title,
+            author_source_id=author_source_id,
+            file_version=file_version,
+            document_type=(DocumentType.PRIVATE_BOOK if book else DocumentType.PRIVATE_PDF),
+            sample_pages=pages,
+            ocr_enabled=ocr,
+        )
+    except (AStockError, ValueError) as exc:
+        if isinstance(exc, AStockError):
+            _emit(
+                {
+                    "status": "FAILED",
+                    "failure_class": exc.failure_class.value,
+                    "message": str(exc),
+                }
+            )
+        else:
+            _emit({"status": "FAILED", "failure_class": "INVALID_INPUT", "message": str(exc)})
+        raise typer.Exit(code=2) from exc
+    manifest = result.manifest
+    parse = result.parse_report
+    _emit(
+        {
+            "status": "INGESTED",
+            "manifest": {
+                "manifest_id": manifest.manifest_id,
+                "source_id": manifest.source_id,
+                "document_id": manifest.document_id,
+                "snapshot_id": manifest.snapshot_id,
+                "pit_id": manifest.pit_id,
+                "file_sha256": manifest.file_sha256,
+                "raw_object_sha256": manifest.raw_object_sha256,
+                "file_name_sha256": manifest.file_name_sha256,
+                "file_version": manifest.file_version,
+                "byte_size": manifest.byte_size,
+                "source_page_count": manifest.source_page_count,
+                "rights_status": manifest.rights_status,
+                "git_policy": manifest.git_policy,
+                "external_republication_policy": manifest.external_republication_policy,
+                "raw_retention_policy": manifest.raw_retention_policy,
+                "cleaning_reconstructable": manifest.cleaning_reconstructable,
+            },
+            "pit_status": result.pit_metadata.point_in_time_status,
+            "parse": (
+                {
+                    "book_parse_report_id": parse.book_parse_report_id,
+                    "parse_scope": parse.parse_scope,
+                    "processing_status": parse.processing_status,
+                    "parser_name": parse.parser_name,
+                    "parser_version": parse.parser_version,
+                    "requested_pages": parse.requested_pages,
+                    "processed_page_count": parse.processed_page_count,
+                    "native_page_count": parse.native_page_count,
+                    "ocr_page_count": parse.ocr_page_count,
+                    "empty_page_count": parse.empty_page_count,
+                    "failed_page_count": parse.failed_page_count,
+                    "parsed_text_char_count": parse.parsed_text_char_count,
+                    "pages": [
+                        {
+                            "page_id": page.page_id,
+                            "page_number": page.page_number,
+                            "extraction_method": page.extraction_method,
+                            "text_char_count": page.text_char_count,
+                            "text_sha256": page.text_sha256,
+                            "section_depth": len(page.section_path),
+                        }
+                        for page in parse.pages
+                    ],
+                    "report_object_sha256": parse.report_object_sha256,
+                }
+                if parse is not None
+                else None
+            ),
+        }
+    )
 
 
 @app.command("paper-status")

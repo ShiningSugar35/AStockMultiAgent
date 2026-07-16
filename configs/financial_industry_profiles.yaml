@@ -1,0 +1,38 @@
+schema_version: "1.0"
+registry_version: "financial-industry-profiles-m3.1-v1"
+profiles:
+  - profile_id: GENERAL_INDUSTRIAL
+    profile_version: "1.0.0"
+    description: General non-financial industrial and consumer companies.
+    excluded_rule_ids: []
+    notes: [M3_1_RATIOS_ARE_DESCRIPTIVE_ONLY]
+  - profile_id: BANK
+    profile_version: "1.0.0"
+    description: Commercial banks with financial-institution balance-sheet semantics.
+    excluded_rule_ids: [beneish_m_score, altman_z_score, accounts_receivable_revenue_ratio, inventory_operating_cost_ratio, prepayments_assets_ratio, other_receivables_assets_ratio, piotroski_f_score, sloan_accrual_ratio]
+    notes: [DO_NOT_APPLY_INDUSTRIAL_WORKING_CAPITAL_THRESHOLDS]
+  - profile_id: INSURANCE
+    profile_version: "1.0.0"
+    description: Insurers with reserve and investment-asset accounting semantics.
+    excluded_rule_ids: [beneish_m_score, altman_z_score, accounts_receivable_revenue_ratio, inventory_operating_cost_ratio, prepayments_assets_ratio, other_receivables_assets_ratio, piotroski_f_score, sloan_accrual_ratio]
+    notes: [DO_NOT_APPLY_INDUSTRIAL_SOLVENCY_SCORES]
+  - profile_id: SECURITIES
+    profile_version: "1.0.0"
+    description: Securities firms and broker-dealers.
+    excluded_rule_ids: [altman_z_score, inventory_operating_cost_ratio, prepayments_assets_ratio, other_receivables_assets_ratio, piotroski_f_score, sloan_accrual_ratio]
+    notes: [USE_SECURITIES_SPECIFIC_PEERS_IN_M3_2]
+  - profile_id: REAL_ESTATE
+    profile_version: "1.0.0"
+    description: Property developers with project inventory and prepayment semantics.
+    excluded_rule_ids: []
+    notes: [PROJECT_ACCOUNTING_CAN_EXPLAIN_HIGH_INVENTORY_OR_PREPAYMENTS]
+  - profile_id: EARLY_BIOTECH
+    profile_version: "1.0.0"
+    description: Pre-commercial or early-commercial biotechnology companies.
+    excluded_rule_ids: []
+    notes: [NEGATIVE_PROFIT_AND_RND_INTENSITY_REQUIRE_SEPARATE_INTERPRETATION]
+  - profile_id: OTHER
+    profile_version: "1.0.0"
+    description: Unclassified companies; only deterministic identities are authoritative.
+    excluded_rule_ids: []
+    notes: [NO_CALIBRATED_RATIO_THRESHOLDS]

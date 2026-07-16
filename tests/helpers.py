@@ -1,24 +1,205 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pymupdf
+
 from astock.core.hashing import content_hash
+from astock.core.object_store import ObjectStore
+from astock.core.state import StateStore
+from astock.documents import DocumentPageRepository, DocumentRepository, PdfParseService
+from astock.evidence import ClaimEvidenceService, EvidenceRepository
+from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.schemas import (
     AdjustmentMode,
     AmountUnit,
+    AvailabilityBasis,
     BarRequest,
+    DocumentType,
+    EvidenceGrade,
+    FactStatus,
+    FinancialAuditRequest,
+    FinancialFact,
+    FinancialFieldCode,
+    FinancialIndustryProfile,
+    FinancialPeriodType,
+    FinancialStatementType,
+    FinancialUnit,
     Frequency,
     Market,
     MarketBar,
     MarketDataBatch,
+    PointInTimeStatus,
     ProviderStatus,
+    SourceDocument,
+    SourceSnapshot,
     TimestampSemantics,
     VolumeUnit,
 )
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+FINANCIAL_GOLDEN_VALUES: dict[FinancialFieldCode, Decimal] = {
+    FinancialFieldCode.TOTAL_ASSETS: Decimal("1000"),
+    FinancialFieldCode.TOTAL_LIABILITIES: Decimal("600"),
+    FinancialFieldCode.TOTAL_EQUITY: Decimal("400"),
+    FinancialFieldCode.CASH_BEGINNING: Decimal("100"),
+    FinancialFieldCode.NET_CASH_OPERATING: Decimal("200"),
+    FinancialFieldCode.NET_CASH_INVESTING: Decimal("-80"),
+    FinancialFieldCode.NET_CASH_FINANCING: Decimal("30"),
+    FinancialFieldCode.EXCHANGE_EFFECT: Decimal("0"),
+    FinancialFieldCode.CASH_ENDING: Decimal("250"),
+    FinancialFieldCode.NET_PROFIT_INCOME: Decimal("100"),
+    FinancialFieldCode.NET_PROFIT_CASH_FLOW: Decimal("100"),
+    FinancialFieldCode.REVENUE: Decimal("1000"),
+    FinancialFieldCode.OPERATING_COST: Decimal("600"),
+    FinancialFieldCode.ACCOUNTS_RECEIVABLE: Decimal("100"),
+    FinancialFieldCode.INVENTORY: Decimal("120"),
+    FinancialFieldCode.PREPAYMENTS: Decimal("20"),
+    FinancialFieldCode.OTHER_RECEIVABLES: Decimal("10"),
+}
+
+_FINANCIAL_STATEMENTS: dict[FinancialFieldCode, FinancialStatementType] = {
+    FinancialFieldCode.TOTAL_ASSETS: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.TOTAL_LIABILITIES: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.TOTAL_EQUITY: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.ACCOUNTS_RECEIVABLE: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.INVENTORY: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.PREPAYMENTS: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.OTHER_RECEIVABLES: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.CASH_BEGINNING: FinancialStatementType.CASH_FLOW_STATEMENT,
+    FinancialFieldCode.NET_CASH_OPERATING: FinancialStatementType.CASH_FLOW_STATEMENT,
+    FinancialFieldCode.NET_CASH_INVESTING: FinancialStatementType.CASH_FLOW_STATEMENT,
+    FinancialFieldCode.NET_CASH_FINANCING: FinancialStatementType.CASH_FLOW_STATEMENT,
+    FinancialFieldCode.EXCHANGE_EFFECT: FinancialStatementType.CASH_FLOW_STATEMENT,
+    FinancialFieldCode.CASH_ENDING: FinancialStatementType.CASH_FLOW_STATEMENT,
+    FinancialFieldCode.NET_PROFIT_CASH_FLOW: FinancialStatementType.CASH_FLOW_STATEMENT,
+    FinancialFieldCode.NET_PROFIT_INCOME: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.REVENUE: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.OPERATING_COST: FinancialStatementType.INCOME_STATEMENT,
+}
+
+
+def make_financial_facts(
+    state: StateStore,
+    object_store: ObjectStore,
+    *,
+    source_suffix: str = "v1",
+    company_id: str = "000001",
+    period_end: date = date(2025, 12, 31),
+    published_at: datetime = datetime(2026, 3, 20, tzinfo=UTC),
+    values: dict[FinancialFieldCode, Decimal] | None = None,
+    unit: FinancialUnit = FinancialUnit.TEN_THOUSAND_CNY,
+    evidence_grade: EvidenceGrade = EvidenceGrade.PRIMARY_OFFICIAL,
+) -> list[FinancialFact]:
+    reported = values or FINANCIAL_GOLDEN_VALUES
+    text = "\n".join(f"{code.value}: {value}" for code, value in reported.items())
+    pdf = pymupdf.open()
+    page = pdf.new_page()
+    page.insert_textbox(pymupdf.Rect(48, 48, 540, 790), text, fontsize=8)
+    pdf_bytes = pdf.tobytes()
+    pdf.close()
+    raw = object_store.put_bytes(pdf_bytes)
+    source_id = f"fixture:financial:{company_id}:{period_end}:{source_suffix}"
+    snapshot = SourceSnapshot(
+        snapshot_id=f"{source_id}:{raw.sha256}",
+        source_id=source_id,
+        object_sha256=raw.sha256,
+        fetched_at=published_at,
+        available_to_system_at=published_at,
+        source_url=f"https://example.invalid/{source_suffix}.pdf",
+        mime="application/pdf",
+        byte_size=raw.byte_size,
+        rights_status="TEST_FIXTURE",
+    )
+    state.register_snapshot(snapshot)
+    document = SourceDocument(
+        document_id=f"document:{source_id}",
+        title="Financial integrity recorded fixture",
+        publisher="TEST_EXCHANGE",
+        document_type=DocumentType.ANNUAL_REPORT,
+        company_ids=[company_id],
+        published_at=published_at,
+        effective_at=published_at,
+        disclosure_id=source_id,
+        source_url=f"https://example.invalid/{source_suffix}.pdf",
+        rights_status="TEST_FIXTURE",
+    )
+    documents = DocumentRepository(state)
+    documents.register(document, snapshot)
+    pages = DocumentPageRepository(state)
+    report = PdfParseService(object_store, state, pages).parse(
+        document, snapshot, ocr_enabled=False
+    )
+    page_model = pages.get_page_by_id(report.page_ids[0])
+    assert page_model is not None
+    parsed_text = object_store.get_bytes(page_model.text_object_sha256).decode("utf-8")
+    evidence = ClaimEvidenceService(
+        object_store,
+        state,
+        pages,
+        documents,
+        EvidenceRepository(state),
+    ).create_page_evidence(
+        page_id=page_model.page_id,
+        char_start=0,
+        char_end=len(parsed_text),
+        evidence_grade=evidence_grade,
+        fact_status=FactStatus.DIRECT,
+        entity_ids=[f"company:{company_id}"],
+    )
+    pit = PointInTimeService(PointInTimeRepository(state), state, object_store).create(
+        source_id=source_id,
+        source_document_id=document.document_id,
+        source_snapshot_id=snapshot.snapshot_id,
+        period_end=period_end,
+        published_at=published_at,
+        effective_at=published_at,
+        ingested_at=published_at,
+        available_to_system_at=published_at,
+        point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
+        availability_basis=AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP,
+    )
+    facts: list[FinancialFact] = []
+    for code, value in reported.items():
+        statement = _FINANCIAL_STATEMENTS[code]
+        facts.append(
+            FinancialFact(
+                fact_id=f"fact:{source_suffix}:{code.value}",
+                company_id=company_id,
+                period_start=(
+                    date(period_end.year, 1, 1)
+                    if statement is not FinancialStatementType.BALANCE_SHEET
+                    else None
+                ),
+                period_end=period_end,
+                period_type=FinancialPeriodType.ANNUAL,
+                statement_type=statement,
+                field_code=code,
+                reported_value=value,
+                unit=unit,
+                source_snapshot_id=snapshot.snapshot_id,
+                pit_id=pit.pit_id,
+                evidence_ids=[evidence.evidence_id],
+            )
+        )
+    return facts
+
+
+def make_financial_request(
+    state: StateStore,
+    object_store: ObjectStore,
+    *,
+    industry_profile: FinancialIndustryProfile = FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+) -> FinancialAuditRequest:
+    return FinancialAuditRequest(
+        company_id="000001",
+        as_of=datetime(2026, 3, 21, tzinfo=UTC),
+        industry_profile=industry_profile,
+        facts=make_financial_facts(state, object_store),
+    )
 
 
 def session_times(trading_date: date = date(2026, 7, 10)) -> list[datetime]:

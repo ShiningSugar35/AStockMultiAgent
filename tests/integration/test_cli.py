@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -8,6 +9,9 @@ import pymupdf
 from typer.testing import CliRunner
 
 from astock.cli import app
+from astock.core.object_store import ObjectStore
+from astock.core.state import StateStore
+from tests.helpers import make_financial_request
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 runner = CliRunner()
@@ -138,3 +142,50 @@ def test_private_docx_cli_output_is_redacted(tmp_path: Path, monkeypatch) -> Non
     assert private_text not in invoked.output
     assert str(docx_path) not in invoked.output
     assert docx_path.name not in invoked.output
+
+
+def test_financial_audit_cli_is_idempotent_and_reports_checkpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = tmp_path / "financial-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+    state = StateStore(runtime / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(runtime / "objects" / "sha256")
+    request = make_financial_request(state, objects)
+    request = request.model_copy(update={"as_of": datetime(2026, 3, 21, tzinfo=UTC)})
+    input_path = tmp_path / "financial-audit-input.json"
+    input_path.write_text(
+        json.dumps(request.model_dump(mode="json"), ensure_ascii=False), encoding="utf-8"
+    )
+
+    schema = runner.invoke(app, ["financial-audit-schema"])
+    assert schema.exit_code == 0, schema.output
+    schema_payload = json.loads(schema.output)
+    assert set(schema_payload["required"]) >= {"company_id", "as_of", "industry_profile"}
+
+    first = runner.invoke(app, ["financial-audit", str(input_path)])
+    assert first.exit_code == 0, first.output
+    payload = json.loads(first.output)
+    assert payload["status"] == "SUCCEEDED"
+    assert payload["pack"]["coverage_status"] == "COMPLETE"
+    assert not payload["reused_existing"]
+    assert len(payload["artifact_hash"]) == 64
+    assert str(input_path) not in first.output
+
+    repeated = runner.invoke(app, ["financial-audit", str(input_path)])
+    assert repeated.exit_code == 0, repeated.output
+    repeated_payload = json.loads(repeated.output)
+    assert repeated_payload["reused_existing"]
+    assert repeated_payload["artifact_hash"] == payload["artifact_hash"]
+
+    status = runner.invoke(
+        app,
+        ["financial-audit-status", payload["pack"]["audit_run_id"]],
+    )
+    assert status.exit_code == 0, status.output
+    status_payload = json.loads(status.output)
+    assert status_payload["status"] == "SUCCEEDED"
+    assert status_payload["checkpoint_step"] == "COMPLETE"
+    assert status_payload["attempt_count"] == 1

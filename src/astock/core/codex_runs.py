@@ -18,6 +18,7 @@ from astock.schemas import (
     AuthorCollectionCoverageReport,
     CodexDraft,
     ContextBudgetReport,
+    FinancialIntegrityEvidencePack,
     HoldingReviewPack,
     PositionMonitoringPlan,
     RunManifest,
@@ -32,6 +33,7 @@ _ARTIFACT_MODELS: dict[str, type[AStockModel]] = {
     "PositionMonitoringPlan": PositionMonitoringPlan,
     "HoldingReviewPack": HoldingReviewPack,
     "AuthorCollectionCoverageReport": AuthorCollectionCoverageReport,
+    "FinancialIntegrityEvidencePack": FinancialIntegrityEvidencePack,
 }
 
 

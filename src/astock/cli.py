@@ -13,7 +13,7 @@ from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 import typer
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from astock import __version__
 from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
@@ -27,6 +27,10 @@ from astock.documents import (
     DocumentPageRepository,
     DocumentRepository,
     PdfParseService,
+)
+from astock.financial_integrity import (
+    FinancialIntegrityRepository,
+    FinancialIntegrityService,
 )
 from astock.market_data.storage import (
     CanonicalMarketStore,
@@ -43,6 +47,7 @@ from astock.schemas import (
     DisclosureExchange,
     DisclosureSearchRequest,
     DocumentType,
+    FinancialAuditRequest,
     InstrumentType,
     Market,
 )
@@ -581,6 +586,124 @@ def private_docx_ingest(
                 "gap_types": [gap["gap_type"] for gap in parse.gaps],
                 "report_object_sha256": parse.report_object_sha256,
             },
+        }
+    )
+
+
+@app.command("financial-audit")
+def financial_audit(
+    input_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, help="Audit request JSON."),
+    ],
+    rule_config: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            help="Versioned financial-rule registry; defaults to project config.",
+        ),
+    ] = None,
+    industry_profiles: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            help="Versioned industry profiles; defaults to project config.",
+        ),
+    ] = None,
+) -> None:
+    """Run an advisory-only financial audit with evidence and PIT gates."""
+
+    paths, state, objects = _services()
+    try:
+        payload = json.loads(input_file.read_text(encoding="utf-8"))
+        request = FinancialAuditRequest.model_validate(payload)
+    except OSError as exc:
+        _emit({"status": "FAILED", "failure_class": "INPUT_READ_FAILED"})
+        raise typer.Exit(code=2) from exc
+    except json.JSONDecodeError as exc:
+        _emit(
+            {
+                "status": "FAILED",
+                "failure_class": "INVALID_JSON",
+                "line": exc.lineno,
+                "column": exc.colno,
+            }
+        )
+        raise typer.Exit(code=2) from exc
+    except ValidationError as exc:
+        details = [
+            {"location": list(error["loc"]), "type": error["type"], "message": error["msg"]}
+            for error in exc.errors(include_input=False, include_url=False)
+        ]
+        _emit({"status": "FAILED", "failure_class": "INVALID_INPUT", "errors": details})
+        raise typer.Exit(code=2) from exc
+    try:
+        service = FinancialIntegrityService(
+            state,
+            objects,
+            rule_config_path=rule_config or paths.root / "configs" / "financial_rules.yaml",
+            industry_profile_path=(
+                industry_profiles
+                or paths.root / "configs" / "financial_industry_profiles.yaml"
+            ),
+        )
+        execution = service.run(request)
+    except (AStockError, ValueError) as exc:
+        _emit(
+            {
+                "status": "FAILED",
+                "failure_class": (
+                    exc.failure_class.value if isinstance(exc, AStockError) else "INVALID_INPUT"
+                ),
+                "message": str(exc),
+            }
+        )
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": execution.pack.status,
+            "artifact_hash": execution.artifact_hash,
+            "reused_existing": execution.reused_existing,
+            "pack": execution.pack,
+        }
+    )
+
+
+@app.command("financial-audit-schema")
+def financial_audit_schema() -> None:
+    """Print the strict JSON Schema accepted by the financial-audit command."""
+
+    _emit(FinancialAuditRequest.model_json_schema())
+
+
+@app.command("financial-audit-status")
+def financial_audit_status(
+    audit_run_id: Annotated[str, typer.Argument(help="Deterministic financial audit run id.")],
+) -> None:
+    """Read one persisted financial-audit checkpoint and artifact summary."""
+
+    _, state, objects = _services()
+    repository = FinancialIntegrityRepository(state, objects)
+    record = repository.get_run(audit_run_id)
+    if record is None:
+        _emit({"status": "NOT_FOUND", "audit_run_id": audit_run_id})
+        raise typer.Exit(code=3)
+    pack = repository.get_pack(audit_run_id)
+    _emit(
+        {
+            "audit_run_id": record.audit_run_id,
+            "status": record.status,
+            "checkpoint_step": record.checkpoint_step,
+            "artifact_hash": record.report_object_hash,
+            "attempt_count": repository.attempt_count(audit_run_id),
+            "coverage_status": pack.coverage_status if pack else None,
+            "risk_level": pack.risk_level if pack else None,
+            "evidence_gap_count": len(pack.evidence_gaps) if pack else None,
+            "manual_task_count": len(pack.manual_tasks) if pack else None,
         }
     )
 

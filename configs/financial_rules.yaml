@@ -1,0 +1,250 @@
+schema_version: "1.0"
+registry_version: "financial-rules-m3.1-v1"
+compatible_engine_version: "financial-deterministic-m3.1.0"
+rules:
+  - rule_id: balance_sheet_identity
+    formula_version: "1.0.0"
+    source_reference: PRC_ACCOUNTING_IDENTITY_ASSETS_LIABILITIES_EQUITY
+    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: []
+    required_fields: [TOTAL_ASSETS, TOTAL_LIABILITIES, TOTAL_EQUITY]
+    minimum_periods: 1
+    threshold_source: REPORTING_UNIT_ROUNDING_POLICY
+    calibration_status: DETERMINISTIC
+    false_positive_modes: [ROUNDED_DISCLOSURE_UNITS, MINORITY_INTEREST_MAPPING]
+    severity: HIGH
+    output_type: IDENTITY
+    tests: [test_balance_identity_golden, test_balance_identity_mismatch]
+    calculator_id: balance_identity
+    parameters:
+      tolerance_reporting_units: "2"
+    implementation_status: IMPLEMENTED_M3_1
+    default_enabled: true
+
+  - rule_id: cash_flow_identity
+    formula_version: "1.0.0"
+    source_reference: PRC_CASH_FLOW_NET_CHANGE_IDENTITY
+    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: []
+    required_fields: [CASH_BEGINNING, NET_CASH_OPERATING, NET_CASH_INVESTING, NET_CASH_FINANCING, EXCHANGE_EFFECT, CASH_ENDING]
+    minimum_periods: 1
+    threshold_source: REPORTING_UNIT_ROUNDING_POLICY
+    calibration_status: DETERMINISTIC
+    false_positive_modes: [RESTRICTED_CASH_SCOPE, ROUNDED_DISCLOSURE_UNITS]
+    severity: HIGH
+    output_type: IDENTITY
+    tests: [test_cash_identity_golden, test_cash_identity_mismatch]
+    calculator_id: cash_identity
+    parameters:
+      tolerance_reporting_units: "3"
+    implementation_status: IMPLEMENTED_M3_1
+    default_enabled: true
+
+  - rule_id: net_profit_cross_statement
+    formula_version: "1.0.0"
+    source_reference: PRC_CASH_FLOW_SUPPLEMENT_NET_PROFIT_RECONCILIATION
+    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: []
+    required_fields: [NET_PROFIT_INCOME, NET_PROFIT_CASH_FLOW]
+    minimum_periods: 1
+    threshold_source: REPORTING_UNIT_ROUNDING_POLICY
+    calibration_status: DETERMINISTIC
+    false_positive_modes: [CONSOLIDATION_SCOPE_DIFFERENCE, ROUNDED_DISCLOSURE_UNITS]
+    severity: MEDIUM
+    output_type: IDENTITY
+    tests: [test_net_profit_cross_statement_golden]
+    calculator_id: net_profit_cross_statement
+    parameters:
+      tolerance_reporting_units: "2"
+    implementation_status: IMPLEMENTED_M3_1
+    default_enabled: true
+
+  - rule_id: cfo_net_profit_ratio
+    formula_version: "1.0.0"
+    source_reference: CASH_CONVERSION_DESCRIPTIVE_METRIC
+    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: []
+    required_fields: [NET_CASH_OPERATING, NET_PROFIT_INCOME]
+    minimum_periods: 1
+    threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
+    calibration_status: NOT_CALIBRATED
+    false_positive_modes: [WORKING_CAPITAL_CYCLE, SEASONALITY, GROWTH_INVESTMENT]
+    severity: INFO
+    output_type: METRIC_ONLY
+    tests: [test_ratio_metrics_golden, test_zero_denominator_is_explicit]
+    calculator_id: ratio
+    parameters:
+      numerator_field: NET_CASH_OPERATING
+      denominator_field: NET_PROFIT_INCOME
+    implementation_status: IMPLEMENTED_M3_1
+    default_enabled: true
+
+  - rule_id: accounts_receivable_revenue_ratio
+    formula_version: "1.0.0"
+    source_reference: RECEIVABLES_TO_REVENUE_DESCRIPTIVE_METRIC
+    applicable_industries: [GENERAL_INDUSTRIAL, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: [BANK, INSURANCE]
+    required_fields: [ACCOUNTS_RECEIVABLE, REVENUE]
+    minimum_periods: 1
+    threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
+    calibration_status: NOT_CALIBRATED
+    false_positive_modes: [BUSINESS_MODEL, SEASONALITY, CONTRACT_BILLING]
+    severity: INFO
+    output_type: METRIC_ONLY
+    tests: [test_ratio_metrics_golden]
+    calculator_id: ratio
+    parameters:
+      numerator_field: ACCOUNTS_RECEIVABLE
+      denominator_field: REVENUE
+    implementation_status: IMPLEMENTED_M3_1
+    default_enabled: true
+
+  - rule_id: inventory_operating_cost_ratio
+    formula_version: "1.0.0"
+    source_reference: INVENTORY_TO_COST_DESCRIPTIVE_METRIC
+    applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: [BANK, INSURANCE, SECURITIES]
+    required_fields: [INVENTORY, OPERATING_COST]
+    minimum_periods: 1
+    threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
+    calibration_status: NOT_CALIBRATED
+    false_positive_modes: [BUSINESS_MODEL, COMMODITY_PRICE_CYCLE, PROJECT_ACCOUNTING]
+    severity: INFO
+    output_type: METRIC_ONLY
+    tests: [test_ratio_metrics_golden]
+    calculator_id: ratio
+    parameters:
+      numerator_field: INVENTORY
+      denominator_field: OPERATING_COST
+    implementation_status: IMPLEMENTED_M3_1
+    default_enabled: true
+
+  - rule_id: prepayments_assets_ratio
+    formula_version: "1.0.0"
+    source_reference: PREPAYMENTS_TO_ASSETS_DESCRIPTIVE_METRIC
+    applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: [BANK, INSURANCE, SECURITIES]
+    required_fields: [PREPAYMENTS, TOTAL_ASSETS]
+    minimum_periods: 1
+    threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
+    calibration_status: NOT_CALIBRATED
+    false_positive_modes: [PROCUREMENT_CYCLE, CAPACITY_EXPANSION, PROJECT_ACCOUNTING]
+    severity: INFO
+    output_type: METRIC_ONLY
+    tests: [test_ratio_metrics_golden]
+    calculator_id: ratio
+    parameters:
+      numerator_field: PREPAYMENTS
+      denominator_field: TOTAL_ASSETS
+    implementation_status: IMPLEMENTED_M3_1
+    default_enabled: true
+
+  - rule_id: other_receivables_assets_ratio
+    formula_version: "1.0.0"
+    source_reference: OTHER_RECEIVABLES_TO_ASSETS_DESCRIPTIVE_METRIC
+    applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: [BANK, INSURANCE, SECURITIES]
+    required_fields: [OTHER_RECEIVABLES, TOTAL_ASSETS]
+    minimum_periods: 1
+    threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
+    calibration_status: NOT_CALIBRATED
+    false_positive_modes: [GROUP_SETTLEMENT, DISPOSAL_RECEIVABLES, PROJECT_ACCOUNTING]
+    severity: INFO
+    output_type: METRIC_ONLY
+    tests: [test_ratio_metrics_golden]
+    calculator_id: ratio
+    parameters:
+      numerator_field: OTHER_RECEIVABLES
+      denominator_field: TOTAL_ASSETS
+    implementation_status: IMPLEMENTED_M3_1
+    default_enabled: true
+
+  - rule_id: beneish_m_score
+    formula_version: "planned-1.0.0"
+    source_reference: BENEISH_M_SCORE_METHOD
+    applicable_industries: [GENERAL_INDUSTRIAL, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: [BANK, INSURANCE]
+    required_fields: [TOTAL_ASSETS, REVENUE, ACCOUNTS_RECEIVABLE]
+    minimum_periods: 2
+    threshold_source: DEFERRED_TO_M3_2_CALIBRATION
+    calibration_status: DEFERRED
+    false_positive_modes: [HIGH_GROWTH, ACQUISITIONS, INDUSTRY_ACCOUNTING]
+    severity: MEDIUM
+    output_type: SCORE
+    tests: [test_bank_excludes_beneish, test_deferred_rule_is_explicit]
+    calculator_id: deferred
+    parameters: {}
+    implementation_status: DEFERRED_M3_2
+    default_enabled: false
+
+  - rule_id: altman_z_score
+    formula_version: "planned-1.0.0"
+    source_reference: ALTMAN_Z_SCORE_METHOD
+    applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: [BANK, INSURANCE, SECURITIES]
+    required_fields: [TOTAL_ASSETS, TOTAL_LIABILITIES, CURRENT_ASSETS, CURRENT_LIABILITIES, RETAINED_EARNINGS, EBIT, REVENUE]
+    minimum_periods: 1
+    threshold_source: DEFERRED_TO_M3_2_INDUSTRY_CALIBRATION
+    calibration_status: DEFERRED
+    false_positive_modes: [FINANCIAL_INSTITUTIONS, ASSET_LIGHT_MODELS, MARKET_VALUE_UNAVAILABLE]
+    severity: MEDIUM
+    output_type: SCORE
+    tests: [test_bank_excludes_altman, test_deferred_rule_is_explicit]
+    calculator_id: deferred
+    parameters: {}
+    implementation_status: DEFERRED_M3_2
+    default_enabled: false
+
+  - rule_id: piotroski_f_score
+    formula_version: "planned-1.0.0"
+    source_reference: PIOTROSKI_F_SCORE_METHOD
+    applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: [BANK, INSURANCE, SECURITIES]
+    required_fields: [TOTAL_ASSETS, NET_PROFIT_INCOME, NET_CASH_OPERATING, TOTAL_DEBT, CURRENT_ASSETS, CURRENT_LIABILITIES, REVENUE]
+    minimum_periods: 2
+    threshold_source: DEFERRED_TO_M3_2_CALIBRATION
+    calibration_status: DEFERRED
+    false_positive_modes: [FINANCIAL_INSTITUTIONS, CORPORATE_ACTIONS, ACCOUNTING_POLICY_CHANGE]
+    severity: LOW
+    output_type: SCORE
+    tests: [test_deferred_rule_is_explicit]
+    calculator_id: deferred
+    parameters: {}
+    implementation_status: DEFERRED_M3_2
+    default_enabled: false
+
+  - rule_id: sloan_accrual_ratio
+    formula_version: "planned-1.0.0"
+    source_reference: SLOAN_ACCRUALS_METHOD
+    applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: [BANK, INSURANCE, SECURITIES]
+    required_fields: [TOTAL_ASSETS, NET_PROFIT_INCOME, NET_CASH_OPERATING]
+    minimum_periods: 2
+    threshold_source: DEFERRED_TO_M3_2_CALIBRATION
+    calibration_status: DEFERRED
+    false_positive_modes: [ACQUISITIONS, RAPID_GROWTH, WORKING_CAPITAL_SEASONALITY]
+    severity: MEDIUM
+    output_type: METRIC_ONLY
+    tests: [test_deferred_rule_is_explicit]
+    calculator_id: deferred
+    parameters: {}
+    implementation_status: DEFERRED_M3_2
+    default_enabled: false
+
+  - rule_id: dupont_decomposition
+    formula_version: "planned-1.0.0"
+    source_reference: DUPONT_DECOMPOSITION_METHOD
+    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    excluded_industries: []
+    required_fields: [TOTAL_ASSETS, TOTAL_EQUITY, NET_PROFIT_INCOME, REVENUE]
+    minimum_periods: 1
+    threshold_source: DEFERRED_TO_M3_2_DECOMPOSITION
+    calibration_status: DEFERRED
+    false_positive_modes: [AVERAGE_BALANCE_UNAVAILABLE, NEGATIVE_EQUITY]
+    severity: INFO
+    output_type: METRIC_ONLY
+    tests: [test_deferred_rule_is_explicit]
+    calculator_id: deferred
+    parameters: {}
+    implementation_status: DEFERRED_M3_2
+    default_enabled: false

@@ -13,7 +13,9 @@ description: Audit financial consistency, recalculated metrics, document conflic
 
 ## Output
 
-Produce `FinancialIntegrityEvidencePack`. Until the Phase 3 implementation is enabled, return `RunManifest(status=NEEDS_INFO)` with the missing facts and rules; do not fabricate a pack.
+For M3.1 deterministic audits, validate a `FinancialAuditRequest` and run `uv run astock financial-audit <request.json>`. Produce `FinancialIntegrityEvidencePack`; missing, future, conflicting, or weakly sourced facts must produce `status=NEEDS_INFO`, explicit evidence gaps, and manual tasks rather than fabricated numbers.
+
+M3.1 enables only statement reconciliation, descriptive recalculation, industry exclusions, evidence/PIT gates, and recoverable persistence. Time-series anomalies, peer percentiles, Isolation Forest, and PyOD remain capability-disabled until M3.2/M3.3; never describe them as executed.
 
 ## Prohibitions
 

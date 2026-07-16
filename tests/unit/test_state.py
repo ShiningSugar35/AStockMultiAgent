@@ -25,6 +25,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0007",
         "0008",
         "0009",
+        "0010",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -32,6 +33,10 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
         assert connection.execute("PRAGMA synchronous").fetchone()[0] == 2
     assert state.integrity_check() == "ok"
+    with state.connect() as connection:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='financial_audit_run'"
+        ).fetchone()
 
 
 def test_checkpoint_updates_only_one_scope_row(state: StateStore) -> None:

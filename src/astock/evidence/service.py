@@ -7,6 +7,7 @@ from datetime import datetime
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents.block_repository import DocumentBlockRepository
 from astock.documents.page_repository import DocumentPageRepository
 from astock.documents.repository import DocumentRepository
 from astock.evidence.repository import EvidenceRepository
@@ -22,6 +23,7 @@ from astock.schemas import (
     EvidenceConflict,
     EvidenceGrade,
     EvidenceLocator,
+    EvidenceLocatorType,
     EvidenceRelation,
     FactStatus,
 )
@@ -35,12 +37,14 @@ class ClaimEvidenceService:
         pages: DocumentPageRepository,
         documents: DocumentRepository,
         repository: EvidenceRepository,
+        blocks: DocumentBlockRepository | None = None,
     ) -> None:
         self.object_store = object_store
         self.state = state
         self.pages = pages
         self.documents = documents
         self.repository = repository
+        self.blocks = blocks or DocumentBlockRepository(state)
 
     def create_page_evidence(
         self,
@@ -69,6 +73,7 @@ class ClaimEvidenceService:
             raise ValueError("Evidence excerpt must contain visible text")
         excerpt_ref = self.object_store.put_bytes(excerpt.encode("utf-8"))
         locator = EvidenceLocator(
+            locator_type=EvidenceLocatorType.PAGE_TEXT,
             page_number=page.page_number,
             section_path=page.section_path,
             char_start=char_start,
@@ -106,6 +111,80 @@ class ClaimEvidenceService:
             document_id=page.document_id,
             snapshot_id=page.snapshot_id,
             page_id=page.page_id,
+            locator=locator,
+            excerpt_sha256=excerpt_ref.sha256,
+            excerpt_object_sha256=excerpt_ref.sha256,
+            evidence_grade=evidence_grade,
+            fact_status=fact_status,
+            entity_ids=sorted(set(entity_ids)),
+            valid_from=valid_from,
+            valid_to=valid_to,
+            available_to_system_at=snapshot.available_to_system_at,
+            rights_status=document.rights_status,
+        )
+        stored = self.repository.register_evidence(evidence)
+        self._register_evidence_artifact(stored)
+        return stored
+
+    def create_block_evidence(
+        self,
+        *,
+        block_id: str,
+        char_start: int,
+        char_end: int,
+        evidence_grade: EvidenceGrade,
+        fact_status: FactStatus,
+        entity_ids: list[str],
+        valid_from: datetime | None = None,
+        valid_to: datetime | None = None,
+    ) -> Evidence:
+        block = self.blocks.get_block_by_id(block_id)
+        if block is None:
+            raise ValueError(f"Unknown parsed block: {block_id}")
+        snapshot = self.documents.snapshot(block.snapshot_id)
+        document = self.documents.get_model(block.document_id)
+        if snapshot is None or document is None:
+            raise ValueError(f"Incomplete source lineage for block: {block_id}")
+        text = self.object_store.get_bytes(block.text_object_sha256).decode("utf-8")
+        if char_start < 0 or char_end <= char_start or char_end > len(text):
+            raise ValueError(f"Evidence range must be within 0..{len(text)}")
+        excerpt = text[char_start:char_end]
+        if not excerpt.strip():
+            raise ValueError("Evidence excerpt must contain visible text")
+        excerpt_ref = self.object_store.put_bytes(excerpt.encode("utf-8"))
+        locator = EvidenceLocator(
+            locator_type=EvidenceLocatorType.BLOCK_TEXT,
+            block_index=block.block_index,
+            block_kind=block.block_kind.value,
+            metadata_object_sha256=block.metadata_object_sha256,
+            char_start=char_start,
+            char_end=char_end,
+            parser_version=block.parser_version,
+        )
+        identity = {
+            "document_id": block.document_id,
+            "snapshot_id": block.snapshot_id,
+            "block_id": block.block_id,
+            "locator": locator.model_dump(mode="json"),
+            "excerpt_sha256": excerpt_ref.sha256,
+            "evidence_grade": evidence_grade,
+            "fact_status": fact_status,
+            "entity_ids": sorted(set(entity_ids)),
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+            "available_to_system_at": snapshot.available_to_system_at,
+            "rights_status": document.rights_status,
+        }
+        evidence_id = f"evidence:{sha256_bytes(canonical_json_bytes(identity))}"
+        existing = self.repository.get_evidence(evidence_id)
+        if existing is not None:
+            self._register_evidence_artifact(existing)
+            return existing
+        evidence = Evidence(
+            evidence_id=evidence_id,
+            document_id=block.document_id,
+            snapshot_id=block.snapshot_id,
+            block_id=block.block_id,
             locator=locator,
             excerpt_sha256=excerpt_ref.sha256,
             excerpt_object_sha256=excerpt_ref.sha256,
@@ -257,7 +336,10 @@ class ClaimEvidenceService:
             artifact_type="Evidence",
             schema_version=evidence.schema_version,
             object_hash=artifact.sha256,
-            input_hashes=[evidence.page_id, evidence.excerpt_object_sha256],
+            input_hashes=[
+                evidence.page_id or evidence.block_id or "",
+                evidence.excerpt_object_sha256,
+            ],
         )
 
     def _register_claim_artifact(self, bundle: ClaimEvidenceBundle) -> None:

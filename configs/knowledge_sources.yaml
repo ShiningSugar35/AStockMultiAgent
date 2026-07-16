@@ -65,6 +65,15 @@ sources:
     url_token: null
     identity_status: PENDING_IDENTITY_CONFIRMATION
     access_status: PENDING_IDENTITY_CONFIRMATION
+    local_seed_sources:
+      - source_id: zhihu-export:hanwujideeyu:articles
+        source_type: PRIVATE_DOCX_EXPORT
+        author_source_id: zhihu:hanwujideeyu
+        file_version: v1-local-2026-07-16
+        expected_sha256: 197ec18e6fabac4401f6412331e9aa50f919498d4e40cfddb481eeab9788852d
+        rights_status: LOCAL_PRIVATE_RESEARCH
+        ingestion_scope: FULL_DOCUMENT_BLOCK_PARSE
+        online_history_coverage: NOT_ESTABLISHED
     collection_scope:
       history_mode: FULL_ACCESSIBLE_HISTORY
       content_types: [answers, thoughts, articles]

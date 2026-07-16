@@ -177,3 +177,36 @@ def test_invalid_private_pdf_is_rejected_before_registration(tmp_path: Path, sta
     with state.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_document").fetchone()[0] == 0
     assert list(objects.root.rglob("*")) == []
+
+
+def test_private_pdf_explicit_full_parse_covers_every_page(tmp_path: Path, state) -> None:
+    path = tmp_path / "private-full.pdf"
+    _private_pdf(path)
+    service = PrivatePdfIngestService(ObjectStore(tmp_path / "objects"), state)
+    result = service.ingest(
+        path,
+        source_id="pdf:test:full",
+        display_name="Full parse fixture",
+        author_source_id="author:test",
+        file_version="v1",
+        document_type=DocumentType.PRIVATE_PDF,
+        full_parse=True,
+        ocr_enabled=False,
+    )
+    assert result.parse_report is not None
+    assert result.parse_report.parse_scope.value == "FULL_SOURCE"
+    assert result.parse_report.processing_status.value == "COMPLETE"
+    assert result.parse_report.requested_pages == [1, 2]
+    assert result.parse_report.processed_page_count == 2
+    with pytest.raises(ValueError, match="cannot be combined"):
+        service.ingest(
+            path,
+            source_id="pdf:test:full",
+            display_name="Full parse fixture",
+            author_source_id="author:test",
+            file_version="v1",
+            document_type=DocumentType.PRIVATE_PDF,
+            sample_pages=[1],
+            full_parse=True,
+            ocr_enabled=False,
+        )

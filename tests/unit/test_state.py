@@ -15,7 +15,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
-    assert state.migrate() == ["0001", "0002", "0003", "0004", "0005", "0006", "0007"]
+    assert state.migrate() == [
+        "0001",
+        "0002",
+        "0003",
+        "0004",
+        "0005",
+        "0006",
+        "0007",
+        "0008",
+        "0009",
+    ]
     assert state.migrate() == []
     with state.connect() as connection:
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -157,6 +167,117 @@ def test_failed_migration_rolls_back_partial_schema(tmp_path: Path) -> None:
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='should_rollback'"
         ).fetchone()
     assert exists is None
+
+
+def test_generic_evidence_migration_preserves_existing_page_links(tmp_path: Path) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 8):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    state.migrate()
+    now = "2026-07-16T00:00:00+00:00"
+    with state.transaction() as connection:
+        connection.execute(
+            "INSERT INTO source_snapshot_index VALUES(?,?,?,?,?,?)",
+            ("snapshot:legacy", "source:legacy", "a" * 64, now, now, "SUCCEEDED"),
+        )
+        connection.execute(
+            "INSERT INTO source_snapshot_detail VALUES(?,?,?,?,?,?)",
+            ("snapshot:legacy", None, "application/pdf", 1, None, "TEST",),
+        )
+        connection.execute(
+            "INSERT INTO source_document VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "document:legacy",
+                "Legacy fixture",
+                "TEST",
+                "ANNOUNCEMENT",
+                "[]",
+                now,
+                None,
+                "legacy-disclosure",
+                "https://example.invalid/legacy.pdf",
+                "TEST",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO document_snapshot VALUES(?,?,?)",
+            ("document:legacy", "snapshot:legacy", now),
+        )
+        connection.execute(
+            "INSERT INTO document_page VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "page:legacy",
+                "document:legacy",
+                "snapshot:legacy",
+                1,
+                "parser-v1",
+                "NATIVE_TEXT",
+                "b" * 64,
+                "b" * 64,
+                1,
+                "c" * 64,
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO evidence_record VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                "evidence:legacy",
+                "document:legacy",
+                "snapshot:legacy",
+                "page:legacy",
+                1,
+                "d" * 64,
+                "d" * 64,
+                now,
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO claim_record VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "claim:legacy",
+                "subject:legacy",
+                "predicate",
+                now,
+                "FACT",
+                1.0,
+                "VALIDATED",
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO claim_evidence_link VALUES(?,?,?,?,?,?,?)",
+            (
+                "claim:legacy",
+                "evidence:legacy",
+                "SUPPORT",
+                1.0,
+                "UNREVIEWED",
+                "{}",
+                now,
+            ),
+        )
+
+    for version in (8, 9):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    assert state.migrate() == ["0008", "0009"]
+    with state.connect() as connection:
+        evidence = connection.execute(
+            "SELECT source_unit_type,source_unit_index,page_id,block_id "
+            "FROM evidence_record WHERE evidence_id='evidence:legacy'"
+        ).fetchone()
+        assert tuple(evidence) == ("PAGE", 1, "page:legacy", None)
+        assert connection.execute("SELECT COUNT(*) FROM claim_evidence_link").fetchone()[0] == 1
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_migration_checksum_ignores_only_line_end_and_eof_whitespace(tmp_path: Path) -> None:

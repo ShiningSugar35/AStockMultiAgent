@@ -64,6 +64,20 @@ def test_private_book_scope_is_formal_but_raw_pdf_remains_git_excluded() -> None
     }
     gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "*.pdf" in gitignore
+    assert "*.docx" in gitignore
+
+
+def test_private_docx_seed_is_registered_without_claiming_online_coverage() -> None:
+    sources = load_yaml("knowledge_sources.yaml")["sources"]
+    source = next(item for item in sources if item["source_id"] == "zhihu:pending:hanwuji-de-eyu")
+    seed = source["local_seed_sources"][0]
+    assert seed["source_id"] == "zhihu-export:hanwujideeyu:articles"
+    assert seed["source_type"] == "PRIVATE_DOCX_EXPORT"
+    assert seed["expected_sha256"] == (
+        "197ec18e6fabac4401f6412331e9aa50f919498d4e40cfddb481eeab9788852d"
+    )
+    assert seed["online_history_coverage"] == "NOT_ESTABLISHED"
+    assert source["enabled"] is False
 
 
 def test_development_plan_names_every_source_and_book_artifact() -> None:

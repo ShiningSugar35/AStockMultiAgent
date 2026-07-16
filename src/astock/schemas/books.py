@@ -16,6 +16,7 @@ from astock.schemas.pit import PointInTimeMetadata
 class BookProcessingStatus(StrEnum):
     NOT_RUN = "NOT_RUN"
     SAMPLE_ONLY = "SAMPLE_ONLY"
+    PARTIAL = "PARTIAL"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
 
@@ -146,8 +147,14 @@ class BookSourceManifest(AStockModel):
 
     @model_validator(mode="after")
     def validate_private_source_policy(self) -> BookSourceManifest:
-        if self.document_type not in {DocumentType.PRIVATE_BOOK, DocumentType.PRIVATE_PDF}:
+        if self.document_type not in {
+            DocumentType.PRIVATE_BOOK,
+            DocumentType.PRIVATE_PDF,
+            DocumentType.PRIVATE_DOCX,
+        }:
             raise ValueError("BookSourceManifest requires a private document type")
+        if self.document_type is DocumentType.PRIVATE_DOCX and self.source_page_count != 0:
+            raise ValueError("reflowable DOCX sources must not claim a stable page count")
         if self.file_sha256 != self.raw_object_sha256:
             raise ValueError("raw object hash must equal the ingested file hash")
         if (
@@ -217,6 +224,51 @@ class BookParseReport(AStockModel):
             or self.processed_page_count != self.source_page_count
         ):
             raise ValueError("FULL_SOURCE requires complete page coverage")
+        return self
+
+
+class PrivateDocxParseReport(AStockModel):
+    docx_parse_report_id: str
+    manifest_id: str
+    document_id: str
+    snapshot_id: str
+    file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parser_name: str
+    parser_version: str
+    processing_status: BookProcessingStatus
+    coverage_status: CoverageStatus
+    source_part_count: int = Field(ge=1)
+    source_paragraph_count: int = Field(ge=0)
+    processed_block_count: int = Field(ge=0)
+    nonempty_block_count: int = Field(ge=0)
+    empty_block_count: int = Field(ge=0)
+    table_count: int = Field(ge=0)
+    table_cell_count: int = Field(ge=0)
+    hyperlink_count: int = Field(ge=0)
+    embedded_visual_count: int = Field(ge=0)
+    unsupported_object_count: int = Field(ge=0)
+    parsed_text_char_count: int = Field(ge=0)
+    block_ids: list[str]
+    block_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    gaps: list[dict[str, Any]] = Field(default_factory=list)
+    report_object_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_coverage(self) -> PrivateDocxParseReport:
+        if self.processed_block_count != len(self.block_ids):
+            raise ValueError("processed_block_count must equal block_ids")
+        if self.nonempty_block_count + self.empty_block_count != self.processed_block_count:
+            raise ValueError("empty and nonempty block counts must equal processed blocks")
+        if self.processed_block_count != self.source_paragraph_count:
+            raise ValueError("every eligible OOXML paragraph must produce one block")
+        if self.processing_status is BookProcessingStatus.COMPLETE:
+            if self.coverage_status is not CoverageStatus.COMPLETE or self.gaps:
+                raise ValueError("COMPLETE DOCX parsing cannot contain coverage gaps")
+        elif self.processing_status is BookProcessingStatus.PARTIAL:
+            if self.coverage_status is not CoverageStatus.PARTIAL or not self.gaps:
+                raise ValueError("PARTIAL DOCX parsing requires explicit gaps")
+        else:
+            raise ValueError("DOCX parse reports must be COMPLETE or PARTIAL")
         return self
 
 
@@ -386,3 +438,9 @@ class PrivatePdfIngestResult(AStockModel):
     manifest: BookSourceManifest
     pit_metadata: PointInTimeMetadata
     parse_report: BookParseReport | None = None
+
+
+class PrivateDocxIngestResult(AStockModel):
+    manifest: BookSourceManifest
+    pit_metadata: PointInTimeMetadata
+    parse_report: PrivateDocxParseReport

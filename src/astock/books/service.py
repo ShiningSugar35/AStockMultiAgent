@@ -68,12 +68,15 @@ class PrivatePdfIngestService:
         file_version: str,
         document_type: DocumentType = DocumentType.PRIVATE_BOOK,
         sample_pages: list[int] | None = None,
+        full_parse: bool = False,
         ocr_enabled: bool = True,
     ) -> PrivatePdfIngestResult:
         if not source_id.strip() or not display_name.strip() or not file_version.strip():
             raise ValueError("source_id, display_name, and file_version are required")
         if document_type not in {DocumentType.PRIVATE_BOOK, DocumentType.PRIVATE_PDF}:
             raise ValueError("private ingestion accepts only PRIVATE_BOOK or PRIVATE_PDF")
+        if full_parse and sample_pages:
+            raise ValueError("Private PDF full parse cannot be combined with sample pages")
         data = self._read_and_validate(path)
         page_count = self._page_count(data)
         raw_ref = self.object_store.put_bytes(data)
@@ -160,12 +163,13 @@ class PrivatePdfIngestService:
         )
         stored_manifest = self.books.register_manifest(manifest)
         self._register_manifest_artifact(stored_manifest)
-        parse_report = self._parse_samples(
+        parse_report = self._parse(
             stored_manifest,
             document,
             snapshot,
             page_count,
             sample_pages,
+            full_parse=full_parse,
             ocr_enabled=ocr_enabled,
         )
         return PrivatePdfIngestResult(
@@ -203,7 +207,7 @@ class PrivatePdfIngestService:
             raise ValueError("Private PDF has no pages")
         return page_count
 
-    def _parse_samples(
+    def _parse(
         self,
         manifest: BookSourceManifest,
         document: SourceDocument,
@@ -211,21 +215,22 @@ class PrivatePdfIngestService:
         page_count: int,
         sample_pages: list[int] | None,
         *,
+        full_parse: bool,
         ocr_enabled: bool,
     ) -> BookParseReport | None:
-        if not sample_pages:
+        if not full_parse and not sample_pages:
             return None
-        if len(sample_pages) != len(set(sample_pages)):
+        if sample_pages and len(sample_pages) != len(set(sample_pages)):
             raise ValueError("Private PDF sample pages must be unique")
-        pages = sorted(sample_pages)
-        if len(pages) > self.maximum_sample_pages:
+        pages = sorted(sample_pages or [])
+        if not full_parse and len(pages) > self.maximum_sample_pages:
             raise ValueError(
                 f"Private PDF sample is limited to {self.maximum_sample_pages} pages"
             )
         report = self.parser.parse(
             document,
             snapshot,
-            page_numbers=pages,
+            page_numbers=None if full_parse else pages,
             ocr_enabled=ocr_enabled,
         )
         if report.report_object_sha256 is None:  # pragma: no cover - parser guarantees storage

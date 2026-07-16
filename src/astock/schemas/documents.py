@@ -31,6 +31,7 @@ class DocumentType(StrEnum):
     ANNOUNCEMENT = "ANNOUNCEMENT"
     PRIVATE_BOOK = "PRIVATE_BOOK"
     PRIVATE_PDF = "PRIVATE_PDF"
+    PRIVATE_DOCX = "PRIVATE_DOCX"
 
 
 class PageExtractionMethod(StrEnum):
@@ -44,6 +45,20 @@ class ParseStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     PARTIAL = "PARTIAL"
     FAILED = "FAILED"
+
+
+class DocumentPartKind(StrEnum):
+    MAIN = "MAIN"
+    HEADER = "HEADER"
+    FOOTER = "FOOTER"
+    FOOTNOTE = "FOOTNOTE"
+    ENDNOTE = "ENDNOTE"
+    COMMENT = "COMMENT"
+
+
+class DocumentBlockKind(StrEnum):
+    PARAGRAPH = "PARAGRAPH"
+    TABLE_CELL_PARAGRAPH = "TABLE_CELL_PARAGRAPH"
 
 
 class DisclosureSearchRequest(AStockModel):
@@ -140,6 +155,41 @@ class DocumentParseReport(AStockModel):
     page_ids: list[str]
     parse_status: ParseStatus
     report_object_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class DocumentBlock(AStockModel):
+    """Stable, non-page text unit for reflowable sources such as DOCX."""
+
+    block_id: str
+    document_id: str
+    snapshot_id: str
+    block_index: int = Field(ge=1)
+    part_kind: DocumentPartKind
+    part_sequence: int = Field(ge=0)
+    block_kind: DocumentBlockKind
+    paragraph_index: int = Field(ge=1)
+    table_index: int | None = Field(default=None, ge=1)
+    row_index: int | None = Field(default=None, ge=1)
+    cell_index: int | None = Field(default=None, ge=1)
+    text_char_count: int = Field(ge=0)
+    text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    text_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    metadata_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parser_name: str
+    parser_version: str
+    hyperlink_count: int = Field(ge=0)
+    is_heading: bool
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_table_location(self) -> DocumentBlock:
+        table_location = (self.table_index, self.row_index, self.cell_index)
+        if self.block_kind is DocumentBlockKind.TABLE_CELL_PARAGRAPH:
+            if any(value is None for value in table_location):
+                raise ValueError("table-cell blocks require table, row, and cell indices")
+        elif any(value is not None for value in table_location):
+            raise ValueError("plain paragraphs cannot carry table-cell indices")
+        return self
 
 
 class DownloadedDocument(AStockModel):

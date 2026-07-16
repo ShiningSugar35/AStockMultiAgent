@@ -38,15 +38,22 @@ class EvidenceRepository:
                     raise ValueError(f"Evidence identity collision: {evidence.evidence_id}")
                 return existing
             connection.execute(
-                "INSERT INTO evidence_record(evidence_id,document_id,snapshot_id,page_id,"
-                "page_number,excerpt_object_hash,excerpt_sha256,available_to_system_at,"
-                "evidence_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO evidence_record(evidence_id,document_id,snapshot_id,"
+                "source_unit_type,source_unit_index,page_id,block_id,excerpt_object_hash,"
+                "excerpt_sha256,available_to_system_at,evidence_json,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     evidence.evidence_id,
                     evidence.document_id,
                     evidence.snapshot_id,
+                    "PAGE" if evidence.page_id is not None else "BLOCK",
+                    (
+                        evidence.locator.page_number
+                        if evidence.page_id is not None
+                        else evidence.locator.block_index
+                    ),
                     evidence.page_id,
-                    evidence.locator.page_number,
+                    evidence.block_id,
                     evidence.excerpt_object_sha256,
                     evidence.excerpt_sha256,
                     evidence.available_to_system_at.isoformat(),

@@ -77,10 +77,22 @@ class ConflictResolutionStatus(StrEnum):
     ACCEPTED_UNCERTAINTY = "ACCEPTED_UNCERTAINTY"
 
 
+class EvidenceLocatorType(StrEnum):
+    PAGE_TEXT = "PAGE_TEXT"
+    BLOCK_TEXT = "BLOCK_TEXT"
+
+
 class EvidenceLocator(AStockModel):
-    locator_type: str = "PAGE_TEXT"
-    page_number: int = Field(ge=1)
+    locator_type: EvidenceLocatorType = EvidenceLocatorType.PAGE_TEXT
+    page_number: int | None = Field(default=None, ge=1, exclude_if=lambda value: value is None)
+    block_index: int | None = Field(default=None, ge=1, exclude_if=lambda value: value is None)
+    block_kind: str | None = Field(default=None, exclude_if=lambda value: value is None)
     section_path: list[str] = Field(default_factory=list)
+    metadata_object_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
     char_start: int = Field(ge=0)
     char_end: int = Field(gt=0)
     parser_version: str
@@ -89,6 +101,23 @@ class EvidenceLocator(AStockModel):
     def validate_range(self) -> EvidenceLocator:
         if self.char_end <= self.char_start:
             raise ValueError("char_end must be greater than char_start")
+        if self.locator_type is EvidenceLocatorType.PAGE_TEXT:
+            if (
+                self.page_number is None
+                or self.block_index is not None
+                or self.block_kind is not None
+            ):
+                raise ValueError("PAGE_TEXT requires only a page number")
+        elif (
+            self.block_index is None
+            or self.block_kind is None
+            or self.page_number is not None
+            or self.metadata_object_sha256 is None
+            or self.section_path
+        ):
+            raise ValueError(
+                "BLOCK_TEXT requires block metadata and cannot expose page or heading text"
+            )
         return self
 
 
@@ -96,7 +125,8 @@ class Evidence(AStockModel):
     evidence_id: str
     document_id: str
     snapshot_id: str
-    page_id: str
+    page_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    block_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     locator: EvidenceLocator
     excerpt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     excerpt_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -112,6 +142,11 @@ class Evidence(AStockModel):
     def validate_validity(self) -> Evidence:
         if self.valid_from and self.valid_to and self.valid_to < self.valid_from:
             raise ValueError("valid_to must not precede valid_from")
+        if self.locator.locator_type is EvidenceLocatorType.PAGE_TEXT:
+            if self.page_id is None or self.block_id is not None:
+                raise ValueError("page evidence requires only page_id")
+        elif self.block_id is None or self.page_id is not None:
+            raise ValueError("block evidence requires only block_id")
         return self
 
 

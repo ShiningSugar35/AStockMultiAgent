@@ -35,6 +35,8 @@ browser-profile/
 
 # Private research source material stays local
 *.pdf
+*.doc
+*.docx
 sources/private/
 
 # Editors and operating system files

@@ -16,7 +16,7 @@ import typer
 from pydantic import BaseModel
 
 from astock import __version__
-from astock.books import PrivatePdfIngestService
+from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
 from astock.core.codex_runs import CodexRunService, build_context_budget
 from astock.core.errors import AStockError
 from astock.core.object_store import ObjectStore
@@ -408,6 +408,10 @@ def private_pdf_ingest(
     author_source_id: Annotated[str, typer.Option(help="Configured author source id.")],
     file_version: Annotated[str, typer.Option(help="User-controlled immutable file version.")],
     pages: Annotated[list[int] | None, typer.Option("--page", min=1)] = None,
+    full: Annotated[
+        bool,
+        typer.Option("--full", help="Parse every page; mutually exclusive with --page."),
+    ] = False,
     book: Annotated[
         bool,
         typer.Option("--book/--generic-pdf", help="Register as private book or generic PDF."),
@@ -429,6 +433,7 @@ def private_pdf_ingest(
             file_version=file_version,
             document_type=(DocumentType.PRIVATE_BOOK if book else DocumentType.PRIVATE_PDF),
             sample_pages=pages,
+            full_parse=full,
             ocr_enabled=ocr,
         )
     except (AStockError, ValueError) as exc:
@@ -497,6 +502,85 @@ def private_pdf_ingest(
                 if parse is not None
                 else None
             ),
+        }
+    )
+
+
+@app.command("private-docx-ingest")
+def private_docx_ingest(
+    path: Annotated[Path, typer.Argument(exists=True, file_okay=True, dir_okay=False)],
+    source_id: Annotated[str, typer.Option(help="Stable configured private-source id.")],
+    title: Annotated[str, typer.Option(help="Local research display title.")],
+    author_source_id: Annotated[str, typer.Option(help="Configured author source id.")],
+    file_version: Annotated[str, typer.Option(help="User-controlled immutable file version.")],
+) -> None:
+    """Ingest and fully parse private DOCX without emitting path, headings, links, or text."""
+
+    _, state, objects = _services()
+    try:
+        result = PrivateDocxIngestService(objects, state).ingest(
+            path,
+            source_id=source_id,
+            display_name=title,
+            author_source_id=author_source_id,
+            file_version=file_version,
+        )
+    except (AStockError, ValueError) as exc:
+        if isinstance(exc, AStockError):
+            _emit(
+                {
+                    "status": "FAILED",
+                    "failure_class": exc.failure_class.value,
+                    "message": str(exc),
+                }
+            )
+        else:
+            _emit({"status": "FAILED", "failure_class": "INVALID_INPUT", "message": str(exc)})
+        raise typer.Exit(code=2) from exc
+    manifest = result.manifest
+    parse = result.parse_report
+    _emit(
+        {
+            "status": "INGESTED",
+            "manifest": {
+                "manifest_id": manifest.manifest_id,
+                "source_id": manifest.source_id,
+                "document_id": manifest.document_id,
+                "snapshot_id": manifest.snapshot_id,
+                "pit_id": manifest.pit_id,
+                "file_sha256": manifest.file_sha256,
+                "raw_object_sha256": manifest.raw_object_sha256,
+                "file_name_sha256": manifest.file_name_sha256,
+                "file_version": manifest.file_version,
+                "byte_size": manifest.byte_size,
+                "rights_status": manifest.rights_status,
+                "git_policy": manifest.git_policy,
+                "external_republication_policy": manifest.external_republication_policy,
+                "raw_retention_policy": manifest.raw_retention_policy,
+                "cleaning_reconstructable": manifest.cleaning_reconstructable,
+            },
+            "pit_status": result.pit_metadata.point_in_time_status,
+            "parse": {
+                "docx_parse_report_id": parse.docx_parse_report_id,
+                "processing_status": parse.processing_status,
+                "coverage_status": parse.coverage_status,
+                "parser_name": parse.parser_name,
+                "parser_version": parse.parser_version,
+                "source_part_count": parse.source_part_count,
+                "source_paragraph_count": parse.source_paragraph_count,
+                "processed_block_count": parse.processed_block_count,
+                "nonempty_block_count": parse.nonempty_block_count,
+                "empty_block_count": parse.empty_block_count,
+                "table_count": parse.table_count,
+                "table_cell_count": parse.table_cell_count,
+                "hyperlink_count": parse.hyperlink_count,
+                "embedded_visual_count": parse.embedded_visual_count,
+                "unsupported_object_count": parse.unsupported_object_count,
+                "parsed_text_char_count": parse.parsed_text_char_count,
+                "block_set_sha256": parse.block_set_sha256,
+                "gap_types": [gap["gap_type"] for gap in parse.gaps],
+                "report_object_sha256": parse.report_object_sha256,
+            },
         }
     )
 

@@ -1,5 +1,10 @@
 """Public schema surface for durable artifacts and local services."""
 
+from astock.schemas.adaptive import (
+    AdaptiveResearchCapabilityStatus,
+    AdaptiveResearchNextStage,
+    AdaptiveResearchStatusReport,
+)
 from astock.schemas.books import (
     BOOK_DOWNWEIGHT_CLASSES,
     BOOK_KEEP_CLASSES,
@@ -350,6 +355,9 @@ from astock.schemas.shadow import (
 __all__ = [
     "AccessTransport",
     "AccountType",
+    "AdaptiveResearchCapabilityStatus",
+    "AdaptiveResearchNextStage",
+    "AdaptiveResearchStatusReport",
     "AdjustmentDirection",
     "AdjustmentMode",
     "AmountUnit",

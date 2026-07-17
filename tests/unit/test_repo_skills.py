@@ -134,6 +134,7 @@ def test_phase7_repo_skill_commands_exist_and_keep_shadow_isolated() -> None:
         "shadow-audit",
         "shadow-recover",
         "phase8-admission",
+        "adaptive-research-status",
     }
     assert expected_commands <= command_names
     orchestrator = (
@@ -141,8 +142,12 @@ def test_phase7_repo_skill_commands_exist_and_keep_shadow_isolated() -> None:
     ).read_text(encoding="utf-8")
     assert "ELIGIBLE_RULE_STATE_MACHINE_RESEARCH" in orchestrator
     assert "Do not change weights or the paper ledger" in orchestrator
+    assert "AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL" in orchestrator
+    assert "explicit rule-research approval" in orchestrator
     recovery = (SKILLS_ROOT / "paper-trading-recovery" / "SKILL.md").read_text(
         encoding="utf-8"
     )
     assert "Shadow studies and their observations must never" in recovery
     assert "Do not write shadow-study results" in recovery
+    assert "adaptive-research-status" in recovery
+    assert "ledger-write command" in recovery

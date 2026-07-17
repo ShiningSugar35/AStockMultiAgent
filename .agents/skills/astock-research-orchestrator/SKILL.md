@@ -13,7 +13,7 @@ description: Route broad or multi-step A-share research requests across local da
 6. Before a decision, require the relevant financial-integrity pack and run `uv run astock committee-input-resolve --artifact-id <id>...`; create a strict request from `committee-schema`, preview it with `committee-plan <request.json>`, then use `committee-decide <request.json>` and `committee-audit <decision_id>`.
 7. If the verdict is `NEEDS_INFO`, route each `committee-task-status <task_id>` to `$evidence-investigation`; after a genuinely new frozen artifact exists, link it with `committee-task-resolve <task_id> <artifact_id>` and create a new committee request/bundle. The committee never performs the search itself.
 8. For a prospective frozen-weight comparison, inspect `shadow-schema`, create the study before its effective time, derive each episode key with `shadow-independence-key`, freeze every arm with `shadow-assign`, and persist the signal-time regime with `market-regime-classify`. Record only reconciled, point-in-time observations through `shadow-observation-record`; then run `shadow-evaluate <study_id> --as-of <timestamp>`, `shadow-status --study-id <study_id>`, and `shadow-audit <study_id>`.
-9. Read `phase8-admission <study_id>` before discussing any adaptive-weight research. A result other than `ELIGIBLE_RULE_STATE_MACHINE_RESEARCH` is a hard stop; it never authorizes online weight changes, a brokerage order, or a write to the main paper ledger.
+9. For any request about dynamic weights or entering Phase 8, first run `uv run astock adaptive-research-status [--study-id <study_id>]`. Its underlying audited admission must be `ELIGIBLE_RULE_STATE_MACHINE_RESEARCH`; a capability result other than `AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL` is a hard stop. Even that status only permits asking for explicit approval of a specific study/report/admission version before rule-state-machine shadow research; it never authorizes an algorithm, online weight changes, a brokerage order, or a write to the main paper ledger.
 10. For a durable Codex explanation, run `uv run astock codex-run-init <request> --artifact-id <DecisionPack_or_TradeProtocol_or_ShadowEvaluationReport_or_Phase8AdmissionReport_artifact_id> --require-registered-output`, import that exact registered object with `codex-run-import`, and finish with `codex-run-audit`.
 
 ## Output
@@ -27,4 +27,5 @@ Produce a frozen-input `DecisionPack` and one TradeProtocol for every committee 
 - Do not ask the committee to search or fetch new evidence.
 - Do not backfill a formal shadow assignment after its outcome is visible.
 - Do not change weights or the paper ledger from a shadow evaluation.
+- Do not implement or start Phase 8 research from admission alone; require the explicit rule-research approval reported by `adaptive-research-status`.
 - Do not create or send a real brokerage order.

@@ -16,6 +16,7 @@ import typer
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from astock import __version__
+from astock.adaptive import AdaptiveResearchStatusService
 from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
 from astock.committee import CommitteeService, load_committee_rules
 from astock.core.codex_runs import (
@@ -377,6 +378,7 @@ def probe() -> None:
     paths, state, objects = _services()
     providers = [EastMoney5mProvider(objects, state), Sina5mProvider(objects, state)]
     shadow = _shadow_service(paths, state, objects)
+    adaptive = AdaptiveResearchStatusService(shadow).status()
     _emit(
         {
             "version": __version__,
@@ -425,6 +427,28 @@ def probe() -> None:
                 "broker_execution": False,
                 "main_paper_ledger_write": False,
                 "online_weight_changes": False,
+            },
+            "adaptive_research": {
+                "implementation_status": adaptive.implementation_status,
+                "status": adaptive.capability_status,
+                "shadow_policy_version": adaptive.shadow_policy_version,
+                "phase8_admission_status": adaptive.phase8_admission_status,
+                "adaptive_weights": adaptive.adaptive_weights_enabled,
+                "online_learning": adaptive.online_learning_allowed,
+                "main_paper_ledger_write": (
+                    adaptive.main_paper_ledger_write_allowed
+                ),
+                "broker_execution": adaptive.broker_execution_allowed,
+                "next_permitted_stage": adaptive.next_permitted_stage,
+                "reason_codes": adaptive.reason_codes,
+                "sample_gaps": {
+                    "observation_months": adaptive.observation_month_gap,
+                    "independent_decisions": adaptive.independent_decision_gap,
+                    "walk_forward_folds": (
+                        adaptive.qualifying_walk_forward_fold_gap
+                    ),
+                    "market_regimes": adaptive.qualifying_market_regime_gap,
+                },
             },
             "providers": [provider.capability() for provider in providers],
         }
@@ -2056,6 +2080,17 @@ def phase8_admission(
 
     paths, state, objects = _services()
     _emit(_shadow_service(paths, state, objects).latest_admission(study_id))
+
+
+@app.command("adaptive-research-status")
+def adaptive_research_status(
+    study_id: Annotated[str | None, typer.Option("--study-id")] = None,
+) -> None:
+    """Report the read-only, admission-gated Phase 8 research boundary."""
+
+    paths, state, objects = _services()
+    shadow = _shadow_service(paths, state, objects)
+    _emit(AdaptiveResearchStatusService(shadow).status(study_id))
 
 
 @app.command("knowledge-source-list")

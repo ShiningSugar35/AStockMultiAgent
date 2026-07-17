@@ -58,6 +58,24 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
     ]
     assert probe["committee"]["status"] == "AVAILABLE"
     assert not probe["committee"]["network_access"]
+    assert probe["adaptive_research"] == {
+        "adaptive_weights": False,
+        "broker_execution": False,
+        "implementation_status": "IMPLEMENTED_DISABLED_BOUNDARY",
+        "main_paper_ledger_write": False,
+        "next_permitted_stage": "PHASE7_FORWARD_EVIDENCE_COLLECTION",
+        "online_learning": False,
+        "phase8_admission_status": None,
+        "reason_codes": ["PHASE7_STUDY_NOT_RUN"],
+        "sample_gaps": {
+            "independent_decisions": 100,
+            "market_regimes": 3,
+            "observation_months": "12",
+            "walk_forward_folds": 5,
+        },
+        "shadow_policy_version": "shadow-evaluation-policy-v1",
+        "status": "NOT_ENTERED_BY_DESIGN",
+    }
 
     artifact = tmp_path / "中文证据.json"
     artifact.write_text("{}", encoding="utf-8")
@@ -560,6 +578,30 @@ def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
         "status": "NOT_RUN",
         "study_id": "study:not-run",
     }
+    adaptive = runner.invoke(
+        app,
+        ["adaptive-research-status", "--study-id", "study:not-run"],
+    )
+    assert adaptive.exit_code == 0, adaptive.output
+    adaptive_payload = json.loads(adaptive.output)
+    assert adaptive_payload["implementation_status"] == (
+        "IMPLEMENTED_DISABLED_BOUNDARY"
+    )
+    assert adaptive_payload["capability_status"] == "NOT_ENTERED_BY_DESIGN"
+    assert adaptive_payload["reason_codes"] == ["PHASE7_STUDY_NOT_RUN"]
+    assert adaptive_payload["observation_month_gap"] == "12"
+    assert adaptive_payload["independent_decision_gap"] == 100
+    assert adaptive_payload["qualifying_walk_forward_fold_gap"] == 5
+    assert adaptive_payload["qualifying_market_regime_gap"] == 3
+    assert not adaptive_payload["adaptive_weights_enabled"]
+    assert not adaptive_payload["online_learning_allowed"]
+    assert not adaptive_payload["main_paper_ledger_write_allowed"]
+    assert not adaptive_payload["broker_execution_allowed"]
+    forced_adaptive = runner.invoke(
+        app,
+        ["adaptive-research-status", "--force-enable"],
+    )
+    assert forced_adaptive.exit_code == 2
 
     secret = "private-shadow-request-must-not-be-echoed"
     invalid_request = tmp_path / "private-invalid-shadow-request.json"

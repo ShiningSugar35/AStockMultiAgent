@@ -336,3 +336,40 @@ def test_research_diagnostic_cli_schema_and_invalid_requests_are_safe(
         }
         assert secret not in invoked.output
         assert str(request) not in invoked.output
+
+
+def test_position_lifecycle_cli_schema_and_invalid_requests_are_safe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "position-lifecycle-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    schema = runner.invoke(app, ["position-lifecycle-schema"])
+    assert schema.exit_code == 0, schema.output
+    payload = json.loads(schema.output)
+    assert payload["rules_version"] == "generic-position-lifecycle-v1"
+    assert payload["action_priority"] == ["EXIT", "REVIEW", "TRIM", "ADD", "HOLD"]
+    assert payload["requires_user_confirmation"]
+    assert payload["add_requires_new_evidence"]
+
+    status = runner.invoke(app, ["holding-review-status", "position:not-run"])
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["status"] == "NOT_RUN"
+
+    secret = "private-position-thesis-must-not-be-echoed"
+    request = tmp_path / "private-position-request.json"
+    request.write_text(json.dumps({"thesis_summary": secret}), encoding="utf-8")
+    for command, error_code in (
+        ("position-plan-create", "INVALID_POSITION_PLAN"),
+        ("holding-review-run", "INVALID_HOLDING_REVIEW"),
+    ):
+        invoked = runner.invoke(app, [command, str(request)])
+        assert invoked.exit_code == 2
+        assert json.loads(invoked.output) == {
+            "error_code": error_code,
+            "status": "REJECTED",
+        }
+        assert secret not in invoked.output
+        assert str(request) not in invoked.output

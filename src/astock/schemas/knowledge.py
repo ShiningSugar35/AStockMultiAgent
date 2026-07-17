@@ -523,9 +523,16 @@ class AuthorSkillCoverage(AStockModel):
 
 
 class PositionMonitoringPlan(AStockModel):
+    plan_id: str | None = None
     position_id: str
     company_id: str
     decision_id: str
+    decision_reference_status: str | None = None
+    base_case_id: str | None = None
+    route_plan_id: str | None = None
+    memo_id: str | None = None
+    as_of: AwareDatetime | None = None
+    rules_version: str | None = None
     thesis_summary: str
     entry_assumptions: list[str]
     holding_horizon: str
@@ -545,9 +552,39 @@ class PositionMonitoringPlan(AStockModel):
     next_review_at: AwareDatetime | None = None
     skill_versions: dict[str, str]
     evidence_snapshot_id: str
+    baseline_evidence_ids: list[str] = Field(default_factory=list)
+    coverage_status: str | None = None
+
+    @model_validator(mode="after")
+    def validate_registered_plan(self) -> PositionMonitoringPlan:
+        if len(self.baseline_evidence_ids) != len(set(self.baseline_evidence_ids)):
+            raise ValueError("monitoring plan baseline evidence ids must be unique")
+        if self.plan_id is not None and any(
+            value is None
+            for value in (
+                self.base_case_id,
+                self.route_plan_id,
+                self.memo_id,
+                self.as_of,
+                self.rules_version,
+                self.decision_reference_status,
+                self.coverage_status,
+            )
+        ):
+            raise ValueError("registered monitoring plans require frozen research lineage")
+        if (
+            self.last_review_at is not None
+            and self.next_review_at is not None
+            and self.next_review_at <= self.last_review_at
+        ):
+            raise ValueError("next monitoring review must follow the last review")
+        return self
 
 
 class HoldingEvidenceUpdate(AStockModel):
+    update_id: str | None = None
+    plan_id: str | None = None
+    rules_version: str | None = None
     position_id: str
     from_as_of: AwareDatetime
     to_as_of: AwareDatetime
@@ -557,8 +594,26 @@ class HoldingEvidenceUpdate(AStockModel):
     unresolved_conflicts: list[str]
     update_hash: str
 
+    @model_validator(mode="after")
+    def validate_incremental_window(self) -> HoldingEvidenceUpdate:
+        if self.to_as_of <= self.from_as_of:
+            raise ValueError("holding evidence update window must move forward")
+        for label, values in (
+            ("added evidence", self.added_evidence_ids),
+            ("changed claim", self.changed_claim_ids),
+            ("invalidated evidence", self.invalidated_evidence_ids),
+            ("unresolved conflict", self.unresolved_conflicts),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"holding update {label} ids must be unique")
+        return self
+
 
 class HoldingReviewPack(AStockModel):
+    review_id: str | None = None
+    plan_id: str | None = None
+    evidence_update_id: str | None = None
+    rules_version: str | None = None
     position_id: str
     as_of: AwareDatetime
     new_market_data: list[dict[str, Any]]
@@ -575,6 +630,23 @@ class HoldingReviewPack(AStockModel):
     action_confidence: float = Field(ge=0, le=1)
     evidence_ids: list[str]
     next_review_conditions: list[str]
+    hard_blocks: list[str] = Field(default_factory=list)
+    degradation_codes: list[str] = Field(default_factory=list)
+    proposal_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_review_sets(self) -> HoldingReviewPack:
+        for label, values in (
+            ("triggered rule", self.triggered_rules),
+            ("unresolved conflict", self.unresolved_conflicts),
+            ("evidence", self.evidence_ids),
+            ("next review condition", self.next_review_conditions),
+            ("hard block", self.hard_blocks),
+            ("degradation code", self.degradation_codes),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"holding review {label} values must be unique")
+        return self
 
 
 class PositionActionProposal(AStockModel):
@@ -586,6 +658,21 @@ class PositionActionProposal(AStockModel):
     evidence_ids: list[str]
     hard_blocks: list[str]
     requires_user_confirmation: bool = True
+    plan_id: str | None = None
+    review_id: str | None = None
+
+    @model_validator(mode="after")
+    def enforce_manual_confirmation(self) -> PositionActionProposal:
+        if not self.requires_user_confirmation:
+            raise ValueError("position action proposals always require user confirmation")
+        for label, values in (
+            ("reason", self.reasons),
+            ("evidence", self.evidence_ids),
+            ("hard block", self.hard_blocks),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"position proposal {label} values must be unique")
+        return self
 
 
 class ExitReviewPack(AStockModel):

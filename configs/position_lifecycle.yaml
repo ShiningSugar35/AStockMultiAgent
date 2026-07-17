@@ -1,0 +1,17 @@
+rules_version: generic-position-lifecycle-v1
+action_priority: [EXIT, REVIEW, TRIM, ADD, HOLD]
+base_action_confidence:
+  HOLD: 0.50
+  ADD: 0.60
+  TRIM: 0.65
+  EXIT: 0.75
+  REVIEW: 0.50
+coverage_confidence_caps:
+  SUFFICIENT: 0.85
+  PARTIAL: 0.65
+  INSUFFICIENT: 0.40
+conflict_hard_block_code: EVIDENCE_CONFLICT_REQUIRES_REVIEW
+invalidated_evidence_hard_block_code: BASELINE_EVIDENCE_INVALIDATED
+add_support_missing_code: ADD_SUPPORTING_EVIDENCE_MISSING
+requires_user_confirmation: true
+add_requires_new_evidence: true

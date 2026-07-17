@@ -1,6 +1,7 @@
 """Frozen-evidence common investment research kernel."""
 
 from astock.research.config import (
+    load_position_lifecycle_config,
     load_research_core_config,
     load_research_diagnostic_config,
     load_research_skill_registry,
@@ -10,6 +11,12 @@ from astock.research.diagnostics import (
     ResearchDiagnosticsService,
     ResearchMemoExecution,
 )
+from astock.research.lifecycle import (
+    HoldingReviewExecution,
+    PositionLifecycleService,
+    PositionPlanExecution,
+)
+from astock.research.lifecycle_repository import LifecycleRepository
 from astock.research.repository import ResearchRepository
 from astock.research.service import (
     BaseCaseExecution,
@@ -30,6 +37,10 @@ __all__ = [
     "ResearchCoreService",
     "ResearchDiagnosticsService",
     "ResearchMemoExecution",
+    "HoldingReviewExecution",
+    "LifecycleRepository",
+    "PositionLifecycleService",
+    "PositionPlanExecution",
     "ResearchRepository",
     "ResearchSkillService",
     "SkillRegistryExecution",
@@ -38,4 +49,5 @@ __all__ = [
     "load_research_core_config",
     "load_research_diagnostic_config",
     "load_research_skill_registry",
+    "load_position_lifecycle_config",
 ]

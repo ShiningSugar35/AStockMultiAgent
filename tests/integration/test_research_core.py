@@ -57,6 +57,7 @@ def _fixture(
     evidence_grade: EvidenceGrade = EvidenceGrade.PRIMARY_OFFICIAL,
     pit_status: PointInTimeStatus = PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
     conflict: bool = False,
+    available_at: datetime | None = None,
 ):
     text = "Revenue grew. Demand may weaken."
     pdf = pymupdf.open()
@@ -66,7 +67,7 @@ def _fixture(
     pdf.close()
     objects = ObjectStore(tmp_path / f"objects-{suffix}")
     raw = objects.put_bytes(pdf_bytes)
-    available = datetime(2026, 1, 10, tzinfo=UTC)
+    available = available_at or datetime(2026, 1, 10, tzinfo=UTC)
     snapshot = SourceSnapshot(
         snapshot_id=f"snapshot:research:{suffix}",
         source_id=f"source:research:{suffix}",

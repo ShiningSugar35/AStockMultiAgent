@@ -56,10 +56,12 @@ from astock.market_data.sync import MarketSyncService
 from astock.paper_trading import LedgerService, PaperReplayService, load_fee_schedule
 from astock.providers import EastMoney5mProvider, Sina5mProvider
 from astock.research import (
+    PositionLifecycleService,
     ResearchCoreService,
     ResearchDiagnosticsService,
     ResearchRepository,
     ResearchSkillService,
+    load_position_lifecycle_config,
     load_research_core_config,
     load_research_diagnostic_config,
     load_research_skill_registry,
@@ -75,9 +77,12 @@ from astock.schemas import (
     DocumentType,
     EvidenceFreezeRequest,
     FinancialAuditRequest,
+    HoldingReviewRequest,
     InstrumentType,
     KnowledgeSourceRegistry,
     Market,
+    PositionLifecycleConfig,
+    PositionPlanCreateRequest,
     ResearchCoreConfig,
     ResearchDiagnosticConfig,
     ResearchMemoComposeRequest,
@@ -134,6 +139,12 @@ def _research_skills(paths: ProjectPaths) -> ResearchSkillRegistry:
 def _research_diagnostics(paths: ProjectPaths) -> ResearchDiagnosticConfig:
     return load_research_diagnostic_config(
         paths.root / "configs" / "research_diagnostics.yaml"
+    )
+
+
+def _position_lifecycle(paths: ProjectPaths) -> PositionLifecycleConfig:
+    return load_position_lifecycle_config(
+        paths.root / "configs" / "position_lifecycle.yaml"
     )
 
 
@@ -1266,6 +1277,165 @@ def research_diagnostic_audit(
             _research_skills(paths),
             _research_diagnostics(paths),
         ).audit(base_case_id)
+    )
+
+
+@app.command("position-lifecycle-schema")
+def position_lifecycle_schema() -> None:
+    """List the frozen lifecycle rules and manual-confirmation safety gates."""
+
+    paths, state, objects = _services()
+    service = PositionLifecycleService(state, objects, _position_lifecycle(paths))
+    rules, object_hash = service.register_rules()
+    _emit(
+        {
+            "rules_version": rules.rules_version,
+            "object_sha256": object_hash,
+            "action_priority": rules.action_priority,
+            "base_action_confidence": rules.base_action_confidence,
+            "coverage_confidence_caps": rules.coverage_confidence_caps,
+            "requires_user_confirmation": rules.requires_user_confirmation,
+            "add_requires_new_evidence": rules.add_requires_new_evidence,
+            "hard_block_codes": [
+                rules.conflict_hard_block_code,
+                rules.invalidated_evidence_hard_block_code,
+                rules.add_support_missing_code,
+            ],
+        }
+    )
+
+
+@app.command("position-plan-create")
+def position_plan_create(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Create a cited monitoring plan without exposing its private thesis text."""
+
+    paths, state, objects = _services()
+    try:
+        request = PositionPlanCreateRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = PositionLifecycleService(
+            state,
+            objects,
+            _position_lifecycle(paths),
+        ).create_plan(request)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_POSITION_PLAN"})
+        raise typer.Exit(code=2) from exc
+    plan = execution.plan
+    _emit(
+        {
+            "status": "MONITORED",
+            "plan_id": plan.plan_id,
+            "position_id": plan.position_id,
+            "company_id": plan.company_id,
+            "base_case_id": plan.base_case_id,
+            "route_plan_id": plan.route_plan_id,
+            "memo_id": plan.memo_id,
+            "rules_version": plan.rules_version,
+            "as_of": plan.as_of,
+            "next_review_at": plan.next_review_at,
+            "condition_count": len(
+                [*plan.price_rules, *plan.fundamental_rules, *plan.event_rules]
+            ),
+            "baseline_evidence_count": len(plan.baseline_evidence_ids),
+            "coverage_status": plan.coverage_status,
+            "object_sha256": execution.object_sha256,
+        }
+    )
+
+
+@app.command("position-plan-status")
+def position_plan_status(
+    position_id: Annotated[str, typer.Argument(help="Monitored position id.")],
+) -> None:
+    """Return safe monitoring and latest-review indexes without thesis prose."""
+
+    paths, state, objects = _services()
+    _emit(
+        PositionLifecycleService(
+            state,
+            objects,
+            _position_lifecycle(paths),
+        ).status(position_id)
+    )
+
+
+@app.command("holding-review-run")
+def holding_review_run(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Generate an incremental action proposal that always needs user confirmation."""
+
+    paths, state, objects = _services()
+    try:
+        request = HoldingReviewRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = PositionLifecycleService(
+            state,
+            objects,
+            _position_lifecycle(paths),
+        ).review(request)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_HOLDING_REVIEW"})
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": "PROPOSED",
+            "update_id": execution.update.update_id,
+            "review_id": execution.review.review_id,
+            "proposal_id": execution.proposal.proposal_id,
+            "position_id": execution.proposal.position_id,
+            "action": execution.proposal.action,
+            "action_confidence": execution.review.action_confidence,
+            "requires_user_confirmation": execution.proposal.requires_user_confirmation,
+            "triggered_rules": execution.review.triggered_rules,
+            "hard_blocks": execution.review.hard_blocks,
+            "degradation_codes": execution.review.degradation_codes,
+            "evidence_count": len(execution.review.evidence_ids),
+            "object_sha256": execution.review_object_sha256,
+        }
+    )
+
+
+@app.command("holding-review-status")
+def holding_review_status(
+    position_id: Annotated[str, typer.Argument(help="Monitored position id.")],
+) -> None:
+    """Return the latest safe lifecycle checkpoint for a position."""
+
+    paths, state, objects = _services()
+    _emit(
+        PositionLifecycleService(
+            state,
+            objects,
+            _position_lifecycle(paths),
+        ).status(position_id)
+    )
+
+
+@app.command("holding-review-audit")
+def holding_review_audit(
+    position_id: Annotated[str, typer.Argument(help="Monitored position id.")],
+) -> None:
+    """Audit lineage, continuous windows, artifacts, and confirmation gates."""
+
+    paths, state, objects = _services()
+    _emit(
+        PositionLifecycleService(
+            state,
+            objects,
+            _position_lifecycle(paths),
+        ).audit(position_id)
     )
 
 

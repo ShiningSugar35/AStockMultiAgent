@@ -18,6 +18,8 @@ from astock.knowledge.distillation import (
 )
 from astock.knowledge.distillation_repository import DistillationRepository
 from astock.knowledge.distillation_storage import ParquetDistillationStore
+from astock.knowledge.draft_repository import KnowledgeDraftRepository
+from astock.knowledge.drafts import KnowledgeDraftExecution, KnowledgeDraftService
 from astock.knowledge.imports import (
     ZhihuCommentReplayExecution,
     ZhihuImportExecution,
@@ -38,6 +40,9 @@ __all__ = [
     "DistillationExecution",
     "DistillationRepository",
     "KnowledgeCoverageAuditService",
+    "KnowledgeDraftExecution",
+    "KnowledgeDraftRepository",
+    "KnowledgeDraftService",
     "KnowledgeDistillationService",
     "KnowledgeRepository",
     "ParquetKnowledgeStore",

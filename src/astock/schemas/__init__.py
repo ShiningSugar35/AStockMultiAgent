@@ -27,6 +27,7 @@ from astock.schemas.books import (
 )
 from astock.schemas.distillation import (
     AuthorDistillationReport,
+    AuthorDraftGenerationReport,
     DistillationClassRuleSet,
     DistillationDecision,
     DistillationLocatorType,
@@ -35,6 +36,11 @@ from astock.schemas.distillation import (
     DistillationRunStatus,
     DistillationSourceLocator,
     DistillationUnit,
+    PrivateSkillCandidateDraft,
+    PrivateSkillCandidatePayload,
+    PrivateViewpointDraft,
+    PrivateViewpointDraftPayload,
+    ViewpointDraftDerivation,
 )
 from astock.schemas.documents import (
     DisclosureAnnouncement,
@@ -217,6 +223,7 @@ __all__ = [
     "AdjustmentMode",
     "AmountUnit",
     "AuthorCollectionCoverageReport",
+    "AuthorDraftGenerationReport",
     "AuthorDistillationReport",
     "AuthorSkillCoverage",
     "AvailabilityBasis",
@@ -364,6 +371,10 @@ __all__ = [
     "PositionActionProposal",
     "PositionLifecycleSkillManifest",
     "PositionMonitoringPlan",
+    "PrivateSkillCandidateDraft",
+    "PrivateSkillCandidatePayload",
+    "PrivateViewpointDraft",
+    "PrivateViewpointDraftPayload",
     "PointInTimeMetadata",
     "PointInTimeStatus",
     "PrivatePdfIngestResult",
@@ -388,6 +399,7 @@ __all__ = [
     "TimestampSemantics",
     "TransportCapability",
     "ValidationReport",
+    "ViewpointDraftDerivation",
     "VerifiedFinancialNumber",
     "VolumeUnit",
     "ZhihuAuthorIdentity",

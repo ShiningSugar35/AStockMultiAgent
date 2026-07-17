@@ -2,7 +2,7 @@
 
 计划日期：2026-07-17
 
-状态：K5.6a～K5.6b 已实现并验收；K5.6c 观点与 Skill 候选待继续
+状态：K5.6a～K5.6d 的确定性自动链与真实运行已实现并验收；人工综合、审核和样本外评测待后续执行，Phase 5 总体仍为 `PARTIAL`
 
 ## 1. 目标与真实输入
 
@@ -91,9 +91,11 @@
 
 ## 8. Migration、CLI 与恢复
 
-- migration 0019：distillation run、unit metadata、分类版本、重复关系、作者报告、私有观点/Skill 草稿登记和审核决定索引；
+- migration 0019：distillation run、unit metadata、分类版本、重复关系、作者报告和初步审核队列；
+- migration 0020：私有摘录草稿、候选 Skill、安全引用关系和作者生成报告；
+- migration 0021：同一蒸馏输入按生成规则版本并存，升级规则不得覆盖旧草稿；
 - Parquet：只保存安全元数据索引，正文/命题/规则载荷只存 ObjectStore；
-- CLI：`knowledge-distill-plan`、`knowledge-distill-run`、`knowledge-distill-status`、`knowledge-review-queue`，输出仅含 ID、哈希、计数和状态；
+- CLI：`knowledge-distill-plan/run/status/audit`、`knowledge-review-queue` 和 `knowledge-draft-generate/status/audit`，输出仅含 ID、哈希、计数和状态；
 - 检查点按 run、source、source_unit 递进；ObjectStore 已写而 SQLite 未提交时可幂等恢复；
 - 相同源快照与规则版本重复运行不重复生成单元和候选。
 
@@ -125,7 +127,10 @@
 
 - [x] K5.6a：统一定位、规范化单元、精确重复链、版本化多标签分类、SQLite/Parquet/ObjectStore 和断点恢复。
 - [x] K5.6b：作者清洗/方法覆盖报告、私有审核队列、四位作者真实运行与逐作者对象/索引审计。
-- [ ] K5.6c：私有观点草稿、Skill 候选、人工审核决定和评测门禁；未经审核不批准。
-- [ ] K5.6d：在 K5.6c 完成后做整体终验，并把人工操作集中报告给用户。
+- [x] K5.6c 自动链：私有原文摘录草稿、空规则 Skill 候选、来源回链、人工审核与评测门禁；未经审核不批准。
+- [ ] K5.6c 人工链：把摘录综合为可测试观点、补适用范围/反证/失效条件，执行评测并作批准或拒绝决定。
+- [x] K5.6d：四位作者真实自动运行、幂等复跑、对象/引用/审批门禁和运行库终验。
+
+K5.6c～K5.6d 自动链真实结果为 401 条 `PENDING` 摘录草稿和 40 个 `NOT_RUN/PENDING` Skill 候选；黄彦臻现有唯一材料未达到生成门槛，结果保持 0/0。验收依据见 `docs/Phase5-K5.6c-K5.6d验收报告.md`。
 
 K5.6a～K5.6b 验收依据见 `docs/Phase5-K5.6a-K5.6b验收报告.md`。

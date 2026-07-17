@@ -22,6 +22,9 @@ from astock.schemas import (
     HumanReviewDecision,
     HumanReviewStatus,
     HumanReviewVerdict,
+    PrivateSkillCandidateDraft,
+    PrivateViewpointDraft,
+    ViewpointDraftDerivation,
 )
 
 
@@ -122,4 +125,38 @@ def test_viewpoint_and_skill_rules_require_page_and_excerpt_lineage() -> None:
             evaluation_status=BookEvaluationStatus.NOT_RUN,
             evaluation_results={},
             approval_status=BookApprovalStatus.PENDING,
+        )
+
+
+def test_automatic_private_drafts_cannot_self_approve_or_claim_evaluation() -> None:
+    with pytest.raises(ValidationError, match="explicit review decision"):
+        PrivateViewpointDraft(
+            draft_id="private-viewpoint:fixture",
+            run_id="distillation:fixture",
+            author_source_id="zhihu:fixture",
+            method_category=BookMethodCategory.STOCK_SELECTION,
+            source_unit_ids=["unit:fixture"],
+            source_excerpt_hashes=["a" * 64],
+            payload_object_sha256="b" * 64,
+            proposition_derivation=(
+                ViewpointDraftDerivation.SOURCE_EXCERPT_NOT_SYNTHESIZED
+            ),
+            generation_rule_version="private-excerpt-draft-v1",
+            human_review_status=HumanReviewStatus.APPROVED,
+            quality_gaps=["PROPOSITION_NOT_SYNTHESIZED"],
+        )
+    with pytest.raises(ValidationError, match="cannot claim an evaluation result"):
+        PrivateSkillCandidateDraft(
+            candidate_id="private-skill:fixture",
+            run_id="distillation:fixture",
+            author_source_id="zhihu:fixture",
+            target_skill=BookSkillTarget.CANDIDATE_SELECTION,
+            method_category=BookMethodCategory.STOCK_SELECTION,
+            source_viewpoint_draft_ids=["private-viewpoint:fixture"],
+            source_unit_ids=["unit:fixture"],
+            payload_object_sha256="c" * 64,
+            generation_rule_version="private-excerpt-draft-v1",
+            evaluation_status=BookEvaluationStatus.PASSED,
+            approval_status=BookApprovalStatus.APPROVED,
+            quality_gaps=["HUMAN_REVIEW_REQUIRED"],
         )

@@ -10,8 +10,11 @@ from astock.schemas.base import AStockModel
 from astock.schemas.books import (
     BOOK_DOWNWEIGHT_CLASSES,
     BOOK_KEEP_CLASSES,
+    BookApprovalStatus,
     BookContentClass,
+    BookEvaluationStatus,
     BookMethodCategory,
+    BookSkillTarget,
     HumanReviewStatus,
 )
 from astock.schemas.knowledge import CoverageStatus
@@ -34,6 +37,10 @@ class DistillationRunStatus(StrEnum):
     RUNNING = "RUNNING"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
+
+
+class ViewpointDraftDerivation(StrEnum):
+    SOURCE_EXCERPT_NOT_SYNTHESIZED = "SOURCE_EXCERPT_NOT_SYNTHESIZED"
 
 
 class DistillationSourceLocator(AStockModel):
@@ -232,7 +239,116 @@ class DistillationReviewQueue(AStockModel):
         return self
 
 
+class PrivateViewpointDraftPayload(AStockModel):
+    proposition: str = Field(min_length=1)
+    proposition_derivation: ViewpointDraftDerivation
+    generation_rule_version: str = Field(min_length=1)
+    method_category: BookMethodCategory
+    source_unit_id: str = Field(min_length=1)
+    source_locator: DistillationSourceLocator
+    applicability_scope: list[str]
+    counterevidence: list[str]
+    failure_conditions: list[str]
+    quality_gaps: list[str] = Field(min_length=1)
+
+
+class PrivateViewpointDraft(AStockModel):
+    draft_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    method_category: BookMethodCategory
+    source_unit_ids: list[str] = Field(min_length=1, max_length=1)
+    source_excerpt_hashes: list[str] = Field(min_length=1, max_length=1)
+    payload_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    proposition_derivation: ViewpointDraftDerivation
+    generation_rule_version: str = Field(min_length=1)
+    human_review_status: HumanReviewStatus = HumanReviewStatus.PENDING
+    quality_gaps: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def prevent_automatic_viewpoint_approval(self) -> PrivateViewpointDraft:
+        if self.human_review_status is HumanReviewStatus.APPROVED:
+            raise ValueError("private viewpoint drafts require an explicit review decision")
+        if len(self.source_unit_ids) != len(set(self.source_unit_ids)):
+            raise ValueError("viewpoint draft source units must be unique")
+        if len(self.source_excerpt_hashes) != len(set(self.source_excerpt_hashes)):
+            raise ValueError("viewpoint draft excerpt hashes must be unique")
+        if any(
+            len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
+            for value in self.source_excerpt_hashes
+        ):
+            raise ValueError("viewpoint draft excerpt hashes must be SHA-256")
+        return self
+
+
+class PrivateSkillCandidatePayload(AStockModel):
+    generation_rule_version: str = Field(min_length=1)
+    formal_rule: dict[str, object] | None = None
+    source_viewpoint_draft_ids: list[str] = Field(min_length=1)
+    required_human_steps: list[str] = Field(min_length=1)
+    generic_safety_gates: list[str] = Field(min_length=1)
+
+
+class PrivateSkillCandidateDraft(AStockModel):
+    candidate_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    target_skill: BookSkillTarget
+    method_category: BookMethodCategory
+    source_viewpoint_draft_ids: list[str] = Field(min_length=1)
+    source_unit_ids: list[str] = Field(min_length=1)
+    payload_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generation_rule_version: str = Field(min_length=1)
+    evaluation_status: BookEvaluationStatus = BookEvaluationStatus.NOT_RUN
+    approval_status: BookApprovalStatus = BookApprovalStatus.PENDING
+    quality_gaps: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def prevent_automatic_skill_approval(self) -> PrivateSkillCandidateDraft:
+        if self.evaluation_status is not BookEvaluationStatus.NOT_RUN:
+            raise ValueError("automatic Skill candidates cannot claim an evaluation result")
+        if self.approval_status is not BookApprovalStatus.PENDING:
+            raise ValueError("automatic Skill candidates must remain PENDING")
+        if len(self.source_viewpoint_draft_ids) != len(
+            set(self.source_viewpoint_draft_ids)
+        ):
+            raise ValueError("Skill candidate viewpoint drafts must be unique")
+        if len(self.source_unit_ids) != len(set(self.source_unit_ids)):
+            raise ValueError("Skill candidate source units must be unique")
+        return self
+
+
+class AuthorDraftGenerationReport(AStockModel):
+    report_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    generation_rule_version: str = Field(min_length=1)
+    source_keep_unit_count: int = Field(ge=0)
+    eligible_method_unit_count: int = Field(ge=0)
+    viewpoint_draft_count: int = Field(ge=0)
+    skill_candidate_count: int = Field(ge=0)
+    method_category_unit_counts: dict[str, int]
+    selected_viewpoint_counts: dict[str, int]
+    target_skill_candidate_counts: dict[str, int]
+    human_review_status: HumanReviewStatus = HumanReviewStatus.PENDING
+    all_evaluations_not_run: bool = True
+    all_approvals_pending: bool = True
+
+    @model_validator(mode="after")
+    def validate_pending_generation(self) -> AuthorDraftGenerationReport:
+        if self.human_review_status is HumanReviewStatus.APPROVED:
+            raise ValueError("draft generation reports cannot self-approve")
+        if not self.all_evaluations_not_run or not self.all_approvals_pending:
+            raise ValueError("automatic draft generation must remain unevaluated and pending")
+        if sum(self.selected_viewpoint_counts.values()) != self.viewpoint_draft_count:
+            raise ValueError("selected viewpoint counts must equal draft count")
+        if sum(self.target_skill_candidate_counts.values()) != self.skill_candidate_count:
+            raise ValueError("target Skill counts must equal candidate count")
+        return self
+
+
 __all__ = [
+    "AuthorDraftGenerationReport",
     "AuthorDistillationReport",
     "DistillationClassRuleSet",
     "DistillationDecision",
@@ -242,4 +358,9 @@ __all__ = [
     "DistillationRunStatus",
     "DistillationSourceLocator",
     "DistillationUnit",
+    "PrivateSkillCandidateDraft",
+    "PrivateSkillCandidatePayload",
+    "PrivateViewpointDraft",
+    "PrivateViewpointDraftPayload",
+    "ViewpointDraftDerivation",
 ]

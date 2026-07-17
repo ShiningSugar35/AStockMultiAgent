@@ -36,6 +36,8 @@ from astock.knowledge import (
     DistillationRepository,
     KnowledgeCoverageAuditService,
     KnowledgeDistillationService,
+    KnowledgeDraftRepository,
+    KnowledgeDraftService,
     KnowledgeRepository,
     ParquetKnowledgeStore,
     ZhihuCollectionService,
@@ -952,6 +954,52 @@ def knowledge_review_queue(
         if summary is None
         else {"status": summary["human_review_status"], "queue": summary}
     )
+
+
+@app.command("knowledge-draft-generate")
+def knowledge_draft_generate(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Generate private excerpt drafts and unevaluated Skill candidates."""
+
+    paths, state, objects = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    execution = KnowledgeDraftService(state, objects).generate(source_id)
+    _emit(
+        {
+            "status": "PENDING_REVIEW",
+            "report": execution.report,
+            "viewpoint_draft_count": len(execution.viewpoint_drafts),
+            "skill_candidate_count": len(execution.skill_candidates),
+        }
+    )
+
+
+@app.command("knowledge-draft-status")
+def knowledge_draft_status(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Return private draft metadata without source excerpts or private paths."""
+
+    paths, state, _ = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    report = KnowledgeDraftRepository(state).latest_report(source_id)
+    _emit(
+        {"status": "NOT_RUN", "report": None}
+        if report is None
+        else {"status": report.human_review_status, "report": report}
+    )
+
+
+@app.command("knowledge-draft-audit")
+def knowledge_draft_audit(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Audit private draft payloads, source references, and approval gates."""
+
+    paths, state, objects = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    _emit(KnowledgeDraftService(state, objects).audit(source_id))
 
 
 @app.command("zhihu-author-probe")

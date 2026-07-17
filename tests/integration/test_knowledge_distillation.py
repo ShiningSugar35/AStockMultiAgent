@@ -12,16 +12,21 @@ from astock.core.object_store import ObjectStore
 from astock.knowledge import (
     DistillationRepository,
     KnowledgeDistillationService,
+    KnowledgeDraftService,
     KnowledgeRepository,
     load_distillation_rules,
 )
 from astock.schemas import (
+    BookApprovalStatus,
+    BookEvaluationStatus,
     DistillationDecision,
     DistillationLocatorType,
     DocumentType,
     FetchStatus,
     HumanReviewStatus,
     KnowledgeSourceDefinition,
+    PrivateSkillCandidatePayload,
+    PrivateViewpointDraftPayload,
     SourceSnapshot,
     ZhihuContentRecord,
     ZhihuContentType,
@@ -154,6 +159,10 @@ def test_cross_source_distillation_is_idempotent_auditable_and_private(
     first = service.run(_source(), rules)
     repeated = service.run(_source(), rules)
     audit = service.audit("zhihu:test-distillation")
+    draft_service = KnowledgeDraftService(state, objects)
+    draft_execution = draft_service.generate("zhihu:test-distillation")
+    repeated_drafts = draft_service.generate("zhihu:test-distillation")
+    draft_audit = draft_service.audit("zhihu:test-distillation")
 
     assert first.run.run_id == repeated.run.run_id
     assert first.report == repeated.report
@@ -178,6 +187,46 @@ def test_cross_source_distillation_is_idempotent_auditable_and_private(
     assert audit["missing_normalized_object_count"] == 0
     assert audit["missing_source_object_count"] == 0
     assert audit["parquet_hash_mismatch_count"] == 0
+    assert draft_execution == repeated_drafts
+    assert draft_execution.report.human_review_status is HumanReviewStatus.PENDING
+    assert draft_execution.report.viewpoint_draft_count == len(
+        draft_execution.viewpoint_drafts
+    )
+    assert draft_execution.report.skill_candidate_count == len(
+        draft_execution.skill_candidates
+    )
+    assert draft_execution.viewpoint_drafts
+    assert draft_execution.skill_candidates
+    assert all(
+        candidate.evaluation_status is BookEvaluationStatus.NOT_RUN
+        and candidate.approval_status is BookApprovalStatus.PENDING
+        for candidate in draft_execution.skill_candidates
+    )
+    viewpoint_payloads = [
+        PrivateViewpointDraftPayload.model_validate_json(
+            objects.get_bytes(draft.payload_object_sha256)
+        )
+        for draft in draft_execution.viewpoint_drafts
+    ]
+    assert _PRIVATE_METHOD in {payload.proposition for payload in viewpoint_payloads}
+    assert all(
+        not payload.applicability_scope
+        and not payload.counterevidence
+        and not payload.failure_conditions
+        and "PROPOSITION_NOT_SYNTHESIZED" in payload.quality_gaps
+        for payload in viewpoint_payloads
+    )
+    skill_payloads = [
+        PrivateSkillCandidatePayload.model_validate_json(
+            objects.get_bytes(candidate.payload_object_sha256)
+        )
+        for candidate in draft_execution.skill_candidates
+    ]
+    assert all(payload.formal_rule is None for payload in skill_payloads)
+    assert draft_audit["status"] == "PASS"
+    assert draft_audit["missing_payload_object_count"] == 0
+    assert draft_audit["candidate_reference_mismatch_count"] == 0
+    assert draft_audit["pending_gate_mismatch_count"] == 0
     parquet = pq.ParquetFile(first.parquet_file).read()
     assert parquet.num_rows == len(units)
     assert "normalized_text_sha256" in parquet.column_names
@@ -201,6 +250,9 @@ def test_cross_source_distillation_is_idempotent_auditable_and_private(
                 ("author_distillation_report", "report_json"),
                 ("book_cleaning_report", "report_json"),
                 ("book_method_coverage_report", "report_json"),
+                ("private_viewpoint_draft", "draft_json"),
+                ("private_skill_candidate_draft", "candidate_json"),
+                ("author_draft_generation_report", "report_json"),
             )
             for row in connection.execute(f"SELECT {column} FROM {table}").fetchall()
         )

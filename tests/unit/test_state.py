@@ -40,6 +40,8 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0017",
         "0018",
         "0019",
+        "0020",
+        "0021",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -244,6 +246,142 @@ def test_failed_migration_rolls_back_partial_schema(tmp_path: Path) -> None:
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='should_rollback'"
         ).fetchone()
     assert exists is None
+
+
+def test_private_draft_version_migration_preserves_rows_and_allows_new_version(
+    tmp_path: Path,
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 21):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    state.migrate()
+    now = "2026-07-17T00:00:00+00:00"
+    with state.transaction() as connection:
+        connection.execute(
+            "INSERT INTO knowledge_distillation_run VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                "run:fixture",
+                "author:fixture",
+                "classification-v1",
+                "COMPLETE",
+                "input-set",
+                1,
+                1,
+                "{}",
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO knowledge_distillation_unit VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "unit:fixture",
+                "run:fixture",
+                "author:fixture",
+                "source:fixture",
+                "snapshot:fixture",
+                "source-unit:fixture",
+                1,
+                1,
+                "a" * 64,
+                None,
+                "KEEP_CANDIDATE",
+                "classification-v1",
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO private_viewpoint_draft VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "draft:v1",
+                "run:fixture",
+                "author:fixture",
+                "STOCK_SELECTION",
+                "unit:fixture",
+                "a" * 64,
+                "b" * 64,
+                "SOURCE_EXCERPT_NOT_SYNTHESIZED",
+                "draft-v1",
+                "PENDING",
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO private_skill_candidate_draft VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "candidate:v1",
+                "run:fixture",
+                "author:fixture",
+                "CANDIDATE_SELECTION",
+                "STOCK_SELECTION",
+                "c" * 64,
+                "draft-v1",
+                "NOT_RUN",
+                "PENDING",
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO private_skill_candidate_viewpoint_ref VALUES(?,?,?)",
+            ("candidate:v1", 1, "draft:v1"),
+        )
+        connection.execute(
+            "INSERT INTO private_skill_candidate_unit_ref VALUES(?,?,?)",
+            ("candidate:v1", 1, "unit:fixture"),
+        )
+        connection.execute(
+            "INSERT INTO author_draft_generation_report VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                "report:v1",
+                "run:fixture",
+                "author:fixture",
+                "draft-v1",
+                1,
+                1,
+                "PENDING",
+                "d" * 64,
+                "{}",
+                now,
+            ),
+        )
+
+    source = next((PROJECT_ROOT / "migrations").glob("0021_*.sql"))
+    shutil.copy(source, migrations / source.name)
+    assert state.migrate() == ["0021"]
+    with state.transaction() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM private_viewpoint_draft"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM private_skill_candidate_viewpoint_ref"
+        ).fetchone()[0] == 1
+        connection.execute(
+            "INSERT INTO private_viewpoint_draft VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "draft:v2",
+                "run:fixture",
+                "author:fixture",
+                "STOCK_SELECTION",
+                "unit:fixture",
+                "a" * 64,
+                "e" * 64,
+                "SOURCE_EXCERPT_NOT_SYNTHESIZED",
+                "draft-v2",
+                "PENDING",
+                "{}",
+                now,
+            ),
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM private_viewpoint_draft"
+        ).fetchone()[0] == 2
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_generic_evidence_migration_preserves_existing_page_links(tmp_path: Path) -> None:

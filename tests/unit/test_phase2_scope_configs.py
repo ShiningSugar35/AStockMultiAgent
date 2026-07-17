@@ -94,7 +94,7 @@ def test_private_docx_is_user_confirmed_complete_without_online_collection() -> 
 
 
 def test_development_plan_names_every_source_and_book_artifact() -> None:
-    plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
+    plan = (PROJECT_ROOT / "docs" / "开发计划.md").read_text(encoding="utf-8")
     for text in (
         "MR Dang",
         "黄彦臻",

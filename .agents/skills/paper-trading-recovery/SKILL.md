@@ -10,6 +10,7 @@ description: Initialize, inspect, recover, or advance the deterministic paper-tr
 3. Run `uv run astock probe`, synchronize the missing 5m interval, and inspect its quality report.
 4. Use `uv run astock paper-replay` only with an existing canonical manifest.
 5. Preserve the old canonical and checkpoint when a provider or quality gate fails.
+6. Treat `shadow-status`, `shadow-audit`, and `phase8-admission` as read-only analytical state. Shadow studies and their observations must never initialize, replay, repair, or mutate this account.
 
 ## Output
 
@@ -19,4 +20,5 @@ Produce deterministic `PortfolioNAV` and `ReplayCheckpoint` values plus an integ
 
 - Do not edit SQLite or advance a cursor past verified data.
 - Do not replace missing 5m bars with invented data.
+- Do not write shadow-study results, arm returns, or adaptive weights into the main paper ledger.
 - Do not connect to or submit orders to a real broker.

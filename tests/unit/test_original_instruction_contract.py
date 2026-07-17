@@ -27,7 +27,7 @@ def _fields(model: type) -> set[str]:
 
 
 def test_development_plan_keeps_every_original_architecture_change() -> None:
-    plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
+    plan = (PROJECT_ROOT / "docs" / "开发计划.md").read_text(encoding="utf-8")
     for section in (
         "## 1.",
         "## 3.",

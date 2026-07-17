@@ -29,12 +29,14 @@ from astock.schemas import (
     FrozenEvidencePack,
     HoldingEvidenceUpdate,
     HoldingReviewPack,
+    Phase8AdmissionReport,
     PositionActionProposal,
     PositionMonitoringPlan,
     ResearchMemoArtifact,
     RunManifest,
     RunMode,
     RunStatus,
+    ShadowEvaluationReport,
     SpecialistDelta,
     SpecialistDiagnosticReport,
     SpecialistRoutePlan,
@@ -60,6 +62,8 @@ _ARTIFACT_MODELS: dict[str, type[AStockModel]] = {
     "CounterCasePack": CounterCasePack,
     "DecisionPack": DecisionPack,
     "TradeProtocol": TradeProtocol,
+    "ShadowEvaluationReport": ShadowEvaluationReport,
+    "Phase8AdmissionReport": Phase8AdmissionReport,
 }
 
 _REGISTERED_PHASE4_OUTPUTS: dict[str, tuple[str, str]] = {
@@ -84,9 +88,15 @@ _REGISTERED_COMMITTEE_OUTPUTS: dict[str, tuple[str, str]] = {
     "TradeProtocol": ("protocol_id", "TradeProtocol"),
 }
 
+_REGISTERED_SHADOW_OUTPUTS: dict[str, tuple[str, str]] = {
+    "ShadowEvaluationReport": ("report_id", "ShadowEvaluationReport"),
+    "Phase8AdmissionReport": ("admission_id", "Phase8AdmissionReport"),
+}
+
 _REGISTERED_STRICT_OUTPUTS = {
     **_REGISTERED_PHASE4_OUTPUTS,
     **_REGISTERED_COMMITTEE_OUTPUTS,
+    **_REGISTERED_SHADOW_OUTPUTS,
 }
 
 
@@ -96,6 +106,10 @@ def registered_phase4_artifact_types() -> list[str]:
 
 def registered_committee_artifact_types() -> list[str]:
     return sorted(_REGISTERED_COMMITTEE_OUTPUTS)
+
+
+def registered_shadow_artifact_types() -> list[str]:
+    return sorted(_REGISTERED_SHADOW_OUTPUTS)
 
 
 def registered_strict_artifact_types() -> list[str]:
@@ -816,5 +830,6 @@ __all__ = [
     "build_context_budget",
     "registered_committee_artifact_types",
     "registered_phase4_artifact_types",
+    "registered_shadow_artifact_types",
     "registered_strict_artifact_types",
 ]

@@ -117,3 +117,32 @@ def test_phase6_repo_skill_commands_exist_and_keep_committee_offline() -> None:
         SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
     ).read_text(encoding="utf-8")
     assert "The committee never performs the search itself" in orchestrator
+
+
+def test_phase7_repo_skill_commands_exist_and_keep_shadow_isolated() -> None:
+    command_names = {command.name for command in app.registered_commands if command.name}
+    expected_commands = {
+        "shadow-schema",
+        "shadow-study-plan",
+        "shadow-study-create",
+        "shadow-independence-key",
+        "shadow-assign",
+        "market-regime-classify",
+        "shadow-observation-record",
+        "shadow-evaluate",
+        "shadow-status",
+        "shadow-audit",
+        "shadow-recover",
+        "phase8-admission",
+    }
+    assert expected_commands <= command_names
+    orchestrator = (
+        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "ELIGIBLE_RULE_STATE_MACHINE_RESEARCH" in orchestrator
+    assert "Do not change weights or the paper ledger" in orchestrator
+    recovery = (SKILLS_ROOT / "paper-trading-recovery" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Shadow studies and their observations must never" in recovery
+    assert "Do not write shadow-study results" in recovery

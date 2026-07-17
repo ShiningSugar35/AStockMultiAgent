@@ -21,6 +21,7 @@ from astock.schemas import (
     ShadowArmType,
     ShadowExecutionObservation,
     ShadowExecutionObservationDraft,
+    ShadowFillStatus,
     ShadowObservationStatus,
     ShadowStudyCreateRequest,
     ShadowStudyMode,
@@ -43,9 +44,9 @@ def _weight(name: str) -> FrozenWeightProfile:
 def _arms() -> list[ShadowArmDraft]:
     common = {
         "protocol_family_version": "protocol-family-v1",
-        "cost_model_version": "cost-v1",
-        "fill_model_version": "fill-v1",
-        "corporate_action_version": "actions-v1",
+        "cost_model_version": "shadow-round-trip-cost-v1",
+        "fill_model_version": "shadow-conservative-5m-v1",
+        "corporate_action_version": "shadow-corporate-actions-v1",
         "created_at": AS_OF,
     }
     return [
@@ -138,10 +139,27 @@ def test_shadow_policy_and_frozen_study_contracts() -> None:
             .model_copy(update={"created_at": AS_OF + timedelta(seconds=1)})
             .model_dump(mode="python")
         )
+    specialist = _arms()[2]
+    with pytest.raises(ValidationError, match="production specialist"):
+        ShadowArmDraft.model_validate(
+            {
+                **specialist.model_dump(mode="python"),
+                "specialist_skill_status": ResearchSkillStatus.PENDING,
+            }
+        )
+    isolated = ShadowArmDraft.model_validate(
+        {
+            **specialist.model_dump(mode="python"),
+            "research_status": ShadowArmResearchStatus.RESEARCH_ISOLATED,
+            "specialist_skill_status": ResearchSkillStatus.PENDING,
+        }
+    )
+    assert isolated.research_status is ShadowArmResearchStatus.RESEARCH_ISOLATED
 
 
 def test_shadow_observation_recalculates_execution_and_maturity() -> None:
     draft = ShadowExecutionObservationDraft(
+        observation_version="observation-v1",
         study_id="study:1",
         assignment_id="assignment:1",
         arm_id="arm:1",
@@ -156,9 +174,13 @@ def test_shadow_observation_recalculates_execution_and_maturity() -> None:
         signal_time=AS_OF,
         entry_time=AS_OF + timedelta(minutes=5),
         valuation_time=AS_OF + timedelta(days=90),
+        fill_status=ShadowFillStatus.FULL,
+        requested_quantity=100,
         quantity=100,
         entry_price_fen=1000,
         valuation_price_fen=1100,
+        highest_price_fen=1150,
+        lowest_price_fen=960,
         gross_pnl_fen=10_000,
         commission_fen=50,
         tax_fen=25,
@@ -166,6 +188,7 @@ def test_shadow_observation_recalculates_execution_and_maturity() -> None:
         slippage_fen=20,
         net_pnl_fen=9_900,
         capital_at_risk_fen=100_000,
+        normalization_notional_fen=100_000,
         net_return=Decimal("0.099"),
         nav_before_fen=1_000_000,
         nav_after_fen=1_009_900,
@@ -173,14 +196,28 @@ def test_shadow_observation_recalculates_execution_and_maturity() -> None:
         mae=Decimal("-0.04"),
         turnover_fen=210_000,
         liquidity_score=Decimal("0.9"),
+        market_volume_shares=10_000,
         participation_rate=Decimal("0.01"),
         replay_quality=ReplayQuality.DUAL_SOURCE_5M_VERIFIED,
+        cost_model_version="shadow-round-trip-cost-v1",
+        fill_model_version="shadow-conservative-5m-v1",
+        corporate_action_version="shadow-corporate-actions-v1",
         market_manifest_sha256="a" * 64,
+        trading_calendar_snapshot_sha256="b" * 64,
+        candidate_set_snapshot_sha256="c" * 64,
+        corporate_action_snapshot_sha256="d" * 64,
+        delisting_snapshot_sha256="e" * 64,
         market_observation_ids=["bar:1", "bar:2"],
         pit_statuses=[
             PointInTimeStatus.CERTIFIED,
             PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
         ],
+        candidate_membership_pit_safe=True,
+        corporate_action_coverage_complete=True,
+        delisting_coverage_complete=True,
+        t_plus_one_compliant=True,
+        price_limit_compliant=True,
+        suspension_compliant=True,
         optimistic_net_pnl_fen=9_900,
         created_at=AS_OF,
     )
@@ -198,6 +235,122 @@ def test_shadow_observation_recalculates_execution_and_maturity() -> None:
         ShadowExecutionObservationDraft.model_validate(
             draft.model_copy(update={"net_pnl_fen": 9_901}).model_dump(mode="python")
         )
+    with pytest.raises(ValidationError, match="MFE/MAE"):
+        ShadowExecutionObservationDraft.model_validate(
+            draft.model_copy(update={"mfe": Decimal("0.16")}).model_dump(
+                mode="python"
+            )
+        )
+    with pytest.raises(ValidationError, match="participation rate"):
+        ShadowExecutionObservationDraft.model_validate(
+            draft.model_copy(
+                update={"participation_rate": Decimal("0.02")}
+            ).model_dump(mode="python")
+        )
+    partial = ShadowExecutionObservationDraft.model_validate(
+        draft.model_copy(
+            update={
+                "fill_status": ShadowFillStatus.PARTIAL,
+                "requested_quantity": 200,
+            }
+        ).model_dump(mode="python")
+    )
+    assert partial.fill_status is ShadowFillStatus.PARTIAL
+    with pytest.raises(ValidationError, match="100-share lots"):
+        ShadowExecutionObservationDraft.model_validate(
+            draft.model_copy(
+                update={"requested_quantity": 50, "quantity": 50}
+            ).model_dump(mode="python")
+        )
+    corporate_action = ShadowExecutionObservationDraft.model_validate(
+        draft.model_copy(
+            update={
+                "corporate_action_cash_fen": 100,
+                "gross_pnl_fen": 10_100,
+                "net_pnl_fen": 10_000,
+                "net_return": Decimal("0.1"),
+                "nav_after_fen": 1_010_000,
+                "optimistic_net_pnl_fen": 10_000,
+            }
+        ).model_dump(mode="python")
+    )
+    assert corporate_action.gross_pnl_fen == 10_100
+    with pytest.raises(ValidationError, match="path sensitivity"):
+        ShadowExecutionObservationDraft.model_validate(
+            draft.model_copy(update={"optimistic_net_pnl_fen": 9_901}).model_dump(
+                mode="python"
+            )
+        )
+    path_sensitive = ShadowExecutionObservationDraft.model_validate(
+        draft.model_copy(
+            update={
+                "ambiguous_intrabar_path": True,
+                "optimistic_net_pnl_fen": 9_901,
+            }
+        ).model_dump(mode="python")
+    )
+    assert path_sensitive.conservative_path_used
+    non_execution = {
+        "entry_time": None,
+        "entry_price_fen": None,
+        "valuation_price_fen": None,
+        "highest_price_fen": None,
+        "lowest_price_fen": None,
+        "quantity": 0,
+        "gross_pnl_fen": 0,
+        "commission_fen": 0,
+        "tax_fen": 0,
+        "transfer_fee_fen": 0,
+        "slippage_fen": 0,
+        "net_pnl_fen": 0,
+        "capital_at_risk_fen": 0,
+        "net_return": Decimal("0"),
+        "nav_after_fen": draft.nav_before_fen,
+        "mfe": Decimal("0"),
+        "mae": Decimal("0"),
+        "turnover_fen": 0,
+        "participation_rate": Decimal("0"),
+        "optimistic_net_pnl_fen": 0,
+    }
+    unfilled = ShadowExecutionObservationDraft.model_validate(
+        draft.model_copy(
+            update={
+                **non_execution,
+                "fill_status": ShadowFillStatus.UNFILLED,
+            }
+        ).model_dump(mode="python")
+    )
+    assert unfilled.requested_quantity == 100
+    no_action = ShadowExecutionObservationDraft.model_validate(
+        draft.model_copy(
+            update={
+                **non_execution,
+                "action": ShadowAction.NO_ACTION,
+                "fill_status": ShadowFillStatus.NOT_APPLICABLE,
+                "requested_quantity": 0,
+                "market_volume_shares": 0,
+            }
+        ).model_dump(mode="python")
+    )
+    assert no_action.action is ShadowAction.NO_ACTION
+    for horizon in (5, 20, 60):
+        exact = ShadowExecutionObservation.model_validate(
+            observation.model_copy(
+                update={"horizon_days": horizon, "trading_days_elapsed": horizon}
+            ).model_dump(mode="python")
+        )
+        pending = ShadowExecutionObservation.model_validate(
+            observation.model_copy(
+                update={
+                    "horizon_days": horizon,
+                    "trading_days_elapsed": horizon - 1,
+                    "status": ShadowObservationStatus.PENDING_MATURITY,
+                    "formal_eligible": False,
+                }
+            ).model_dump(mode="python")
+        )
+        assert exact.status is ShadowObservationStatus.MATURE
+        assert pending.status is ShadowObservationStatus.PENDING_MATURITY
     with pytest.raises(ValidationError, match="completed horizon"):
         ShadowExecutionObservation.model_validate(
             observation
@@ -214,6 +367,8 @@ def test_phase8_admission_cannot_disagree_with_deterministic_gates() -> None:
         "shadow_report_sha256": "a" * 64,
         "status": Phase8AdmissionStatus.ELIGIBLE_RULE_STATE_MACHINE_RESEARCH,
         "gate_results": {"sample": True, "increment": False},
+        "experimental_arm_gate_results": {"arm:1": {"increment": True}},
+        "eligible_experimental_arm_ids": ["arm:1"],
         "reason_codes": ["INCREMENT_FAILED"],
         "admission_sha256": "b" * 64,
     }

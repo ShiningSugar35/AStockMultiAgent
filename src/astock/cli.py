@@ -23,6 +23,7 @@ from astock.core.codex_runs import (
     build_context_budget,
     registered_committee_artifact_types,
     registered_phase4_artifact_types,
+    registered_shadow_artifact_types,
     registered_strict_artifact_types,
 )
 from astock.core.errors import AStockError
@@ -94,12 +95,16 @@ from astock.schemas import (
     InstrumentType,
     KnowledgeSourceRegistry,
     Market,
+    MarketRegimeFeatures,
     PositionLifecycleConfig,
     PositionPlanCreateRequest,
     ResearchCoreConfig,
     ResearchDiagnosticConfig,
     ResearchMemoComposeRequest,
     ResearchSkillRegistry,
+    ShadowDecisionAssignmentRequest,
+    ShadowExecutionObservationDraft,
+    ShadowStudyCreateRequest,
     SpecialistDeltaBuildRequest,
     SpecialistDiagnosticRequest,
     SpecialistRouteRequest,
@@ -108,6 +113,11 @@ from astock.schemas import (
     ZhihuResponseKind,
 )
 from astock.settings import ProjectPaths
+from astock.shadow import (
+    ParquetShadowStore,
+    ShadowEvaluationService,
+    load_shadow_evaluation_policy,
+)
 
 app = typer.Typer(
     name="astock",
@@ -170,6 +180,21 @@ def _committee_service(
         state,
         objects,
         load_committee_rules(paths.root / "configs" / "committee_rules.yaml"),
+    )
+
+
+def _shadow_service(
+    paths: ProjectPaths,
+    state: StateStore,
+    objects: ObjectStore,
+) -> ShadowEvaluationService:
+    return ShadowEvaluationService(
+        state,
+        objects,
+        load_shadow_evaluation_policy(
+            paths.root / "configs" / "shadow_evaluation.yaml"
+        ),
+        ParquetShadowStore(paths.parquet),
     )
 
 
@@ -351,6 +376,7 @@ def probe() -> None:
 
     paths, state, objects = _services()
     providers = [EastMoney5mProvider(objects, state), Sina5mProvider(objects, state)]
+    shadow = _shadow_service(paths, state, objects)
     _emit(
         {
             "version": __version__,
@@ -369,6 +395,7 @@ def probe() -> None:
                 "registered_output_required": True,
                 "strict_phase4_types": registered_phase4_artifact_types(),
                 "strict_committee_types": registered_committee_artifact_types(),
+                "strict_shadow_types": registered_shadow_artifact_types(),
                 "strict_all_types": registered_strict_artifact_types(),
             },
             "committee": {
@@ -383,6 +410,21 @@ def probe() -> None:
                 "browser_access": False,
                 "full_document_access": False,
                 "provider_narrative": "OPTIONAL_DISABLED",
+            },
+            "shadow_evaluation": {
+                "status": shadow.status().status,
+                "policy_version": shadow.configured_policy.policy_version,
+                "weights_frozen": True,
+                "minimum_independent_decisions": (
+                    shadow.configured_policy.minimum_independent_decisions
+                ),
+                "phase8_minimum_observation_months": (
+                    shadow.configured_policy.phase8_observation_months
+                ),
+                "network_access": False,
+                "broker_execution": False,
+                "main_paper_ledger_write": False,
+                "online_weight_changes": False,
             },
             "providers": [provider.capability() for provider in providers],
         }
@@ -1762,6 +1804,258 @@ def committee_task_resolve(
     except ValueError as exc:
         _emit({"status": "REJECTED", "error_code": "INVALID_TASK_RESOLUTION"})
         raise typer.Exit(code=2) from exc
+
+
+@app.command("shadow-schema")
+def shadow_schema() -> None:
+    """Print the frozen shadow-evaluation contracts and empirical gates."""
+
+    paths, state, objects = _services()
+    service = _shadow_service(paths, state, objects)
+    _emit(
+        {
+            "study_request_schema": ShadowStudyCreateRequest.model_json_schema(),
+            "assignment_schema": ShadowDecisionAssignmentRequest.model_json_schema(),
+            "market_regime_features_schema": MarketRegimeFeatures.model_json_schema(),
+            "observation_schema": ShadowExecutionObservationDraft.model_json_schema(),
+            "policy": service.configured_policy,
+            "hard_boundaries": {
+                "weights_frozen": True,
+                "future_inputs_allowed": False,
+                "not_pit_safe_formal_samples_allowed": False,
+                "online_weight_changes_allowed": False,
+                "broker_execution_allowed": False,
+                "main_paper_ledger_write_allowed": False,
+                "independence_key_is_deterministic": True,
+            },
+        }
+    )
+
+
+@app.command("shadow-independence-key")
+def shadow_independence_key(
+    study_id: Annotated[str, typer.Argument(help="Frozen shadow study id.")],
+    company_id: Annotated[str, typer.Argument(help="Frozen company id.")],
+    thesis_version: Annotated[str, typer.Argument(help="Frozen thesis version.")],
+    event_id: Annotated[str, typer.Argument(help="Frozen official event id.")],
+) -> None:
+    """Compute the only accepted independence key for one frozen episode."""
+
+    paths, state, objects = _services()
+    try:
+        service = _shadow_service(paths, state, objects)
+        _emit(
+            {
+                "status": "FROZEN",
+                "study_id": study_id,
+                "independence_rule_version": (
+                    service.configured_policy.independence_rule_version
+                ),
+                "independence_key": service.build_independence_key(
+                    study_id,
+                    company_id=company_id,
+                    thesis_version=thesis_version,
+                    event_id=event_id,
+                ),
+            }
+        )
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "SHADOW_STUDY_NOT_AVAILABLE"})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("shadow-study-plan")
+def shadow_study_plan(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Validate a frozen study definition without durable shadow writes."""
+
+    paths, state, objects = _services()
+    try:
+        request = ShadowStudyCreateRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        _emit(_shadow_service(paths, state, objects).plan_study(request))
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_SHADOW_STUDY"})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("shadow-study-create")
+def shadow_study_create(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Create an immutable study and its isolated comparison arms."""
+
+    paths, state, objects = _services()
+    try:
+        request = ShadowStudyCreateRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = _shadow_service(paths, state, objects).create_study(request)
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "SHADOW_STUDY_CREATE_REJECTED"})
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": execution.manifest.evidence_status,
+            "study": execution.manifest,
+            "arms": execution.arms,
+            "object_sha256_by_id": execution.object_sha256_by_id,
+        }
+    )
+
+
+@app.command("shadow-assign")
+def shadow_assign(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Freeze every arm assignment before any outcome is visible."""
+
+    paths, state, objects = _services()
+    try:
+        request = ShadowDecisionAssignmentRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        assignment = _shadow_service(paths, state, objects).assign(request)
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "SHADOW_ASSIGNMENT_REJECTED"})
+        raise typer.Exit(code=2) from exc
+    _emit({"status": "ASSIGNED", "assignment": assignment})
+
+
+@app.command("market-regime-classify")
+def market_regime_classify(
+    study_id: Annotated[str, typer.Argument(help="Frozen shadow study id.")],
+    features_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Classify one signal-time market snapshot with fixed deterministic precedence."""
+
+    paths, state, objects = _services()
+    try:
+        features = MarketRegimeFeatures.model_validate_json(
+            features_file.read_text(encoding="utf-8")
+        )
+        snapshot = _shadow_service(paths, state, objects).classify_regime(
+            study_id,
+            features,
+        )
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "MARKET_REGIME_REJECTED"})
+        raise typer.Exit(code=2) from exc
+    _emit({"status": snapshot.regime, "snapshot": snapshot})
+
+
+@app.command("shadow-observation-record")
+def shadow_observation_record(
+    observation_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Record a versioned observation only after all PnL and NAV identities reconcile."""
+
+    paths, state, objects = _services()
+    try:
+        draft = ShadowExecutionObservationDraft.model_validate_json(
+            observation_file.read_text(encoding="utf-8")
+        )
+        observation = _shadow_service(paths, state, objects).record_observation(draft)
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "SHADOW_OBSERVATION_REJECTED"})
+        raise typer.Exit(code=2) from exc
+    _emit({"status": observation.status, "observation": observation})
+
+
+@app.command("shadow-evaluate")
+def shadow_evaluate(
+    study_id: Annotated[str, typer.Argument(help="Frozen shadow study id.")],
+    as_of: Annotated[str, typer.Option(help="Timezone-aware ISO evaluation time.")],
+) -> None:
+    """Compute deterministic paired out-of-sample metrics and Phase 8 admission."""
+
+    paths, state, objects = _services()
+    try:
+        parsed_as_of = datetime.fromisoformat(as_of)
+        execution = _shadow_service(paths, state, objects).evaluate(
+            study_id,
+            as_of=parsed_as_of,
+        )
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "SHADOW_EVALUATION_REJECTED"})
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": execution.report.evidence_status,
+            "report": execution.report,
+            "phase8_admission": execution.admission,
+            "report_object_sha256": execution.report_object_sha256,
+            "admission_object_sha256": execution.admission_object_sha256,
+        }
+    )
+
+
+@app.command("shadow-status")
+def shadow_status(
+    study_id: Annotated[str | None, typer.Option("--study-id")] = None,
+) -> None:
+    """Return safe shadow sample, maturity, report, and admission counts."""
+
+    paths, state, objects = _services()
+    _emit(_shadow_service(paths, state, objects).status(study_id))
+
+
+@app.command("shadow-audit")
+def shadow_audit(
+    study_id: Annotated[str, typer.Argument(help="Frozen shadow study id.")],
+) -> None:
+    """Audit frozen objects, indexes, pair assignments, reports, and admission."""
+
+    paths, state, objects = _services()
+    _emit(_shadow_service(paths, state, objects).audit(study_id))
+
+
+@app.command("shadow-recover")
+def shadow_recover(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Idempotently rebuild provable study/arm indexes from the original request."""
+
+    paths, state, objects = _services()
+    try:
+        request = ShadowStudyCreateRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        result = _shadow_service(paths, state, objects).recover_study(request)
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "SHADOW_NOT_RECOVERABLE"})
+        raise typer.Exit(code=2) from exc
+    _emit(result)
+
+
+@app.command("phase8-admission")
+def phase8_admission(
+    study_id: Annotated[str, typer.Argument(help="Frozen shadow study id.")],
+) -> None:
+    """Read the latest deterministic Phase 8 research-admission result."""
+
+    paths, state, objects = _services()
+    _emit(_shadow_service(paths, state, objects).latest_admission(study_id))
 
 
 @app.command("knowledge-source-list")

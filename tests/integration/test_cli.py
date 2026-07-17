@@ -52,6 +52,10 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
         "DecisionPack",
         "TradeProtocol",
     ]
+    assert probe["codex_artifacts"]["strict_shadow_types"] == [
+        "Phase8AdmissionReport",
+        "ShadowEvaluationReport",
+    ]
     assert probe["committee"]["status"] == "AVAILABLE"
     assert not probe["committee"]["network_access"]
 
@@ -505,6 +509,67 @@ def test_committee_cli_schema_status_and_invalid_requests_fail_closed(
         ("committee-plan", "INVALID_COMMITTEE_REQUEST"),
         ("committee-decide", "COMMITTEE_DECISION_REJECTED"),
         ("committee-recover", "COMMITTEE_NOT_RECOVERABLE"),
+    ):
+        invoked = runner.invoke(app, [command, str(invalid_request)])
+        assert invoked.exit_code == 2
+        assert json.loads(invoked.output) == {
+            "error_code": error_code,
+            "status": "REJECTED",
+        }
+        assert secret not in invoked.output
+        assert str(invalid_request) not in invoked.output
+
+
+def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "shadow-terminal-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    schema = runner.invoke(app, ["shadow-schema"])
+    assert schema.exit_code == 0, schema.output
+    schema_payload = json.loads(schema.output)
+    assert schema_payload["policy"]["policy_version"] == "shadow-evaluation-policy-v1"
+    assert schema_payload["hard_boundaries"] == {
+        "broker_execution_allowed": False,
+        "future_inputs_allowed": False,
+        "independence_key_is_deterministic": True,
+        "main_paper_ledger_write_allowed": False,
+        "not_pit_safe_formal_samples_allowed": False,
+        "online_weight_changes_allowed": False,
+        "weights_frozen": True,
+    }
+
+    status = runner.invoke(app, ["shadow-status", "--study-id", "study:not-run"])
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["status"] == "NOT_RUN"
+    audit = runner.invoke(app, ["shadow-audit", "study:not-run"])
+    assert audit.exit_code == 0, audit.output
+    assert json.loads(audit.output) == {
+        "finding_codes": ["SHADOW_STUDY_NOT_RUN"],
+        "status": "NOT_RUN",
+        "study_id": "study:not-run",
+    }
+    admission = runner.invoke(app, ["phase8-admission", "study:not-run"])
+    assert admission.exit_code == 0, admission.output
+    assert json.loads(admission.output) == {
+        "broker_execution_allowed": False,
+        "online_weight_changes_allowed": False,
+        "status": "NOT_RUN",
+        "study_id": "study:not-run",
+    }
+
+    secret = "private-shadow-request-must-not-be-echoed"
+    invalid_request = tmp_path / "private-invalid-shadow-request.json"
+    invalid_request.write_text(json.dumps({"private": secret}), encoding="utf-8")
+    for command, error_code in (
+        ("shadow-study-plan", "INVALID_SHADOW_STUDY"),
+        ("shadow-study-create", "SHADOW_STUDY_CREATE_REJECTED"),
+        ("shadow-assign", "SHADOW_ASSIGNMENT_REJECTED"),
+        ("shadow-observation-record", "SHADOW_OBSERVATION_REJECTED"),
+        ("shadow-recover", "SHADOW_NOT_RECOVERABLE"),
     ):
         invoked = runner.invoke(app, [command, str(invalid_request)])
         assert invoked.exit_code == 2

@@ -7,6 +7,15 @@ effective_from: "2026-07-17T00:00:00+08:00"
 regime_rule_version: market-regime-v1
 independence_rule_version: shadow-independence-v1
 statistics_version: shadow-statistics-v1
+cost_model_version: shadow-round-trip-cost-v1
+fill_model_version: shadow-conservative-5m-v1
+corporate_action_version: shadow-corporate-actions-v1
+commission_rate: "0.0003"
+minimum_commission_fen: 500
+stamp_tax_sell_rate: "0.0005"
+transfer_fee_rate: "0.00001"
+slippage_rate: "0.0005"
+maximum_participation_rate: "0.10"
 required_horizons:
   - 5
   - 20

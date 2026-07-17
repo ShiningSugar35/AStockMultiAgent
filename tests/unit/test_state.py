@@ -29,15 +29,17 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0006",
         "0007",
         "0008",
-            "0009",
-            "0010",
-            "0011",
-            "0012",
-            "0013",
-            "0014",
-            "0015",
-            "0016",
-        ]
+        "0009",
+        "0010",
+        "0011",
+        "0012",
+        "0013",
+        "0014",
+        "0015",
+        "0016",
+        "0017",
+        "0018",
+    ]
     assert state.migrate() == []
     with state.connect() as connection:
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -153,6 +155,7 @@ def test_collection_checkpoint_round_trips_every_required_cursor_level(
         listing_page=3,
         listing_cursor="offset:40",
         content_id="answer-123",
+        comment_parent_id="root-456",
         comment_page=2,
         comment_cursor="comment:20",
         nested_reply_cursor="reply:8",
@@ -168,7 +171,12 @@ def test_collection_checkpoint_round_trips_every_required_cursor_level(
         status="RUNNING",
         object_hash="b" * 64,
     )
-    recovered = state.get_collection_checkpoint("mr-dang-77", "answers", "answer-123")
+    recovered = state.get_collection_checkpoint(
+        "mr-dang-77",
+        "answers",
+        "answer-123",
+        "root-456",
+    )
     assert recovered is not None
     assert recovered.comment_page == 3
     assert recovered.comment_cursor == "comment:40"
@@ -177,6 +185,33 @@ def test_collection_checkpoint_round_trips_every_required_cursor_level(
             "SELECT checkpoint_id FROM checkpoint WHERE scope_type='author-collection'"
         ).fetchall()
     assert [row["checkpoint_id"] for row in rows] == [checkpoint_id]
+
+
+def test_root_and_child_comment_checkpoints_use_distinct_scopes(state: StateStore) -> None:
+    root = CollectionCheckpoint(
+        author="zhihu:test",
+        content_type="answers",
+        listing_page=0,
+        content_id="answer-1",
+        comment_page=1,
+        comment_cursor="root-next",
+    )
+    child = root.model_copy(
+        update={
+            "comment_parent_id": "comment-1",
+            "nested_reply_cursor": "child-next",
+        }
+    )
+    root_id = state.set_collection_checkpoint(root, status="RUNNING")
+    child_id = state.set_collection_checkpoint(child, status="RUNNING")
+
+    assert root_id != child_id
+    assert state.get_collection_checkpoint(
+        "zhihu:test", "answers", "answer-1"
+    ) == root
+    assert state.get_collection_checkpoint(
+        "zhihu:test", "answers", "answer-1", "comment-1"
+    ) == child
 
 
 def test_lease_lock_can_be_recovered_after_expiry(state: StateStore) -> None:

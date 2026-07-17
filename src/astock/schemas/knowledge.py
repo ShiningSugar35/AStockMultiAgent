@@ -21,6 +21,14 @@ class CoverageStatus(StrEnum):
     ACCESS_RESTRICTED = "ACCESS_RESTRICTED"
 
 
+class KnowledgeAuditStatus(StrEnum):
+    PASS = "PASS"
+    PARTIAL = "PARTIAL"
+    ACCESS_RESTRICTED = "ACCESS_RESTRICTED"
+    NOT_COLLECTED = "NOT_COLLECTED"
+    USER_CONFIRMED_COMPLETE_EXPORT = "USER_CONFIRMED_COMPLETE_EXPORT"
+
+
 class CollectionTerminalCondition(StrEnum):
     PAGINATION_COMPLETE = "PAGINATION_COMPLETE"
     CONFIRMED_EMPTY = "CONFIRMED_EMPTY"
@@ -69,6 +77,48 @@ class ZhihuImportStatus(StrEnum):
     REJECTED = "REJECTED"
 
 
+class ZhihuEndpointTemplateStatus(StrEnum):
+    VERIFIED = "VERIFIED"
+    PENDING_OBSERVATION = "PENDING_OBSERVATION"
+
+
+class ZhihuCommentEndpointTemplate(AStockModel):
+    template_id: str = Field(min_length=1)
+    response_kind: ZhihuResponseKind
+    content_types: list[ZhihuContentType] = Field(min_length=1)
+    path_template: str | None = None
+    default_query: dict[str, str] = Field(default_factory=dict)
+    status: ZhihuEndpointTemplateStatus
+    observation_evidence: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_template_status(self) -> ZhihuCommentEndpointTemplate:
+        if self.response_kind not in {
+            ZhihuResponseKind.ROOT_COMMENTS,
+            ZhihuResponseKind.CHILD_COMMENTS,
+        }:
+            raise ValueError("comment endpoint templates only cover comment responses")
+        if self.status is ZhihuEndpointTemplateStatus.VERIFIED:
+            if not self.path_template or not self.path_template.startswith("/api/"):
+                raise ValueError("verified endpoint templates require an API path")
+        elif self.path_template is not None:
+            raise ValueError("pending endpoint templates cannot contain a guessed path")
+        if len(self.content_types) != len(set(self.content_types)):
+            raise ValueError("endpoint template content types must be unique")
+        return self
+
+
+class ZhihuEndpointTemplateRegistry(AStockModel):
+    templates: list[ZhihuCommentEndpointTemplate] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_template_ids(self) -> ZhihuEndpointTemplateRegistry:
+        template_ids = [item.template_id for item in self.templates]
+        if len(template_ids) != len(set(template_ids)):
+            raise ValueError("Zhihu endpoint template ids must be unique")
+        return self
+
+
 class ZhihuBrowserResponseEnvelope(AStockModel):
     author_source_id: str = Field(min_length=1)
     response_kind: ZhihuResponseKind
@@ -76,6 +126,7 @@ class ZhihuBrowserResponseEnvelope(AStockModel):
     content_id: str | None = None
     parent_comment_id: str | None = None
     listing_page: int | None = Field(default=None, ge=0)
+    comment_page: int | None = Field(default=None, ge=0)
     request_cursor: str | None = None
     requested_url: str = Field(min_length=1)
     status_code: int = Field(ge=100, le=599)
@@ -107,19 +158,37 @@ class ZhihuBrowserResponseEnvelope(AStockModel):
                 self.content_type is None
                 or self.content_id is not None
                 or self.listing_page is None
+                or self.comment_page is not None
             ):
                 raise ValueError("listing responses require content_type and no content_id")
+        elif self.response_kind in {
+            ZhihuResponseKind.ROOT_COMMENTS,
+            ZhihuResponseKind.CHILD_COMMENTS,
+        }:
+            if self.content_type is None or not self.content_id:
+                raise ValueError("comment responses require content identity")
+            if self.comment_page is None or self.listing_page is not None:
+                raise ValueError("comment responses require comment_page only")
         else:
             if self.content_type is None or not self.content_id:
-                raise ValueError("detail and comment responses require content identity")
-        if self.response_kind is not ZhihuResponseKind.LISTING and (
-            self.listing_page is not None or self.request_cursor is not None
+                raise ValueError("content detail responses require content identity")
+            if (
+                self.listing_page is not None
+                or self.comment_page is not None
+                or self.request_cursor is not None
+            ):
+                raise ValueError("content detail responses cannot declare page cursors")
+        page_number = self.listing_page if self.listing_page is not None else self.comment_page
+        if page_number == 0 and self.request_cursor is not None:
+            raise ValueError("the first page cannot declare a prior cursor")
+        if page_number is not None and page_number > 0 and not self.request_cursor:
+            raise ValueError("continued pages require request_cursor")
+        if self.response_kind is ZhihuResponseKind.PROFILE and (
+            self.listing_page is not None
+            or self.comment_page is not None
+            or self.request_cursor is not None
         ):
-            raise ValueError("listing cursor fields are only valid for listing responses")
-        if self.listing_page == 0 and self.request_cursor is not None:
-            raise ValueError("the first listing page cannot declare a prior cursor")
-        if self.listing_page is not None and self.listing_page > 0 and not self.request_cursor:
-            raise ValueError("continued listing pages require request_cursor")
+            raise ValueError("profile responses cannot declare page cursors")
         if (
             self.response_kind is ZhihuResponseKind.CHILD_COMMENTS
             and not self.parent_comment_id
@@ -144,6 +213,7 @@ class ZhihuImportedResponse(AStockModel):
     content_id: str | None = None
     parent_comment_id: str | None = None
     listing_page: int | None = Field(default=None, ge=0)
+    comment_page: int | None = Field(default=None, ge=0)
     request_cursor: str | None = None
     requested_url: str = Field(min_length=1)
     status_code: int = Field(ge=100, le=599)
@@ -180,6 +250,7 @@ class KnowledgeLocalSeedSource(AStockModel):
     author_source_id: str = Field(min_length=1)
     file_version: str = Field(min_length=1)
     expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_block_count: int | None = Field(default=None, ge=0)
     rights_status: str = Field(min_length=1)
     ingestion_scope: str = Field(min_length=1)
     online_history_coverage: str = Field(min_length=1)
@@ -290,6 +361,94 @@ class ZhihuContentRecord(AStockModel):
     previous_version_id: str | None = None
 
 
+class ZhihuCommentNode(AStockModel):
+    version_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    content_type: ZhihuContentType
+    content_id: str = Field(min_length=1)
+    comment_id: str = Field(min_length=1)
+    platform_author_id: str | None = None
+    author_url_token: str | None = None
+    author_display_name: str | None = None
+    parent_comment_id: str | None = None
+    reply_to_comment_id: str | None = None
+    root_comment_id: str = Field(min_length=1)
+    published_at: AwareDatetime | None = None
+    updated_at: AwareDatetime | None = None
+    collected_at: AwareDatetime
+    like_count: int = Field(default=0, ge=0)
+    child_comment_count: int = Field(default=0, ge=0)
+    is_target_author: bool
+    body_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    metadata_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    raw_source_snapshot_id: str = Field(min_length=1)
+    previous_version_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_comment_hierarchy(self) -> ZhihuCommentNode:
+        if self.parent_comment_id is None and self.root_comment_id != self.comment_id:
+            raise ValueError("root comments must identify themselves as root_comment_id")
+        if self.parent_comment_id is not None and self.root_comment_id == self.comment_id:
+            raise ValueError("child comments cannot identify themselves as the root")
+        return self
+
+
+class ZhihuCommentPage(AStockModel):
+    page_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    content_type: ZhihuContentType
+    content_id: str = Field(min_length=1)
+    parent_comment_id: str | None = None
+    comment_page: int = Field(ge=0)
+    request_url: str = Field(min_length=1)
+    request_cursor: str | None = None
+    next_cursor: str | None = None
+    is_end: bool
+    comment_ids: list[str]
+    source_snapshot_id: str = Field(min_length=1)
+    raw_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    transport: ZhihuTransport
+    http_status: int = Field(ge=100, le=599)
+    response_structure_version: str = Field(min_length=1)
+    fetched_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_comment_ids_and_cursor(self) -> ZhihuCommentPage:
+        if len(self.comment_ids) != len(set(self.comment_ids)):
+            raise ValueError("comment page ids must be unique")
+        if not self.is_end and not self.next_cursor:
+            raise ValueError("non-terminal comment pages require a next cursor")
+        return self
+
+
+class ZhihuAuthorParticipationChain(AStockModel):
+    chain_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    content_type: ZhihuContentType
+    content_id: str = Field(min_length=1)
+    root_comment_id: str = Field(min_length=1)
+    target_author_comment_ids: list[str] = Field(min_length=1)
+    ordered_context_comment_ids: list[str] = Field(min_length=1)
+    source_snapshot_ids: list[str] = Field(min_length=1)
+    selection_rule_version: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_participation_chain(self) -> ZhihuAuthorParticipationChain:
+        if len(self.target_author_comment_ids) != len(set(self.target_author_comment_ids)):
+            raise ValueError("target author comment ids must be unique")
+        if len(self.ordered_context_comment_ids) != len(
+            set(self.ordered_context_comment_ids)
+        ):
+            raise ValueError("participation context comment ids must be unique")
+        if not set(self.target_author_comment_ids).issubset(
+            self.ordered_context_comment_ids
+        ):
+            raise ValueError("participation context must contain every target author comment")
+        if len(self.source_snapshot_ids) != len(set(self.source_snapshot_ids)):
+            raise ValueError("participation chain snapshot ids must be unique")
+        return self
+
+
 class ZhihuCollectionGap(AStockModel):
     gap_id: str = Field(min_length=1)
     author_source_id: str = Field(min_length=1)
@@ -310,6 +469,7 @@ class CollectionCheckpoint(AStockModel):
     listing_page: int = Field(ge=0)
     listing_cursor: str | None = None
     content_id: str | None = None
+    comment_parent_id: str | None = None
     comment_page: int | None = Field(default=None, ge=0)
     comment_cursor: str | None = None
     nested_reply_cursor: str | None = None
@@ -464,3 +624,109 @@ class AuthorCollectionCoverageReport(AStockModel):
         if len(self.source_snapshot_ids) != len(set(self.source_snapshot_ids)):
             raise ValueError("coverage snapshot ids must be unique")
         return self
+
+
+class KnowledgeLocalCoverageReport(AStockModel):
+    report_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    seed_source_id: str = Field(min_length=1)
+    coverage_basis: str = Field(pattern=r"^USER_CONFIRMED_COMPLETE_EXPORT$")
+    expected_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    registered_file_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    manifest_id: str | None = None
+    source_snapshot_id: str | None = None
+    parse_report_id: str | None = None
+    expected_block_count: int = Field(ge=0)
+    registered_block_count: int = Field(ge=0)
+    verified_text_object_count: int = Field(ge=0)
+    verified_metadata_object_count: int = Field(ge=0)
+    missing_object_count: int = Field(ge=0)
+    file_hash_matches: bool
+    raw_object_verified: bool
+    source_snapshot_matches: bool
+    parse_report_verified: bool
+    block_id_set_matches: bool
+    block_set_object_verified: bool
+    status: KnowledgeAuditStatus
+    findings: list[str] = Field(default_factory=list)
+    audited_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_complete_local_export(self) -> KnowledgeLocalCoverageReport:
+        if self.verified_text_object_count > self.registered_block_count:
+            raise ValueError("verified text objects cannot exceed registered blocks")
+        if self.verified_metadata_object_count > self.registered_block_count:
+            raise ValueError("verified metadata objects cannot exceed registered blocks")
+        if self.status is KnowledgeAuditStatus.USER_CONFIRMED_COMPLETE_EXPORT:
+            checks = (
+                self.file_hash_matches,
+                self.raw_object_verified,
+                self.source_snapshot_matches,
+                self.parse_report_verified,
+                self.block_id_set_matches,
+                self.block_set_object_verified,
+                self.registered_block_count == self.expected_block_count,
+                self.verified_text_object_count == self.registered_block_count,
+                self.verified_metadata_object_count == self.registered_block_count,
+                self.missing_object_count == 0,
+                not self.findings,
+            )
+            if not all(checks):
+                raise ValueError("complete local export requires every integrity check")
+        return self
+
+
+class KnowledgeScopeCoverageAudit(AStockModel):
+    content_type: str = Field(min_length=1)
+    listing_report_id: str | None = None
+    listing_terminal_condition: CollectionTerminalCondition | None = None
+    listing_coverage_status: CoverageStatus | None = None
+    sqlite_content_version_count: int = Field(ge=0)
+    parquet_content_version_count: int = Field(ge=0)
+    verified_content_body_count: int = Field(ge=0)
+    missing_content_body_count: int = Field(ge=0)
+    missing_content_parquet_count: int = Field(ge=0)
+    orphan_content_parquet_count: int = Field(ge=0)
+    content_parquet_hash_mismatch_count: int = Field(ge=0)
+    content_parquet_read_error_count: int = Field(ge=0)
+    sqlite_comment_version_count: int = Field(ge=0)
+    parquet_comment_version_count: int = Field(ge=0)
+    verified_comment_body_count: int = Field(ge=0)
+    missing_comment_body_count: int = Field(ge=0)
+    missing_comment_parquet_count: int = Field(ge=0)
+    orphan_comment_parquet_count: int = Field(ge=0)
+    comment_parquet_hash_mismatch_count: int = Field(ge=0)
+    comment_parquet_read_error_count: int = Field(ge=0)
+    root_comment_required_count: int = Field(ge=0)
+    root_comment_terminal_count: int = Field(ge=0)
+    child_reply_required_count: int = Field(ge=0)
+    child_reply_terminal_count: int = Field(ge=0)
+    open_gap_count: int = Field(ge=0)
+    status: KnowledgeAuditStatus
+    findings: list[str] = Field(default_factory=list)
+
+
+class KnowledgeSourceCoverageAudit(AStockModel):
+    source_id: str = Field(min_length=1)
+    online_collection_required: bool
+    identity_status: KnowledgeIdentityStatus
+    identity_registered: bool
+    scope_reports: list[KnowledgeScopeCoverageAudit] = Field(default_factory=list)
+    local_report_ids: list[str] = Field(default_factory=list)
+    pending_import_count: int = Field(ge=0)
+    open_gap_count: int = Field(ge=0)
+    status: KnowledgeAuditStatus
+    findings: list[str] = Field(default_factory=list)
+
+
+class KnowledgeCoverageAuditReport(AStockModel):
+    report_id: str = Field(min_length=1)
+    source_reports: list[KnowledgeSourceCoverageAudit]
+    total_open_gap_count: int = Field(ge=0)
+    total_pending_import_count: int = Field(ge=0)
+    stale_running_job_count: int = Field(ge=0)
+    missing_object_count: int = Field(ge=0)
+    parquet_mismatch_count: int = Field(ge=0)
+    status: KnowledgeAuditStatus
+    findings: list[str] = Field(default_factory=list)
+    audited_at: AwareDatetime

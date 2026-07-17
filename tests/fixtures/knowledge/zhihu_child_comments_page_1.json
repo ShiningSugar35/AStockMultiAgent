@@ -1,0 +1,27 @@
+{
+  "data": [
+    {
+      "id": "comment-reader-followup",
+      "content": "Synthetic reader follow-up.",
+      "author": {"id": "reader-3", "url_token": "reader-3", "name": "Reader Three"},
+      "parent_comment_id": "comment-root-1",
+      "reply_to_comment_id": "comment-author-1",
+      "root_comment_id": "comment-root-1",
+      "created_time": 1780000400,
+      "like_count": 0,
+      "child_comment_count": 0
+    },
+    {
+      "id": "comment-author-2",
+      "content": "Synthetic target-author follow-up reply.",
+      "author": {"id": "fixture-author-id", "url_token": "mr-dang-77", "name": "MR Dang"},
+      "parent_comment_id": "comment-root-1",
+      "reply_to_comment_id": "comment-reader-followup",
+      "root_comment_id": "comment-root-1",
+      "created_time": 1780000500,
+      "like_count": 1,
+      "child_comment_count": 0
+    }
+  ],
+  "paging": {"is_end": true, "next": ""}
+}

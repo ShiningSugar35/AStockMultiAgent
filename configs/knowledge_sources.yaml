@@ -71,6 +71,7 @@ sources:
         author_source_id: zhihu:hanwujideeyu
         file_version: v1-local-2026-07-16
         expected_sha256: 197ec18e6fabac4401f6412331e9aa50f919498d4e40cfddb481eeab9788852d
+        expected_block_count: 2032
         rights_status: LOCAL_PRIVATE_RESEARCH
         ingestion_scope: FULL_DOCUMENT_BLOCK_PARSE
         online_history_coverage: USER_CONFIRMED_COMPLETE_EXPORT

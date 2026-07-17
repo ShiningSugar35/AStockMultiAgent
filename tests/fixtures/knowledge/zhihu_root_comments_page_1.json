@@ -1,0 +1,40 @@
+{
+  "data": [
+    {
+      "id": "comment-root-1",
+      "content": "Synthetic root context.",
+      "author": {"id": "reader-1", "url_token": "reader-1", "name": "Reader One"},
+      "created_time": 1780000000,
+      "updated_time": 1780000000,
+      "like_count": 2,
+      "child_comment_count": 3,
+      "child_comments": [
+        {
+          "id": "comment-author-1",
+          "content": "Synthetic target-author reply.",
+          "author": {"id": "fixture-author-id", "url_token": "mr-dang-77", "name": "MR Dang"},
+          "parent_comment_id": "comment-root-1",
+          "reply_to_comment_id": "comment-root-1",
+          "root_comment_id": "comment-root-1",
+          "created_time": 1780000100,
+          "updated_time": 1780000100,
+          "like_count": 1,
+          "child_comment_count": 0
+        }
+      ]
+    },
+    {
+      "id": "comment-root-2",
+      "content": "Synthetic unrelated branch.",
+      "member": {"id": "reader-2", "url_token": "reader-2", "name": "Reader Two"},
+      "created_time": 1780000200,
+      "like_count": 0,
+      "child_comment_count": 0,
+      "child_comments": []
+    }
+  ],
+  "paging": {
+    "is_end": false,
+    "next": "https://www.zhihu.com/api/v4/comment_v5/answers/answer-fixture/root_comment?order_by=score&limit=2&offset=2"
+  }
+}

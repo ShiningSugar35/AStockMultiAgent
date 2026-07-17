@@ -14,6 +14,8 @@ from astock.schemas import (
     KnowledgeIdentityStatus,
     KnowledgeSourceDefinition,
     ZhihuAuthorIdentity,
+    ZhihuCommentNode,
+    ZhihuCommentPage,
     ZhihuContentRecord,
     ZhihuContentType,
     ZhihuListingPage,
@@ -22,6 +24,7 @@ from astock.schemas import (
 
 class ZhihuResponseAdapter:
     STRUCTURE_VERSION = "zhihu-api-v4-listing-v1"
+    COMMENT_STRUCTURE_VERSION = "zhihu-comment-v5-v1"
 
     def __init__(self, object_store: ObjectStore) -> None:
         self.object_store = object_store
@@ -112,6 +115,182 @@ class ZhihuResponseAdapter:
             fetched_at=response.snapshot.fetched_at,
         )
         return page, records
+
+    def parse_comment_page(
+        self,
+        source: KnowledgeSourceDefinition,
+        content_type: ZhihuContentType,
+        content_id: str,
+        *,
+        parent_comment_id: str | None,
+        comment_page: int,
+        request_cursor: str | None,
+        response: PersistedZhihuResponse,
+    ) -> tuple[ZhihuCommentPage, list[ZhihuCommentNode]]:
+        self._assert_success(response)
+        payload = _json_mapping(response)
+        raw_data = payload.get("data")
+        paging = payload.get("paging")
+        if not isinstance(raw_data, list) or not isinstance(paging, dict):
+            raise self._invalid(response, "Zhihu comment page lacks data or paging")
+        is_end = paging.get("is_end")
+        next_cursor = paging.get("next")
+        if not isinstance(is_end, bool):
+            raise self._invalid(response, "Zhihu comment paging is_end is not boolean")
+        if not is_end and not isinstance(next_cursor, str):
+            raise self._invalid(response, "Zhihu comment page lacks its next cursor")
+        if not raw_data and not is_end:
+            raise self._invalid(
+                response, "Zhihu returned an empty non-terminal comment page"
+            )
+        nodes: list[ZhihuCommentNode] = []
+        for item in raw_data:
+            if not isinstance(item, dict):
+                raise self._invalid(response, "Zhihu comment item is not an object")
+            root = self._parse_comment(
+                source,
+                content_type,
+                content_id,
+                item,
+                response,
+                fallback_parent_comment_id=parent_comment_id,
+                fallback_root_comment_id=parent_comment_id,
+            )
+            nodes.append(root)
+            preview = item.get("child_comments")
+            if preview is None:
+                preview = []
+            if not isinstance(preview, list):
+                raise self._invalid(response, "Zhihu child comment preview is not a list")
+            for child in preview:
+                if not isinstance(child, dict):
+                    raise self._invalid(
+                        response, "Zhihu child comment preview item is invalid"
+                    )
+                nodes.append(
+                    self._parse_comment(
+                        source,
+                        content_type,
+                        content_id,
+                        child,
+                        response,
+                        fallback_parent_comment_id=root.comment_id,
+                        fallback_root_comment_id=root.root_comment_id,
+                    )
+                )
+        comment_ids = [node.comment_id for node in nodes]
+        if len(comment_ids) != len(set(comment_ids)):
+            raise self._invalid(response, "Zhihu comment page repeats a comment id")
+        page_identity = {
+            "source_id": source.source_id,
+            "content_type": content_type.value,
+            "content_id": content_id,
+            "parent_comment_id": parent_comment_id,
+            "comment_page": comment_page,
+            "request_cursor": request_cursor,
+            "raw_object_sha256": response.snapshot.object_sha256,
+        }
+        page = ZhihuCommentPage(
+            page_id=f"zhihu-comment-page:{content_hash(page_identity)}",
+            author_source_id=source.source_id,
+            content_type=content_type,
+            content_id=content_id,
+            parent_comment_id=parent_comment_id,
+            comment_page=comment_page,
+            request_url=response.requested_url,
+            request_cursor=request_cursor,
+            next_cursor=str(next_cursor) if isinstance(next_cursor, str) else None,
+            is_end=is_end,
+            comment_ids=comment_ids,
+            source_snapshot_id=response.snapshot.snapshot_id,
+            raw_object_sha256=response.snapshot.object_sha256,
+            transport=response.transport,
+            http_status=response.status_code,
+            response_structure_version=self.COMMENT_STRUCTURE_VERSION,
+            fetched_at=response.snapshot.fetched_at,
+        )
+        return page, nodes
+
+    def _parse_comment(
+        self,
+        source: KnowledgeSourceDefinition,
+        content_type: ZhihuContentType,
+        content_id: str,
+        item: dict[str, Any],
+        response: PersistedZhihuResponse,
+        *,
+        fallback_parent_comment_id: str | None,
+        fallback_root_comment_id: str | None,
+    ) -> ZhihuCommentNode:
+        comment_id = _required_identifier(item, "id")
+        raw_author = item.get("author") or item.get("member")
+        author = raw_author if isinstance(raw_author, dict) else {}
+        platform_author_id = _optional_identifier(author.get("id"))
+        author_url_token = _optional_text(author.get("url_token"))
+        author_display_name = _optional_text(author.get("name"))
+        body = item.get("content")
+        if not isinstance(body, str):
+            raise self._invalid(response, "Zhihu comment lacks string content")
+        body_object = self.object_store.put_bytes(body.encode("utf-8"))
+        raw_parent = _optional_identifier(item.get("parent_comment_id"))
+        parent_comment_id = (
+            None if raw_parent in {None, "0"} else raw_parent
+        ) or fallback_parent_comment_id
+        raw_root = _optional_identifier(item.get("root_comment_id"))
+        if parent_comment_id is None:
+            root_comment_id = comment_id
+        else:
+            root_comment_id = raw_root or fallback_root_comment_id or parent_comment_id
+        reply_to_comment_id = _optional_identifier(
+            item.get("reply_to_comment_id") or item.get("reply_comment_id")
+        )
+        published_at = _optional_timestamp(item.get("created_time") or item.get("created"))
+        updated_at = _optional_timestamp(item.get("updated_time") or item.get("updated"))
+        is_target_author = bool(
+            (source.platform_user_id and platform_author_id == source.platform_user_id)
+            or (source.url_token and author_url_token == source.url_token)
+        )
+        like_count = _nonnegative_int(item.get("like_count"))
+        child_comment_count = _nonnegative_int(item.get("child_comment_count"))
+        metadata = {
+            "author_source_id": source.source_id,
+            "content_type": content_type.value,
+            "content_id": content_id,
+            "comment_id": comment_id,
+            "platform_author_id": platform_author_id,
+            "author_url_token": author_url_token,
+            "parent_comment_id": parent_comment_id,
+            "reply_to_comment_id": reply_to_comment_id,
+            "root_comment_id": root_comment_id,
+            "published_at": published_at.isoformat() if published_at else None,
+            "updated_at": updated_at.isoformat() if updated_at else None,
+            "like_count": like_count,
+            "child_comment_count": child_comment_count,
+            "is_target_author": is_target_author,
+        }
+        metadata_sha256 = content_hash(metadata)
+        return ZhihuCommentNode(
+            version_id=f"zhihu-comment:{content_hash({**metadata, 'body': body_object.sha256})}",
+            author_source_id=source.source_id,
+            content_type=content_type,
+            content_id=content_id,
+            comment_id=comment_id,
+            platform_author_id=platform_author_id,
+            author_url_token=author_url_token,
+            author_display_name=author_display_name,
+            parent_comment_id=parent_comment_id,
+            reply_to_comment_id=reply_to_comment_id,
+            root_comment_id=root_comment_id,
+            published_at=published_at,
+            updated_at=updated_at,
+            collected_at=response.snapshot.fetched_at,
+            like_count=like_count,
+            child_comment_count=child_comment_count,
+            is_target_author=is_target_author,
+            body_object_sha256=body_object.sha256,
+            metadata_sha256=metadata_sha256,
+            raw_source_snapshot_id=response.snapshot.snapshot_id,
+        )
 
     def _parse_content(
         self,
@@ -257,6 +436,14 @@ def _optional_timestamp(value: Any) -> datetime | None:
     if isinstance(value, (int, float)):
         return datetime.fromtimestamp(value, tz=UTC)
     return None
+
+
+def _nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int) and value >= 0:
+        return value
+    return 0
 
 
 def _canonical_url(

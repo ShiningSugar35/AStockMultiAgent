@@ -11,8 +11,13 @@ from astock.core.state import StateStore
 from astock.schemas import (
     AuthorCollectionCoverageReport,
     CollectionTerminalCondition,
+    KnowledgeCoverageAuditReport,
+    KnowledgeLocalCoverageReport,
     ZhihuAuthorIdentity,
+    ZhihuAuthorParticipationChain,
     ZhihuCollectionGap,
+    ZhihuCommentNode,
+    ZhihuCommentPage,
     ZhihuContentRecord,
     ZhihuContentType,
     ZhihuImportedResponse,
@@ -25,6 +30,12 @@ from astock.schemas import (
 class ContentRegistration:
     status: str
     record: ZhihuContentRecord
+
+
+@dataclass(frozen=True, slots=True)
+class CommentRegistration:
+    status: str
+    record: ZhihuCommentNode
 
 
 class KnowledgeRepository:
@@ -102,11 +113,11 @@ class KnowledgeRepository:
             connection.execute(
                 "INSERT INTO zhihu_imported_response("
                 "envelope_id,source_id,response_kind,content_type,content_id,"
-                "parent_comment_id,listing_page,request_cursor,requested_url,http_status,"
-                "response_mime,transport,"
+                "parent_comment_id,listing_page,comment_page,request_cursor,requested_url,"
+                "http_status,response_mime,transport,"
                 "source_snapshot_id,raw_object_hash,body_byte_size,import_status,"
                 "captured_at,imported_at,consumed_at,record_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record.envelope_id,
                     record.author_source_id,
@@ -115,6 +126,7 @@ class KnowledgeRepository:
                     record.content_id,
                     record.parent_comment_id,
                     record.listing_page,
+                    record.comment_page,
                     record.request_cursor,
                     record.requested_url,
                     record.status_code,
@@ -243,6 +255,176 @@ class KnowledgeRepository:
                 ),
             )
         return page
+
+    def register_comment_page(self, page: ZhihuCommentPage) -> ZhihuCommentPage:
+        page_json = canonical_json_bytes(page.model_dump(mode="json")).decode("utf-8")
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT page_json FROM zhihu_comment_page_manifest WHERE page_id=?",
+                (page.page_id,),
+            ).fetchone()
+            if row is not None:
+                existing = ZhihuCommentPage.model_validate_json(row["page_json"])
+                if content_hash(_comment_page_semantic(existing)) != content_hash(
+                    _comment_page_semantic(page)
+                ):
+                    raise ValueError(f"Zhihu comment page collision: {page.page_id}")
+                return existing
+            connection.execute(
+                "INSERT INTO zhihu_comment_page_manifest("
+                "page_id,source_id,content_type,content_id,parent_comment_id,comment_page,"
+                "request_url,request_cursor,next_cursor,is_end,comment_count,"
+                "source_snapshot_id,raw_object_hash,transport,http_status,structure_version,"
+                "page_json,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    page.page_id,
+                    page.author_source_id,
+                    page.content_type.value,
+                    page.content_id,
+                    page.parent_comment_id,
+                    page.comment_page,
+                    page.request_url,
+                    page.request_cursor,
+                    page.next_cursor,
+                    int(page.is_end),
+                    len(page.comment_ids),
+                    page.source_snapshot_id,
+                    page.raw_object_sha256,
+                    page.transport.value,
+                    page.http_status,
+                    page.response_structure_version,
+                    page_json,
+                    page.fetched_at.isoformat(),
+                ),
+            )
+        return page
+
+    def register_comment(self, record: ZhihuCommentNode) -> CommentRegistration:
+        with self.state.transaction() as connection:
+            same = connection.execute(
+                "SELECT record_json FROM zhihu_comment_version WHERE version_id=?",
+                (record.version_id,),
+            ).fetchone()
+            if same is not None:
+                existing = ZhihuCommentNode.model_validate_json(same["record_json"])
+                if content_hash(_comment_semantic(existing)) != content_hash(
+                    _comment_semantic(record)
+                ):
+                    raise ValueError(f"Zhihu comment version collision: {record.version_id}")
+                return CommentRegistration("DUPLICATE", existing)
+            latest_row = connection.execute(
+                "SELECT record_json FROM zhihu_comment_version "
+                "WHERE source_id=? AND content_type=? AND content_id=? AND comment_id=? "
+                "ORDER BY collected_at DESC,version_id DESC LIMIT 1",
+                (
+                    record.author_source_id,
+                    record.content_type.value,
+                    record.content_id,
+                    record.comment_id,
+                ),
+            ).fetchone()
+            latest = (
+                ZhihuCommentNode.model_validate_json(latest_row["record_json"])
+                if latest_row
+                else None
+            )
+            stored = record.model_copy(
+                update={"previous_version_id": latest.version_id if latest else None}
+            )
+            record_json = canonical_json_bytes(stored.model_dump(mode="json")).decode(
+                "utf-8"
+            )
+            connection.execute(
+                "INSERT INTO zhihu_comment_version("
+                "version_id,source_id,content_type,content_id,comment_id,root_comment_id,"
+                "parent_comment_id,reply_to_comment_id,platform_author_id,published_at,"
+                "updated_at,collected_at,body_object_hash,metadata_hash,"
+                "raw_source_snapshot_id,previous_version_id,record_json) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    stored.version_id,
+                    stored.author_source_id,
+                    stored.content_type.value,
+                    stored.content_id,
+                    stored.comment_id,
+                    stored.root_comment_id,
+                    stored.parent_comment_id,
+                    stored.reply_to_comment_id,
+                    stored.platform_author_id,
+                    stored.published_at.isoformat() if stored.published_at else None,
+                    stored.updated_at.isoformat() if stored.updated_at else None,
+                    stored.collected_at.isoformat(),
+                    stored.body_object_sha256,
+                    stored.metadata_sha256,
+                    stored.raw_source_snapshot_id,
+                    stored.previous_version_id,
+                    record_json,
+                ),
+            )
+        return CommentRegistration("UPDATED" if latest else "NEW", stored)
+
+    def latest_comments(
+        self,
+        source_id: str,
+        content_type: ZhihuContentType,
+        content_id: str,
+    ) -> list[ZhihuCommentNode]:
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT record_json FROM zhihu_comment_version "
+                "WHERE source_id=? AND content_type=? AND content_id=? "
+                "ORDER BY collected_at DESC,version_id DESC",
+                (source_id, content_type.value, content_id),
+            ).fetchall()
+        latest: dict[str, ZhihuCommentNode] = {}
+        for row in rows:
+            record = ZhihuCommentNode.model_validate_json(row["record_json"])
+            latest.setdefault(record.comment_id, record)
+        return sorted(
+            latest.values(),
+            key=lambda item: (
+                item.published_at or item.collected_at,
+                item.comment_id,
+            ),
+        )
+
+    def register_participation_chain(
+        self,
+        chain: ZhihuAuthorParticipationChain,
+        *,
+        object_hash: str,
+    ) -> ZhihuAuthorParticipationChain:
+        chain_json = canonical_json_bytes(chain.model_dump(mode="json")).decode("utf-8")
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT chain_json,chain_object_hash FROM zhihu_author_participation_chain "
+                "WHERE chain_id=?",
+                (chain.chain_id,),
+            ).fetchone()
+            if row is not None:
+                if str(row["chain_json"]) != chain_json or str(
+                    row["chain_object_hash"]
+                ) != object_hash:
+                    raise ValueError(f"Zhihu participation chain collision: {chain.chain_id}")
+                return chain
+            connection.execute(
+                "INSERT INTO zhihu_author_participation_chain("
+                "chain_id,source_id,content_type,content_id,root_comment_id,"
+                "selection_rule_version,chain_object_hash,chain_json,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    chain.chain_id,
+                    chain.author_source_id,
+                    chain.content_type.value,
+                    chain.content_id,
+                    chain.root_comment_id,
+                    chain.selection_rule_version,
+                    object_hash,
+                    chain_json,
+                    chain.created_at.isoformat(),
+                ),
+            )
+        return chain
 
     def register_content(self, record: ZhihuContentRecord) -> ContentRegistration:
         with self.state.transaction() as connection:
@@ -446,12 +628,98 @@ class KnowledgeRepository:
             ).fetchone()
         return int(row[0]) if row else 0
 
+    def register_local_coverage_report(
+        self,
+        report: KnowledgeLocalCoverageReport,
+        *,
+        object_hash: str,
+    ) -> None:
+        report_json = canonical_json_bytes(report.model_dump(mode="json")).decode("utf-8")
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT report_json,report_object_hash FROM knowledge_local_coverage_report "
+                "WHERE report_id=?",
+                (report.report_id,),
+            ).fetchone()
+            if row is not None:
+                if (
+                    str(row["report_json"]) != report_json
+                    or str(row["report_object_hash"]) != object_hash
+                ):
+                    raise ValueError(f"local coverage report collision: {report.report_id}")
+                return
+            connection.execute(
+                "INSERT INTO knowledge_local_coverage_report("
+                "report_id,source_id,seed_source_id,status,report_object_hash,report_json,"
+                "audited_at,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    report.report_id,
+                    report.author_source_id,
+                    report.seed_source_id,
+                    report.status.value,
+                    object_hash,
+                    report_json,
+                    report.audited_at.isoformat(),
+                    report.created_at.isoformat(),
+                ),
+            )
+
+    def register_coverage_audit_report(
+        self,
+        report: KnowledgeCoverageAuditReport,
+        *,
+        object_hash: str,
+    ) -> None:
+        report_json = canonical_json_bytes(report.model_dump(mode="json")).decode("utf-8")
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT report_json,report_object_hash FROM knowledge_coverage_audit_report "
+                "WHERE report_id=?",
+                (report.report_id,),
+            ).fetchone()
+            if row is not None:
+                if (
+                    str(row["report_json"]) != report_json
+                    or str(row["report_object_hash"]) != object_hash
+                ):
+                    raise ValueError(f"coverage audit report collision: {report.report_id}")
+                return
+            connection.execute(
+                "INSERT INTO knowledge_coverage_audit_report("
+                "report_id,status,report_object_hash,report_json,audited_at,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (
+                    report.report_id,
+                    report.status.value,
+                    object_hash,
+                    report_json,
+                    report.audited_at.isoformat(),
+                    report.created_at.isoformat(),
+                ),
+            )
+
 
 def _listing_semantic(page: ZhihuListingPage) -> dict[str, object]:
     return page.model_dump(mode="json", exclude={"created_at", "fetched_at"})
 
 
 def _content_semantic(record: ZhihuContentRecord) -> dict[str, object]:
+    return record.model_dump(
+        mode="json",
+        exclude={
+            "created_at",
+            "collected_at",
+            "previous_version_id",
+            "raw_source_snapshot_id",
+        },
+    )
+
+
+def _comment_page_semantic(page: ZhihuCommentPage) -> dict[str, object]:
+    return page.model_dump(mode="json", exclude={"created_at", "fetched_at"})
+
+
+def _comment_semantic(record: ZhihuCommentNode) -> dict[str, object]:
     return record.model_dump(
         mode="json",
         exclude={
@@ -472,6 +740,7 @@ def _import_semantic(record: ZhihuImportedResponse) -> dict[str, object]:
         "content_id": record.content_id,
         "parent_comment_id": record.parent_comment_id,
         "listing_page": record.listing_page,
+        "comment_page": record.comment_page,
         "request_cursor": record.request_cursor,
         "requested_url": record.requested_url,
         "status_code": record.status_code,
@@ -485,6 +754,7 @@ def _import_semantic(record: ZhihuImportedResponse) -> dict[str, object]:
 
 
 __all__ = [
+    "CommentRegistration",
     "ContentRegistration",
     "KnowledgeRepository",
 ]

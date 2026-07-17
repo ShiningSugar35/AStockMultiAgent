@@ -1,0 +1,20 @@
+schema_version: "1.0"
+templates:
+  - template_id: zhihu-comment-v5-answer-root
+    response_kind: ROOT_COMMENTS
+    content_types: [answers]
+    path_template: /api/v4/comment_v5/answers/{content_id}/root_comment
+    default_query:
+      order_by: score
+      limit: "20"
+      offset: ""
+    status: VERIFIED
+    observation_evidence: CHROME_PAGE_ASSET_2026-07-17
+
+  - template_id: zhihu-comment-v5-child
+    response_kind: CHILD_COMMENTS
+    content_types: [answers, articles, thoughts]
+    path_template: null
+    default_query: {}
+    status: PENDING_OBSERVATION
+    observation_evidence: CHILD_REPLY_UI_NOT_YET_OBSERVED

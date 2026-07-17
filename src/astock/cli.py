@@ -33,12 +33,14 @@ from astock.financial_integrity import (
     FinancialIntegrityService,
 )
 from astock.knowledge import (
+    KnowledgeCoverageAuditService,
     KnowledgeRepository,
     ParquetKnowledgeStore,
     ZhihuCollectionService,
     ZhihuResponseImportService,
     get_knowledge_source,
     load_knowledge_sources,
+    load_zhihu_endpoint_templates,
 )
 from astock.market_data.storage import (
     CanonicalMarketStore,
@@ -60,6 +62,8 @@ from astock.schemas import (
     KnowledgeSourceRegistry,
     Market,
     ZhihuContentType,
+    ZhihuEndpointTemplateRegistry,
+    ZhihuResponseKind,
 )
 from astock.settings import ProjectPaths
 
@@ -81,6 +85,12 @@ def _services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
 
 def _knowledge_sources(paths: ProjectPaths) -> KnowledgeSourceRegistry:
     return load_knowledge_sources(paths.root / "configs" / "knowledge_sources.yaml")
+
+
+def _zhihu_endpoint_templates(paths: ProjectPaths) -> ZhihuEndpointTemplateRegistry:
+    return load_zhihu_endpoint_templates(
+        paths.root / "configs" / "zhihu_endpoint_templates.yaml"
+    )
 
 
 def _emit(value: Any) -> None:
@@ -814,6 +824,36 @@ def knowledge_source_list() -> None:
     )
 
 
+@app.command("knowledge-local-coverage")
+def knowledge_local_coverage(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted local-export source id.")],
+    seed_source_id: Annotated[
+        str | None,
+        typer.Option(help="Required only when the author has multiple local seeds."),
+    ] = None,
+) -> None:
+    """Verify a private local export without emitting its path or content."""
+
+    paths, state, objects = _services()
+    source = get_knowledge_source(_knowledge_sources(paths), source_id)
+    report = KnowledgeCoverageAuditService(state, objects, paths.parquet).audit_local_source(
+        source,
+        seed_source_id=seed_source_id,
+    )
+    _emit({"status": report.status, "report": report})
+
+
+@app.command("knowledge-coverage-audit")
+def knowledge_coverage_audit() -> None:
+    """Reconcile allowlisted coverage, objects, SQLite, and Parquet indexes."""
+
+    paths, state, objects = _services()
+    report = KnowledgeCoverageAuditService(state, objects, paths.parquet).audit_registry(
+        _knowledge_sources(paths)
+    )
+    _emit({"status": report.status, "report": report})
+
+
 @app.command("zhihu-author-probe")
 def zhihu_author_probe(
     source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
@@ -854,7 +894,11 @@ def zhihu_response_import(
     paths, state, objects = _services()
     service = ZhihuResponseImportService(state, objects, paths.runtime)
     try:
-        execution = service.import_file(envelope, _knowledge_sources(paths))
+        execution = service.import_file(
+            envelope,
+            _knowledge_sources(paths),
+            _zhihu_endpoint_templates(paths),
+        )
     except AStockError as exc:
         _emit(
             {
@@ -892,6 +936,45 @@ def zhihu_import_replay(
     paths, state, objects = _services()
     service = ZhihuResponseImportService(state, objects, paths.runtime)
     try:
+        imported = service.repository.get_imported_response(envelope_id)
+        if imported is not None and imported.response_kind in {
+            ZhihuResponseKind.ROOT_COMMENTS,
+            ZhihuResponseKind.CHILD_COMMENTS,
+        }:
+            comment_replay = service.replay_comment(
+                envelope_id,
+                _knowledge_sources(paths),
+                ParquetKnowledgeStore(paths.parquet),
+            )
+            if comment_replay.comment_execution is None:
+                _emit(
+                    {
+                        "status": (
+                            "CONSUMED_WITH_GAP"
+                            if comment_replay.response_failure
+                            else "ALREADY_CONSUMED"
+                        ),
+                        "envelope_id": comment_replay.record.envelope_id,
+                        "import_status": comment_replay.record.import_status,
+                        "response_failure": comment_replay.response_failure,
+                    }
+                )
+                return
+            comment_execution = comment_replay.comment_execution
+            _emit(
+                {
+                    "status": "CONSUMED",
+                    "envelope_id": comment_replay.record.envelope_id,
+                    "import_status": comment_replay.record.import_status,
+                    "response_kind": comment_replay.record.response_kind,
+                    "comment_page_id": comment_execution.page.page_id,
+                    "comment_record_count": len(comment_execution.comment_records),
+                    "participation_chain_count": len(
+                        comment_execution.participation_chains
+                    ),
+                }
+            )
+            return
         replay = service.replay_listing(
             envelope_id,
             _knowledge_sources(paths),

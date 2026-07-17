@@ -222,6 +222,7 @@ class StateStore:
             checkpoint.author,
             checkpoint.content_type,
             checkpoint.content_id,
+            checkpoint.comment_parent_id,
         )
         return self.set_checkpoint(
             scope_type="author-collection",
@@ -237,8 +238,14 @@ class StateStore:
         author: str,
         content_type: str,
         content_id: str | None = None,
+        comment_parent_id: str | None = None,
     ) -> CollectionCheckpoint | None:
-        scope_key = self._collection_checkpoint_scope(author, content_type, content_id)
+        scope_key = self._collection_checkpoint_scope(
+            author,
+            content_type,
+            content_id,
+            comment_parent_id,
+        )
         stored = self.get_checkpoint("author-collection", scope_key)
         if stored is None:
             return None
@@ -249,15 +256,17 @@ class StateStore:
         author: str,
         content_type: str,
         content_id: str | None,
+        comment_parent_id: str | None = None,
     ) -> str:
+        identity = {
+            "author": author,
+            "content_type": content_type,
+            "content_id": content_id or "__listing__",
+        }
+        if comment_parent_id is not None:
+            identity["comment_parent_id"] = comment_parent_id
         return sha256_bytes(
-            canonical_json_bytes(
-                {
-                    "author": author,
-                    "content_type": content_type,
-                    "content_id": content_id or "__listing__",
-                }
-            )
+            canonical_json_bytes(identity)
         )
 
     def set_cursor(

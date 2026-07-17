@@ -14,6 +14,7 @@ from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.source_router import SourceAccessRouter
 from astock.core.state import StateStore
+from astock.knowledge.comments import ZhihuCommentIngestExecution, ZhihuCommentService
 from astock.knowledge.config import get_knowledge_source
 from astock.knowledge.repository import KnowledgeRepository
 from astock.knowledge.service import ZhihuCollectionService, ZhihuSyncExecution
@@ -33,6 +34,8 @@ from astock.schemas import (
     TransportCapability,
     ZhihuBrowserResponseEnvelope,
     ZhihuContentType,
+    ZhihuEndpointTemplateRegistry,
+    ZhihuEndpointTemplateStatus,
     ZhihuImportedResponse,
     ZhihuImportStatus,
     ZhihuResponseKind,
@@ -52,6 +55,13 @@ class ZhihuImportExecution:
 class ZhihuReplayExecution:
     record: ZhihuImportedResponse
     sync_execution: ZhihuSyncExecution | None
+
+
+@dataclass(frozen=True, slots=True)
+class ZhihuCommentReplayExecution:
+    record: ZhihuImportedResponse
+    comment_execution: ZhihuCommentIngestExecution | None
+    response_failure: FailureClass | None = None
 
 
 class _SingleImportedListingTransport:
@@ -132,6 +142,7 @@ class ZhihuResponseImportService:
         self,
         envelope_path: Path,
         registry: KnowledgeSourceRegistry,
+        endpoint_registry: ZhihuEndpointTemplateRegistry | None = None,
     ) -> ZhihuImportExecution:
         resolved = self._validated_runtime_file(envelope_path)
         try:
@@ -145,7 +156,7 @@ class ZhihuResponseImportService:
                 details={"validation_error_count": exc.error_count()},
             ) from exc
         source = get_knowledge_source(registry, envelope.author_source_id)
-        self._validate_source_and_envelope(source, envelope)
+        self._validate_source_and_envelope(source, envelope, endpoint_registry)
         self._record_import_access(source, envelope.transport)
         body = envelope.decoded_body()
         persisted = self.persistence.persist_imported_response(
@@ -166,6 +177,7 @@ class ZhihuResponseImportService:
             "content_id": envelope.content_id,
             "parent_comment_id": envelope.parent_comment_id,
             "listing_page": envelope.listing_page,
+            "comment_page": envelope.comment_page,
             "request_cursor": envelope.request_cursor,
             "requested_url": envelope.requested_url,
             "status_code": envelope.status_code,
@@ -180,6 +192,7 @@ class ZhihuResponseImportService:
             content_id=envelope.content_id,
             parent_comment_id=envelope.parent_comment_id,
             listing_page=envelope.listing_page,
+            comment_page=envelope.comment_page,
             request_cursor=envelope.request_cursor,
             requested_url=envelope.requested_url,
             status_code=envelope.status_code,
@@ -254,6 +267,70 @@ class ZhihuResponseImportService:
         consumed = self.repository.mark_import_consumed(envelope_id, datetime.now(UTC))
         return ZhihuReplayExecution(record=consumed, sync_execution=execution)
 
+    def replay_comment(
+        self,
+        envelope_id: str,
+        registry: KnowledgeSourceRegistry,
+        parquet_store: ParquetKnowledgeStore,
+    ) -> ZhihuCommentReplayExecution:
+        record = self.repository.get_imported_response(envelope_id)
+        if record is None:
+            raise ProviderError(
+                "Zhihu response envelope is not registered",
+                failure_class=FailureClass.INVALID_RESPONSE,
+            )
+        if record.import_status is ZhihuImportStatus.CONSUMED:
+            return ZhihuCommentReplayExecution(record=record, comment_execution=None)
+        if record.response_kind not in {
+            ZhihuResponseKind.ROOT_COMMENTS,
+            ZhihuResponseKind.CHILD_COMMENTS,
+        }:
+            raise ProviderError(
+                "Response envelope is not a comment page",
+                failure_class=FailureClass.POLICY_REJECTED,
+            )
+        assert record.content_type is not None
+        assert record.content_id is not None
+        assert record.comment_page is not None
+        source = get_knowledge_source(registry, record.author_source_id)
+        self._validate_comment_replay_checkpoint(record)
+        with self.state.connect() as connection:
+            already_committed = connection.execute(
+                "SELECT 1 FROM zhihu_comment_page_manifest WHERE source_snapshot_id=?",
+                (record.source_snapshot_id,),
+            ).fetchone()
+        if already_committed is not None:
+            consumed = self.repository.mark_import_consumed(envelope_id, datetime.now(UTC))
+            return ZhihuCommentReplayExecution(record=consumed, comment_execution=None)
+        persisted = self._persisted_response(record)
+        failure = classify_response_failure(persisted)
+        if failure is not None:
+            self._record_comment_gap(record, failure)
+            consumed = self.repository.mark_import_consumed(envelope_id, datetime.now(UTC))
+            return ZhihuCommentReplayExecution(
+                record=consumed,
+                comment_execution=None,
+                response_failure=failure,
+            )
+        execution = ZhihuCommentService(
+            self.state,
+            self.object_store,
+            parquet_store,
+        ).ingest_page(
+            source,
+            record.content_type,
+            record.content_id,
+            parent_comment_id=record.parent_comment_id,
+            comment_page=record.comment_page,
+            request_cursor=record.request_cursor,
+            response=persisted,
+        )
+        consumed = self.repository.mark_import_consumed(envelope_id, datetime.now(UTC))
+        return ZhihuCommentReplayExecution(
+            record=consumed,
+            comment_execution=execution,
+        )
+
     def _validate_replay_checkpoint(self, record: ZhihuImportedResponse) -> None:
         assert record.content_type is not None
         assert record.listing_page is not None
@@ -279,6 +356,92 @@ class ZhihuResponseImportService:
                     "received_listing_page": record.listing_page,
                 },
             )
+
+    def _validate_comment_replay_checkpoint(
+        self, record: ZhihuImportedResponse
+    ) -> None:
+        assert record.content_type is not None
+        assert record.content_id is not None
+        assert record.comment_page is not None
+        checkpoint = self.state.get_collection_checkpoint(
+            record.author_source_id,
+            record.content_type.value,
+            record.content_id,
+            record.parent_comment_id,
+        )
+        if checkpoint is None or checkpoint.terminal_condition is not None:
+            expected_page = 0
+            expected_cursor = None
+        else:
+            expected_page = checkpoint.comment_page
+            expected_cursor = (
+                checkpoint.nested_reply_cursor
+                if record.parent_comment_id
+                else checkpoint.comment_cursor
+            )
+        if record.comment_page != expected_page or record.request_cursor != expected_cursor:
+            raise ProviderError(
+                "Imported comment response is not the next durable checkpoint boundary",
+                failure_class=FailureClass.CONFLICT,
+                details={
+                    "expected_comment_page": expected_page,
+                    "received_comment_page": record.comment_page,
+                },
+            )
+
+    def _persisted_response(
+        self, record: ZhihuImportedResponse
+    ) -> PersistedZhihuResponse:
+        snapshot = self.state.get_snapshot(record.source_snapshot_id)
+        if snapshot is None:
+            raise ProviderError(
+                "Imported response lost its SourceSnapshot",
+                failure_class=FailureClass.INVALID_RESPONSE,
+            )
+        return PersistedZhihuResponse(
+            requested_url=record.requested_url,
+            status_code=record.status_code,
+            content_type=record.response_mime,
+            body=self.object_store.get_bytes(record.raw_object_sha256),
+            snapshot=snapshot,
+            transport=record.transport,
+            latency_ms=0,
+        )
+
+    def _record_comment_gap(
+        self,
+        record: ZhihuImportedResponse,
+        failure: FailureClass,
+    ) -> None:
+        assert record.content_type is not None
+        assert record.content_id is not None
+        comment_scope = (
+            f"comments:{record.content_type.value}:{record.content_id}:"
+            f"{record.parent_comment_id or '__root__'}"
+        )
+        access_failure = failure in {
+            FailureClass.AUTH_REQUIRED,
+            FailureClass.ACCESS_RESTRICTED,
+            FailureClass.RATE_LIMITED,
+        }
+        scope_id = self.state.upsert_collection_scope(
+            author_id=record.author_source_id,
+            content_type=comment_scope,
+            status="ACCESS_RESTRICTED" if access_failure else "PARTIAL",
+            last_cursor=record.request_cursor,
+            terminal_condition=("ACCESS_RESTRICTED" if access_failure else "FETCH_FAILED"),
+        )
+        self.state.record_collection_gap(
+            scope_id=scope_id,
+            cursor={
+                "comment_page": record.comment_page,
+                "comment_cursor": record.request_cursor,
+                "source_snapshot_id": record.source_snapshot_id,
+            },
+            failure_class=failure.value,
+            retryable=failure in {FailureClass.NETWORK, FailureClass.TIMEOUT},
+            status="OPEN",
+        )
 
     def _validated_runtime_file(self, path: Path) -> Path:
         runtime = self.runtime_root.resolve()
@@ -307,6 +470,7 @@ class ZhihuResponseImportService:
     def _validate_source_and_envelope(
         source: KnowledgeSourceDefinition,
         envelope: ZhihuBrowserResponseEnvelope,
+        endpoint_registry: ZhihuEndpointTemplateRegistry | None,
     ) -> None:
         if (
             not source.online_collection_required
@@ -357,9 +521,64 @@ class ZhihuResponseImportService:
                     "Zhihu listing response does not match the allowlisted author scope",
                     failure_class=FailureClass.POLICY_REJECTED,
                 )
+        elif envelope.response_kind in {
+            ZhihuResponseKind.ROOT_COMMENTS,
+            ZhihuResponseKind.CHILD_COMMENTS,
+        }:
+            ZhihuResponseImportService._validate_comment_endpoint(
+                envelope,
+                path,
+                endpoint_registry,
+            )
         elif envelope.content_id not in path.split("/"):
             raise ProviderError(
                 "Zhihu detail/comment URL does not contain its declared content id",
+                failure_class=FailureClass.POLICY_REJECTED,
+            )
+
+    @staticmethod
+    def _validate_comment_endpoint(
+        envelope: ZhihuBrowserResponseEnvelope,
+        path: str,
+        endpoint_registry: ZhihuEndpointTemplateRegistry | None,
+    ) -> None:
+        if endpoint_registry is None:
+            raise ProviderError(
+                "Zhihu comment import requires an approved endpoint registry",
+                failure_class=FailureClass.POLICY_REJECTED,
+            )
+        assert envelope.content_type is not None
+        template = next(
+            (
+                item
+                for item in endpoint_registry.templates
+                if item.response_kind is envelope.response_kind
+                and envelope.content_type in item.content_types
+            ),
+            None,
+        )
+        if (
+            template is None
+            or template.status is not ZhihuEndpointTemplateStatus.VERIFIED
+            or template.path_template is None
+        ):
+            raise ProviderError(
+                "Zhihu comment endpoint has not been observed and approved",
+                failure_class=FailureClass.CAPABILITY_UNAVAILABLE,
+            )
+        expected = template.path_template
+        expected = expected.replace("{content_id}", envelope.content_id or "")
+        expected = expected.replace(
+            "{parent_comment_id}", envelope.parent_comment_id or ""
+        )
+        if "{" in expected or "}" in expected:
+            raise ProviderError(
+                "Zhihu endpoint template contains an unsupported placeholder",
+                failure_class=FailureClass.INVALID_RESPONSE,
+            )
+        if path != expected.rstrip("/"):
+            raise ProviderError(
+                "Zhihu comment response does not match an approved endpoint template",
                 failure_class=FailureClass.POLICY_REJECTED,
             )
 
@@ -424,6 +643,7 @@ def _page_size(requested_url: str) -> int:
 
 __all__ = [
     "ZhihuImportExecution",
+    "ZhihuCommentReplayExecution",
     "ZhihuReplayExecution",
     "ZhihuResponseImportService",
 ]

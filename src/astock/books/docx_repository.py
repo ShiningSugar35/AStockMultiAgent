@@ -20,6 +20,17 @@ class PrivateDocxRepository:
             ).fetchone()
         return PrivateDocxParseReport.model_validate_json(row["report_json"]) if row else None
 
+    def latest_parse_report_for_manifest(
+        self, manifest_id: str
+    ) -> PrivateDocxParseReport | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT report_json FROM private_docx_parse_report WHERE manifest_id=? "
+                "ORDER BY created_at DESC,docx_parse_report_id DESC LIMIT 1",
+                (manifest_id,),
+            ).fetchone()
+        return PrivateDocxParseReport.model_validate_json(row["report_json"]) if row else None
+
     def register_parse_report(self, report: PrivateDocxParseReport) -> PrivateDocxParseReport:
         if report.report_object_sha256 is None:
             raise ValueError("PrivateDocxParseReport must be stored in ObjectStore first")

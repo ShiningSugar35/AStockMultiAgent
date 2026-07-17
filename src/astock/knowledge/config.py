@@ -7,12 +7,21 @@ from typing import Any
 
 import yaml
 
-from astock.schemas import KnowledgeSourceDefinition, KnowledgeSourceRegistry
+from astock.schemas import (
+    KnowledgeSourceDefinition,
+    KnowledgeSourceRegistry,
+    ZhihuEndpointTemplateRegistry,
+)
 
 
 def load_knowledge_sources(path: Path) -> KnowledgeSourceRegistry:
     payload = _load_yaml_mapping(path)
     return KnowledgeSourceRegistry.model_validate(payload)
+
+
+def load_zhihu_endpoint_templates(path: Path) -> ZhihuEndpointTemplateRegistry:
+    payload = _load_yaml_mapping(path)
+    return ZhihuEndpointTemplateRegistry.model_validate(payload)
 
 
 def get_knowledge_source(

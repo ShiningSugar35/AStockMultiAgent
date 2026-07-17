@@ -1,7 +1,18 @@
 """Allowlisted, immutable and resumable knowledge ingestion."""
 
-from astock.knowledge.config import get_knowledge_source, load_knowledge_sources
+from astock.knowledge.audit import KnowledgeCoverageAuditService
+from astock.knowledge.comments import (
+    ZhihuCommentIngestExecution,
+    ZhihuCommentService,
+    derive_author_participation_chains,
+)
+from astock.knowledge.config import (
+    get_knowledge_source,
+    load_knowledge_sources,
+    load_zhihu_endpoint_templates,
+)
 from astock.knowledge.imports import (
+    ZhihuCommentReplayExecution,
     ZhihuImportExecution,
     ZhihuReplayExecution,
     ZhihuResponseImportService,
@@ -17,10 +28,14 @@ from astock.knowledge.transport import (
 
 __all__ = [
     "ContentRegistration",
+    "KnowledgeCoverageAuditService",
     "KnowledgeRepository",
     "ParquetKnowledgeStore",
     "PersistedZhihuResponse",
     "ZhihuCollectionService",
+    "ZhihuCommentIngestExecution",
+    "ZhihuCommentService",
+    "ZhihuCommentReplayExecution",
     "ZhihuHttpTransport",
     "ZhihuImportExecution",
     "ZhihuReplayExecution",
@@ -28,5 +43,7 @@ __all__ = [
     "ZhihuResponseTransport",
     "ZhihuSyncExecution",
     "get_knowledge_source",
+    "derive_author_participation_chains",
     "load_knowledge_sources",
+    "load_zhihu_endpoint_templates",
 ]

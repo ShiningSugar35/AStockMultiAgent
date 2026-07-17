@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "id": "comment-root-author",
+      "content": "Synthetic target-author root comment.",
+      "author": {"id": "fixture-author-id", "url_token": "mr-dang-77", "name": "MR Dang"},
+      "created_time": 1780000300,
+      "like_count": 3,
+      "child_comment_count": 0,
+      "child_comments": []
+    }
+  ],
+  "paging": {"is_end": true, "next": ""}
+}

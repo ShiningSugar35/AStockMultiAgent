@@ -9,8 +9,10 @@ from astock.core.state import StateStore
 from astock.schemas import (
     BaseCasePack,
     FrozenEvidencePack,
+    ResearchMemoArtifact,
     ResearchSkillRegistry,
     SpecialistDelta,
+    SpecialistDiagnosticReport,
     SpecialistRoutePlan,
 )
 
@@ -365,6 +367,189 @@ class ResearchRepository:
                 (route_plan_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_diagnostic_report(
+        self,
+        diagnostic_id: str,
+    ) -> SpecialistDiagnosticReport | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT object_hash FROM specialist_diagnostic_index WHERE diagnostic_id=?",
+                (diagnostic_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SpecialistDiagnosticReport.model_validate_json(
+            self.object_store.get_bytes(str(row["object_hash"]))
+        )
+
+    def diagnostic_report_object_hash(self, diagnostic_id: str) -> str | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT object_hash FROM specialist_diagnostic_index WHERE diagnostic_id=?",
+                (diagnostic_id,),
+            ).fetchone()
+        return str(row["object_hash"]) if row else None
+
+    def register_diagnostic_report(
+        self,
+        report: SpecialistDiagnosticReport,
+        *,
+        object_hash: str,
+    ) -> SpecialistDiagnosticReport:
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT object_hash,input_hash,config_hash FROM specialist_diagnostic_index "
+                "WHERE diagnostic_id=?",
+                (report.diagnostic_id,),
+            ).fetchone()
+            if row is not None:
+                if (
+                    str(row["input_hash"]) != report.input_sha256
+                    or str(row["config_hash"]) != report.config_sha256
+                ):
+                    raise ValueError(
+                        f"specialist diagnostic identity collision: {report.diagnostic_id}"
+                    )
+                return SpecialistDiagnosticReport.model_validate_json(
+                    self.object_store.get_bytes(str(row["object_hash"]))
+                )
+            version_row = connection.execute(
+                "SELECT diagnostic_id,config_hash FROM specialist_diagnostic_index "
+                "WHERE route_plan_id=? AND skill_id=? AND skill_version=? "
+                "AND diagnostics_version=? AND input_hash=?",
+                (
+                    report.route_plan_id,
+                    report.skill_id,
+                    report.skill_version,
+                    report.diagnostics_version,
+                    report.input_sha256,
+                ),
+            ).fetchone()
+            if version_row is not None:
+                if str(version_row["config_hash"]) != report.config_sha256:
+                    raise ValueError(
+                        "research diagnostic configuration changed without a version bump"
+                    )
+                raise ValueError(
+                    "research diagnostic output changed without a rule version bump"
+                )
+            connection.execute(
+                "INSERT INTO specialist_diagnostic_index("
+                "diagnostic_id,base_case_id,route_plan_id,delta_id,skill_id,skill_version,"
+                "diagnostics_version,status,signal_count,degradation_count,metric_count,"
+                "evidence_request_count,evidence_count,object_hash,input_hash,config_hash,"
+                "created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    report.diagnostic_id,
+                    report.base_case_id,
+                    report.route_plan_id,
+                    report.delta_id,
+                    report.skill_id,
+                    report.skill_version,
+                    report.diagnostics_version,
+                    report.status.value,
+                    len(report.signal_codes),
+                    len(report.degradation_codes),
+                    len(report.metric_names),
+                    len(report.evidence_request_codes),
+                    len(report.evidence_ids),
+                    object_hash,
+                    report.input_sha256,
+                    report.config_sha256,
+                    report.created_at.isoformat(),
+                ),
+            )
+        return report
+
+    def diagnostic_report_summaries(self, base_case_id: str) -> list[dict[str, object]]:
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT diagnostic_id,base_case_id,route_plan_id,delta_id,skill_id,"
+                "skill_version,diagnostics_version,status,signal_count,degradation_count,"
+                "metric_count,evidence_request_count,evidence_count,object_hash,config_hash,"
+                "created_at "
+                "FROM specialist_diagnostic_index WHERE base_case_id=? "
+                "ORDER BY skill_id,skill_version,diagnostic_id",
+                (base_case_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_research_memo(self, memo_id: str) -> ResearchMemoArtifact | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT object_hash FROM research_memo_index WHERE memo_id=?",
+                (memo_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ResearchMemoArtifact.model_validate_json(
+            self.object_store.get_bytes(str(row["object_hash"]))
+        )
+
+    def research_memo_object_hash(self, memo_id: str) -> str | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT object_hash FROM research_memo_index WHERE memo_id=?",
+                (memo_id,),
+            ).fetchone()
+        return str(row["object_hash"]) if row else None
+
+    def register_research_memo(
+        self,
+        memo: ResearchMemoArtifact,
+        *,
+        object_hash: str,
+        input_hash: str,
+    ) -> ResearchMemoArtifact:
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT object_hash,input_hash FROM research_memo_index WHERE memo_id=?",
+                (memo.memo_id,),
+            ).fetchone()
+            if row is not None:
+                if str(row["input_hash"]) != input_hash:
+                    raise ValueError(f"research memo identity collision: {memo.memo_id}")
+                return ResearchMemoArtifact.model_validate_json(
+                    self.object_store.get_bytes(str(row["object_hash"]))
+                )
+            connection.execute(
+                "INSERT INTO research_memo_index("
+                "memo_id,base_case_id,route_plan_id,company_id,as_of,registry_version,"
+                "coverage_status,delta_count,missing_selected_count,gap_count,"
+                "degradation_count,evidence_count,object_hash,input_hash,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    memo.memo_id,
+                    memo.base_case_id,
+                    memo.route_plan_id,
+                    memo.company_id,
+                    memo.as_of.astimezone(UTC).isoformat(),
+                    memo.registry_version,
+                    memo.coverage_status.value,
+                    len(memo.delta_references),
+                    len(memo.missing_selected_skill_ids),
+                    len(memo.open_gap_codes),
+                    len(memo.degradation_codes),
+                    len(memo.evidence_ids),
+                    object_hash,
+                    input_hash,
+                    memo.created_at.isoformat(),
+                ),
+            )
+        return memo
+
+    def latest_research_memo_summary(self, base_case_id: str) -> dict[str, object] | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT memo_id,base_case_id,route_plan_id,company_id,as_of,registry_version,"
+                "coverage_status,delta_count,missing_selected_count,gap_count,"
+                "degradation_count,evidence_count,object_hash,created_at "
+                "FROM research_memo_index WHERE base_case_id=? "
+                "ORDER BY created_at DESC,memo_id DESC LIMIT 1",
+                (base_case_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
 
 __all__ = ["ResearchRepository"]

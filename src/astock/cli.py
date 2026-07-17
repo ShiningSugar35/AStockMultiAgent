@@ -13,7 +13,7 @@ from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 import typer
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from astock import __version__
 from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
@@ -57,9 +57,11 @@ from astock.paper_trading import LedgerService, PaperReplayService, load_fee_sch
 from astock.providers import EastMoney5mProvider, Sina5mProvider
 from astock.research import (
     ResearchCoreService,
+    ResearchDiagnosticsService,
     ResearchRepository,
     ResearchSkillService,
     load_research_core_config,
+    load_research_diagnostic_config,
     load_research_skill_registry,
 )
 from astock.schemas import (
@@ -77,8 +79,11 @@ from astock.schemas import (
     KnowledgeSourceRegistry,
     Market,
     ResearchCoreConfig,
+    ResearchDiagnosticConfig,
+    ResearchMemoComposeRequest,
     ResearchSkillRegistry,
     SpecialistDeltaBuildRequest,
+    SpecialistDiagnosticRequest,
     SpecialistRouteRequest,
     ZhihuContentType,
     ZhihuEndpointTemplateRegistry,
@@ -124,6 +129,12 @@ def _research_core(paths: ProjectPaths) -> ResearchCoreConfig:
 
 def _research_skills(paths: ProjectPaths) -> ResearchSkillRegistry:
     return load_research_skill_registry(paths.root / "configs" / "research_skills.yaml")
+
+
+def _research_diagnostics(paths: ProjectPaths) -> ResearchDiagnosticConfig:
+    return load_research_diagnostic_config(
+        paths.root / "configs" / "research_diagnostics.yaml"
+    )
 
 
 def _emit(value: Any) -> None:
@@ -1097,6 +1108,163 @@ def research_specialist_audit(
             state,
             objects,
             _research_skills(paths),
+        ).audit(base_case_id)
+    )
+
+
+@app.command("research-diagnostic-schema")
+def research_diagnostic_schema() -> None:
+    """List deterministic diagnostic contracts and their fixed rule version."""
+
+    paths, _, _ = _services()
+    config = _research_diagnostics(paths)
+    registry = _research_skills(paths)
+    _emit(
+        {
+            "diagnostics_version": config.diagnostics_version,
+            "diagnostics": [
+                {
+                    "skill_id": item.skill_id,
+                    "skill_version": item.skill_version,
+                    "input_schema": {
+                        "IndustryBottleneckSkill": "IndustryBottleneckDiagnosticRequest",
+                        "EventToAlphaSkill": "EventToAlphaDiagnosticRequest",
+                        "GrowthProbabilitySkill": "GrowthProbabilityDiagnosticRequest",
+                        "GrowthValuationLens": "GrowthValuationDiagnosticRequest",
+                        "DailyTrendHealthSkill": "DailyTrendDiagnosticRequest",
+                        "HourlySwingSkill": "HourlySwingDiagnosticRequest",
+                    }[item.skill_id],
+                }
+                for item in registry.skills
+                if item.counts_as_specialist
+            ],
+            "memo": {
+                "skill_id": "ResearchMemoComposer",
+                "skill_version": "research-memo-composer-v1",
+                "input_schema": "ResearchMemoComposeRequest",
+            },
+        }
+    )
+
+
+@app.command("research-specialist-diagnose")
+def research_specialist_diagnose(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Run one selected deterministic diagnostic and store its cited Delta."""
+
+    paths, state, objects = _services()
+    try:
+        request = TypeAdapter(SpecialistDiagnosticRequest).validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = ResearchDiagnosticsService(
+            state,
+            objects,
+            _research_skills(paths),
+            _research_diagnostics(paths),
+        ).diagnose(request)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_RESEARCH_DIAGNOSTIC"})
+        raise typer.Exit(code=2) from exc
+    report = execution.report
+    delta = execution.delta
+    _emit(
+        {
+            "status": report.status,
+            "diagnostic_id": report.diagnostic_id,
+            "delta_id": delta.delta_id,
+            "base_case_id": report.base_case_id,
+            "route_plan_id": report.route_plan_id,
+            "skill_id": report.skill_id,
+            "skill_version": report.skill_version,
+            "diagnostics_version": report.diagnostics_version,
+            "object_sha256": execution.object_sha256,
+            "delta_object_sha256": execution.delta_object_sha256,
+            "signal_codes": report.signal_codes,
+            "degradation_codes": report.degradation_codes,
+            "metric_count": len(report.metric_names),
+            "evidence_request_count": len(report.evidence_request_codes),
+            "evidence_count": len(report.evidence_ids),
+        }
+    )
+
+
+@app.command("research-memo-compose")
+def research_memo_compose(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Compose a citation-preserving reference memo without new research facts."""
+
+    paths, state, objects = _services()
+    try:
+        request = ResearchMemoComposeRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = ResearchDiagnosticsService(
+            state,
+            objects,
+            _research_skills(paths),
+            _research_diagnostics(paths),
+        ).compose_memo(request)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_RESEARCH_MEMO"})
+        raise typer.Exit(code=2) from exc
+    memo = execution.memo
+    _emit(
+        {
+            "status": "COMPOSED",
+            "memo_id": memo.memo_id,
+            "base_case_id": memo.base_case_id,
+            "route_plan_id": memo.route_plan_id,
+            "object_sha256": execution.object_sha256,
+            "coverage_status": memo.coverage_status,
+            "confidence_cap": memo.confidence_cap,
+            "delta_count": len(memo.delta_references),
+            "missing_selected_skill_ids": memo.missing_selected_skill_ids,
+            "open_gap_count": len(memo.open_gap_codes),
+            "evidence_count": len(memo.evidence_ids),
+            "degradation_codes": memo.degradation_codes,
+        }
+    )
+
+
+@app.command("research-diagnostic-status")
+def research_diagnostic_status(
+    base_case_id: Annotated[str, typer.Argument(help="Frozen BaseCase id.")],
+) -> None:
+    """Return safe diagnostic and memo indexes without research prose."""
+
+    paths, state, objects = _services()
+    _emit(
+        ResearchDiagnosticsService(
+            state,
+            objects,
+            _research_skills(paths),
+            _research_diagnostics(paths),
+        ).status(base_case_id)
+    )
+
+
+@app.command("research-diagnostic-audit")
+def research_diagnostic_audit(
+    base_case_id: Annotated[str, typer.Argument(help="Frozen BaseCase id.")],
+) -> None:
+    """Audit diagnostic objects, Delta links, evidence scope, and memo references."""
+
+    paths, state, objects = _services()
+    _emit(
+        ResearchDiagnosticsService(
+            state,
+            objects,
+            _research_skills(paths),
+            _research_diagnostics(paths),
         ).audit(base_case_id)
     )
 

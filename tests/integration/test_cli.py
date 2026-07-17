@@ -304,3 +304,35 @@ def test_research_specialist_registry_cli_and_invalid_requests_are_safe(
         }
         assert secret not in invoked.output
         assert str(request) not in invoked.output
+
+
+def test_research_diagnostic_cli_schema_and_invalid_requests_are_safe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "diagnostic-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    schema = runner.invoke(app, ["research-diagnostic-schema"])
+    assert schema.exit_code == 0, schema.output
+    payload = json.loads(schema.output)
+    assert payload["diagnostics_version"] == "research-diagnostics-v1"
+    assert len(payload["diagnostics"]) == 6
+    assert payload["memo"]["skill_id"] == "ResearchMemoComposer"
+
+    secret = "private-diagnostic-statement-must-not-be-echoed"
+    request = tmp_path / "private-diagnostic-request.json"
+    request.write_text(json.dumps({"statement": secret}), encoding="utf-8")
+    for command, error_code in (
+        ("research-specialist-diagnose", "INVALID_RESEARCH_DIAGNOSTIC"),
+        ("research-memo-compose", "INVALID_RESEARCH_MEMO"),
+    ):
+        invoked = runner.invoke(app, [command, str(request)])
+        assert invoked.exit_code == 2
+        assert json.loads(invoked.output) == {
+            "error_code": error_code,
+            "status": "REJECTED",
+        }
+        assert secret not in invoked.output
+        assert str(request) not in invoked.output

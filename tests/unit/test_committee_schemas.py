@@ -12,6 +12,7 @@ from astock.schemas import (
     CommitteeCoverageMetrics,
     CommitteeDecisionScope,
     CommitteeEntryOrderType,
+    CommitteePortfolioRiskState,
     CommitteeProtocolDraft,
     CommitteeRatioRange,
 )
@@ -41,6 +42,16 @@ def _assessment() -> CommitteeAssessment:
             specialist_coverage=Decimal("1"),
             pit_coverage=Decimal("1"),
             liquidity_score=Decimal("1"),
+            evidence_ids=evidence_ids,
+        ),
+        portfolio_risk=CommitteePortfolioRiskState(
+            current_total_exposure=Decimal("0"),
+            post_decision_total_exposure=Decimal("0.04"),
+            current_industry_exposure=Decimal("0"),
+            post_decision_industry_exposure=Decimal("0.04"),
+            max_abs_correlation=Decimal("0.20"),
+            portfolio_drawdown=Decimal("0.01"),
+            consecutive_loss_count=0,
             evidence_ids=evidence_ids,
         ),
         tradable=True,
@@ -107,6 +118,16 @@ def test_committee_assessment_rejects_future_execution_and_unreferenced_material
             assessment.model_copy(update={"manual_emergency_stop": True}).model_dump(
                 mode="python"
             )
+        )
+    with pytest.raises(ValidationError, match="post-decision total exposure"):
+        CommitteeAssessment.model_validate(
+            assessment.model_copy(
+                update={
+                    "portfolio_risk": assessment.portfolio_risk.model_copy(
+                        update={"post_decision_total_exposure": Decimal("0.01")}
+                    )
+                }
+            ).model_dump(mode="python")
         )
 
 

@@ -504,6 +504,7 @@ def _assessment_evidence_ids(assessment: CommitteeAssessmentSnapshot) -> list[st
         | set(assessment.expected_return_range.evidence_ids)
         | set(assessment.downside_range.evidence_ids)
         | set(assessment.coverage.evidence_ids)
+        | set(assessment.portfolio_risk.evidence_ids)
         | set(assessment.protocol.evidence_ids)
         | {
             evidence_id

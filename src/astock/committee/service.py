@@ -682,6 +682,7 @@ class CommitteeService:
             | set(assessment.expected_return_range.evidence_ids)
             | set(assessment.downside_range.evidence_ids)
             | set(assessment.coverage.evidence_ids)
+            | set(assessment.portfolio_risk.evidence_ids)
             | set(assessment.protocol.evidence_ids)
             | (
                 set(counter_case.evidence_ids) if counter_case is not None else set()
@@ -1118,6 +1119,17 @@ class CommitteeService:
             reject.add("LEVERAGE_PROHIBITED")
         if assessment.requested_position > rules.max_single_position:
             reject.add("POSITION_CAP_EXCEEDED")
+        portfolio = assessment.portfolio_risk
+        if portfolio.post_decision_total_exposure > rules.max_total_exposure:
+            reject.add("TOTAL_EXPOSURE_LIMIT_EXCEEDED")
+        if portfolio.post_decision_industry_exposure > rules.max_industry_exposure:
+            reject.add("INDUSTRY_EXPOSURE_LIMIT_EXCEEDED")
+        if portfolio.max_abs_correlation > rules.max_abs_correlation:
+            reject.add("PORTFOLIO_CORRELATION_LIMIT_EXCEEDED")
+        if portfolio.portfolio_drawdown >= rules.max_portfolio_drawdown:
+            reject.add("PORTFOLIO_DRAWDOWN_FREEZE")
+        if portfolio.consecutive_loss_count >= rules.max_consecutive_losses:
+            reject.add("CONSECUTIVE_LOSS_FREEZE")
         if (
             assessment.scope is CommitteeDecisionScope.NEW_CANDIDATE
             and assessment.thesis_invalidated
@@ -1125,6 +1137,10 @@ class CommitteeService:
             reject.add("THESIS_INVALIDATED")
         if not assessment.market_data_quality_pass:
             needs_info.add("DATA_QUALITY_FAILED")
+        if portfolio.material_announcement_freeze:
+            needs_info.add("MATERIAL_ANNOUNCEMENT_FREEZE")
+        if portfolio.data_anomaly_freeze:
+            needs_info.add("DATA_ANOMALY_FREEZE")
         coverage = assessment.coverage
         for value, threshold, code in (
             (coverage.data_coverage, rules.min_data_coverage, "DATA_COVERAGE_INSUFFICIENT"),
@@ -1515,6 +1531,7 @@ def _assessment_evidence_ids(assessment: CommitteeAssessment) -> set[str]:
         | set(assessment.expected_return_range.evidence_ids)
         | set(assessment.downside_range.evidence_ids)
         | set(assessment.coverage.evidence_ids)
+        | set(assessment.portfolio_risk.evidence_ids)
         | set(assessment.protocol.evidence_ids)
         | {
             evidence_id

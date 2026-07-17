@@ -108,6 +108,27 @@ class CommitteeCoverageMetrics(AStockModel):
         return self
 
 
+class CommitteePortfolioRiskState(AStockModel):
+    current_total_exposure: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    post_decision_total_exposure: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    current_industry_exposure: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    post_decision_industry_exposure: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    max_abs_correlation: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    portfolio_drawdown: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    consecutive_loss_count: int = Field(ge=0)
+    material_announcement_freeze: bool = False
+    data_anomaly_freeze: bool = False
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_portfolio_risk(self) -> CommitteePortfolioRiskState:
+        _require_sorted_unique(
+            self.evidence_ids,
+            "committee portfolio-risk evidence ids",
+        )
+        return self
+
+
 class CommitteeProtocolDraft(AStockModel):
     strategy_id: str = Field(min_length=1)
     skill_versions: dict[str, str] = Field(default_factory=dict)
@@ -147,6 +168,7 @@ class CommitteeAssessment(AStockModel):
     downside_range: CommitteeRatioRange
     confidence: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
     coverage: CommitteeCoverageMetrics
+    portfolio_risk: CommitteePortfolioRiskState
     tradable: bool
     market_data_quality_pass: bool
     key_fact_community_only: bool = False
@@ -182,6 +204,16 @@ class CommitteeAssessment(AStockModel):
             raise ValueError("new candidates cannot already have a position")
         if self.scope is not CommitteeDecisionScope.NEW_CANDIDATE and self.current_position <= 0:
             raise ValueError("position decisions require a positive current position")
+        if self.portfolio_risk.current_total_exposure < self.current_position:
+            raise ValueError("total exposure cannot be below the current company position")
+        if self.portfolio_risk.current_industry_exposure < self.current_position:
+            raise ValueError("industry exposure cannot be below the current company position")
+        if self.portfolio_risk.post_decision_total_exposure < self.requested_position:
+            raise ValueError("post-decision total exposure cannot be below the requested position")
+        if self.portfolio_risk.post_decision_industry_exposure < self.requested_position:
+            raise ValueError(
+                "post-decision industry exposure cannot be below the requested position"
+            )
         _require_sorted_unique(
             self.support_evidence_ids,
             "committee assessment support evidence ids",
@@ -284,6 +316,11 @@ class CommitteeRuleConfig(AStockModel):
     high_potential_return_lower: Decimal = Field(ge=Decimal("-1"), le=Decimal("10"))
     max_downside_absolute: Decimal = Field(ge=0, le=1)
     low_coverage_margin: Decimal = Field(ge=0, le=1)
+    max_total_exposure: Decimal = Field(gt=0, le=1)
+    max_industry_exposure: Decimal = Field(gt=0, le=1)
+    max_abs_correlation: Decimal = Field(ge=0, le=1)
+    max_portfolio_drawdown: Decimal = Field(gt=0, le=1)
+    max_consecutive_losses: int = Field(ge=1)
     financial_integrity_required: bool = True
     financial_reject_rule_ids: list[str]
     max_context_bytes: int = Field(ge=1)
@@ -297,6 +334,8 @@ class CommitteeRuleConfig(AStockModel):
             raise ValueError("high-position threshold cannot exceed the position cap")
         if self.high_potential_return_lower < self.min_expected_return_lower:
             raise ValueError("high-return threshold cannot be below the eligibility threshold")
+        if self.max_industry_exposure > self.max_total_exposure:
+            raise ValueError("industry exposure cap cannot exceed total exposure cap")
         _require_sorted_unique(
             self.financial_reject_rule_ids,
             "committee financial reject rule ids",
@@ -562,6 +601,7 @@ __all__ = [
     "CommitteeInvestigationTask",
     "CommitteeNarrativeMode",
     "CommitteePlanReport",
+    "CommitteePortfolioRiskState",
     "CommitteeProtocolDraft",
     "CommitteeProtocolStatus",
     "CommitteeRatioRange",

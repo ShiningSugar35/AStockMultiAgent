@@ -15,6 +15,11 @@ min_expected_return_lower: "0.10"
 high_potential_return_lower: "0.20"
 max_downside_absolute: "0.25"
 low_coverage_margin: "0.10"
+max_total_exposure: "0.80"
+max_industry_exposure: "0.25"
+max_abs_correlation: "0.80"
+max_portfolio_drawdown: "0.20"
+max_consecutive_losses: 5
 financial_integrity_required: true
 financial_reject_rule_ids:
   - balance_sheet_identity

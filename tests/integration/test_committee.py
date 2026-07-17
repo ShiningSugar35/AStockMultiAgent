@@ -17,6 +17,7 @@ from astock.schemas import (
     CommitteeDecisionScope,
     CommitteeEntryOrderType,
     CommitteeNarrativeMode,
+    CommitteePortfolioRiskState,
     CommitteeProtocolDraft,
     CommitteeProtocolStatus,
     CommitteeRatioRange,
@@ -163,6 +164,25 @@ def _service_and_request(
             specialist_coverage=Decimal("1"),
             pit_coverage=Decimal("1"),
             liquidity_score=Decimal("1"),
+            evidence_ids=evidence_ids,
+            created_at=as_of,
+        ),
+        "portfolio_risk": CommitteePortfolioRiskState(
+            current_total_exposure=(
+                Decimal("0")
+                if scope is CommitteeDecisionScope.NEW_CANDIDATE
+                else Decimal("0.20")
+            ),
+            post_decision_total_exposure=Decimal("0.24"),
+            current_industry_exposure=(
+                Decimal("0")
+                if scope is CommitteeDecisionScope.NEW_CANDIDATE
+                else Decimal("0.10")
+            ),
+            post_decision_industry_exposure=Decimal("0.14"),
+            max_abs_correlation=Decimal("0.30"),
+            portfolio_drawdown=Decimal("0.03"),
+            consecutive_loss_count=0,
             evidence_ids=evidence_ids,
             created_at=as_of,
         ),
@@ -414,6 +434,9 @@ def test_hard_blocks_and_budget_degradation_cannot_be_overridden_by_narrative(
         {
             **request.assessment.model_dump(mode="python"),
             "signal_evidence_ids": {"tradable": [evidence_id]},
+            "portfolio_risk": request.assessment.portfolio_risk.model_copy(
+                update={"portfolio_drawdown": Decimal("0.20")}
+            ),
         }
     )
     blocked_request = CommitteeDecisionRequest(
@@ -425,6 +448,7 @@ def test_hard_blocks_and_budget_degradation_cannot_be_overridden_by_narrative(
     blocked = committee.decide(blocked_request)
     assert blocked.decision.verdict is CommitteeVerdict.REJECT
     assert "NOT_TRADABLE" in blocked.decision.hard_blocks
+    assert "PORTFOLIO_DRAWDOWN_FREEZE" in blocked.decision.hard_blocks
     assert not blocked.decision.narrative_can_override
 
     base_rules = load_committee_rules(PROJECT_ROOT / "configs" / "committee_rules.yaml")

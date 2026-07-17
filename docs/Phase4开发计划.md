@@ -2,7 +2,7 @@
 
 计划日期：2026-07-17
 
-状态：P4.1 已实现并验收；P4.2～P4.5 按顺序继续开发，尚未用文字冒充完成。
+状态：P4.1～P4.2 已实现并验收；P4.3～P4.5 按顺序继续开发，尚未用文字冒充完成。
 
 ## 1. 目标
 
@@ -144,9 +144,9 @@ Phase 4 把已经完成的证据、PIT、财务核验和行情基础设施接成
 ## 11. 实施进度
 
 - [x] P4.1：冻结证据、PIT/冲突门禁、一次性 BaseCase、ObjectStore/安全 SQLite 索引、CLI、审计和验收。
-- [ ] P4.2：版本化 Skill manifest、确定性专家路由、最多 3 个专家和 SpecialistDelta。
+- [x] P4.2：版本化 Skill manifest、确定性专家路由、最多 3 个专家和 SpecialistDelta。
 - [ ] P4.3：七个通用 Skill 的确定性诊断接口和降级路径。
 - [ ] P4.4：版本化通用持仓生命周期内核与增量 HoldingReview。
 - [ ] P4.5：Codex/Repo Skill 集成、整体恢复与 Phase 4 终验。
 
-P4.1 验收依据见 `docs/Phase4-P4.1验收报告.md`。
+P4.1～P4.2 验收依据见 `docs/Phase4-P4.1验收报告.md` 与 `docs/Phase4-P4.2验收报告.md`。

@@ -6,7 +6,13 @@ from datetime import UTC
 
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.schemas import BaseCasePack, FrozenEvidencePack
+from astock.schemas import (
+    BaseCasePack,
+    FrozenEvidencePack,
+    ResearchSkillRegistry,
+    SpecialistDelta,
+    SpecialistRoutePlan,
+)
 
 
 class ResearchRepository:
@@ -157,6 +163,208 @@ class ResearchRepository:
                 (company_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def get_skill_registry(self, registry_version: str) -> ResearchSkillRegistry | None:
+        row = self.skill_registry_summary(registry_version)
+        if row is None:
+            return None
+        return ResearchSkillRegistry.model_validate_json(
+            self.object_store.get_bytes(str(row["object_hash"]))
+        )
+
+    def skill_registry_summary(self, registry_version: str) -> dict[str, object] | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT registry_version,skill_count,specialist_count,max_specialists,"
+                "object_hash,config_hash,created_at FROM research_skill_registry_index "
+                "WHERE registry_version=?",
+                (registry_version,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def register_skill_registry(
+        self,
+        registry: ResearchSkillRegistry,
+        *,
+        object_hash: str,
+        config_hash: str,
+    ) -> ResearchSkillRegistry:
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT object_hash,config_hash FROM research_skill_registry_index "
+                "WHERE registry_version=?",
+                (registry.registry_version,),
+            ).fetchone()
+            if row is not None:
+                if str(row["config_hash"]) != config_hash:
+                    raise ValueError(
+                        f"research Skill registry version collision: {registry.registry_version}"
+                    )
+                return ResearchSkillRegistry.model_validate_json(
+                    self.object_store.get_bytes(str(row["object_hash"]))
+                )
+            connection.execute(
+                "INSERT INTO research_skill_registry_index("
+                "registry_version,skill_count,specialist_count,max_specialists,object_hash,"
+                "config_hash,created_at) VALUES(?,?,?,?,?,?,?)",
+                (
+                    registry.registry_version,
+                    len(registry.skills),
+                    sum(item.counts_as_specialist for item in registry.skills),
+                    registry.max_specialists,
+                    object_hash,
+                    config_hash,
+                    registry.created_at.isoformat(),
+                ),
+            )
+        return registry
+
+    def get_route_plan(self, route_plan_id: str) -> SpecialistRoutePlan | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT object_hash FROM specialist_route_plan_index WHERE route_plan_id=?",
+                (route_plan_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SpecialistRoutePlan.model_validate_json(
+            self.object_store.get_bytes(str(row["object_hash"]))
+        )
+
+    def route_plan_object_hash(self, route_plan_id: str) -> str | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT object_hash FROM specialist_route_plan_index WHERE route_plan_id=?",
+                (route_plan_id,),
+            ).fetchone()
+        return str(row["object_hash"]) if row else None
+
+    def register_route_plan(
+        self,
+        plan: SpecialistRoutePlan,
+        *,
+        object_hash: str,
+        request_hash: str,
+    ) -> SpecialistRoutePlan:
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT object_hash,request_hash FROM specialist_route_plan_index "
+                "WHERE route_plan_id=?",
+                (plan.route_plan_id,),
+            ).fetchone()
+            if row is not None:
+                if str(row["request_hash"]) != request_hash:
+                    raise ValueError(f"specialist route identity collision: {plan.route_plan_id}")
+                return SpecialistRoutePlan.model_validate_json(
+                    self.object_store.get_bytes(str(row["object_hash"]))
+                )
+            connection.execute(
+                "INSERT INTO specialist_route_plan_index("
+                "route_plan_id,base_case_id,evidence_pack_id,registry_version,coverage_status,"
+                "confidence_cap,selected_count,unavailable_count,degradation_count,object_hash,"
+                "request_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    plan.route_plan_id,
+                    plan.base_case_id,
+                    plan.evidence_pack_id,
+                    plan.registry_version,
+                    plan.coverage_status.value,
+                    plan.confidence_cap,
+                    len(plan.selected),
+                    len(plan.unavailable),
+                    len(plan.degradation_codes),
+                    object_hash,
+                    request_hash,
+                    plan.created_at.isoformat(),
+                ),
+            )
+        return plan
+
+    def latest_route_plan_summary(self, base_case_id: str) -> dict[str, object] | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT route_plan_id,base_case_id,evidence_pack_id,registry_version,"
+                "coverage_status,confidence_cap,selected_count,unavailable_count,"
+                "degradation_count,object_hash,created_at FROM specialist_route_plan_index "
+                "WHERE base_case_id=? ORDER BY created_at DESC,route_plan_id DESC LIMIT 1",
+                (base_case_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_specialist_delta(self, delta_id: str) -> SpecialistDelta | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT object_hash FROM specialist_delta_index WHERE delta_id=?",
+                (delta_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SpecialistDelta.model_validate_json(
+            self.object_store.get_bytes(str(row["object_hash"]))
+        )
+
+    def specialist_delta_object_hash(self, delta_id: str) -> str | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT object_hash FROM specialist_delta_index WHERE delta_id=?",
+                (delta_id,),
+            ).fetchone()
+        return str(row["object_hash"]) if row else None
+
+    def register_specialist_delta(
+        self,
+        delta: SpecialistDelta,
+        *,
+        object_hash: str,
+        request_hash: str,
+    ) -> SpecialistDelta:
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT object_hash,request_hash FROM specialist_delta_index WHERE delta_id=?",
+                (delta.delta_id,),
+            ).fetchone()
+            if row is not None:
+                if str(row["request_hash"]) != request_hash:
+                    raise ValueError(f"specialist delta identity collision: {delta.delta_id}")
+                return SpecialistDelta.model_validate_json(
+                    self.object_store.get_bytes(str(row["object_hash"]))
+                )
+            connection.execute(
+                "INSERT INTO specialist_delta_index("
+                "delta_id,base_case_id,route_plan_id,skill_id,skill_version,"
+                "incremental_finding_count,correction_count,metric_count,"
+                "evidence_request_count,evidence_count,confidence_delta,object_hash,"
+                "request_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    delta.delta_id,
+                    delta.base_case_id,
+                    delta.route_plan_id,
+                    delta.skill_id,
+                    delta.skill_version,
+                    len(delta.incremental_findings),
+                    len(delta.base_case_corrections),
+                    len(delta.industry_specific_metrics),
+                    len(delta.additional_evidence_requests),
+                    len(delta.evidence_ids),
+                    delta.confidence_delta,
+                    object_hash,
+                    request_hash,
+                    delta.created_at.isoformat(),
+                ),
+            )
+        return delta
+
+    def specialist_delta_summaries(self, route_plan_id: str) -> list[dict[str, object]]:
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT delta_id,base_case_id,route_plan_id,skill_id,skill_version,"
+                "incremental_finding_count,correction_count,metric_count,"
+                "evidence_request_count,evidence_count,confidence_delta,object_hash,created_at "
+                "FROM specialist_delta_index WHERE route_plan_id=? "
+                "ORDER BY skill_id,skill_version,delta_id",
+                (route_plan_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
 
 __all__ = ["ResearchRepository"]

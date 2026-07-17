@@ -271,3 +271,36 @@ def test_invalid_base_case_cli_request_is_redacted(tmp_path: Path, monkeypatch) 
     }
     assert secret not in invoked.output
     assert str(request) not in invoked.output
+
+
+def test_research_specialist_registry_cli_and_invalid_requests_are_safe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "specialist-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    listed = runner.invoke(app, ["research-specialist-list"])
+    assert listed.exit_code == 0, listed.output
+    payload = json.loads(listed.output)
+    assert payload["status"] == "REGISTERED"
+    assert payload["max_specialists"] == 3
+    assert len(payload["skills"]) == 7
+    assert sum(item["counts_as_specialist"] for item in payload["skills"]) == 6
+
+    secret = "private-specialist-statement-must-not-be-echoed"
+    request = tmp_path / "private-specialist-request.json"
+    request.write_text(json.dumps({"statement": secret}), encoding="utf-8")
+    for command, error_code in (
+        ("research-specialist-route", "INVALID_SPECIALIST_ROUTE"),
+        ("research-delta-import", "INVALID_SPECIALIST_DELTA"),
+    ):
+        invoked = runner.invoke(app, [command, str(request)])
+        assert invoked.exit_code == 2
+        assert json.loads(invoked.output) == {
+            "error_code": error_code,
+            "status": "REJECTED",
+        }
+        assert secret not in invoked.output
+        assert str(request) not in invoked.output

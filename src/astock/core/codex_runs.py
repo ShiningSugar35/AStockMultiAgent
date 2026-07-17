@@ -26,6 +26,8 @@ from astock.schemas import (
     RunManifest,
     RunMode,
     RunStatus,
+    SpecialistDelta,
+    SpecialistRoutePlan,
     ValidationReport,
 )
 from astock.schemas.base import AStockModel
@@ -33,6 +35,8 @@ from astock.schemas.base import AStockModel
 _ARTIFACT_MODELS: dict[str, type[AStockModel]] = {
     "FrozenEvidencePack": FrozenEvidencePack,
     "BaseCasePack": BaseCasePack,
+    "SpecialistRoutePlan": SpecialistRoutePlan,
+    "SpecialistDelta": SpecialistDelta,
     "ContextBudgetReport": ContextBudgetReport,
     "PositionMonitoringPlan": PositionMonitoringPlan,
     "HoldingReviewPack": HoldingReviewPack,

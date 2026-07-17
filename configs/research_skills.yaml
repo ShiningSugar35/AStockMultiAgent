@@ -1,0 +1,210 @@
+registry_version: research-skills-v1
+max_specialists: 3
+coverage_confidence_caps:
+  SUFFICIENT: 0.90
+  PARTIAL: 0.70
+  INSUFFICIENT: 0.45
+skills:
+  - skill_id: IndustryBottleneckSkill
+    skill_version: industry-bottleneck-v1
+    kind: INDUSTRY_BOTTLENECK
+    source_references:
+      - https://github.com/muxuuu/serenity-skill/commit/c2fe93deedfd0d1bd9fe7ef0601ea1b9c20ea24a
+      - local:A-share-evidence-adaptation-v1
+    trigger_tags: [industry, bottleneck, supply_chain, scarcity]
+    industry_tags: [semiconductor, manufacturing, materials, equipment]
+    event_tags: []
+    horizons: [medium, long]
+    required_inputs: [industry_evidence]
+    optional_input_degradation_codes: {}
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL]
+    reasoning_steps:
+      - Trace system change to a necessary industry link.
+      - Test scarcity, substitutability, and listed-company value capture.
+      - Record disconfirming evidence and missing links.
+    positive_signals: [necessary_link_verified, scarcity_verified, value_capture_verified]
+    negative_signals: [easy_substitution, no_listed_company_capture, story_only]
+    invalidation_conditions: [system_change_reversed, bottleneck_removed]
+    known_failure_modes: [theme_chasing, fixed_score_overreach, community_fact_substitution]
+    output_schema: SpecialistDelta
+    cost_class: MEDIUM
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: EventToAlphaSkill
+    skill_version: event-to-alpha-v1
+    kind: EVENT_TO_ALPHA
+    source_references:
+      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - local:A-share-event-transmission-v1
+    trigger_tags: [event, catalyst, policy, announcement]
+    industry_tags: []
+    event_tags: [policy, order, capacity, price_change, corporate_action]
+    horizons: [short, medium]
+    required_inputs: [event_evidence]
+    optional_input_degradation_codes: {}
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL]
+    reasoning_steps:
+      - Verify the event and its point-in-time availability.
+      - Map it to an operating metric, financial direction, and time window.
+      - Define a falsifier before stating an incremental implication.
+    positive_signals: [verified_event, measurable_transmission, bounded_window]
+    negative_signals: [headline_only, no_financial_transmission, stale_event]
+    invalidation_conditions: [event_reversed, operating_metric_not_confirmed]
+    known_failure_modes: [news_recency_bias, duplicate_event_counting, causality_overclaim]
+    output_schema: SpecialistDelta
+    cost_class: MEDIUM
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: GrowthProbabilitySkill
+    skill_version: growth-probability-v1
+    kind: GROWTH_PROBABILITY
+    source_references:
+      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - local:A-share-growth-probability-v1
+    trigger_tags: [growth, scenario, probability]
+    industry_tags: []
+    event_tags: []
+    horizons: [medium, long]
+    required_inputs: [financial_evidence]
+    optional_input_degradation_codes:
+      consensus_estimates: CONSENSUS_UNAVAILABLE
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL]
+    reasoning_steps:
+      - Define mutually exclusive growth scenarios and explicit drivers.
+      - Assign probabilities that conserve to one.
+      - Bind duration and failure conditions to evidence.
+    positive_signals: [driver_verified, probability_conserved, duration_bounded]
+    negative_signals: [scenario_overlap, unsupported_probability, perpetual_growth]
+    invalidation_conditions: [driver_invalidated, probability_mass_not_conserved]
+    known_failure_modes: [false_precision, base_rate_neglect, consensus_as_fact]
+    output_schema: SpecialistDelta
+    cost_class: MEDIUM
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: GrowthValuationLens
+    skill_version: growth-valuation-v1
+    kind: GROWTH_VALUATION
+    source_references:
+      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - local:A-share-valuation-expectations-v1
+    trigger_tags: [valuation, growth, expectations]
+    industry_tags: []
+    event_tags: []
+    horizons: [medium, long]
+    required_inputs: [valuation_inputs]
+    optional_input_degradation_codes:
+      consensus_estimates: CONSENSUS_UNAVAILABLE
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL]
+    reasoning_steps:
+      - Separate market-implied expectations from the research scenario.
+      - Test duration, dilution, reinvestment, and terminal assumptions.
+      - Emit adjustments rather than a standalone target price.
+    positive_signals: [expectations_explicit, scenario_bounded, dilution_included]
+    negative_signals: [single_multiple_shortcut, consensus_substitution, terminal_dominance]
+    invalidation_conditions: [valuation_input_stale, scenario_probability_changed]
+    known_failure_modes: [multiple_comparability_error, growth_duration_overreach, precision_theater]
+    output_schema: SpecialistDelta
+    cost_class: MEDIUM
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: DailyTrendHealthSkill
+    skill_version: daily-trend-health-v1
+    kind: DAILY_TREND_HEALTH
+    source_references:
+      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - local:A-share-daily-quality-gate-v1
+    trigger_tags: [trend, daily, market_health]
+    industry_tags: []
+    event_tags: []
+    horizons: [short, medium]
+    required_inputs: [daily_market_quality]
+    optional_input_degradation_codes: {}
+    required_frequencies: [1d]
+    required_evidence_grades: [SECONDARY]
+    reasoning_steps:
+      - Require a passing daily data-quality report.
+      - Calculate only versioned daily indicators.
+      - Describe trend context without emitting a buy signal.
+    positive_signals: [daily_quality_pass, trend_confirmed]
+    negative_signals: [daily_quality_fail, unstable_trend]
+    invalidation_conditions: [daily_series_revised, quality_gate_failed]
+    known_failure_modes: [lookahead_window, threshold_transfer, trend_as_fundamental_fact]
+    output_schema: SpecialistDelta
+    cost_class: LOW
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: HourlySwingSkill
+    skill_version: hourly-swing-v1
+    kind: HOURLY_SWING
+    source_references:
+      - local:A-share-independent-hourly-swing-v1
+    trigger_tags: [swing, hourly, timing]
+    industry_tags: []
+    event_tags: []
+    horizons: [short]
+    required_inputs: [hourly_market_quality]
+    optional_input_degradation_codes: {}
+    required_frequencies: [60m]
+    required_evidence_grades: [SECONDARY]
+    reasoning_steps:
+      - Require a passing independent 60-minute quality gate.
+      - Apply only hourly rules and thresholds.
+      - Return timing context and failure modes, never a standalone order.
+    positive_signals: [hourly_quality_pass, hourly_structure_confirmed]
+    negative_signals: [frequency_unavailable, hourly_quality_fail]
+    invalidation_conditions: [hourly_series_revised, hourly_quality_gate_failed]
+    known_failure_modes: [daily_threshold_reuse, sparse_bar_interpolation, overtrading]
+    output_schema: SpecialistDelta
+    cost_class: LOW
+    dependencies: []
+    incompatible_skills: [DailyTrendHealthSkill]
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: ResearchMemoComposer
+    skill_version: research-memo-composer-v1
+    kind: RESEARCH_MEMO
+    source_references:
+      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - local:citation-preserving-memo-v1
+    trigger_tags: []
+    industry_tags: []
+    event_tags: []
+    horizons: [short, medium, long]
+    required_inputs: [base_case]
+    optional_input_degradation_codes: {}
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL]
+    reasoning_steps:
+      - Compose only frozen BaseCase and selected SpecialistDelta content.
+      - Preserve evidence identifiers and explicit gaps.
+      - Add no new research fact or evidence identifier.
+    positive_signals: [citation_union_preserved, gaps_visible]
+    negative_signals: [new_uncited_fact, hidden_gap]
+    invalidation_conditions: [base_case_superseded, delta_audit_failed]
+    known_failure_modes: [citation_loss, prose_overclaim, duplicated_common_analysis]
+    output_schema: ResearchMemoArtifact
+    cost_class: LOW
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: false
+    status: ENABLED_CONTRACT

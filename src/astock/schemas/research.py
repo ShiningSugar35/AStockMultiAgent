@@ -263,12 +263,333 @@ class BaseCasePack(AStockModel):
         return self
 
 
+class ResearchSkillKind(StrEnum):
+    INDUSTRY_BOTTLENECK = "INDUSTRY_BOTTLENECK"
+    EVENT_TO_ALPHA = "EVENT_TO_ALPHA"
+    GROWTH_PROBABILITY = "GROWTH_PROBABILITY"
+    GROWTH_VALUATION = "GROWTH_VALUATION"
+    DAILY_TREND_HEALTH = "DAILY_TREND_HEALTH"
+    HOURLY_SWING = "HOURLY_SWING"
+    RESEARCH_MEMO = "RESEARCH_MEMO"
+
+
+class ResearchSkillStatus(StrEnum):
+    ENABLED_CONTRACT = "ENABLED_CONTRACT"
+    PENDING = "PENDING"
+    DISABLED = "DISABLED"
+
+
+class ResearchCostClass(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+
+
+class SpecialistCoverageStatus(StrEnum):
+    SUFFICIENT = "SUFFICIENT"
+    PARTIAL = "PARTIAL"
+    INSUFFICIENT = "INSUFFICIENT"
+
+
+class SpecialistEligibility(StrEnum):
+    READY = "READY"
+    DEGRADED = "DEGRADED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class AdjustmentDirection(StrEnum):
+    INCREASE = "INCREASE"
+    DECREASE = "DECREASE"
+    NEUTRAL = "NEUTRAL"
+
+
+class ResearchSkillManifest(AStockModel):
+    skill_id: str = Field(min_length=1)
+    skill_version: str = Field(min_length=1)
+    kind: ResearchSkillKind
+    source_references: list[str] = Field(min_length=1)
+    trigger_tags: list[str]
+    industry_tags: list[str]
+    event_tags: list[str]
+    horizons: list[str]
+    required_inputs: list[str]
+    optional_input_degradation_codes: dict[str, str]
+    required_frequencies: list[str]
+    required_evidence_grades: list[EvidenceGrade]
+    reasoning_steps: list[str] = Field(min_length=1)
+    positive_signals: list[str] = Field(min_length=1)
+    negative_signals: list[str] = Field(min_length=1)
+    invalidation_conditions: list[str] = Field(min_length=1)
+    known_failure_modes: list[str] = Field(min_length=1)
+    output_schema: str = Field(min_length=1)
+    cost_class: ResearchCostClass
+    dependencies: list[str]
+    incompatible_skills: list[str]
+    counts_as_specialist: bool
+    status: ResearchSkillStatus
+
+    @model_validator(mode="after")
+    def validate_manifest_sets(self) -> ResearchSkillManifest:
+        list_fields = {
+            "source references": self.source_references,
+            "trigger tags": self.trigger_tags,
+            "industry tags": self.industry_tags,
+            "event tags": self.event_tags,
+            "horizons": self.horizons,
+            "required inputs": self.required_inputs,
+            "required frequencies": self.required_frequencies,
+            "required evidence grades": self.required_evidence_grades,
+            "dependencies": self.dependencies,
+            "incompatible skills": self.incompatible_skills,
+        }
+        for label, values in list_fields.items():
+            if len(values) != len(set(values)):
+                raise ValueError(f"research Skill {label} must be unique")
+        overlap = set(self.required_inputs) & set(self.optional_input_degradation_codes)
+        if overlap:
+            raise ValueError("required and optional Skill inputs cannot overlap")
+        if self.kind is ResearchSkillKind.RESEARCH_MEMO and self.counts_as_specialist:
+            raise ValueError("ResearchMemoComposer cannot consume a specialist slot")
+        if self.kind is not ResearchSkillKind.RESEARCH_MEMO and not self.counts_as_specialist:
+            raise ValueError("analysis Skills must consume a specialist slot")
+        return self
+
+
+class ResearchSkillRegistry(AStockModel):
+    registry_version: str = Field(min_length=1)
+    max_specialists: int = Field(ge=1, le=3)
+    coverage_confidence_caps: dict[SpecialistCoverageStatus, float]
+    skills: list[ResearchSkillManifest] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_registry(self) -> ResearchSkillRegistry:
+        skill_ids = [skill.skill_id for skill in self.skills]
+        if len(skill_ids) != len(set(skill_ids)):
+            raise ValueError("research Skill ids must be unique")
+        identities = [(skill.skill_id, skill.skill_version) for skill in self.skills]
+        if len(identities) != len(set(identities)):
+            raise ValueError("research Skill identities must be unique")
+        if set(self.coverage_confidence_caps) != set(SpecialistCoverageStatus):
+            raise ValueError("specialist confidence caps must cover every coverage status")
+        if any(value < 0 or value > 1 for value in self.coverage_confidence_caps.values()):
+            raise ValueError("specialist confidence caps must be within 0..1")
+        memo_count = sum(
+            skill.kind is ResearchSkillKind.RESEARCH_MEMO for skill in self.skills
+        )
+        if memo_count != 1:
+            raise ValueError("research Skill registry requires one ResearchMemoComposer")
+        known = set(skill_ids)
+        for skill in self.skills:
+            unknown = (set(skill.dependencies) | set(skill.incompatible_skills)) - known
+            if unknown:
+                raise ValueError(
+                    f"Skill {skill.skill_id} references unknown Skills: "
+                    + ", ".join(sorted(unknown))
+                )
+        return self
+
+
+class SpecialistRouteRequest(AStockModel):
+    base_case_id: str = Field(min_length=1)
+    thesis_tags: list[str]
+    industry_tags: list[str]
+    event_tags: list[str]
+    horizon: str = Field(min_length=1)
+    available_inputs: list[str]
+    available_frequencies: list[str]
+    explicit_skill_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_route_scope(self) -> SpecialistRouteRequest:
+        for label, values in (
+            ("thesis tags", self.thesis_tags),
+            ("industry tags", self.industry_tags),
+            ("event tags", self.event_tags),
+            ("available inputs", self.available_inputs),
+            ("available frequencies", self.available_frequencies),
+            ("explicit Skill ids", self.explicit_skill_ids),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"specialist route {label} must be unique")
+        return self
+
+
+class SpecialistRouteMatch(AStockModel):
+    skill_id: str = Field(min_length=1)
+    skill_version: str = Field(min_length=1)
+    score: int = Field(ge=0)
+    eligibility: SpecialistEligibility
+    reason_codes: list[str] = Field(min_length=1)
+    missing_required_inputs: list[str]
+    missing_required_frequencies: list[str]
+    degradation_codes: list[str]
+
+    @model_validator(mode="after")
+    def validate_route_match(self) -> SpecialistRouteMatch:
+        for values in (
+            self.reason_codes,
+            self.missing_required_inputs,
+            self.missing_required_frequencies,
+            self.degradation_codes,
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError("specialist route match values must be unique")
+        if self.eligibility is SpecialistEligibility.UNAVAILABLE and not (
+            self.missing_required_inputs or self.missing_required_frequencies
+        ):
+            raise ValueError("unavailable specialist matches require a missing hard input")
+        return self
+
+
+class SpecialistRoutePlan(AStockModel):
+    route_plan_id: str = Field(min_length=1)
+    base_case_id: str = Field(min_length=1)
+    evidence_pack_id: str = Field(min_length=1)
+    registry_version: str = Field(min_length=1)
+    selected: list[SpecialistRouteMatch]
+    unavailable: list[SpecialistRouteMatch]
+    excluded_skill_reasons: dict[str, list[str]]
+    coverage_status: SpecialistCoverageStatus
+    confidence_cap: float = Field(ge=0, le=1)
+    max_specialists: int = Field(ge=1, le=3)
+    degradation_codes: list[str]
+
+    @model_validator(mode="after")
+    def validate_route_plan(self) -> SpecialistRoutePlan:
+        if len(self.selected) > self.max_specialists:
+            raise ValueError("specialist route exceeds its declared maximum")
+        selected_ids = [item.skill_id for item in self.selected]
+        unavailable_ids = [item.skill_id for item in self.unavailable]
+        if len(selected_ids) != len(set(selected_ids)):
+            raise ValueError("selected specialist Skills must be unique")
+        if len(unavailable_ids) != len(set(unavailable_ids)):
+            raise ValueError("unavailable specialist Skills must be unique")
+        if set(selected_ids) & set(unavailable_ids):
+            raise ValueError("a Skill cannot be both selected and unavailable")
+        if any(item.eligibility is SpecialistEligibility.UNAVAILABLE for item in self.selected):
+            raise ValueError("unavailable Skills cannot be selected")
+        if any(
+            item.eligibility is not SpecialistEligibility.UNAVAILABLE
+            for item in self.unavailable
+        ):
+            raise ValueError("unavailable list can only contain unavailable matches")
+        if len(self.degradation_codes) != len(set(self.degradation_codes)):
+            raise ValueError("specialist route degradation codes must be unique")
+        return self
+
+
+class SpecialistMetricInput(AStockModel):
+    metric_name: str = Field(min_length=1)
+    value: float | str
+    unit: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class SpecialistMetric(AStockModel):
+    metric_id: str = Field(min_length=1)
+    metric_name: str = Field(min_length=1)
+    value: float | str
+    unit: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class SpecialistAdjustmentInput(AStockModel):
+    dimension: str = Field(min_length=1)
+    direction: AdjustmentDirection
+    magnitude: float = Field(ge=0, le=1)
+    rationale: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class SpecialistAdjustment(AStockModel):
+    adjustment_id: str = Field(min_length=1)
+    dimension: str = Field(min_length=1)
+    direction: AdjustmentDirection
+    magnitude: float = Field(ge=0, le=1)
+    rationale: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class SpecialistEvidenceRequest(AStockModel):
+    request_code: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    required_evidence: list[str] = Field(min_length=1)
+    blocking: bool
+
+
+class SpecialistDeltaBuildRequest(AStockModel):
+    base_case_id: str = Field(min_length=1)
+    route_plan_id: str = Field(min_length=1)
+    skill_id: str = Field(min_length=1)
+    skill_version: str = Field(min_length=1)
+    incremental_findings: list[ResearchFindingInput]
+    base_case_corrections: list[ResearchFindingInput]
+    industry_specific_metrics: list[SpecialistMetricInput]
+    additional_evidence_requests: list[SpecialistEvidenceRequest]
+    failure_modes: list[str]
+    confidence_delta: float = Field(ge=-0.25, le=0.25)
+    valuation_adjustments: list[SpecialistAdjustmentInput]
+    risk_adjustments: list[SpecialistAdjustmentInput]
+    coverage_delta: dict[BaseCaseSection, float]
+
+    @model_validator(mode="after")
+    def validate_delta_request(self) -> SpecialistDeltaBuildRequest:
+        if any(value < -1 or value > 1 for value in self.coverage_delta.values()):
+            raise ValueError("specialist coverage deltas must be within -1..1")
+        request_codes = [item.request_code for item in self.additional_evidence_requests]
+        if len(request_codes) != len(set(request_codes)):
+            raise ValueError("specialist evidence request codes must be unique")
+        if len(self.failure_modes) != len(set(self.failure_modes)):
+            raise ValueError("specialist failure modes must be unique")
+        return self
+
+
+class SpecialistDelta(AStockModel):
+    delta_id: str = Field(min_length=1)
+    base_case_id: str = Field(min_length=1)
+    evidence_pack_id: str = Field(min_length=1)
+    route_plan_id: str = Field(min_length=1)
+    skill_id: str = Field(min_length=1)
+    skill_version: str = Field(min_length=1)
+    incremental_findings: list[CitedResearchFinding]
+    base_case_corrections: list[CitedResearchFinding]
+    industry_specific_metrics: list[SpecialistMetric]
+    additional_evidence_requests: list[SpecialistEvidenceRequest]
+    failure_modes: list[str]
+    confidence_delta: float = Field(ge=-0.25, le=0.25)
+    valuation_adjustments: list[SpecialistAdjustment]
+    risk_adjustments: list[SpecialistAdjustment]
+    coverage_delta: dict[BaseCaseSection, float]
+    evidence_ids: list[str]
+
+    @model_validator(mode="after")
+    def validate_delta_conservation(self) -> SpecialistDelta:
+        if any(value < -1 or value > 1 for value in self.coverage_delta.values()):
+            raise ValueError("specialist coverage deltas must be within -1..1")
+        cited = {
+            evidence_id
+            for item in (
+                *self.incremental_findings,
+                *self.base_case_corrections,
+                *self.industry_specific_metrics,
+                *self.valuation_adjustments,
+                *self.risk_adjustments,
+            )
+            for evidence_id in item.evidence_ids
+        }
+        if self.evidence_ids != sorted(cited):
+            raise ValueError("SpecialistDelta evidence ids must equal the cited union")
+        if len(self.failure_modes) != len(set(self.failure_modes)):
+            raise ValueError("SpecialistDelta failure modes must be unique")
+        return self
+
+
 __all__ = [
     "BASE_CASE_SECTIONS",
     "BaseCaseBuildRequest",
     "BaseCaseDraft",
     "BaseCasePack",
     "BaseCaseSection",
+    "AdjustmentDirection",
     "CitedResearchFinding",
     "EvidenceFreezeRequest",
     "FrozenEvidencePack",
@@ -279,4 +600,21 @@ __all__ = [
     "ResearchGap",
     "ResearchGapInput",
     "ResearchGapSeverity",
+    "ResearchCostClass",
+    "ResearchSkillKind",
+    "ResearchSkillManifest",
+    "ResearchSkillRegistry",
+    "ResearchSkillStatus",
+    "SpecialistAdjustment",
+    "SpecialistAdjustmentInput",
+    "SpecialistCoverageStatus",
+    "SpecialistDelta",
+    "SpecialistDeltaBuildRequest",
+    "SpecialistEligibility",
+    "SpecialistEvidenceRequest",
+    "SpecialistMetric",
+    "SpecialistMetricInput",
+    "SpecialistRouteMatch",
+    "SpecialistRoutePlan",
+    "SpecialistRouteRequest",
 ]

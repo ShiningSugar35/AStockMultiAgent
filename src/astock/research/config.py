@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from astock.schemas import ResearchCoreConfig
+from astock.schemas import ResearchCoreConfig, ResearchSkillRegistry
 
 
 def load_research_core_config(path: Path) -> ResearchCoreConfig:
@@ -21,4 +21,18 @@ def load_research_core_config(path: Path) -> ResearchCoreConfig:
     return ResearchCoreConfig.model_validate(payload)
 
 
-__all__ = ["load_research_core_config"]
+def load_research_skill_registry(path: Path) -> ResearchSkillRegistry:
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"cannot read research Skill configuration: {path.name}") from exc
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid research Skill YAML: {path.name}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"research Skill configuration must contain a mapping: {path.name}"
+        )
+    return ResearchSkillRegistry.model_validate(payload)
+
+
+__all__ = ["load_research_core_config", "load_research_skill_registry"]

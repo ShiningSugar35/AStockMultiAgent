@@ -58,7 +58,9 @@ from astock.providers import EastMoney5mProvider, Sina5mProvider
 from astock.research import (
     ResearchCoreService,
     ResearchRepository,
+    ResearchSkillService,
     load_research_core_config,
+    load_research_skill_registry,
 )
 from astock.schemas import (
     AdjustmentMode,
@@ -75,6 +77,9 @@ from astock.schemas import (
     KnowledgeSourceRegistry,
     Market,
     ResearchCoreConfig,
+    ResearchSkillRegistry,
+    SpecialistDeltaBuildRequest,
+    SpecialistRouteRequest,
     ZhihuContentType,
     ZhihuEndpointTemplateRegistry,
     ZhihuResponseKind,
@@ -115,6 +120,10 @@ def _distillation_rules(paths: ProjectPaths) -> DistillationClassRuleSet:
 
 def _research_core(paths: ProjectPaths) -> ResearchCoreConfig:
     return load_research_core_config(paths.root / "configs" / "research_core.yaml")
+
+
+def _research_skills(paths: ProjectPaths) -> ResearchSkillRegistry:
+    return load_research_skill_registry(paths.root / "configs" / "research_skills.yaml")
 
 
 def _emit(value: Any) -> None:
@@ -926,6 +935,170 @@ def research_base_case_audit(
 
     paths, state, objects = _services()
     _emit(ResearchCoreService(state, objects, _research_core(paths)).audit(company_id))
+
+
+@app.command("research-specialist-list")
+def research_specialist_list() -> None:
+    """Register and list versioned research Skill contracts."""
+
+    paths, state, objects = _services()
+    execution = ResearchSkillService(
+        state,
+        objects,
+        _research_skills(paths),
+    ).register_registry()
+    registry = execution.registry
+    _emit(
+        {
+            "status": "REGISTERED",
+            "registry_version": registry.registry_version,
+            "object_sha256": execution.object_sha256,
+            "max_specialists": registry.max_specialists,
+            "skills": [
+                {
+                    "skill_id": item.skill_id,
+                    "skill_version": item.skill_version,
+                    "kind": item.kind,
+                    "status": item.status,
+                    "counts_as_specialist": item.counts_as_specialist,
+                    "required_inputs": item.required_inputs,
+                    "required_frequencies": item.required_frequencies,
+                }
+                for item in registry.skills
+            ],
+        }
+    )
+
+
+@app.command("research-specialist-route")
+def research_specialist_route(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Select at most three specialists using explicit deterministic rules."""
+
+    paths, state, objects = _services()
+    try:
+        request = SpecialistRouteRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = ResearchSkillService(
+            state,
+            objects,
+            _research_skills(paths),
+        ).route(request)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_SPECIALIST_ROUTE"})
+        raise typer.Exit(code=2) from exc
+    plan = execution.plan
+    _emit(
+        {
+            "status": "ROUTED",
+            "route_plan_id": plan.route_plan_id,
+            "base_case_id": plan.base_case_id,
+            "object_sha256": execution.object_sha256,
+            "coverage_status": plan.coverage_status,
+            "confidence_cap": plan.confidence_cap,
+            "selected": [
+                {
+                    "skill_id": item.skill_id,
+                    "skill_version": item.skill_version,
+                    "eligibility": item.eligibility,
+                    "reason_codes": item.reason_codes,
+                    "degradation_codes": item.degradation_codes,
+                }
+                for item in plan.selected
+            ],
+            "unavailable": [
+                {
+                    "skill_id": item.skill_id,
+                    "skill_version": item.skill_version,
+                    "reason_codes": item.reason_codes,
+                    "missing_required_inputs": item.missing_required_inputs,
+                    "missing_required_frequencies": item.missing_required_frequencies,
+                }
+                for item in plan.unavailable
+            ],
+            "excluded_skill_reasons": plan.excluded_skill_reasons,
+            "degradation_codes": plan.degradation_codes,
+        }
+    )
+
+
+@app.command("research-delta-import")
+def research_delta_import(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Validate and store one selected specialist's incremental research output."""
+
+    paths, state, objects = _services()
+    try:
+        request = SpecialistDeltaBuildRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = ResearchSkillService(
+            state,
+            objects,
+            _research_skills(paths),
+        ).build_delta(request)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_SPECIALIST_DELTA"})
+        raise typer.Exit(code=2) from exc
+    delta = execution.delta
+    _emit(
+        {
+            "status": "IMPORTED",
+            "delta_id": delta.delta_id,
+            "base_case_id": delta.base_case_id,
+            "route_plan_id": delta.route_plan_id,
+            "skill_id": delta.skill_id,
+            "skill_version": delta.skill_version,
+            "object_sha256": execution.object_sha256,
+            "incremental_finding_count": len(delta.incremental_findings),
+            "correction_count": len(delta.base_case_corrections),
+            "metric_count": len(delta.industry_specific_metrics),
+            "evidence_request_count": len(delta.additional_evidence_requests),
+            "evidence_count": len(delta.evidence_ids),
+            "confidence_delta": delta.confidence_delta,
+        }
+    )
+
+
+@app.command("research-specialist-status")
+def research_specialist_status(
+    base_case_id: Annotated[str, typer.Argument(help="Frozen BaseCase id.")],
+) -> None:
+    """Return safe route and delta indexes without research prose."""
+
+    paths, state, objects = _services()
+    _emit(
+        ResearchSkillService(
+            state,
+            objects,
+            _research_skills(paths),
+        ).status(base_case_id)
+    )
+
+
+@app.command("research-specialist-audit")
+def research_specialist_audit(
+    base_case_id: Annotated[str, typer.Argument(help="Frozen BaseCase id.")],
+) -> None:
+    """Audit route, delta, frozen evidence scope, and safe index counts."""
+
+    paths, state, objects = _services()
+    _emit(
+        ResearchSkillService(
+            state,
+            objects,
+            _research_skills(paths),
+        ).audit(base_case_id)
+    )
 
 
 @app.command("knowledge-source-list")

@@ -1,7 +1,7 @@
 # Phase 3 M3.2 / M3.3 开发计划
 
 计划日期：2026-07-17
-状态：M3.2 已完成并验收；M3.3 继续执行
+状态：M3.2、M3.3 均已完成并验收；Phase 3 完成
 前置基线：M3.1 提交 `884a5b2`，Python 3.12.10，SQLite migration 0001～0010
 
 ## 1. 目标与非目标
@@ -95,7 +95,7 @@ M3.2 验收门：`pytest`、`ruff`、`pyright` 全通过；冻结 golden 公式�
 
 ## 6. M3.3 实施顺序与验收
 
-1. 增加模型/数据集/推理 Schema 和 migration 0012。
+1. 增加模型/数据集/推理 Schema 和 migration 0012；已应用状态库需要的作用域、行业与 cohort 元数据只通过追加 migration 0013～0014 补充。
 2. 引入固定版本的 scikit-learn、PyOD 及其 Python 3.12 兼容依赖。
 3. 实现冻结数据集构建、三类模型训练/推理、模型对象入 ObjectStore 和 checkpoint 恢复。
 4. 建立不含未来信息的 frozen fixture，覆盖正常、异常、常量列、缺值、样本不足和重跑。
@@ -103,6 +103,8 @@ M3.2 验收门：`pytest`、`ruff`、`pyright` 全通过；冻结 golden 公式�
 6. 完成 Phase 3 验收报告和能力状态更新，不再显示 `DISABLED_UNTIL_M3_2/M3_3`。
 
 M3.3 验收门：固定数据集重复训练得到相同模型身份和分数；异常不得断言欺诈；未来样本无法进入历史训练；三种模型有独立测试；旧数据库可升级且外键完整。
+
+实际验收结果见 `docs/Phase3-M3.3验收报告.md`：固定数据集、按时序/同行隔离的训练口径、行业与 cohort 身份、三类模型、模型工件、评测报告、证据/PIT 门禁、缺样本降级、重复运行和 migration 0012～0014 均已通过；全仓为 131 passed / 8 skipped，ruff 与 pyright 零问题。
 
 ## 7. 回滚与提交
 

@@ -109,6 +109,26 @@ class FinancialRiskLevel(StrEnum):
     HIGH = "HIGH"
 
 
+class FinancialAnomalyModelType(StrEnum):
+    ROBUST_Z_SCORE = "ROBUST_Z_SCORE"
+    ISOLATION_FOREST = "ISOLATION_FOREST"
+    PYOD_ECOD = "PYOD_ECOD"
+
+
+class FinancialAnomalyScope(StrEnum):
+    TIME_SERIES = "TIME_SERIES"
+    PEER = "PEER"
+
+
+class FinancialBenignContext(StrEnum):
+    HIGH_GROWTH = "HIGH_GROWTH"
+    ACQUISITION_RESTRUCTURING = "ACQUISITION_RESTRUCTURING"
+    SEASONALITY = "SEASONALITY"
+    REAL_ESTATE_PROJECT_ACCOUNTING = "REAL_ESTATE_PROJECT_ACCOUNTING"
+    EARLY_BIOTECH_RND_PHASE = "EARLY_BIOTECH_RND_PHASE"
+    ACCOUNTING_POLICY_CHANGE = "ACCOUNTING_POLICY_CHANGE"
+
+
 class FinancialCoverageStatus(StrEnum):
     COMPLETE = "COMPLETE"
     PARTIAL = "PARTIAL"
@@ -267,6 +287,124 @@ class FinancialPeerCohort(AStockModel):
         return self
 
 
+class FinancialAnomalySample(AStockModel):
+    sample_id: str = Field(min_length=1)
+    company_id: str = Field(min_length=1)
+    period_end: date
+    available_at: AwareDatetime
+    producer: Literal["FINANCIAL_M3_2"] = "FINANCIAL_M3_2"
+    feature_values: dict[str, Decimal] = Field(min_length=1)
+    feature_formula_versions: dict[str, str] = Field(min_length=1)
+    source_snapshot_ids: list[str] = Field(min_length=1)
+    pit_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+    expected_anomaly: bool | None = None
+    benign_contexts: list[FinancialBenignContext] = Field(default_factory=list)
+    benign_context_evidence_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_feature_and_context_lineage(self) -> FinancialAnomalySample:
+        if set(self.feature_values) != set(self.feature_formula_versions):
+            raise ValueError("every anomaly feature requires exactly one formula version")
+        if any(not value.is_finite() for value in self.feature_values.values()):
+            raise ValueError("anomaly features must contain only finite decimal values")
+        for values, label in (
+            (self.source_snapshot_ids, "source_snapshot_ids"),
+            (self.pit_ids, "pit_ids"),
+            (self.evidence_ids, "evidence_ids"),
+            (self.benign_context_evidence_ids, "benign_context_evidence_ids"),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"{label} must be unique")
+        if self.benign_contexts and not self.benign_context_evidence_ids:
+            raise ValueError("benign contexts require separate supporting evidence")
+        return self
+
+
+class FinancialAnomalyDataset(AStockModel):
+    dataset_id: str = Field(min_length=1)
+    as_of: AwareDatetime
+    industry_profile: FinancialIndustryProfile
+    peer_cohort_id: str = Field(min_length=1)
+    feature_names: list[str] = Field(min_length=1)
+    samples: list[FinancialAnomalySample] = Field(min_length=1)
+    training_sample_ids: list[str] = Field(min_length=1)
+    target_sample_id: str = Field(min_length=1)
+    evaluation_sample_ids: list[str] = Field(default_factory=list)
+    frozen: Literal[True] = True
+
+    @model_validator(mode="after")
+    def validate_frozen_dataset(self) -> FinancialAnomalyDataset:
+        if len(self.feature_names) != len(set(self.feature_names)):
+            raise ValueError("anomaly dataset feature names must be unique")
+        sample_ids = [sample.sample_id for sample in self.samples]
+        if len(sample_ids) != len(set(sample_ids)):
+            raise ValueError("anomaly dataset sample ids must be unique")
+        entity_periods = [
+            (sample.company_id, sample.period_end) for sample in self.samples
+        ]
+        if len(entity_periods) != len(set(entity_periods)):
+            raise ValueError("anomaly dataset company-period observations must be unique")
+        known = set(sample_ids)
+        training = set(self.training_sample_ids)
+        evaluation = set(self.evaluation_sample_ids)
+        if len(training) != len(self.training_sample_ids):
+            raise ValueError("training sample ids must be unique")
+        if len(evaluation) != len(self.evaluation_sample_ids):
+            raise ValueError("evaluation sample ids must be unique")
+        if self.target_sample_id not in known:
+            raise ValueError("target sample must exist in the frozen dataset")
+        if self.target_sample_id in training:
+            raise ValueError("target sample cannot be part of anomaly-model training")
+        if training & evaluation:
+            raise ValueError("training and evaluation samples must not overlap")
+        if not training <= known or not evaluation <= known:
+            raise ValueError("training and evaluation ids must reference known samples")
+        expected_features = set(self.feature_names)
+        by_id = {sample.sample_id: sample for sample in self.samples}
+        for sample in self.samples:
+            if set(sample.feature_values) != expected_features:
+                raise ValueError("every sample must match the frozen feature schema")
+            if sample.available_at > self.as_of:
+                raise ValueError("sample cannot be available after dataset as_of")
+            if sample.period_end > self.as_of.date():
+                raise ValueError("sample period cannot end after dataset as_of")
+        if any(by_id[sample_id].expected_anomaly is None for sample_id in evaluation):
+            raise ValueError("evaluation samples require frozen expected labels")
+        return self
+
+
+class FinancialAnomalyModelSpec(AStockModel):
+    model_id: str = Field(min_length=1)
+    model_type: FinancialAnomalyModelType
+    model_version: str = Field(min_length=1)
+    scope: FinancialAnomalyScope
+    feature_names: list[str] = Field(min_length=1)
+    minimum_training_samples: int = Field(default=20, ge=8)
+    contamination: Decimal = Field(default=Decimal("0.10"), gt=0, le=Decimal("0.50"))
+    random_state: int = 20260717
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_model_features(self) -> FinancialAnomalyModelSpec:
+        if len(self.feature_names) != len(set(self.feature_names)):
+            raise ValueError("anomaly model feature names must be unique")
+        return self
+
+
+class FinancialAnomalyModelRegistry(AStockModel):
+    registry_version: str = Field(min_length=1)
+    compatible_engine_version: str = Field(min_length=1)
+    models: list[FinancialAnomalyModelSpec] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_model_ids(self) -> FinancialAnomalyModelRegistry:
+        model_ids = [model.model_id for model in self.models]
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("anomaly model registry ids must be unique")
+        return self
+
+
 class FinancialAuditRequest(AStockModel):
     company_id: str = Field(min_length=1)
     as_of: AwareDatetime
@@ -275,6 +413,8 @@ class FinancialAuditRequest(AStockModel):
     requested_rule_ids: list[str] = Field(default_factory=list)
     series_requests: list[FinancialSeriesRequest] = Field(default_factory=list)
     peer_cohorts: list[FinancialPeerCohort] = Field(default_factory=list)
+    anomaly_dataset: FinancialAnomalyDataset | None = None
+    anomaly_model_specs: list[FinancialAnomalyModelSpec] = Field(default_factory=list)
     formal_historical: bool = True
     allow_approximated_pit: bool = False
 
@@ -301,6 +441,26 @@ class FinancialAuditRequest(AStockModel):
                 raise ValueError("peer cohort cannot use an as_of after the audit")
             if cohort.industry_profile is not self.industry_profile:
                 raise ValueError("peer cohort industry must match the audited company")
+        model_ids = [spec.model_id for spec in self.anomaly_model_specs]
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("anomaly model ids must be unique")
+        if (self.anomaly_dataset is None) != (not self.anomaly_model_specs):
+            raise ValueError("anomaly dataset and model specs must be supplied together")
+        if self.anomaly_dataset is not None:
+            if self.anomaly_dataset.as_of > self.as_of:
+                raise ValueError("anomaly dataset cannot use an as_of after the audit")
+            if self.anomaly_dataset.industry_profile is not self.industry_profile:
+                raise ValueError("anomaly dataset industry must match the audited company")
+            target = next(
+                sample
+                for sample in self.anomaly_dataset.samples
+                if sample.sample_id == self.anomaly_dataset.target_sample_id
+            )
+            if target.company_id != self.company_id:
+                raise ValueError("anomaly target sample must belong to the audited company")
+            for spec in self.anomaly_model_specs:
+                if spec.feature_names != self.anomaly_dataset.feature_names:
+                    raise ValueError("model features must exactly match the frozen dataset")
         if self.allow_approximated_pit and not self.formal_historical:
             raise ValueError("allow_approximated_pit only applies to formal historical audits")
         return self
@@ -492,6 +652,15 @@ class FinancialAnomaly(AStockModel):
     anomaly_id: str
     model_id: str
     model_version: str
+    model_artifact_id: str
+    dataset_id: str
+    sample_id: str
+    scope: FinancialAnomalyScope
+    score: Decimal = Field(allow_inf_nan=False)
+    threshold: Decimal = Field(allow_inf_nan=False)
+    is_anomaly: bool
+    triggered_features: list[str] = Field(default_factory=list)
+    limitation_codes: list[str] = Field(default_factory=list)
     severity: FinancialSeverity
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_gap_ids: list[str] = Field(default_factory=list)
@@ -506,8 +675,44 @@ class FinancialAnomaly(AStockModel):
 class FinancialBenignExplanation(AStockModel):
     explanation_id: str
     explanation_code: str
-    related_finding_ids: list[str] = Field(min_length=1)
+    related_finding_ids: list[str] = Field(default_factory=list)
+    related_anomaly_ids: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_related_signal(self) -> FinancialBenignExplanation:
+        if not self.related_finding_ids and not self.related_anomaly_ids:
+            raise ValueError("benign explanation requires a related finding or anomaly")
+        return self
+
+
+class FinancialAnomalyModelArtifact(AStockModel):
+    model_artifact_id: str
+    model_id: str
+    model_type: FinancialAnomalyModelType
+    model_version: str
+    scope: FinancialAnomalyScope
+    dataset_id: str
+    feature_names: list[str]
+    training_sample_ids: list[str]
+    parameters: dict[str, Any]
+    library_versions: dict[str, str]
+    dataset_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    serialized_model_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class FinancialAnomalyEvaluationReport(AStockModel):
+    evaluation_id: str
+    model_artifact_id: str
+    dataset_id: str
+    scope: FinancialAnomalyScope
+    sample_count: int = Field(ge=0)
+    true_positive: int = Field(ge=0)
+    true_negative: int = Field(ge=0)
+    false_positive: int = Field(ge=0)
+    false_negative: int = Field(ge=0)
+    precision: Decimal | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    recall: Decimal | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
 
 class FinancialIntegrityEvidencePack(AStockModel):
@@ -531,6 +736,8 @@ class FinancialIntegrityEvidencePack(AStockModel):
     rule_findings: list[FinancialRuleFinding]
     time_series_anomalies: list[FinancialAnomaly] = Field(default_factory=list)
     peer_anomalies: list[FinancialAnomaly] = Field(default_factory=list)
+    anomaly_model_artifacts: list[FinancialAnomalyModelArtifact] = Field(default_factory=list)
+    anomaly_evaluations: list[FinancialAnomalyEvaluationReport] = Field(default_factory=list)
     document_conflicts: list[FinancialDocumentConflict] = Field(default_factory=list)
     governance_findings: list[FinancialRuleFinding] = Field(default_factory=list)
     benign_explanations: list[FinancialBenignExplanation] = Field(default_factory=list)

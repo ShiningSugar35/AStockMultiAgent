@@ -9,7 +9,13 @@ from uuid import uuid4
 from astock.core.hashing import canonical_json_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.schemas import FinancialIntegrityEvidencePack, FinancialPeerCohort, RunStatus
+from astock.schemas import (
+    FinancialAnomalyDataset,
+    FinancialAnomalyModelArtifact,
+    FinancialIntegrityEvidencePack,
+    FinancialPeerCohort,
+    RunStatus,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,5 +271,74 @@ class FinancialIntegrityRepository:
                     len(cohort.observations),
                     object_hash,
                     now,
+                ),
+            )
+
+    def register_anomaly_dataset(
+        self,
+        *,
+        audit_run_id: str,
+        dataset: FinancialAnomalyDataset,
+        object_hash: str,
+    ) -> None:
+        with self.state.transaction() as connection:
+            connection.execute(
+                "INSERT INTO financial_anomaly_dataset_manifest("
+                "audit_run_id,dataset_id,as_of,industry_profile,peer_cohort_id,"
+                "feature_count,training_sample_count,"
+                "evaluation_sample_count,target_sample_id,object_hash,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(audit_run_id,dataset_id) DO UPDATE SET "
+                "as_of=excluded.as_of,industry_profile=excluded.industry_profile,"
+                "peer_cohort_id=excluded.peer_cohort_id,feature_count=excluded.feature_count,"
+                "training_sample_count=excluded.training_sample_count,"
+                "evaluation_sample_count=excluded.evaluation_sample_count,"
+                "target_sample_id=excluded.target_sample_id,object_hash=excluded.object_hash",
+                (
+                    audit_run_id,
+                    dataset.dataset_id,
+                    dataset.as_of.isoformat(),
+                    dataset.industry_profile.value,
+                    dataset.peer_cohort_id,
+                    len(dataset.feature_names),
+                    len(dataset.training_sample_ids),
+                    len(dataset.evaluation_sample_ids),
+                    dataset.target_sample_id,
+                    object_hash,
+                    dataset.created_at.isoformat(),
+                ),
+            )
+
+    def register_anomaly_model(
+        self,
+        *,
+        audit_run_id: str,
+        artifact: FinancialAnomalyModelArtifact,
+    ) -> None:
+        parameters_json = canonical_json_bytes(artifact.parameters).decode("utf-8")
+        versions_json = canonical_json_bytes(artifact.library_versions).decode("utf-8")
+        with self.state.transaction() as connection:
+            connection.execute(
+                "INSERT INTO financial_anomaly_model_manifest("
+                "model_artifact_id,audit_run_id,dataset_id,model_id,model_type,model_version,scope,"
+                "parameters_json,library_versions_json,dataset_object_hash,"
+                "serialized_model_object_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(model_artifact_id) DO UPDATE SET "
+                "parameters_json=excluded.parameters_json,"
+                "library_versions_json=excluded.library_versions_json,"
+                "serialized_model_object_hash=excluded.serialized_model_object_hash",
+                (
+                    artifact.model_artifact_id,
+                    audit_run_id,
+                    artifact.dataset_id,
+                    artifact.model_id,
+                    artifact.model_type.value,
+                    artifact.model_version,
+                    artifact.scope.value,
+                    parameters_json,
+                    versions_json,
+                    artifact.dataset_object_hash,
+                    artifact.serialized_model_object_hash,
+                    artifact.created_at.isoformat(),
                 ),
             )

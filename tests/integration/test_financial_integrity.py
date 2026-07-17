@@ -60,7 +60,7 @@ def test_recorded_golden_case_reconciles_and_recalculates(state, object_store) -
         for rule_id, expected in fixture["expected_metrics"].items()
     }
     assert all(finding.evidence_ids for finding in first.pack.rule_findings)
-    assert first.pack.capability_status["pyod"] == "DISABLED_UNTIL_M3_3"
+    assert first.pack.capability_status["pyod"] == "AVAILABLE_M3_3_PYOD_ECOD"
 
     repeated = service.run(request)
     assert repeated.reused_existing

@@ -9,6 +9,10 @@ from astock.financial_integrity.advanced_calculations import (
     piotroski_f_score,
     sloan_accrual_ratio,
 )
+from astock.financial_integrity.anomaly import (
+    FinancialAnomalyEngine,
+    FinancialAnomalyExecution,
+)
 from astock.financial_integrity.calculations import (
     balance_identity_difference,
     cash_identity_difference,
@@ -16,6 +20,7 @@ from astock.financial_integrity.calculations import (
     reporting_rounding_tolerance,
 )
 from astock.financial_integrity.config import (
+    load_financial_anomaly_models,
     load_financial_industry_profiles,
     load_financial_rule_registry,
 )
@@ -31,6 +36,8 @@ from astock.financial_integrity.service import (
 __all__ = [
     "FinancialAuditExecution",
     "FinancialAuditRunRecord",
+    "FinancialAnomalyEngine",
+    "FinancialAnomalyExecution",
     "FinancialIntegrityRepository",
     "FinancialIntegrityService",
     "altman_z_score",
@@ -40,6 +47,7 @@ __all__ = [
     "decimal_ratio",
     "dupont_decomposition",
     "load_financial_industry_profiles",
+    "load_financial_anomaly_models",
     "load_financial_rule_registry",
     "midrank_percentile",
     "percentage_change",

@@ -22,6 +22,11 @@ from astock.financial_integrity.advanced_calculations import (
     piotroski_f_score,
     sloan_accrual_ratio,
 )
+from astock.financial_integrity.anomaly import (
+    FinancialAnomalyEngine,
+    FinancialAnomalyExecution,
+    anomaly_scope_training_samples,
+)
 from astock.financial_integrity.calculations import (
     balance_identity_difference,
     cash_identity_difference,
@@ -39,6 +44,9 @@ from astock.schemas import (
     EvidenceGrade,
     FactStatus,
     FetchStatus,
+    FinancialAnomaly,
+    FinancialAnomalySample,
+    FinancialAnomalyScope,
     FinancialAuditRequest,
     FinancialCoverageStatus,
     FinancialDerivationType,
@@ -268,6 +276,26 @@ class FinancialIntegrityService:
                 record.created_at,
             )
             self.repository.checkpoint(audit_run_id, "PEERS_EVALUATED")
+            anomaly_execution = self._run_anomaly_models(
+                request,
+                gaps,
+                record.created_at,
+            )
+            self.repository.checkpoint(audit_run_id, "ANOMALIES_EVALUATED")
+            anomaly_assessments = (
+                anomaly_execution.target_assessments if anomaly_execution is not None else []
+            )
+            anomaly_artifacts = (
+                anomaly_execution.model_artifacts if anomaly_execution is not None else []
+            )
+            anomaly_evaluations = (
+                anomaly_execution.evaluations if anomaly_execution is not None else []
+            )
+            benign_explanations = (
+                anomaly_execution.benign_explanations
+                if anomaly_execution is not None
+                else []
+            )
             evidence_gaps = gaps.values()
             status = RunStatus.NEEDS_INFO if evidence_gaps else RunStatus.SUCCEEDED
             pack = FinancialIntegrityEvidencePack(
@@ -289,14 +317,24 @@ class FinancialIntegrityService:
                 derived_metrics=derived_metrics,
                 peer_percentiles=peer_percentiles,
                 rule_findings=findings,
-                time_series_anomalies=[],
-                peer_anomalies=[],
+                time_series_anomalies=[
+                    anomaly
+                    for anomaly in anomaly_assessments
+                    if anomaly.scope is FinancialAnomalyScope.TIME_SERIES
+                ],
+                peer_anomalies=[
+                    anomaly
+                    for anomaly in anomaly_assessments
+                    if anomaly.scope is FinancialAnomalyScope.PEER
+                ],
+                anomaly_model_artifacts=anomaly_artifacts,
+                anomaly_evaluations=anomaly_evaluations,
                 document_conflicts=validation.conflicts,
                 governance_findings=[],
-                benign_explanations=[],
+                benign_explanations=benign_explanations,
                 evidence_gaps=evidence_gaps,
                 manual_tasks=self._manual_tasks(audit_run_id, evidence_gaps, record.created_at),
-                risk_level=self._risk_level(findings),
+                risk_level=self._risk_level(findings, anomaly_assessments),
                 hard_blocks=[],
                 advisory_only=True,
                 rule_versions={rule.rule_id: rule.formula_version for rule in selected_rules},
@@ -304,7 +342,11 @@ class FinancialIntegrityService:
                     "deterministic_engine": self.ENGINE_VERSION,
                     "time_series_models": "M3_2_DECIMAL_SERIES_V1",
                     "peer_models": "M3_2_MIDRANK_PERCENTILE_V1",
-                    "pyod": "DISABLED_UNTIL_M3_3",
+                    "anomaly_engine": FinancialAnomalyEngine.ENGINE_VERSION,
+                    **{
+                        f"anomaly:{artifact.model_id}": artifact.model_version
+                        for artifact in anomaly_artifacts
+                    },
                 },
                 capability_status={
                     "deterministic_reconciliation": "AVAILABLE_M3_1",
@@ -312,9 +354,25 @@ class FinancialIntegrityService:
                     "cross_period_metrics": "AVAILABLE_M3_2_EXPLICIT_REQUEST",
                     "peer_percentiles": "AVAILABLE_M3_2_VALIDATED_COHORTS",
                     "financial_scores": "AVAILABLE_M3_2_EXPLICIT_REQUEST",
-                    "time_series_anomalies": "DISABLED_UNTIL_M3_3",
-                    "peer_anomalies": "DISABLED_UNTIL_M3_3",
-                    "pyod": "DISABLED_UNTIL_M3_3",
+                    "time_series_anomalies": (
+                        "EXECUTED_M3_3"
+                        if anomaly_execution is not None
+                        else (
+                            "REQUESTED_M3_3_NEEDS_INFO"
+                            if request.anomaly_dataset is not None
+                            else "AVAILABLE_M3_3_NOT_REQUESTED"
+                        )
+                    ),
+                    "peer_anomalies": (
+                        "EXECUTED_M3_3"
+                        if anomaly_execution is not None
+                        else (
+                            "REQUESTED_M3_3_NEEDS_INFO"
+                            if request.anomaly_dataset is not None
+                            else "AVAILABLE_M3_3_NOT_REQUESTED"
+                        )
+                    ),
+                    "pyod": "AVAILABLE_M3_3_PYOD_ECOD",
                 },
                 created_at=record.created_at,
             )
@@ -340,7 +398,51 @@ class FinancialIntegrityService:
                     for percentile in peer_percentiles
                     for evidence_id in percentile.evidence_ids
                 }
+                | {
+                    evidence_id
+                    for anomaly in anomaly_assessments
+                    for evidence_id in anomaly.evidence_ids
+                }
             )
+            if anomaly_execution is not None and request.anomaly_dataset is not None:
+                self.state.register_artifact(
+                    artifact_id=(
+                        "FinancialAnomalyDataset:"
+                        f"{request.anomaly_dataset.dataset_id}:"
+                        f"{anomaly_execution.dataset_object_hash}"
+                    ),
+                    artifact_type="FinancialAnomalyDataset",
+                    schema_version=request.anomaly_dataset.schema_version,
+                    object_hash=anomaly_execution.dataset_object_hash,
+                    input_hashes=sorted(
+                        {
+                            source_id
+                            for sample in request.anomaly_dataset.samples
+                            for source_id in [
+                                *sample.source_snapshot_ids,
+                                *sample.pit_ids,
+                                *sample.evidence_ids,
+                            ]
+                        }
+                    ),
+                )
+                self.repository.register_anomaly_dataset(
+                    audit_run_id=audit_run_id,
+                    dataset=request.anomaly_dataset,
+                    object_hash=anomaly_execution.dataset_object_hash,
+                )
+            for artifact in anomaly_artifacts:
+                self.state.register_artifact(
+                    artifact_id=f"FinancialAnomalyModelArtifact:{artifact.model_artifact_id}",
+                    artifact_type="FinancialAnomalyModelArtifact",
+                    schema_version=artifact.schema_version,
+                    object_hash=artifact.serialized_model_object_hash,
+                    input_hashes=[artifact.dataset_object_hash],
+                )
+                self.repository.register_anomaly_model(
+                    audit_run_id=audit_run_id,
+                    artifact=artifact,
+                )
             self.state.register_artifact(
                 artifact_id=f"FinancialIntegrityEvidencePack:{audit_run_id}",
                 artifact_type="FinancialIntegrityEvidencePack",
@@ -360,6 +462,13 @@ class FinancialIntegrityService:
                         pit_id
                         for percentile in peer_percentiles
                         for pit_id in percentile.pit_ids
+                    ),
+                    *(
+                        artifact.dataset_object_hash for artifact in anomaly_artifacts
+                    ),
+                    *(
+                        artifact.serialized_model_object_hash
+                        for artifact in anomaly_artifacts
                     ),
                 ],
             )
@@ -417,6 +526,17 @@ class FinancialIntegrityService:
                     },
                 )
                 for cohort in sorted(request.peer_cohorts, key=lambda value: value.cohort_id)
+            ],
+            "anomaly_dataset": (
+                _drop_created_at(request.anomaly_dataset.model_dump(mode="json"))
+                if request.anomaly_dataset is not None
+                else None
+            ),
+            "anomaly_model_specs": [
+                _drop_created_at(spec.model_dump(mode="json"))
+                for spec in sorted(
+                    request.anomaly_model_specs, key=lambda value: value.model_id
+                )
             ],
             "formal_historical": request.formal_historical,
             "allow_approximated_pit": request.allow_approximated_pit,
@@ -1640,6 +1760,115 @@ class FinancialIntegrityService:
                 return False
         return True
 
+    def _run_anomaly_models(
+        self,
+        request: FinancialAuditRequest,
+        gaps: _GapCollector,
+        created_at: datetime,
+    ) -> FinancialAnomalyExecution | None:
+        dataset = request.anomaly_dataset
+        if dataset is None:
+            return None
+        valid = True
+        for spec in request.anomaly_model_specs:
+            eligible_training = anomaly_scope_training_samples(dataset, spec.scope)
+            if len(eligible_training) < spec.minimum_training_samples:
+                gaps.add(
+                    FinancialGapType.MODEL_SAMPLE_INSUFFICIENT,
+                    "ANOMALY_MODEL_TRAINING_SAMPLE_MINIMUM_NOT_MET",
+                    rule_ids=[spec.model_id],
+                )
+                valid = False
+        for feature_name in dataset.feature_names:
+            versions = {
+                sample.feature_formula_versions[feature_name]
+                for sample in dataset.samples
+            }
+            if len(versions) != 1:
+                gaps.add(
+                    FinancialGapType.MODEL_INPUT_INVALID,
+                    "ANOMALY_FEATURE_FORMULA_VERSION_MISMATCH",
+                    rule_ids=[feature_name],
+                )
+                valid = False
+        for sample in dataset.samples:
+            if not self._anomaly_sample_is_usable(request, sample):
+                gaps.add(
+                    FinancialGapType.MODEL_INPUT_INVALID,
+                    "ANOMALY_SAMPLE_LINEAGE_OR_PIT_INVALID",
+                    period_end=sample.period_end,
+                    fact_ids=[sample.sample_id],
+                    safe_evidence_ids=sample.evidence_ids,
+                )
+                valid = False
+        if not valid:
+            return None
+        try:
+            return FinancialAnomalyEngine(self.object_store).run(
+                dataset,
+                request.anomaly_model_specs,
+                created_at=created_at,
+            )
+        except ValueError:
+            gaps.add(
+                FinancialGapType.MODEL_INPUT_INVALID,
+                "ANOMALY_MODEL_TRAINING_OR_INFERENCE_FAILED",
+                rule_ids=[spec.model_id for spec in request.anomaly_model_specs],
+                safe_evidence_ids=sorted(
+                    {
+                        evidence_id
+                        for sample in dataset.samples
+                        for evidence_id in sample.evidence_ids
+                    }
+                ),
+            )
+            return None
+
+    def _anomaly_sample_is_usable(
+        self,
+        request: FinancialAuditRequest,
+        sample: FinancialAnomalySample,
+    ) -> bool:
+        if sample.available_at > request.as_of:
+            return False
+        for snapshot_id in sample.source_snapshot_ids:
+            row = self._snapshot_row(snapshot_id)
+            if row is None:
+                return False
+            if datetime.fromisoformat(str(row["availability_at"])) > request.as_of:
+                return False
+            if str(row["fetch_status"]) != FetchStatus.SUCCEEDED.value:
+                return False
+            if not self.object_store.verify(str(row["object_hash"])):
+                return False
+        for pit_id in sample.pit_ids:
+            pit = self.pit_repository.get(pit_id)
+            if pit is None:
+                return False
+            try:
+                PointInTimeService.assert_usable(
+                    pit,
+                    request.as_of,
+                    formal_historical=request.formal_historical,
+                    allow_approximated=request.allow_approximated_pit,
+                )
+            except ValueError:
+                return False
+        accepted_entities = {sample.company_id, f"company:{sample.company_id}"}
+        for evidence_id in [*sample.evidence_ids, *sample.benign_context_evidence_ids]:
+            evidence = self.evidence_repository.get_evidence(evidence_id)
+            if evidence is None:
+                return False
+            if evidence.evidence_grade is not EvidenceGrade.PRIMARY_OFFICIAL:
+                return False
+            if evidence.fact_status is not FactStatus.DIRECT:
+                return False
+            if not accepted_entities.intersection(evidence.entity_ids):
+                return False
+            if evidence.snapshot_id not in sample.source_snapshot_ids:
+                return False
+        return True
+
     def _calculate_rule(
         self,
         rule: FinancialRuleDefinition,
@@ -1855,6 +2084,10 @@ class FinancialIntegrityService:
                 FinancialGapType.LINEAGE_MISMATCH,
             }:
                 action = "CORRECT_FINANCIAL_FACT_METADATA"
+            elif gap.gap_type is FinancialGapType.MODEL_SAMPLE_INSUFFICIENT:
+                action = "COLLECT_MORE_PIT_SAFE_FINANCIAL_FEATURE_SAMPLES"
+            elif gap.gap_type is FinancialGapType.MODEL_INPUT_INVALID:
+                action = "CORRECT_FROZEN_ANOMALY_DATASET"
             else:
                 action = "PROVIDE_PRIMARY_OFFICIAL_STATEMENT_EVIDENCE"
             identity = {"audit_run_id": audit_run_id, "gap_id": gap.gap_id, "action": action}
@@ -1881,7 +2114,10 @@ class FinancialIntegrityService:
         return FinancialCoverageStatus.COMPLETE
 
     @staticmethod
-    def _risk_level(findings: list[FinancialRuleFinding]) -> FinancialRiskLevel:
+    def _risk_level(
+        findings: list[FinancialRuleFinding],
+        anomalies: list[FinancialAnomaly] | None = None,
+    ) -> FinancialRiskLevel:
         flagged = [
             finding for finding in findings if finding.status is FinancialFindingStatus.FLAG
         ]
@@ -1892,4 +2128,18 @@ class FinancialIntegrityService:
             for finding in flagged
         ):
             return FinancialRiskLevel.MEDIUM
+        if any(anomaly.is_anomaly for anomaly in anomalies or []):
+            return FinancialRiskLevel.MEDIUM
         return FinancialRiskLevel.LOW
+
+
+def _drop_created_at(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _drop_created_at(item)
+            for key, item in value.items()
+            if key != "created_at"
+        }
+    if isinstance(value, list):
+        return [_drop_created_at(item) for item in value]
+    return value

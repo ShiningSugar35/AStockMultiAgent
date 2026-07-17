@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pymupdf
@@ -20,7 +22,10 @@ from astock.schemas import (
     DocumentType,
     EvidenceGrade,
     FactStatus,
+    FinancialAnomalyDataset,
+    FinancialAnomalySample,
     FinancialAuditRequest,
+    FinancialBenignContext,
     FinancialDurationSemantics,
     FinancialFact,
     FinancialFieldCode,
@@ -226,6 +231,164 @@ def make_financial_request(
         as_of=datetime(2026, 3, 21, tzinfo=UTC),
         industry_profile=industry_profile,
         facts=make_financial_facts(state, object_store),
+    )
+
+
+def make_financial_anomaly_dataset(
+    state: StateStore,
+    object_store: ObjectStore,
+    lineage_fact: FinancialFact,
+) -> FinancialAnomalyDataset:
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "tests"
+        / "fixtures"
+        / "financial"
+        / "anomaly_dataset_v1.json"
+    )
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    feature_names = list(payload["feature_names"])
+    items = [*payload["training"], *payload["evaluation"]]
+    quarter_ends = [
+        date(year, month, day)
+        for year in range(2019, 2024)
+        for month, day in ((3, 31), (6, 30), (9, 30), (12, 31))
+    ]
+
+    def identity(item: dict[str, object]) -> tuple[str, date]:
+        sample_id = str(item["sample_id"])
+        if sample_id.startswith("ts-train-"):
+            return lineage_fact.company_id, quarter_ends[int(sample_id[-2:]) - 1]
+        if sample_id == "ts-eval-normal-1":
+            return lineage_fact.company_id, date(2024, 3, 31)
+        if sample_id == "ts-eval-normal-2":
+            return lineage_fact.company_id, date(2024, 6, 30)
+        if sample_id.startswith("peer-train-"):
+            return f"peer-{sample_id[-2:]}", date(2025, 12, 31)
+        if sample_id.startswith("peer-eval-normal-"):
+            return f"peer-eval-{sample_id[-1]}", date(2025, 12, 31)
+        return lineage_fact.company_id, date(2025, 12, 31)
+
+    rows = []
+    for item in items:
+        company_id, period_end = identity(item)
+        rows.append(
+            f"{item['sample_id']}|{company_id}|{period_end.isoformat()}|"
+            f"{'|'.join(str(value) for value in item['values'])}"
+        )
+    pdf = pymupdf.open()
+    page = pdf.new_page()
+    page.insert_textbox(
+        pymupdf.Rect(30, 30, 565, 812),
+        "\n".join(rows),
+        fontsize=5,
+    )
+    raw = object_store.put_bytes(pdf.tobytes())
+    pdf.close()
+    available_at = datetime(2026, 3, 20, tzinfo=UTC)
+    source_id = f"fixture:financial-anomaly:{lineage_fact.company_id}"
+    snapshot = SourceSnapshot(
+        snapshot_id=f"{source_id}:{raw.sha256}",
+        source_id=source_id,
+        object_sha256=raw.sha256,
+        fetched_at=available_at,
+        available_to_system_at=available_at,
+        source_url="https://example.invalid/financial-anomaly-dataset.pdf",
+        mime="application/pdf",
+        byte_size=raw.byte_size,
+        rights_status="TEST_FIXTURE",
+    )
+    state.register_snapshot(snapshot)
+    document = SourceDocument(
+        document_id=f"document:{source_id}",
+        title="Frozen financial anomaly feature fixture",
+        publisher="TEST_EXCHANGE",
+        document_type=DocumentType.ANNUAL_REPORT,
+        company_ids=sorted({identity(item)[0] for item in items}),
+        published_at=available_at,
+        effective_at=available_at,
+        disclosure_id=source_id,
+        source_url="https://example.invalid/financial-anomaly-dataset.pdf",
+        rights_status="TEST_FIXTURE",
+    )
+    documents = DocumentRepository(state)
+    documents.register(document, snapshot)
+    pages = DocumentPageRepository(state)
+    report = PdfParseService(object_store, state, pages).parse(
+        document,
+        snapshot,
+        ocr_enabled=False,
+    )
+    page_model = pages.get_page_by_id(report.page_ids[0])
+    assert page_model is not None
+    parsed_text = object_store.get_bytes(page_model.text_object_sha256).decode("utf-8")
+    evidence = ClaimEvidenceService(
+        object_store,
+        state,
+        pages,
+        documents,
+        EvidenceRepository(state),
+    ).create_page_evidence(
+        page_id=page_model.page_id,
+        char_start=0,
+        char_end=len(parsed_text),
+        evidence_grade=EvidenceGrade.PRIMARY_OFFICIAL,
+        fact_status=FactStatus.DIRECT,
+        entity_ids=[f"company:{company_id}" for company_id in document.company_ids],
+    )
+    pit_service = PointInTimeService(PointInTimeRepository(state), state, object_store)
+    pits = {
+        period_end: pit_service.create(
+            source_id=f"{source_id}:{period_end.isoformat()}",
+            source_document_id=document.document_id,
+            source_snapshot_id=snapshot.snapshot_id,
+            period_end=period_end,
+            published_at=available_at,
+            effective_at=available_at,
+            ingested_at=available_at,
+            available_to_system_at=available_at,
+            point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
+            availability_basis=AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP,
+        )
+        for period_end in sorted({identity(item)[1] for item in items})
+    }
+    samples: list[FinancialAnomalySample] = []
+    for item in items:
+        is_target = item["sample_id"] == payload["target_sample_id"]
+        company_id, period_end = identity(item)
+        samples.append(
+            FinancialAnomalySample(
+                sample_id=item["sample_id"],
+                company_id=company_id,
+                period_end=period_end,
+                available_at=available_at,
+                feature_values={
+                    name: Decimal(value)
+                    for name, value in zip(feature_names, item["values"], strict=True)
+                },
+                feature_formula_versions={
+                    name: "m3.2-feature-v1" for name in feature_names
+                },
+                source_snapshot_ids=[snapshot.snapshot_id],
+                pit_ids=[pits[period_end].pit_id],
+                evidence_ids=[evidence.evidence_id],
+                expected_anomaly=item.get("expected_anomaly"),
+                benign_contexts=[FinancialBenignContext.HIGH_GROWTH] if is_target else [],
+                benign_context_evidence_ids=(
+                    [evidence.evidence_id] if is_target else []
+                ),
+            )
+        )
+    return FinancialAnomalyDataset(
+        dataset_id=payload["dataset_id"],
+        as_of=datetime(2026, 3, 20, tzinfo=UTC),
+        industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+        peer_cohort_id="fixture-general-industrial-2025",
+        feature_names=feature_names,
+        samples=samples,
+        training_sample_ids=[item["sample_id"] for item in payload["training"]],
+        target_sample_id=payload["target_sample_id"],
+        evaluation_sample_ids=[item["sample_id"] for item in payload["evaluation"]],
     )
 
 

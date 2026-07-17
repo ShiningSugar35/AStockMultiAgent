@@ -7,9 +7,14 @@ from pathlib import Path
 import yaml
 
 from astock.schemas import (
+    FinancialAnomalyModelRegistry,
     FinancialIndustryProfileRegistry,
     FinancialRuleRegistry,
 )
+
+
+def load_financial_anomaly_models(path: Path) -> FinancialAnomalyModelRegistry:
+    return FinancialAnomalyModelRegistry.model_validate(_load_yaml_mapping(path))
 
 
 def load_financial_rule_registry(path: Path) -> FinancialRuleRegistry:

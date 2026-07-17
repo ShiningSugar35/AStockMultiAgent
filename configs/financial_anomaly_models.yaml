@@ -1,0 +1,35 @@
+schema_version: "1.0"
+registry_version: "financial-anomaly-models-m3.3-v1"
+compatible_engine_version: "financial-anomaly-m3.3.0"
+models:
+  - model_id: robust-z-financial-features
+    model_type: ROBUST_Z_SCORE
+    model_version: "1.0.0"
+    scope: TIME_SERIES
+    feature_names: [cash_conversion, accrual_ratio, receivables_ratio]
+    minimum_training_samples: 20
+    contamination: "0.10"
+    random_state: 20260717
+    parameters:
+      z_threshold: "3.5"
+
+  - model_id: isolation-forest-financial-features
+    model_type: ISOLATION_FOREST
+    model_version: "1.0.0"
+    scope: PEER
+    feature_names: [cash_conversion, accrual_ratio, receivables_ratio]
+    minimum_training_samples: 20
+    contamination: "0.10"
+    random_state: 20260717
+    parameters:
+      n_estimators: 200
+
+  - model_id: pyod-ecod-financial-features
+    model_type: PYOD_ECOD
+    model_version: "1.0.0"
+    scope: PEER
+    feature_names: [cash_conversion, accrual_ratio, receivables_ratio]
+    minimum_training_samples: 20
+    contamination: "0.10"
+    random_state: 20260717
+    parameters: {}

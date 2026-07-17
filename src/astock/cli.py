@@ -33,12 +33,15 @@ from astock.financial_integrity import (
     FinancialIntegrityService,
 )
 from astock.knowledge import (
+    DistillationRepository,
     KnowledgeCoverageAuditService,
+    KnowledgeDistillationService,
     KnowledgeRepository,
     ParquetKnowledgeStore,
     ZhihuCollectionService,
     ZhihuResponseImportService,
     get_knowledge_source,
+    load_distillation_rules,
     load_knowledge_sources,
     load_zhihu_endpoint_templates,
 )
@@ -56,6 +59,7 @@ from astock.schemas import (
     DisclosureCategory,
     DisclosureExchange,
     DisclosureSearchRequest,
+    DistillationClassRuleSet,
     DocumentType,
     FinancialAuditRequest,
     InstrumentType,
@@ -90,6 +94,12 @@ def _knowledge_sources(paths: ProjectPaths) -> KnowledgeSourceRegistry:
 def _zhihu_endpoint_templates(paths: ProjectPaths) -> ZhihuEndpointTemplateRegistry:
     return load_zhihu_endpoint_templates(
         paths.root / "configs" / "zhihu_endpoint_templates.yaml"
+    )
+
+
+def _distillation_rules(paths: ProjectPaths) -> DistillationClassRuleSet:
+    return load_distillation_rules(
+        paths.root / "configs" / "knowledge_distillation_rules.yaml"
     )
 
 
@@ -852,6 +862,96 @@ def knowledge_coverage_audit() -> None:
         _knowledge_sources(paths)
     )
     _emit({"status": report.status, "report": report})
+
+
+@app.command("knowledge-distill-plan")
+def knowledge_distill_plan(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Preview private-safe distillation inputs without emitting source text."""
+
+    paths, state, objects = _services()
+    source = get_knowledge_source(_knowledge_sources(paths), source_id)
+    plan = KnowledgeDistillationService(state, objects, paths.parquet).plan(
+        source,
+        _distillation_rules(paths),
+    )
+    _emit({"status": "PLANNED", "plan": plan})
+
+
+@app.command("knowledge-distill-run")
+def knowledge_distill_run(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Classify immutable author material and create a pending review queue."""
+
+    paths, state, objects = _services()
+    source = get_knowledge_source(_knowledge_sources(paths), source_id)
+    execution = KnowledgeDistillationService(state, objects, paths.parquet).run(
+        source,
+        _distillation_rules(paths),
+    )
+    _emit(
+        {
+            "status": execution.run.status,
+            "run_id": execution.run.run_id,
+            "report": execution.report,
+            "review_queue": {
+                "queue_id": execution.review_queue.queue_id,
+                "candidate_count": len(execution.review_queue.unit_ids),
+                "human_review_status": execution.review_queue.human_review_status,
+            },
+            "parquet_file_count": 1,
+            "book_cleaning_report_ids": execution.book_cleaning_report_ids,
+            "book_method_coverage_report_ids": (
+                execution.book_method_coverage_report_ids
+            ),
+        }
+    )
+
+
+@app.command("knowledge-distill-status")
+def knowledge_distill_status(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Return the latest safe distillation report for one author."""
+
+    paths, state, _ = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    report = DistillationRepository(state).latest_author_report(source_id)
+    _emit(
+        {"status": "NOT_RUN", "report": None}
+        if report is None
+        else {"status": report.coverage_status, "report": report}
+    )
+
+
+@app.command("knowledge-distill-audit")
+def knowledge_distill_audit(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Verify distillation objects and SQLite/Parquet correspondence."""
+
+    paths, state, objects = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    audit = KnowledgeDistillationService(state, objects, paths.parquet).audit(source_id)
+    _emit(audit)
+
+
+@app.command("knowledge-review-queue")
+def knowledge_review_queue(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Return review-queue metadata without source text or private paths."""
+
+    paths, state, _ = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    summary = DistillationRepository(state).latest_review_queue_summary(source_id)
+    _emit(
+        {"status": "NOT_RUN", "queue": None}
+        if summary is None
+        else {"status": summary["human_review_status"], "queue": summary}
+    )
 
 
 @app.command("zhihu-author-probe")

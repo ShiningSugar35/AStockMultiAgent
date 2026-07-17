@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from astock.schemas import (
+    DistillationClassRuleSet,
     KnowledgeSourceDefinition,
     KnowledgeSourceRegistry,
     ZhihuEndpointTemplateRegistry,
@@ -22,6 +23,11 @@ def load_knowledge_sources(path: Path) -> KnowledgeSourceRegistry:
 def load_zhihu_endpoint_templates(path: Path) -> ZhihuEndpointTemplateRegistry:
     payload = _load_yaml_mapping(path)
     return ZhihuEndpointTemplateRegistry.model_validate(payload)
+
+
+def load_distillation_rules(path: Path) -> DistillationClassRuleSet:
+    payload = _load_yaml_mapping(path)
+    return DistillationClassRuleSet.model_validate(payload)
 
 
 def get_knowledge_source(

@@ -1,0 +1,24 @@
+schema_version: "1.0"
+rule_version: knowledge-classification-v1
+minimum_unit_char_count: 6
+content_class_terms:
+  REPEATED_SLOGAN: [口号, 信仰, 永远的神]
+  MARKETING_PROMOTION: [付费, 课程, 扫码, 公众号, 打赏, 广告]
+  NON_METHOD_STORY: [段子, 闲聊, 故事]
+  REPETITION_WITHOUT_NEW_INFORMATION: []
+  UNSUPPORTED_EMOTIONAL_JUDGMENT: [无脑, 必涨, 垃圾, 牛逼, 梭哈]
+  STALE_INSTANT_PRICE_CONCLUSION: [现价, 今日涨停, 明天涨, 目标价]
+  STOCK_SELECTION: [选股, 筛选, 候选, 好公司, 股票池]
+  BUSINESS_MODEL: [商业模式, 护城河, 竞争优势, 盈利模式, 客户粘性]
+  INDUSTRY: [行业, 产业链, 供需, 渗透率, 周期]
+  VALUATION: [估值, 市盈率, 市净率, 现金流折现, 安全边际, PE, PB]
+  FINANCIAL_QUALITY: [财务, 现金流, 净利润, 毛利率, 负债, 应收, 存货, ROE]
+  ENTRY: [建仓, 买入, 入场, 首次仓位]
+  HOLDING_VALIDATION: [持仓, 跟踪, 验证, 基本面变化]
+  ADD: [加仓, 增加仓位]
+  TRIM: [减仓, 降低仓位]
+  EXIT: [退出, 卖出, 清仓, 止盈]
+  RISK_CONTROL: [风险, 止损, 仓位控制, 回撤]
+  FAILURE_CASE: [失败, 踩雷, 错误]
+  COUNTEREVIDENCE_INVALIDATION: [反证, 证伪, 失效, 逻辑破坏]
+  REVIEW_METHOD: [复盘, 总结, 回顾]

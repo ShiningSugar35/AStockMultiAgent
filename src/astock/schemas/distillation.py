@@ -1,0 +1,245 @@
+"""Cross-source private knowledge distillation contracts."""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+from pydantic import AwareDatetime, Field, model_validator
+
+from astock.schemas.base import AStockModel
+from astock.schemas.books import (
+    BOOK_DOWNWEIGHT_CLASSES,
+    BOOK_KEEP_CLASSES,
+    BookContentClass,
+    BookMethodCategory,
+    HumanReviewStatus,
+)
+from astock.schemas.knowledge import CoverageStatus
+
+
+class DistillationLocatorType(StrEnum):
+    PAGE_TEXT = "PAGE_TEXT"
+    BLOCK_TEXT = "BLOCK_TEXT"
+    ZHIHU_CONTENT = "ZHIHU_CONTENT"
+    ZHIHU_COMMENT = "ZHIHU_COMMENT"
+
+
+class DistillationDecision(StrEnum):
+    KEEP_CANDIDATE = "KEEP_CANDIDATE"
+    DOWNWEIGHT_CANDIDATE = "DOWNWEIGHT_CANDIDATE"
+    UNCLASSIFIED = "UNCLASSIFIED"
+
+
+class DistillationRunStatus(StrEnum):
+    RUNNING = "RUNNING"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+
+
+class DistillationSourceLocator(AStockModel):
+    locator_type: DistillationLocatorType
+    source_snapshot_id: str = Field(min_length=1)
+    source_unit_id: str = Field(min_length=1)
+    source_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    page_number: int | None = Field(default=None, ge=1)
+    block_index: int | None = Field(default=None, ge=1)
+    content_id: str | None = None
+    comment_id: str | None = None
+    char_start: int = Field(ge=0)
+    char_end: int = Field(gt=0)
+    parser_or_schema_version: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_locator_identity(self) -> DistillationSourceLocator:
+        if self.char_end <= self.char_start:
+            raise ValueError("distillation locator char range must be positive")
+        if self.locator_type is DistillationLocatorType.PAGE_TEXT:
+            if (
+                self.page_number is None
+                or self.block_index is not None
+                or self.content_id is not None
+                or self.comment_id is not None
+            ):
+                raise ValueError("PAGE_TEXT requires only page_number")
+        elif self.locator_type is DistillationLocatorType.BLOCK_TEXT:
+            if (
+                self.block_index is None
+                or self.page_number is not None
+                or self.content_id is not None
+                or self.comment_id is not None
+            ):
+                raise ValueError("BLOCK_TEXT requires only block_index")
+        elif self.locator_type is DistillationLocatorType.ZHIHU_CONTENT:
+            if (
+                not self.content_id
+                or self.page_number is not None
+                or self.block_index is not None
+                or self.comment_id is not None
+            ):
+                raise ValueError("ZHIHU_CONTENT requires only content_id")
+        elif (
+            not self.content_id
+            or not self.comment_id
+            or self.page_number is not None
+            or self.block_index is not None
+        ):
+            raise ValueError("ZHIHU_COMMENT requires content_id and comment_id")
+        return self
+
+
+class DistillationClassRuleSet(AStockModel):
+    rule_version: str = Field(min_length=1)
+    minimum_unit_char_count: int = Field(ge=1)
+    content_class_terms: dict[BookContentClass, list[str]]
+
+    @model_validator(mode="after")
+    def validate_class_coverage(self) -> DistillationClassRuleSet:
+        required = set(BOOK_DOWNWEIGHT_CLASSES) | set(BOOK_KEEP_CLASSES)
+        if set(self.content_class_terms) != required:
+            raise ValueError("distillation rules must cover every content class")
+        for content_class, terms in self.content_class_terms.items():
+            normalized = [term.strip().casefold() for term in terms]
+            if any(not term for term in normalized) or len(normalized) != len(set(normalized)):
+                raise ValueError(
+                    f"distillation terms must be nonempty and unique: {content_class.value}"
+                )
+        return self
+
+
+class DistillationUnit(AStockModel):
+    unit_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    source_id: str = Field(min_length=1)
+    source_item_ordinal: int = Field(ge=1)
+    segment_ordinal: int = Field(ge=1)
+    locator: DistillationSourceLocator
+    normalized_text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalized_char_count: int = Field(ge=1)
+    duplicate_of_unit_id: str | None = None
+    content_classes: list[BookContentClass]
+    method_categories: list[BookMethodCategory]
+    decision: DistillationDecision
+    reason_codes: list[str] = Field(min_length=1)
+    score_by_content_class: dict[str, float]
+    classification_rule_version: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_classification(self) -> DistillationUnit:
+        if len(self.content_classes) != len(set(self.content_classes)):
+            raise ValueError("distillation content classes must be unique")
+        if len(self.method_categories) != len(set(self.method_categories)):
+            raise ValueError("distillation method categories must be unique")
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("distillation reason codes must be unique")
+        if self.duplicate_of_unit_id is not None:
+            if self.duplicate_of_unit_id == self.unit_id:
+                raise ValueError("a distillation unit cannot duplicate itself")
+            if (
+                self.decision is not DistillationDecision.DOWNWEIGHT_CANDIDATE
+                or BookContentClass.REPETITION_WITHOUT_NEW_INFORMATION
+                not in self.content_classes
+                or "EXACT_DUPLICATE" not in self.reason_codes
+            ):
+                raise ValueError("duplicate units require an explicit downweight decision")
+        return self
+
+
+class DistillationRun(AStockModel):
+    run_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    classification_rule_version: str = Field(min_length=1)
+    input_hashes: list[str] = Field(min_length=1)
+    input_source_ids: list[str] = Field(min_length=1)
+    status: DistillationRunStatus
+    input_source_item_count: int = Field(ge=0)
+    empty_source_item_count: int = Field(ge=0)
+    produced_unit_count: int = Field(ge=0)
+    canonical_unit_count: int = Field(ge=0)
+    duplicate_unit_count: int = Field(ge=0)
+    started_at: AwareDatetime
+    finished_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def validate_run_counts(self) -> DistillationRun:
+        if len(self.input_hashes) != len(set(self.input_hashes)):
+            raise ValueError("distillation input hashes must be unique")
+        if len(self.input_source_ids) != len(set(self.input_source_ids)):
+            raise ValueError("distillation input source ids must be unique")
+        if self.canonical_unit_count + self.duplicate_unit_count != self.produced_unit_count:
+            raise ValueError("canonical and duplicate counts must equal produced units")
+        if self.status is DistillationRunStatus.COMPLETE and self.finished_at is None:
+            raise ValueError("completed distillation runs require finished_at")
+        if self.status is DistillationRunStatus.RUNNING and self.finished_at is not None:
+            raise ValueError("running distillation runs cannot have finished_at")
+        return self
+
+
+class AuthorDistillationReport(AStockModel):
+    report_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    input_source_ids: list[str] = Field(min_length=1)
+    local_manifest_ids: list[str]
+    input_source_item_count: int = Field(ge=0)
+    empty_source_item_count: int = Field(ge=0)
+    unit_count: int = Field(ge=0)
+    canonical_unit_count: int = Field(ge=0)
+    duplicate_unit_count: int = Field(ge=0)
+    keep_candidate_count: int = Field(ge=0)
+    downweight_candidate_count: int = Field(ge=0)
+    unclassified_count: int = Field(ge=0)
+    content_class_counts: dict[str, int]
+    method_category_counts: dict[str, int]
+    online_content_count: int = Field(ge=0)
+    target_author_comment_count: int = Field(ge=0)
+    open_collection_gap_count: int = Field(ge=0)
+    missing_object_count: int = Field(ge=0)
+    coverage_status: CoverageStatus
+    human_review_status: HumanReviewStatus
+    review_queue_id: str = Field(min_length=1)
+    parquet_object_count: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_report_counts(self) -> AuthorDistillationReport:
+        if self.canonical_unit_count + self.duplicate_unit_count != self.unit_count:
+            raise ValueError("report canonical and duplicate counts must equal units")
+        decisions = (
+            self.keep_candidate_count
+            + self.downweight_candidate_count
+            + self.unclassified_count
+        )
+        if decisions != self.unit_count:
+            raise ValueError("every distillation unit requires exactly one decision")
+        if self.human_review_status is HumanReviewStatus.APPROVED:
+            raise ValueError("automatic distillation reports cannot self-approve")
+        return self
+
+
+class DistillationReviewQueue(AStockModel):
+    queue_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    unit_ids: list[str]
+    human_review_status: HumanReviewStatus = HumanReviewStatus.PENDING
+
+    @model_validator(mode="after")
+    def validate_queue(self) -> DistillationReviewQueue:
+        if len(self.unit_ids) != len(set(self.unit_ids)):
+            raise ValueError("review queue unit ids must be unique")
+        if self.human_review_status is HumanReviewStatus.APPROVED:
+            raise ValueError("review queues require explicit review decisions")
+        return self
+
+
+__all__ = [
+    "AuthorDistillationReport",
+    "DistillationClassRuleSet",
+    "DistillationDecision",
+    "DistillationLocatorType",
+    "DistillationReviewQueue",
+    "DistillationRun",
+    "DistillationRunStatus",
+    "DistillationSourceLocator",
+    "DistillationUnit",
+]

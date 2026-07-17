@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
 
@@ -23,6 +23,47 @@ class RunStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     NEEDS_INFO = "NEEDS_INFO"
     FAILED = "FAILED"
+
+
+class CodexArtifactRole(StrEnum):
+    PRIMARY = "PRIMARY"
+    PARENT = "PARENT"
+    CONTEXT = "CONTEXT"
+
+
+class CodexArtifactReference(AStockModel):
+    artifact_id: str = Field(min_length=1)
+    artifact_type: str = Field(min_length=1)
+    object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    role: CodexArtifactRole = CodexArtifactRole.CONTEXT
+
+
+class CodexRunInputManifest(AStockModel):
+    manifest_version: Literal["codex-run-input-v2"] = "codex-run-input-v2"
+    selected_skills: list[str] = Field(default_factory=list)
+    artifact_references: list[CodexArtifactReference] = Field(default_factory=list)
+    legacy_artifact_paths: list[str] = Field(default_factory=list)
+    require_registered_output: bool = False
+
+    @model_validator(mode="after")
+    def validate_frozen_inputs(self) -> CodexRunInputManifest:
+        for label, values in (
+            ("selected Skill", self.selected_skills),
+            (
+                "artifact id",
+                [item.artifact_id for item in self.artifact_references],
+            ),
+            (
+                "artifact object hash",
+                [item.object_sha256 for item in self.artifact_references],
+            ),
+            ("legacy artifact path", self.legacy_artifact_paths),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"Codex run {label} values must be unique")
+        if self.require_registered_output and not self.artifact_references:
+            raise ValueError("strict Codex runs require registered artifact inputs")
+        return self
 
 
 class RunManifest(AStockModel):

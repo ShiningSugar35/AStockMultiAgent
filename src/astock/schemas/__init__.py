@@ -274,7 +274,10 @@ from astock.schemas.research import (
     SpecialistRouteRequest,
 )
 from astock.schemas.runs import (
+    CodexArtifactReference,
+    CodexArtifactRole,
     CodexDraft,
+    CodexRunInputManifest,
     CommitteeAccessPolicy,
     ContextBudgetReport,
     RunManifest,
@@ -323,7 +326,10 @@ __all__ = [
     "ClaimStatus",
     "ClaimType",
     "CitedResearchFinding",
+    "CodexArtifactReference",
+    "CodexArtifactRole",
     "CodexDraft",
+    "CodexRunInputManifest",
     "CollectionCheckpoint",
     "CollectionTerminalCondition",
     "CommitteeAccessPolicy",

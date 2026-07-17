@@ -17,7 +17,11 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from astock import __version__
 from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
-from astock.core.codex_runs import CodexRunService, build_context_budget
+from astock.core.codex_runs import (
+    CodexRunService,
+    build_context_budget,
+    registered_phase4_artifact_types,
+)
 from astock.core.errors import AStockError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
@@ -56,6 +60,7 @@ from astock.market_data.sync import MarketSyncService
 from astock.paper_trading import LedgerService, PaperReplayService, load_fee_schedule
 from astock.providers import EastMoney5mProvider, Sina5mProvider
 from astock.research import (
+    Phase4ChainService,
     PositionLifecycleService,
     ResearchCoreService,
     ResearchDiagnosticsService,
@@ -70,6 +75,9 @@ from astock.schemas import (
     AdjustmentMode,
     BarRequest,
     BaseCaseBuildRequest,
+    CodexArtifactReference,
+    CodexRunInputManifest,
+    ContextBudgetReport,
     DisclosureCategory,
     DisclosureExchange,
     DisclosureSearchRequest,
@@ -145,6 +153,59 @@ def _research_diagnostics(paths: ProjectPaths) -> ResearchDiagnosticConfig:
 def _position_lifecycle(paths: ProjectPaths) -> PositionLifecycleConfig:
     return load_position_lifecycle_config(
         paths.root / "configs" / "position_lifecycle.yaml"
+    )
+
+
+def _phase4_chain(
+    paths: ProjectPaths,
+    state: StateStore,
+    objects: ObjectStore,
+) -> Phase4ChainService:
+    return Phase4ChainService(
+        state,
+        objects,
+        _research_core(paths),
+        _research_skills(paths),
+        _research_diagnostics(paths),
+        _position_lifecycle(paths),
+    )
+
+
+def _context_budget_with_registered(
+    service: CodexRunService,
+    *,
+    skills: list[str],
+    artifact_paths: list[Path],
+    artifact_ids: list[str],
+) -> tuple[ContextBudgetReport, list[CodexArtifactReference]]:
+    budget = build_context_budget(skills=skills, artifact_paths=artifact_paths)
+    references: list[CodexArtifactReference] = []
+    seen_hashes: set[str] = set()
+    duplicates = list(budget.duplicate_inputs_avoided)
+    registered_bytes = 0
+    for artifact_id in dict.fromkeys(artifact_ids):
+        reference = service.resolve_artifact_reference(artifact_id)
+        if reference.object_sha256 in seen_hashes:
+            duplicates.append(artifact_id)
+            continue
+        seen_hashes.add(reference.object_sha256)
+        references.append(reference)
+        registered_bytes += len(service.object_store.get_bytes(reference.object_sha256))
+    total_bytes = budget.artifact_byte_size + registered_bytes
+    return (
+        budget.model_copy(
+            update={
+                "selected_skills": list(dict.fromkeys(skills)),
+                "selected_artifacts": [
+                    *budget.selected_artifacts,
+                    *(item.artifact_id for item in references),
+                ],
+                "artifact_byte_size": total_bytes,
+                "estimated_text_tokens": (total_bytes + 3) // 4,
+                "duplicate_inputs_avoided": duplicates,
+            }
+        ),
+        references,
     )
 
 
@@ -285,6 +346,11 @@ def probe() -> None:
                 "DETERMINISTIC_MODE": "AVAILABLE",
                 "OPENAI_COMPATIBLE_MODE": "OPTIONAL_DISABLED",
                 "QMT": "UNAVAILABLE",
+            },
+            "codex_artifacts": {
+                "input_manifest_version": "codex-run-input-v2",
+                "registered_output_required": True,
+                "strict_phase4_types": registered_phase4_artifact_types(),
             },
             "providers": [provider.capability() for provider in providers],
         }
@@ -848,10 +914,25 @@ def paper_replay(
 def context_plan(
     skills: Annotated[list[str] | None, typer.Option("--skill")] = None,
     artifacts: Annotated[list[Path] | None, typer.Option("--artifact")] = None,
+    artifact_ids: Annotated[list[str] | None, typer.Option("--artifact-id")] = None,
 ) -> None:
     """Estimate local input size and duplicate reads before a Codex research run."""
 
-    report = build_context_budget(skills=skills or [], artifact_paths=artifacts or [])
+    if artifact_ids:
+        paths, state, objects = _services()
+        service = CodexRunService(paths.runtime, objects, state)
+        try:
+            report, _ = _context_budget_with_registered(
+                service,
+                skills=skills or [],
+                artifact_paths=artifacts or [],
+                artifact_ids=artifact_ids,
+            )
+        except ValueError as exc:
+            _emit({"status": "REJECTED", "error_code": "INVALID_CODEX_INPUT"})
+            raise typer.Exit(code=2) from exc
+    else:
+        report = build_context_budget(skills=skills or [], artifact_paths=artifacts or [])
     _emit(report)
 
 
@@ -1439,6 +1520,34 @@ def holding_review_audit(
     )
 
 
+@app.command("research-chain-status")
+def research_chain_status(
+    company_id: Annotated[str, typer.Argument(help="Company research entity id.")],
+    position_id: Annotated[
+        str | None,
+        typer.Option(help="Optional monitored position id for lifecycle status."),
+    ] = None,
+) -> None:
+    """Return safe status across the complete implemented Phase 4 chain."""
+
+    paths, state, objects = _services()
+    _emit(_phase4_chain(paths, state, objects).status(company_id, position_id=position_id))
+
+
+@app.command("research-chain-audit")
+def research_chain_audit(
+    company_id: Annotated[str, typer.Argument(help="Company research entity id.")],
+    position_id: Annotated[
+        str | None,
+        typer.Option(help="Optional monitored position id for lifecycle audit."),
+    ] = None,
+) -> None:
+    """Audit existing Phase 4 artifacts without rerunning research or using network."""
+
+    paths, state, objects = _services()
+    _emit(_phase4_chain(paths, state, objects).audit(company_id, position_id=position_id))
+
+
 @app.command("knowledge-source-list")
 def knowledge_source_list() -> None:
     """List the validated knowledge allowlist without exposing private source text."""
@@ -1868,16 +1977,40 @@ def codex_run_init(
     request: Annotated[str, typer.Argument(help="Natural-language task text.")],
     skills: Annotated[list[str] | None, typer.Option("--skill")] = None,
     artifacts: Annotated[list[Path] | None, typer.Option("--artifact")] = None,
+    artifact_ids: Annotated[list[str] | None, typer.Option("--artifact-id")] = None,
+    require_registered_output: Annotated[
+        bool,
+        typer.Option(
+            "--require-registered-output/--allow-unregistered-output",
+            help="Require an exact deterministic Phase 4 artifact as output.",
+        ),
+    ] = False,
 ) -> None:
     """Initialize an auditable Codex run directory and context budget."""
 
     paths, state, objects = _services()
-    budget = build_context_budget(skills=skills or [], artifact_paths=artifacts or [])
-    manifest = CodexRunService(paths.runtime, objects, state).initialize(
-        {"request": request},
-        context_budget=budget,
-        input_manifest={"artifacts": budget.selected_artifacts},
-    )
+    service = CodexRunService(paths.runtime, objects, state)
+    try:
+        budget, references = _context_budget_with_registered(
+            service,
+            skills=skills or [],
+            artifact_paths=artifacts or [],
+            artifact_ids=artifact_ids or [],
+        )
+        input_manifest = CodexRunInputManifest(
+            selected_skills=skills or [],
+            artifact_references=references,
+            legacy_artifact_paths=[str(path.resolve()) for path in artifacts or []],
+            require_registered_output=require_registered_output,
+        )
+        manifest = service.initialize(
+            {"request": request},
+            context_budget=budget,
+            input_manifest=input_manifest,
+        )
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_CODEX_INPUT"})
+        raise typer.Exit(code=2) from exc
     _emit(manifest)
 
 
@@ -1894,7 +2027,56 @@ def codex_run_import(
         service.stage_draft(run_id, draft)
         report = service.import_draft(run_id)
     except AStockError as exc:
-        _emit({"valid": False, "failure_class": exc.failure_class.value, "message": str(exc)})
+        _emit({"valid": False, "failure_class": exc.failure_class.value})
+        raise typer.Exit(code=2) from exc
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"valid": False, "error_code": "INVALID_CODEX_DRAFT"})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
+    if not report.valid:
+        raise typer.Exit(code=2)
+
+
+@app.command("codex-run-status")
+def codex_run_status(
+    run_id: Annotated[str, typer.Argument(help="Codex run identifier.")],
+) -> None:
+    """Return safe frozen-input and validated-output metadata for one run."""
+
+    paths, state, objects = _services()
+    try:
+        _emit(CodexRunService(paths.runtime, objects, state).status(run_id))
+    except ValueError as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_RUN_ID"})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("codex-run-audit")
+def codex_run_audit(
+    run_id: Annotated[str, typer.Argument(help="Codex run identifier.")],
+) -> None:
+    """Audit frozen inputs, files, objects, indexes, and run status."""
+
+    paths, state, objects = _services()
+    try:
+        _emit(CodexRunService(paths.runtime, objects, state).audit(run_id))
+    except ValueError as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_RUN_ID"})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("codex-run-recover")
+def codex_run_recover(
+    run_id: Annotated[str, typer.Argument(help="Codex run identifier.")],
+) -> None:
+    """Idempotently finish a staged run after an interrupted import."""
+
+    paths, state, objects = _services()
+    service = CodexRunService(paths.runtime, objects, state)
+    try:
+        report = service.recover(run_id)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"valid": False, "error_code": "CODEX_RUN_NOT_RECOVERABLE"})
         raise typer.Exit(code=2) from exc
     _emit(report)
     if not report.valid:

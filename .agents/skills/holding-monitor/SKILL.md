@@ -5,12 +5,12 @@ description: Review what changed for open paper positions or user-declared real 
 
 # 持仓监控
 
-1. Run `uv run astock paper-status` for paper positions; treat real positions as read-only user input.
+1. Run `uv run astock paper-status` for paper positions; treat real positions as read-only user input, then load `position-plan-status <position_id>`.
 2. Synchronize raw 5m data and inspect `quality-report` before using price triggers.
-3. Load the position's `PositionMonitoringPlan` and last frozen evidence snapshot.
-4. Gather only evidence added since the last review.
-5. Distinguish no new evidence from refutation.
-6. Write a `HoldingReviewPack` and import it through the Codex run service.
+3. Gather only evidence after the latest review boundary and create a strict `HoldingReviewRequest`; distinguish no new evidence from refutation.
+4. Run `uv run astock holding-review-run <request.json>` and then `holding-review-audit <position_id>`; never construct an action outside the registered lifecycle rules.
+5. Run `uv run astock context-plan --artifact-id <review_artifact_id>` and initialize `codex-run-init <request> --artifact-id <review_artifact_id> --require-registered-output`.
+6. Import the exact registered `HoldingReviewPack` or `PositionActionProposal` through `codex-run-import`, then require `codex-run-audit` PASS.
 
 ## Output
 

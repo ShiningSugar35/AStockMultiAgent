@@ -5,16 +5,16 @@ description: Build a cited, point-in-time company research case from official do
 
 # 公司深度研究
 
-1. Run `uv run astock probe`, then `uv run astock context-plan` with only the frozen artifacts needed for this company.
-2. Reuse the latest frozen EvidencePack and BaseCasePack when their as-of time is valid.
-3. Fetch only incremental disclosures and market data through the source router.
-4. Build common analysis once, then load no more than three necessary specialist deltas.
-5. Resolve material conflicts or return `NEEDS_INFO` with an evidence investigation task.
-6. Start durable work with `uv run astock codex-run-init`; submit only currently supported artifact Schemas with `uv run astock codex-run-import`.
+1. Run `uv run astock probe`, then inspect `uv run astock research-chain-status <company_id>` and `research-chain-audit` before opening sources.
+2. Reuse the latest frozen EvidencePack and BaseCasePack when their as-of time is valid; fetch only incremental disclosures and market data through the source router.
+3. If required, run `research-evidence-freeze` and `research-base-case-build`; build the common analysis once.
+4. Run `research-specialist-route`, no more than three selected diagnostics through `research-specialist-diagnose`, and finish the reference union with `research-memo-compose`.
+5. Resolve material conflicts or return `NEEDS_INFO` with an evidence investigation task; require `research-chain-audit` PASS before presenting a completed Phase 4 research chain.
+6. Run `uv run astock context-plan --artifact-id <memo_artifact_id>`, then `codex-run-init <request> --artifact-id <memo_artifact_id> --require-registered-output`, import the exact registered memo with `codex-run-import`, and finish with `codex-run-audit`.
 
 ## Output
 
-Produce `BaseCasePack`, optional `SpecialistDelta[]`, and a validated `DecisionPack` only after those Schemas become available. During M1, return `RunManifest(status=NEEDS_INFO)` rather than simulating later-phase research.
+Produce `BaseCasePack`, `SpecialistDelta[]`, diagnostic reports, and `ResearchMemoArtifact` with exact evidence references. `DecisionPack` belongs to Phase 6 and is unavailable until its deterministic committee gates are implemented.
 
 ## Prohibitions
 

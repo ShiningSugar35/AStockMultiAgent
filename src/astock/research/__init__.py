@@ -17,6 +17,7 @@ from astock.research.lifecycle import (
     PositionPlanExecution,
 )
 from astock.research.lifecycle_repository import LifecycleRepository
+from astock.research.phase4 import Phase4ChainService
 from astock.research.repository import ResearchRepository
 from astock.research.service import (
     BaseCaseExecution,
@@ -41,6 +42,7 @@ __all__ = [
     "LifecycleRepository",
     "PositionLifecycleService",
     "PositionPlanExecution",
+    "Phase4ChainService",
     "ResearchRepository",
     "ResearchSkillService",
     "SkillRegistryExecution",

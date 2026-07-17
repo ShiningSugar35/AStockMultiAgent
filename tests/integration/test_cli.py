@@ -45,6 +45,8 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
         "eastmoney-5m",
         "sina-5m",
     }
+    assert probe["codex_artifacts"]["input_manifest_version"] == "codex-run-input-v2"
+    assert len(probe["codex_artifacts"]["strict_phase4_types"]) == 10
 
     artifact = tmp_path / "中文证据.json"
     artifact.write_text("{}", encoding="utf-8")
@@ -373,3 +375,71 @@ def test_position_lifecycle_cli_schema_and_invalid_requests_are_safe(
         }
         assert secret not in invoked.output
         assert str(request) not in invoked.output
+
+
+def test_phase4_chain_and_strict_codex_cli_fail_closed_without_frozen_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "phase4-terminal-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    status = runner.invoke(app, ["research-chain-status", "company:not-run"])
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["status"] == "NOT_RUN"
+    audit = runner.invoke(app, ["research-chain-audit", "company:not-run"])
+    assert audit.exit_code == 0, audit.output
+    assert json.loads(audit.output)["finding_codes"] == ["CORE_NOT_RUN"]
+
+    secret = "private-strict-codex-request-must-not-be-echoed"
+    strict = runner.invoke(
+        app,
+        ["codex-run-init", secret, "--require-registered-output"],
+    )
+    assert strict.exit_code == 2
+    assert json.loads(strict.output) == {
+        "error_code": "INVALID_CODEX_INPUT",
+        "status": "REJECTED",
+    }
+    assert secret not in strict.output
+
+    missing = runner.invoke(
+        app,
+        ["context-plan", "--artifact-id", "BaseCasePack:not-registered"],
+    )
+    assert missing.exit_code == 2
+    assert json.loads(missing.output) == {
+        "error_code": "INVALID_CODEX_INPUT",
+        "status": "REJECTED",
+    }
+
+    invalid_id = runner.invoke(app, ["codex-run-status", "../invalid"])
+    assert invalid_id.exit_code == 2
+    assert json.loads(invalid_id.output) == {
+        "error_code": "INVALID_RUN_ID",
+        "status": "REJECTED",
+    }
+
+    initialized = runner.invoke(app, ["codex-run-init", "safe local validation"])
+    assert initialized.exit_code == 0, initialized.output
+    run_id = json.loads(initialized.output)["run_id"]
+    payload_secret = "private-invalid-payload-must-not-be-echoed"
+    invalid_draft = tmp_path / "private-invalid-codex-draft.json"
+    invalid_draft.write_text(
+        json.dumps(
+            {
+                "artifact_type": "ContextBudgetReport",
+                "payload": {"unexpected_private_field": payload_secret},
+                "citations": {},
+                "requested_commands": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    imported = runner.invoke(app, ["codex-run-import", run_id, str(invalid_draft)])
+    assert imported.exit_code == 2
+    import_payload = json.loads(imported.output)
+    assert import_payload["errors"] == ["INVALID_CODEX_ARTIFACT_PAYLOAD"]
+    assert payload_secret not in imported.output
+    assert str(invalid_draft) not in imported.output

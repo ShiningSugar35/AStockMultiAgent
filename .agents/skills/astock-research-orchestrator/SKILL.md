@@ -6,16 +6,16 @@ description: Route broad or multi-step A-share research requests across local da
 # A股研究总控
 
 1. Run `uv run astock probe` and treat unavailable capabilities as unavailable.
-2. Run `uv run astock context-plan` with only the required Skills and frozen artifacts.
-3. Route to the narrowest project Skill; do not duplicate its work.
-4. Prefer local/API facts, then MCP, then browser, then a manual investigation task.
-5. Run deterministic synchronization and quality commands before reasoning from market data.
-6. Initialize a run with `uv run astock codex-run-init` when producing a durable conclusion.
-7. Put the result in the declared Schema and import it through `uv run astock codex-run-import`.
+2. Inspect existing work with `uv run astock research-chain-status <company_id>`; use `research-chain-audit` before reusing a frozen chain.
+3. Run `uv run astock context-plan --skill <skill> --artifact-id <artifact_id>` with only the required registered artifacts, then route to the narrowest project Skill.
+4. Prefer local/API facts, then MCP, then browser, then a manual investigation task. Run deterministic synchronization and quality commands before reasoning from market data.
+5. Build missing Phase 4 nodes only through their validated research/position CLI; do not duplicate a node that already audits PASS.
+6. For a durable Phase 4 result, run `uv run astock codex-run-init <request> --artifact-id <artifact_id> --require-registered-output`.
+7. Put the exact already-registered deterministic object in the declared Schema and import it through `uv run astock codex-run-import`; finish with `codex-run-audit`.
 
 ## Output
 
-Produce a `RunManifest` plus one validated domain artifact. If a required module or evidence set is missing, set the run to `NEEDS_INFO` and state the exact missing capability.
+Produce a frozen-input `RunManifest` plus one validated registered domain artifact. Before Phase 6 is implemented, do not claim a committee `DecisionPack`; return the exact missing stage or evidence instead.
 
 ## Prohibitions
 

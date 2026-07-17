@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from astock.cli import app
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_ROOT = PROJECT_ROOT / ".agents" / "skills"
 
@@ -51,3 +53,38 @@ def test_agents_file_discovers_every_repo_skill() -> None:
         assert f"${name}" in agents
     assert "禁止未来函数" in agents
     assert "不自动向券商发单" in agents
+
+
+def test_phase4_repo_skill_commands_exist_and_use_strict_codex_binding() -> None:
+    command_names = {command.name for command in app.registered_commands if command.name}
+    expected_commands = {
+        "research-chain-status",
+        "research-chain-audit",
+        "research-evidence-freeze",
+        "research-base-case-build",
+        "research-specialist-route",
+        "research-specialist-diagnose",
+        "research-memo-compose",
+        "position-plan-status",
+        "holding-review-run",
+        "holding-review-audit",
+        "context-plan",
+        "codex-run-init",
+        "codex-run-import",
+        "codex-run-audit",
+    }
+    assert expected_commands <= command_names
+    for name in (
+        "astock-research-orchestrator",
+        "company-deep-research",
+        "holding-monitor",
+    ):
+        body = (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
+        assert "--require-registered-output" in body
+        assert "codex-run-audit" in body
+    assert "research-chain-audit" in (
+        SKILLS_ROOT / "company-deep-research" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "holding-review-run" in (
+        SKILLS_ROOT / "holding-monitor" / "SKILL.md"
+    ).read_text(encoding="utf-8")

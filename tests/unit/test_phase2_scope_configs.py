@@ -11,7 +11,7 @@ def load_yaml(name: str) -> dict:
     return yaml.safe_load((PROJECT_ROOT / "configs" / name).read_text(encoding="utf-8"))
 
 
-def test_knowledge_allowlist_is_exact_and_pending_identities_are_not_guessed() -> None:
+def test_knowledge_allowlist_is_exact_and_online_identities_are_confirmed() -> None:
     sources = load_yaml("knowledge_sources.yaml")["sources"]
     by_name = {source["display_name"]: source for source in sources}
     assert set(by_name) == {"MR Dang", "黄彦臻", "派大星皮皮", "寒武纪的鳄鱼"}
@@ -21,14 +21,18 @@ def test_knowledge_allowlist_is_exact_and_pending_identities_are_not_guessed() -
     assert mr_dang["identity_status"] == "CONFIRMED"
     assert mr_dang["enabled"] is True
 
-    for display_name in ("黄彦臻", "派大星皮皮"):
+    expected_tokens = {
+        "黄彦臻": "huang-wei-yan-30",
+        "派大星皮皮": "xiao-peng-61-47",
+    }
+    for display_name, token in expected_tokens.items():
         source = by_name[display_name]
-        assert source["profile_url"] is None
+        assert source["profile_url"] == f"https://www.zhihu.com/people/{token}"
         assert source["platform_user_id"] is None
-        assert source["url_token"] is None
-        assert source["identity_status"] == "PENDING_IDENTITY_CONFIRMATION"
-        assert source["access_status"] == "PENDING_IDENTITY_CONFIRMATION"
-        assert source["enabled"] is False
+        assert source["url_token"] == token
+        assert source["identity_status"] == "CONFIRMED"
+        assert source["access_status"] == "LOGGED_IN_ACCESS_VERIFIED"
+        assert source["enabled"] is True
         scope = source["collection_scope"]
         assert scope["history_mode"] == "FULL_ACCESSIBLE_HISTORY"
         assert scope["content_types"] == ["answers", "thoughts", "articles"]
@@ -43,7 +47,7 @@ def test_knowledge_allowlist_is_exact_and_pending_identities_are_not_guessed() -
     assert hanwuji["enabled"] is True
 
 
-def test_every_pending_identity_has_an_open_manual_task() -> None:
+def test_resolved_identity_tasks_leave_no_open_identity_blocker() -> None:
     sources = load_yaml("knowledge_sources.yaml")["sources"]
     pending_ids = {
         source["source_id"]
@@ -54,6 +58,7 @@ def test_every_pending_identity_has_an_open_manual_task() -> None:
     open_subjects = {task["subject_source_id"] for task in tasks if task["status"] == "OPEN"}
     assert open_subjects == pending_ids
     assert all(task["task_type"] == "IDENTITY_CONFIRMATION" for task in tasks)
+    assert {task["status"] for task in tasks} == {"RESOLVED"}
 
 
 def test_private_book_scope_is_formal_but_raw_pdf_remains_git_excluded() -> None:

@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "id": 103,
+      "type": "answer",
+      "content": "<p>synthetic fixture answer three</p>",
+      "created_time": 1704412800,
+      "updated_time": 1704499200,
+      "author": {"id": "fixture-author-id", "url_token": "mr-dang-77"},
+      "question": {"id": 9003, "title": "Synthetic fixture question three"}
+    }
+  ],
+  "paging": {
+    "is_end": true,
+    "next": "",
+    "previous": "https://www.zhihu.com/api/v4/members/mr-dang-77/answers?limit=2&offset=0&sort_by=created"
+  }
+}

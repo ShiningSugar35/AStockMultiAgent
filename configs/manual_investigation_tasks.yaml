@@ -2,16 +2,20 @@ schema_version: "1.0"
 tasks:
   - task_id: identity:zhihu:huang-yanzhen
     task_type: IDENTITY_CONFIRMATION
-    subject_source_id: zhihu:pending:huang-yanzhen
+    subject_source_id: zhihu:huang-wei-yan-30
     display_name: 黄彦臻
     required_fields: [profile_url, platform_user_id_or_url_token]
-    status: OPEN
+    status: RESOLVED
     blocking_scope: THIS_SOURCE_COLLECTION_ONLY
+    resolution: PUBLIC_INDEX_CANDIDATE_PLUS_PROFILE_API_EXACT_NAME_AND_TOKEN_MATCH
+    resolved_at: "2026-07-17"
 
   - task_id: identity:zhihu:paidaxing-pipi
     task_type: IDENTITY_CONFIRMATION
-    subject_source_id: zhihu:pending:paidaxing-pipi
+    subject_source_id: zhihu:xiao-peng-61-47
     display_name: 派大星皮皮
     required_fields: [profile_url, platform_user_id_or_url_token]
-    status: OPEN
+    status: RESOLVED
     blocking_scope: THIS_SOURCE_COLLECTION_ONLY
+    resolution: PUBLIC_INDEX_CANDIDATE_PLUS_PROFILE_API_EXACT_NAME_AND_TOKEN_MATCH
+    resolved_at: "2026-07-17"

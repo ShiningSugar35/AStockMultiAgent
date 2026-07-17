@@ -19,14 +19,14 @@ sources:
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
     enabled: true
 
-  - source_id: zhihu:pending:huang-yanzhen
+  - source_id: zhihu:huang-wei-yan-30
     display_name: 黄彦臻
     platform: zhihu
-    profile_url: null
+    profile_url: https://www.zhihu.com/people/huang-wei-yan-30
     platform_user_id: null
-    url_token: null
-    identity_status: PENDING_IDENTITY_CONFIRMATION
-    access_status: PENDING_IDENTITY_CONFIRMATION
+    url_token: huang-wei-yan-30
+    identity_status: CONFIRMED
+    access_status: LOGGED_IN_ACCESS_VERIFIED
     collection_scope:
       history_mode: FULL_ACCESSIBLE_HISTORY
       content_types: [answers, thoughts, articles]
@@ -35,17 +35,17 @@ sources:
       include_nested_replies: true
       derive_author_participation_chains: true
       incremental_updates: true
-    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH_PENDING_IDENTITY
-    enabled: false
+    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
+    enabled: true
 
-  - source_id: zhihu:pending:paidaxing-pipi
+  - source_id: zhihu:xiao-peng-61-47
     display_name: 派大星皮皮
     platform: zhihu
-    profile_url: null
+    profile_url: https://www.zhihu.com/people/xiao-peng-61-47
     platform_user_id: null
-    url_token: null
-    identity_status: PENDING_IDENTITY_CONFIRMATION
-    access_status: PENDING_IDENTITY_CONFIRMATION
+    url_token: xiao-peng-61-47
+    identity_status: CONFIRMED
+    access_status: LOGGED_IN_ACCESS_VERIFIED
     collection_scope:
       history_mode: FULL_ACCESSIBLE_HISTORY
       content_types: [answers, thoughts, articles]
@@ -54,8 +54,8 @@ sources:
       include_nested_replies: true
       derive_author_participation_chains: true
       incremental_updates: true
-    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH_PENDING_IDENTITY
-    enabled: false
+    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
+    enabled: true
 
   - source_id: zhihu:hanwujideeyu
     display_name: 寒武纪的鳄鱼

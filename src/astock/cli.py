@@ -32,6 +32,13 @@ from astock.financial_integrity import (
     FinancialIntegrityRepository,
     FinancialIntegrityService,
 )
+from astock.knowledge import (
+    KnowledgeRepository,
+    ParquetKnowledgeStore,
+    ZhihuCollectionService,
+    get_knowledge_source,
+    load_knowledge_sources,
+)
 from astock.market_data.storage import (
     CanonicalMarketStore,
     ParquetMarketStore,
@@ -49,7 +56,9 @@ from astock.schemas import (
     DocumentType,
     FinancialAuditRequest,
     InstrumentType,
+    KnowledgeSourceRegistry,
     Market,
+    ZhihuContentType,
 )
 from astock.settings import ProjectPaths
 
@@ -67,6 +76,10 @@ def _services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
     state = StateStore(paths.state_db, paths.root / "migrations")
     state.migrate()
     return paths, state, ObjectStore(paths.objects)
+
+
+def _knowledge_sources(paths: ProjectPaths) -> KnowledgeSourceRegistry:
+    return load_knowledge_sources(paths.root / "configs" / "knowledge_sources.yaml")
 
 
 def _emit(value: Any) -> None:
@@ -774,6 +787,133 @@ def context_plan(
 
     report = build_context_budget(skills=skills or [], artifact_paths=artifacts or [])
     _emit(report)
+
+
+@app.command("knowledge-source-list")
+def knowledge_source_list() -> None:
+    """List the validated knowledge allowlist without exposing private source text."""
+
+    paths, _, _ = _services()
+    registry = _knowledge_sources(paths)
+    _emit(
+        {
+            "sources": [
+                {
+                    "source_id": source.source_id,
+                    "display_name": source.display_name,
+                    "identity_status": source.identity_status,
+                    "access_status": source.access_status,
+                    "enabled": source.enabled,
+                    "online_collection_required": source.online_collection_required,
+                    "content_types": source.collection_scope.content_types,
+                }
+                for source in registry.sources
+            ]
+        }
+    )
+
+
+@app.command("zhihu-author-probe")
+def zhihu_author_probe(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
+) -> None:
+    """Probe one confirmed Zhihu profile with a persisted low-frequency response."""
+
+    paths, state, objects = _services()
+    source = get_knowledge_source(_knowledge_sources(paths), source_id)
+    service = ZhihuCollectionService(
+        state,
+        objects,
+        ParquetKnowledgeStore(paths.parquet),
+    )
+    try:
+        identity = service.probe_identity(source)
+    except AStockError as exc:
+        _emit(
+            {
+                "status": "FAILED",
+                "failure_class": exc.failure_class,
+                "message": str(exc),
+                "details": exc.details,
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit({"status": "CONFIRMED", "identity": identity})
+
+
+@app.command("zhihu-author-sync")
+def zhihu_author_sync(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
+    content_type: Annotated[
+        ZhihuContentType,
+        typer.Option(case_sensitive=False, help="answers, articles, or thoughts"),
+    ] = ZhihuContentType.ANSWERS,
+    max_pages: Annotated[
+        int | None,
+        typer.Option(help="Optional smoke limit; a capped run remains PARTIAL."),
+    ] = None,
+    page_size: Annotated[int, typer.Option(min=1, max=100)] = 20,
+    request_interval_seconds: Annotated[
+        float,
+        typer.Option(min=0, help="Minimum delay between listing requests."),
+    ] = 2.0,
+) -> None:
+    """Synchronize one allowlisted Zhihu listing without emitting collected text."""
+
+    paths, state, objects = _services()
+    source = get_knowledge_source(_knowledge_sources(paths), source_id)
+    service = ZhihuCollectionService(
+        state,
+        objects,
+        ParquetKnowledgeStore(paths.parquet),
+        minimum_request_interval_seconds=request_interval_seconds,
+    )
+    try:
+        execution = service.sync_listing(
+            source,
+            content_type,
+            max_pages=max_pages,
+            page_size=page_size,
+        )
+    except AStockError as exc:
+        _emit(
+            {
+                "status": "FAILED",
+                "failure_class": exc.failure_class,
+                "message": str(exc),
+                "details": exc.details,
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit(
+        {
+            "status": execution.report.coverage_status,
+            "job_id": execution.job_id,
+            "report": execution.report,
+            "listing_page_count": len(execution.listing_pages),
+            "content_record_count": len(execution.content_records),
+            "parquet_file_count": len(execution.parquet_files),
+        }
+    )
+
+
+@app.command("zhihu-coverage")
+def zhihu_coverage(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
+    content_type: Annotated[
+        ZhihuContentType,
+        typer.Option(case_sensitive=False, help="answers, articles, or thoughts"),
+    ] = ZhihuContentType.ANSWERS,
+) -> None:
+    """Return the latest durable coverage report for one Zhihu listing scope."""
+
+    _, state, _ = _services()
+    report = KnowledgeRepository(state).latest_coverage_report(source_id, content_type)
+    _emit(
+        {"status": "NOT_COLLECTED", "report": None}
+        if report is None
+        else {"status": report.coverage_status, "report": report}
+    )
 
 
 @app.command("codex-run-init")

@@ -1,0 +1,27 @@
+{
+  "data": [
+    {
+      "id": 101,
+      "type": "answer",
+      "content": "<p>synthetic fixture answer one</p>",
+      "created_time": 1704067200,
+      "updated_time": 1704153600,
+      "author": {"id": "fixture-author-id", "url_token": "mr-dang-77"},
+      "question": {"id": 9001, "title": "Synthetic fixture question one"}
+    },
+    {
+      "id": 102,
+      "type": "answer",
+      "content": "<p>synthetic fixture answer two</p>",
+      "created_time": 1704240000,
+      "updated_time": 1704326400,
+      "author": {"id": "fixture-author-id", "url_token": "mr-dang-77"},
+      "question": {"id": 9002, "title": "Synthetic fixture question two"}
+    }
+  ],
+  "paging": {
+    "is_end": false,
+    "next": "https://www.zhihu.com/api/v4/members/mr-dang-77/answers?limit=2&offset=2&sort_by=created",
+    "previous": ""
+  }
+}

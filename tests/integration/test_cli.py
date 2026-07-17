@@ -54,6 +54,27 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
     assert planned.exit_code == 0, planned.output
     assert json.loads(planned.output)["artifact_byte_size"] == 2
 
+    sources = runner.invoke(app, ["knowledge-source-list"])
+    assert sources.exit_code == 0, sources.output
+    source_payload = json.loads(sources.output)
+    assert {item["display_name"] for item in source_payload["sources"]} == {
+        "MR Dang",
+        "黄彦臻",
+        "派大星皮皮",
+        "寒武纪的鳄鱼",
+    }
+    crocodile = next(
+        item for item in source_payload["sources"] if item["display_name"] == "寒武纪的鳄鱼"
+    )
+    assert not crocodile["online_collection_required"]
+
+    coverage = runner.invoke(
+        app,
+        ["zhihu-coverage", "zhihu:mr-dang-77", "--content-type", "answers"],
+    )
+    assert coverage.exit_code == 0, coverage.output
+    assert json.loads(coverage.output) == {"report": None, "status": "NOT_COLLECTED"}
+
 
 def test_private_pdf_cli_output_is_redacted(tmp_path: Path, monkeypatch) -> None:
     runtime = tmp_path / "private-runtime"

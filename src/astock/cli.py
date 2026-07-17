@@ -36,6 +36,7 @@ from astock.knowledge import (
     KnowledgeRepository,
     ParquetKnowledgeStore,
     ZhihuCollectionService,
+    ZhihuResponseImportService,
     get_knowledge_source,
     load_knowledge_sources,
 )
@@ -839,6 +840,94 @@ def zhihu_author_probe(
         )
         raise typer.Exit(code=3) from exc
     _emit({"status": "CONFIRMED", "identity": identity})
+
+
+@app.command("zhihu-response-import")
+def zhihu_response_import(
+    envelope: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Persist one credential-free Chrome/manual Zhihu response envelope."""
+
+    paths, state, objects = _services()
+    service = ZhihuResponseImportService(state, objects, paths.runtime)
+    try:
+        execution = service.import_file(envelope, _knowledge_sources(paths))
+    except AStockError as exc:
+        _emit(
+            {
+                "status": "REJECTED",
+                "failure_class": exc.failure_class,
+                "message": str(exc),
+                "details": exc.details,
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    record = execution.record
+    _emit(
+        {
+            "status": "IMPORTED",
+            "envelope_id": record.envelope_id,
+            "author_source_id": record.author_source_id,
+            "response_kind": record.response_kind,
+            "content_type": record.content_type,
+            "http_status": record.status_code,
+            "body_byte_size": record.body_byte_size,
+            "source_snapshot_id": record.source_snapshot_id,
+            "raw_object_sha256": record.raw_object_sha256,
+            "import_status": record.import_status,
+            "response_failure": execution.response_failure,
+        }
+    )
+
+
+@app.command("zhihu-import-replay")
+def zhihu_import_replay(
+    envelope_id: Annotated[str, typer.Argument(help="Registered response envelope id.")],
+) -> None:
+    """Consume one imported listing response through the normal checkpoint pipeline."""
+
+    paths, state, objects = _services()
+    service = ZhihuResponseImportService(state, objects, paths.runtime)
+    try:
+        replay = service.replay_listing(
+            envelope_id,
+            _knowledge_sources(paths),
+            ParquetKnowledgeStore(paths.parquet),
+        )
+    except AStockError as exc:
+        _emit(
+            {
+                "status": "REJECTED",
+                "failure_class": exc.failure_class,
+                "message": str(exc),
+                "details": exc.details,
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    if replay.sync_execution is None:
+        _emit(
+            {
+                "status": "ALREADY_CONSUMED",
+                "envelope_id": replay.record.envelope_id,
+                "import_status": replay.record.import_status,
+            }
+        )
+        return
+    execution = replay.sync_execution
+    _emit(
+        {
+            "status": "CONSUMED",
+            "envelope_id": replay.record.envelope_id,
+            "import_status": replay.record.import_status,
+            "coverage_status": execution.report.coverage_status,
+            "terminal_condition": execution.report.terminal_condition,
+            "listing_page_count": len(execution.listing_pages),
+            "content_record_count": len(execution.content_records),
+        }
+    )
 
 
 @app.command("zhihu-author-sync")

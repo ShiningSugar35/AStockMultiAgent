@@ -66,7 +66,7 @@ CLI 分两步：
 
 ## 5. 测试与提交顺序
 
-1. K5.3a：导入信封 Schema、migration 0016、仓储、路径/URL/敏感字段拒绝和幂等测试。
+1. [x] K5.3a：导入信封 Schema、migration 0016、仓储、路径/URL/敏感字段拒绝、列表回放和幂等测试。验收见 `docs/Phase5-K5.3a验收报告.md`。
 2. K5.3b：评论页/节点/参与链 Schema、migration、人工 fixture、分页与崩溃恢复测试。
 3. K5.4：登录响应 live smoke；按作者/类型恢复，限制发生即暂停该来源。
 4. K5.5：覆盖审计、本地 DOCX 覆盖、对象/Parquet/SQLite 对账和隐私扫描。

@@ -15,6 +15,8 @@ from astock.schemas import (
     ZhihuCollectionGap,
     ZhihuContentRecord,
     ZhihuContentType,
+    ZhihuImportedResponse,
+    ZhihuImportStatus,
     ZhihuListingPage,
 )
 
@@ -80,6 +82,126 @@ class KnowledgeRepository:
                 (source_id,),
             ).fetchone()
         return ZhihuAuthorIdentity.model_validate_json(row["identity_json"]) if row else None
+
+    def register_imported_response(
+        self, record: ZhihuImportedResponse
+    ) -> ZhihuImportedResponse:
+        record_json = canonical_json_bytes(record.model_dump(mode="json")).decode("utf-8")
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM zhihu_imported_response WHERE envelope_id=?",
+                (record.envelope_id,),
+            ).fetchone()
+            if row is not None:
+                existing = ZhihuImportedResponse.model_validate_json(row["record_json"])
+                if content_hash(_import_semantic(existing)) != content_hash(
+                    _import_semantic(record)
+                ):
+                    raise ValueError(f"Zhihu response envelope collision: {record.envelope_id}")
+                return existing
+            connection.execute(
+                "INSERT INTO zhihu_imported_response("
+                "envelope_id,source_id,response_kind,content_type,content_id,"
+                "parent_comment_id,listing_page,request_cursor,requested_url,http_status,"
+                "response_mime,transport,"
+                "source_snapshot_id,raw_object_hash,body_byte_size,import_status,"
+                "captured_at,imported_at,consumed_at,record_json) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    record.envelope_id,
+                    record.author_source_id,
+                    record.response_kind.value,
+                    record.content_type.value if record.content_type else None,
+                    record.content_id,
+                    record.parent_comment_id,
+                    record.listing_page,
+                    record.request_cursor,
+                    record.requested_url,
+                    record.status_code,
+                    record.response_mime,
+                    record.transport.value,
+                    record.source_snapshot_id,
+                    record.raw_object_sha256,
+                    record.body_byte_size,
+                    record.import_status.value,
+                    record.captured_at.isoformat(),
+                    record.imported_at.isoformat(),
+                    record.consumed_at.isoformat() if record.consumed_at else None,
+                    record_json,
+                ),
+            )
+        return record
+
+    def get_imported_response(self, envelope_id: str) -> ZhihuImportedResponse | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM zhihu_imported_response WHERE envelope_id=?",
+                (envelope_id,),
+            ).fetchone()
+        return ZhihuImportedResponse.model_validate_json(row["record_json"]) if row else None
+
+    def pending_import_count(self, source_id: str | None = None) -> int:
+        query = "SELECT COUNT(*) FROM zhihu_imported_response WHERE import_status='PENDING'"
+        parameters: tuple[str, ...] = ()
+        if source_id is not None:
+            query += " AND source_id=?"
+            parameters = (source_id,)
+        with self.state.connect() as connection:
+            return int(connection.execute(query, parameters).fetchone()[0])
+
+    def list_pending_imports(
+        self,
+        source_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[ZhihuImportedResponse]:
+        if not 1 <= limit <= 10_000:
+            raise ValueError("pending import limit must be between 1 and 10000")
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT record_json FROM zhihu_imported_response "
+                "WHERE source_id=? AND import_status='PENDING' "
+                "ORDER BY captured_at,envelope_id LIMIT ?",
+                (source_id, limit),
+            ).fetchall()
+        return [
+            ZhihuImportedResponse.model_validate_json(row["record_json"])
+            for row in rows
+        ]
+
+    def mark_import_consumed(
+        self, envelope_id: str, consumed_at: datetime
+    ) -> ZhihuImportedResponse:
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM zhihu_imported_response WHERE envelope_id=?",
+                (envelope_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(envelope_id)
+            existing = ZhihuImportedResponse.model_validate_json(row["record_json"])
+            if existing.import_status is ZhihuImportStatus.CONSUMED:
+                return existing
+            consumed = existing.model_copy(
+                update={
+                    "import_status": ZhihuImportStatus.CONSUMED,
+                    "consumed_at": consumed_at,
+                }
+            )
+            record_json = canonical_json_bytes(consumed.model_dump(mode="json")).decode(
+                "utf-8"
+            )
+            connection.execute(
+                "UPDATE zhihu_imported_response SET import_status=?,consumed_at=?,"
+                "record_json=? WHERE envelope_id=?",
+                (
+                    consumed.import_status.value,
+                    consumed_at.isoformat(),
+                    record_json,
+                    envelope_id,
+                ),
+            )
+        return consumed
 
     def register_listing_page(self, page: ZhihuListingPage) -> ZhihuListingPage:
         page_json = canonical_json_bytes(page.model_dump(mode="json")).decode("utf-8")
@@ -339,6 +461,27 @@ def _content_semantic(record: ZhihuContentRecord) -> dict[str, object]:
             "raw_source_snapshot_id",
         },
     )
+
+
+def _import_semantic(record: ZhihuImportedResponse) -> dict[str, object]:
+    return {
+        "envelope_id": record.envelope_id,
+        "author_source_id": record.author_source_id,
+        "response_kind": record.response_kind.value,
+        "content_type": record.content_type.value if record.content_type else None,
+        "content_id": record.content_id,
+        "parent_comment_id": record.parent_comment_id,
+        "listing_page": record.listing_page,
+        "request_cursor": record.request_cursor,
+        "requested_url": record.requested_url,
+        "status_code": record.status_code,
+        "response_mime": record.response_mime,
+        "transport": record.transport.value,
+        "source_snapshot_id": record.source_snapshot_id,
+        "raw_object_sha256": record.raw_object_sha256,
+        "body_byte_size": record.body_byte_size,
+        "captured_at": record.captured_at.isoformat(),
+    }
 
 
 __all__ = [

@@ -81,7 +81,7 @@ class ZhihuCollectionService:
         job_id = self.state.create_job("zhihu-author-probe", content_hash(request_identity))
         attempt_id = self.state.start_attempt(job_id)
         try:
-            self._record_python_access(source, "profile")
+            self._record_access(source, "profile")
             assert source.url_token is not None
             response = self.transport.fetch(
                 author_source_id=source.source_id,
@@ -163,7 +163,7 @@ class ZhihuCollectionService:
         fetched_pages = 0
         try:
             while True:
-                self._record_python_access(source, f"listing:{content_type.value}")
+                self._record_access(source, f"listing:{content_type.value}")
                 try:
                     response = self.transport.fetch(
                         author_source_id=source.source_id,
@@ -561,11 +561,12 @@ class ZhihuCollectionService:
             input_hashes=report.source_snapshot_ids,
         )
 
-    def _record_python_access(
+    def _record_access(
         self,
         source: KnowledgeSourceDefinition,
         capability: str,
     ) -> None:
+        selected = getattr(self.transport, "access_transport", AccessTransport.API)
         self.router.decide(
             SourceAccessRequest(
                 source_id=source.source_id,
@@ -576,8 +577,12 @@ class ZhihuCollectionService:
                     source_id=source.source_id,
                     transport=AccessTransport.API,
                     requested_capabilities=[capability],
-                    available=True,
-                    reason="Verified low-frequency Python structured request is available.",
+                    available=selected is AccessTransport.API,
+                    reason=(
+                        "Verified low-frequency Python structured request is available."
+                        if selected is AccessTransport.API
+                        else "Python structured access did not supply this response."
+                    ),
                 ),
                 TransportCapability(
                     source_id=source.source_id,
@@ -590,8 +595,15 @@ class ZhihuCollectionService:
                     source_id=source.source_id,
                     transport=AccessTransport.BROWSER,
                     requested_capabilities=[capability],
-                    available=True,
-                    reason="Logged-in Chrome is an allowed fallback after structured access.",
+                    available=selected is AccessTransport.BROWSER,
+                    reason="A credential-free logged-in Chrome response was imported.",
+                ),
+                TransportCapability(
+                    source_id=source.source_id,
+                    transport=AccessTransport.MANUAL,
+                    requested_capabilities=[capability],
+                    available=selected is AccessTransport.MANUAL,
+                    reason="A credential-free manually saved response was imported.",
                 ),
             ],
         )

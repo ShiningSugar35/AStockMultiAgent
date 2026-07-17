@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from enum import StrEnum
 from typing import Any
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from astock.schemas.base import AStockModel
 
@@ -51,6 +53,109 @@ class ZhihuTransport(StrEnum):
     MCP = "MCP"
     CHROME = "CHROME"
     MANUAL_IMPORT = "MANUAL_IMPORT"
+
+
+class ZhihuResponseKind(StrEnum):
+    PROFILE = "PROFILE"
+    LISTING = "LISTING"
+    CONTENT_DETAIL = "CONTENT_DETAIL"
+    ROOT_COMMENTS = "ROOT_COMMENTS"
+    CHILD_COMMENTS = "CHILD_COMMENTS"
+
+
+class ZhihuImportStatus(StrEnum):
+    PENDING = "PENDING"
+    CONSUMED = "CONSUMED"
+    REJECTED = "REJECTED"
+
+
+class ZhihuBrowserResponseEnvelope(AStockModel):
+    author_source_id: str = Field(min_length=1)
+    response_kind: ZhihuResponseKind
+    content_type: ZhihuContentType | None = None
+    content_id: str | None = None
+    parent_comment_id: str | None = None
+    listing_page: int | None = Field(default=None, ge=0)
+    request_cursor: str | None = None
+    requested_url: str = Field(min_length=1)
+    status_code: int = Field(ge=100, le=599)
+    response_mime: str = Field(min_length=1, max_length=255)
+    body_base64: str = Field(min_length=1, max_length=90_000_000)
+    transport: ZhihuTransport
+    captured_at: AwareDatetime
+
+    @field_validator("body_base64")
+    @classmethod
+    def validate_body_base64(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("body_base64 must be valid base64") from exc
+        if len(decoded) > 64 * 1024 * 1024:
+            raise ValueError("decoded Zhihu response exceeds 64 MiB")
+        return value
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> ZhihuBrowserResponseEnvelope:
+        if self.transport not in {ZhihuTransport.CHROME, ZhihuTransport.MANUAL_IMPORT}:
+            raise ValueError("response envelopes only accept Chrome or manual imports")
+        if self.response_kind is ZhihuResponseKind.PROFILE:
+            if self.content_type is not None or self.content_id is not None:
+                raise ValueError("profile responses cannot identify content")
+        elif self.response_kind is ZhihuResponseKind.LISTING:
+            if (
+                self.content_type is None
+                or self.content_id is not None
+                or self.listing_page is None
+            ):
+                raise ValueError("listing responses require content_type and no content_id")
+        else:
+            if self.content_type is None or not self.content_id:
+                raise ValueError("detail and comment responses require content identity")
+        if self.response_kind is not ZhihuResponseKind.LISTING and (
+            self.listing_page is not None or self.request_cursor is not None
+        ):
+            raise ValueError("listing cursor fields are only valid for listing responses")
+        if self.listing_page == 0 and self.request_cursor is not None:
+            raise ValueError("the first listing page cannot declare a prior cursor")
+        if self.listing_page is not None and self.listing_page > 0 and not self.request_cursor:
+            raise ValueError("continued listing pages require request_cursor")
+        if (
+            self.response_kind is ZhihuResponseKind.CHILD_COMMENTS
+            and not self.parent_comment_id
+        ):
+            raise ValueError("child comment responses require parent_comment_id")
+        if (
+            self.response_kind is not ZhihuResponseKind.CHILD_COMMENTS
+            and self.parent_comment_id is not None
+        ):
+            raise ValueError("parent_comment_id is only valid for child comments")
+        return self
+
+    def decoded_body(self) -> bytes:
+        return base64.b64decode(self.body_base64, validate=True)
+
+
+class ZhihuImportedResponse(AStockModel):
+    envelope_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    response_kind: ZhihuResponseKind
+    content_type: ZhihuContentType | None = None
+    content_id: str | None = None
+    parent_comment_id: str | None = None
+    listing_page: int | None = Field(default=None, ge=0)
+    request_cursor: str | None = None
+    requested_url: str = Field(min_length=1)
+    status_code: int = Field(ge=100, le=599)
+    response_mime: str = Field(min_length=1, max_length=255)
+    transport: ZhihuTransport
+    source_snapshot_id: str = Field(min_length=1)
+    raw_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    body_byte_size: int = Field(ge=0)
+    import_status: ZhihuImportStatus = ZhihuImportStatus.PENDING
+    captured_at: AwareDatetime
+    imported_at: AwareDatetime
+    consumed_at: AwareDatetime | None = None
 
 
 class KnowledgeCollectionScope(AStockModel):

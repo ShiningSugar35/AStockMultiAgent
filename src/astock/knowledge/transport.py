@@ -122,9 +122,11 @@ class ZhihuHttpTransport:
         transport: ZhihuTransport,
         latency_ms: int = 0,
         selected_headers: dict[str, str | None] | None = None,
+        fetched_at: datetime | None = None,
     ) -> PersistedZhihuResponse:
         _validate_zhihu_url(requested_url)
         now = datetime.now(UTC)
+        observed_at = fetched_at or now
         raw = self.object_store.put_bytes(body)
         scope = content_type.value if content_type else "profile"
         snapshot_source_id = f"{author_source_id}:{scope}:{transport.value.lower()}"
@@ -133,7 +135,7 @@ class ZhihuHttpTransport:
             snapshot_id=f"{snapshot_source_id}:{raw.sha256}",
             source_id=snapshot_source_id,
             object_sha256=raw.sha256,
-            fetched_at=now,
+            fetched_at=observed_at,
             available_to_system_at=now,
             source_url=requested_url,
             mime=content_type_header.split(";", 1)[0].strip().lower(),

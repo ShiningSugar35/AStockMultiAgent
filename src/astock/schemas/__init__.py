@@ -128,10 +128,14 @@ from astock.schemas.knowledge import (
     PositionLifecycleSkillManifest,
     PositionMonitoringPlan,
     ZhihuAuthorIdentity,
+    ZhihuBrowserResponseEnvelope,
     ZhihuCollectionGap,
     ZhihuContentRecord,
     ZhihuContentType,
+    ZhihuImportedResponse,
+    ZhihuImportStatus,
     ZhihuListingPage,
+    ZhihuResponseKind,
     ZhihuTransport,
 )
 from astock.schemas.market import (
@@ -351,9 +355,13 @@ __all__ = [
     "VerifiedFinancialNumber",
     "VolumeUnit",
     "ZhihuAuthorIdentity",
+    "ZhihuBrowserResponseEnvelope",
     "ZhihuCollectionGap",
     "ZhihuContentRecord",
     "ZhihuContentType",
+    "ZhihuImportedResponse",
+    "ZhihuImportStatus",
     "ZhihuListingPage",
+    "ZhihuResponseKind",
     "ZhihuTransport",
 ]

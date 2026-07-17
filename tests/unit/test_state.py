@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from astock.core.state import StateStore
-from astock.schemas import CollectionCheckpoint, CollectionTerminalCondition
+from astock.schemas import (
+    CollectionCheckpoint,
+    CollectionTerminalCondition,
+    FetchStatus,
+    SourceSnapshot,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,6 +36,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
             "0013",
             "0014",
             "0015",
+            "0016",
         ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -78,6 +84,31 @@ def test_job_attempt_lifecycle_is_auditable(state: StateStore) -> None:
     assert attempt["ended_at"] is not None
     assert attempt["error_class"] == "NETWORK"
     assert attempt["retryable"] == 1
+
+
+def test_source_snapshot_round_trips_from_split_index_tables(
+    state: StateStore,
+) -> None:
+    snapshot = SourceSnapshot(
+        snapshot_id="snapshot:round-trip",
+        source_id="source:test",
+        object_sha256="a" * 64,
+        fetched_at=datetime(2026, 7, 17, tzinfo=UTC),
+        available_to_system_at=datetime(2026, 7, 17, 0, 0, 1, tzinfo=UTC),
+        source_url="https://example.invalid/data",
+        mime="application/json",
+        byte_size=10,
+        headers_hash="b" * 64,
+        fetch_status=FetchStatus.SUCCEEDED,
+        rights_status="TEST",
+    )
+    state.register_snapshot(snapshot)
+
+    restored = state.get_snapshot(snapshot.snapshot_id)
+    assert restored is not None
+    assert restored.model_dump(exclude={"created_at"}) == snapshot.model_dump(
+        exclude={"created_at"}
+    )
 
 
 def test_cursor_idempotency_and_collection_interfaces(state: StateStore) -> None:

@@ -428,6 +428,34 @@ class StateStore:
                 ),
             )
 
+    def get_snapshot(self, snapshot_id: str) -> SourceSnapshot | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT i.snapshot_id,i.source_id,i.object_hash,i.fetched_at,"
+                "i.availability_at,i.fetch_status,d.source_url,d.mime,d.byte_size,"
+                "d.headers_hash,d.rights_status FROM source_snapshot_index i "
+                "JOIN source_snapshot_detail d ON d.snapshot_id=i.snapshot_id "
+                "WHERE i.snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SourceSnapshot.model_validate(
+            {
+                "snapshot_id": row["snapshot_id"],
+                "source_id": row["source_id"],
+                "object_sha256": row["object_hash"],
+                "fetched_at": row["fetched_at"],
+                "available_to_system_at": row["availability_at"],
+                "fetch_status": row["fetch_status"],
+                "source_url": row["source_url"],
+                "mime": row["mime"],
+                "byte_size": row["byte_size"],
+                "headers_hash": row["headers_hash"],
+                "rights_status": row["rights_status"],
+            }
+        )
+
     def record_source_decision(self, decision: SourceAccessDecision) -> None:
         with self.transaction() as connection:
             connection.execute(

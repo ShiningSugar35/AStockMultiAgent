@@ -23,6 +23,8 @@ from astock.schemas import (
     CodexDraft,
     CodexRunInputManifest,
     ContextBudgetReport,
+    CounterCasePack,
+    DecisionPack,
     FinancialIntegrityEvidencePack,
     FrozenEvidencePack,
     HoldingEvidenceUpdate,
@@ -36,6 +38,7 @@ from astock.schemas import (
     SpecialistDelta,
     SpecialistDiagnosticReport,
     SpecialistRoutePlan,
+    TradeProtocol,
     ValidationReport,
 )
 from astock.schemas.base import AStockModel
@@ -54,6 +57,9 @@ _ARTIFACT_MODELS: dict[str, type[AStockModel]] = {
     "PositionActionProposal": PositionActionProposal,
     "AuthorCollectionCoverageReport": AuthorCollectionCoverageReport,
     "FinancialIntegrityEvidencePack": FinancialIntegrityEvidencePack,
+    "CounterCasePack": CounterCasePack,
+    "DecisionPack": DecisionPack,
+    "TradeProtocol": TradeProtocol,
 }
 
 _REGISTERED_PHASE4_OUTPUTS: dict[str, tuple[str, str]] = {
@@ -72,9 +78,28 @@ _REGISTERED_PHASE4_OUTPUTS: dict[str, tuple[str, str]] = {
     "PositionActionProposal": ("proposal_id", "PositionActionProposal"),
 }
 
+_REGISTERED_COMMITTEE_OUTPUTS: dict[str, tuple[str, str]] = {
+    "CounterCasePack": ("counter_case_id", "CounterCasePack"),
+    "DecisionPack": ("decision_id", "DecisionPack"),
+    "TradeProtocol": ("protocol_id", "TradeProtocol"),
+}
+
+_REGISTERED_STRICT_OUTPUTS = {
+    **_REGISTERED_PHASE4_OUTPUTS,
+    **_REGISTERED_COMMITTEE_OUTPUTS,
+}
+
 
 def registered_phase4_artifact_types() -> list[str]:
     return sorted(_REGISTERED_PHASE4_OUTPUTS)
+
+
+def registered_committee_artifact_types() -> list[str]:
+    return sorted(_REGISTERED_COMMITTEE_OUTPUTS)
+
+
+def registered_strict_artifact_types() -> list[str]:
+    return sorted(_REGISTERED_STRICT_OUTPUTS)
 
 
 class CodexRunService:
@@ -561,7 +586,7 @@ class CodexRunService:
         artifact_type: str,
         artifact: AStockModel,
     ) -> tuple[str, str]:
-        identity = _REGISTERED_PHASE4_OUTPUTS.get(artifact_type)
+        identity = _REGISTERED_STRICT_OUTPUTS.get(artifact_type)
         if identity is None:
             raise ValueError("STRICT_CODEX_OUTPUT_TYPE_UNSUPPORTED")
         field_name, prefix = identity
@@ -789,5 +814,7 @@ def _collect_evidence_ids(value: Any) -> set[str]:
 __all__ = [
     "CodexRunService",
     "build_context_budget",
+    "registered_committee_artifact_types",
     "registered_phase4_artifact_types",
+    "registered_strict_artifact_types",
 ]

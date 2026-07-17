@@ -9,12 +9,13 @@ description: Review what changed for open paper positions or user-declared real 
 2. Synchronize raw 5m data and inspect `quality-report` before using price triggers.
 3. Gather only evidence after the latest review boundary and create a strict `HoldingReviewRequest`; distinguish no new evidence from refutation.
 4. Run `uv run astock holding-review-run <request.json>` and then `holding-review-audit <position_id>`; never construct an action outside the registered lifecycle rules.
-5. Run `uv run astock context-plan --artifact-id <review_artifact_id>` and initialize `codex-run-init <request> --artifact-id <review_artifact_id> --require-registered-output`.
-6. Import the exact registered `HoldingReviewPack` or `PositionActionProposal` through `codex-run-import`, then require `codex-run-audit` PASS.
+5. Resolve the frozen BaseCase/memo/financial/plan/update/review/proposal artifacts with `uv run astock committee-input-resolve --artifact-id <id>...`; run `committee-plan <request.json>`, then `committee-decide <request.json>` and `committee-audit <decision_id>`.
+6. Run `uv run astock context-plan --artifact-id <DecisionPack_artifact_id>` and initialize `codex-run-init <request> --artifact-id <DecisionPack_artifact_id> --require-registered-output`.
+7. Import the exact registered `DecisionPack` or `TradeProtocol` through `codex-run-import`, then require `codex-run-audit` PASS.
 
 ## Output
 
-Produce `HoldingReviewPack`. Any `PositionActionProposal` is advisory and must set `requires_user_confirmation=true`.
+Produce `HoldingReviewPack`, a committee `DecisionPack`, and one TradeProtocol. Any `PositionActionProposal` and TradeProtocol remain advisory and require user confirmation; the service never writes an order or ledger entry.
 
 ## Prohibitions
 

@@ -17,10 +17,13 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from astock import __version__
 from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
+from astock.committee import CommitteeService, load_committee_rules
 from astock.core.codex_runs import (
     CodexRunService,
     build_context_budget,
+    registered_committee_artifact_types,
     registered_phase4_artifact_types,
+    registered_strict_artifact_types,
 )
 from astock.core.errors import AStockError
 from astock.core.object_store import ObjectStore
@@ -77,6 +80,8 @@ from astock.schemas import (
     BaseCaseBuildRequest,
     CodexArtifactReference,
     CodexRunInputManifest,
+    CommitteeAccessPolicy,
+    CommitteeDecisionRequest,
     ContextBudgetReport,
     DisclosureCategory,
     DisclosureExchange,
@@ -153,6 +158,18 @@ def _research_diagnostics(paths: ProjectPaths) -> ResearchDiagnosticConfig:
 def _position_lifecycle(paths: ProjectPaths) -> PositionLifecycleConfig:
     return load_position_lifecycle_config(
         paths.root / "configs" / "position_lifecycle.yaml"
+    )
+
+
+def _committee_service(
+    paths: ProjectPaths,
+    state: StateStore,
+    objects: ObjectStore,
+) -> CommitteeService:
+    return CommitteeService(
+        state,
+        objects,
+        load_committee_rules(paths.root / "configs" / "committee_rules.yaml"),
     )
 
 
@@ -351,6 +368,21 @@ def probe() -> None:
                 "input_manifest_version": "codex-run-input-v2",
                 "registered_output_required": True,
                 "strict_phase4_types": registered_phase4_artifact_types(),
+                "strict_committee_types": registered_committee_artifact_types(),
+                "strict_all_types": registered_strict_artifact_types(),
+            },
+            "committee": {
+                "status": "AVAILABLE",
+                "rules_version": _committee_service(
+                    paths, state, objects
+                ).configured_rules.rules_version,
+                "supported_input_types": CommitteeService.supported_input_types(),
+                "network_access": False,
+                "api_access": False,
+                "mcp_access": False,
+                "browser_access": False,
+                "full_document_access": False,
+                "provider_narrative": "OPTIONAL_DISABLED",
             },
             "providers": [provider.capability() for provider in providers],
         }
@@ -1548,6 +1580,190 @@ def research_chain_audit(
     _emit(_phase4_chain(paths, state, objects).audit(company_id, position_id=position_id))
 
 
+@app.command("committee-schema")
+def committee_schema() -> None:
+    """Print the frozen-input committee request contract and active rule version."""
+
+    paths, state, objects = _services()
+    service = _committee_service(paths, state, objects)
+    _emit(
+        {
+            "request_schema": CommitteeDecisionRequest.model_json_schema(),
+            "rules": service.configured_rules,
+            "supported_input_types": service.supported_input_types(),
+            "external_access": {
+                "network": False,
+                "api": False,
+                "mcp": False,
+                "browser": False,
+                "full_document": False,
+                "new_research": False,
+            },
+        }
+    )
+
+
+@app.command("committee-input-resolve")
+def committee_input_resolve(
+    artifact_ids: Annotated[list[str] | None, typer.Option("--artifact-id")] = None,
+) -> None:
+    """Resolve registered artifact ids into exact committee references and policy hashes."""
+
+    if not artifact_ids:
+        _emit({"status": "REJECTED", "error_code": "ARTIFACT_IDS_REQUIRED"})
+        raise typer.Exit(code=2)
+    paths, state, objects = _services()
+    service = _committee_service(paths, state, objects)
+    try:
+        references = sorted(
+            (service.resolve_reference(item) for item in dict.fromkeys(artifact_ids)),
+            key=lambda item: item.artifact_id,
+        )
+        policy = CommitteeAccessPolicy(
+            frozen_artifact_hashes=sorted(item.object_sha256 for item in references)
+        )
+    except (AStockError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_COMMITTEE_INPUT"})
+        raise typer.Exit(code=2) from exc
+    _emit({"artifact_references": references, "access_policy": policy})
+
+
+@app.command("committee-plan")
+def committee_plan(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Validate and preview a committee verdict without durable committee writes."""
+
+    paths, state, objects = _services()
+    service = _committee_service(paths, state, objects)
+    try:
+        request = CommitteeDecisionRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        _emit(service.plan(request))
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_COMMITTEE_REQUEST"})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("committee-decide")
+def committee_decide(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Create an immutable DecisionPack, TradeProtocol, and any NEEDS_INFO tasks."""
+
+    paths, state, objects = _services()
+    service = _committee_service(paths, state, objects)
+    try:
+        request = CommitteeDecisionRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = service.decide(request)
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "COMMITTEE_DECISION_REJECTED"})
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": "DECIDED",
+            "decision": execution.decision,
+            "protocol": execution.protocol,
+            "counter_case": execution.counter_case,
+            "investigation_tasks": execution.investigation_tasks,
+            "object_sha256_by_type": execution.object_sha256_by_type,
+        }
+    )
+
+
+@app.command("committee-status")
+def committee_status(
+    decision_id: Annotated[str | None, typer.Option("--decision-id")] = None,
+    company_id: Annotated[str | None, typer.Option("--company-id")] = None,
+) -> None:
+    """Return safe committee, protocol, and investigation-task metadata."""
+
+    paths, state, objects = _services()
+    try:
+        _emit(
+            _committee_service(paths, state, objects).status(
+                decision_id=decision_id,
+                company_id=company_id,
+            )
+        )
+    except ValueError as exc:
+        _emit({"status": "REJECTED", "error_code": "COMMITTEE_ID_REQUIRED"})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("committee-audit")
+def committee_audit(
+    decision_id: Annotated[str, typer.Argument(help="Committee decision id.")],
+) -> None:
+    """Recompute and audit one decision without networking or new research."""
+
+    paths, state, objects = _services()
+    _emit(_committee_service(paths, state, objects).audit(decision_id))
+
+
+@app.command("committee-recover")
+def committee_recover(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Idempotently finish an interrupted deterministic committee write."""
+
+    paths, state, objects = _services()
+    service = _committee_service(paths, state, objects)
+    try:
+        request = CommitteeDecisionRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        _emit(service.recover(request))
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "COMMITTEE_NOT_RECOVERABLE"})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("committee-task-status")
+def committee_task_status(
+    task_id: Annotated[str, typer.Argument(help="Committee investigation task id.")],
+) -> None:
+    """Return safe status for one NEEDS_INFO investigation task."""
+
+    paths, state, objects = _services()
+    _emit(_committee_service(paths, state, objects).task_status(task_id))
+
+
+@app.command("committee-task-resolve")
+def committee_task_resolve(
+    task_id: Annotated[str, typer.Argument(help="Open committee task id.")],
+    resolution_artifact_id: Annotated[
+        str,
+        typer.Argument(help="New registered frozen artifact that addresses the gap."),
+    ],
+) -> None:
+    """Link a new frozen artifact to a task; this never reruns the committee itself."""
+
+    paths, state, objects = _services()
+    try:
+        _emit(
+            _committee_service(paths, state, objects).resolve_task(
+                task_id,
+                resolution_artifact_id,
+            )
+        )
+    except ValueError as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_TASK_RESOLUTION"})
+        raise typer.Exit(code=2) from exc
+
+
 @app.command("knowledge-source-list")
 def knowledge_source_list() -> None:
     """List the validated knowledge allowlist without exposing private source text."""
@@ -1982,7 +2198,7 @@ def codex_run_init(
         bool,
         typer.Option(
             "--require-registered-output/--allow-unregistered-output",
-            help="Require an exact deterministic Phase 4 artifact as output.",
+            help="Require an exact registered deterministic artifact as output.",
         ),
     ] = False,
 ) -> None:

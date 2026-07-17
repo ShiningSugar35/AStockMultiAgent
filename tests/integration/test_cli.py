@@ -47,6 +47,13 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
     }
     assert probe["codex_artifacts"]["input_manifest_version"] == "codex-run-input-v2"
     assert len(probe["codex_artifacts"]["strict_phase4_types"]) == 10
+    assert probe["codex_artifacts"]["strict_committee_types"] == [
+        "CounterCasePack",
+        "DecisionPack",
+        "TradeProtocol",
+    ]
+    assert probe["committee"]["status"] == "AVAILABLE"
+    assert not probe["committee"]["network_access"]
 
     artifact = tmp_path / "中文证据.json"
     artifact.write_text("{}", encoding="utf-8")
@@ -443,3 +450,67 @@ def test_phase4_chain_and_strict_codex_cli_fail_closed_without_frozen_inputs(
     assert import_payload["errors"] == ["INVALID_CODEX_ARTIFACT_PAYLOAD"]
     assert payload_secret not in imported.output
     assert str(invalid_draft) not in imported.output
+
+
+def test_committee_cli_schema_status_and_invalid_requests_fail_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "committee-terminal-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    schema = runner.invoke(app, ["committee-schema"])
+    assert schema.exit_code == 0, schema.output
+    schema_payload = json.loads(schema.output)
+    assert schema_payload["rules"]["rules_version"] == "committee-rules-v1"
+    assert schema_payload["external_access"] == {
+        "api": False,
+        "browser": False,
+        "full_document": False,
+        "mcp": False,
+        "network": False,
+        "new_research": False,
+    }
+
+    missing_status = runner.invoke(app, ["committee-status"])
+    assert missing_status.exit_code == 2
+    assert json.loads(missing_status.output) == {
+        "error_code": "COMMITTEE_ID_REQUIRED",
+        "status": "REJECTED",
+    }
+    not_run = runner.invoke(
+        app,
+        ["committee-status", "--decision-id", "decision:not-run"],
+    )
+    assert not_run.exit_code == 0, not_run.output
+    assert json.loads(not_run.output)["status"] == "NOT_RUN"
+    task = runner.invoke(app, ["committee-task-status", "task:not-run"])
+    assert task.exit_code == 0, task.output
+    assert json.loads(task.output)["status"] == "NOT_RUN"
+    unresolved = runner.invoke(
+        app,
+        ["committee-task-resolve", "task:not-run", "artifact:not-run"],
+    )
+    assert unresolved.exit_code == 2
+    assert json.loads(unresolved.output) == {
+        "error_code": "INVALID_TASK_RESOLUTION",
+        "status": "REJECTED",
+    }
+
+    secret = "private-committee-request-must-not-be-echoed"
+    invalid_request = tmp_path / "private-invalid-committee-request.json"
+    invalid_request.write_text(json.dumps({"private": secret}), encoding="utf-8")
+    for command, error_code in (
+        ("committee-plan", "INVALID_COMMITTEE_REQUEST"),
+        ("committee-decide", "COMMITTEE_DECISION_REJECTED"),
+        ("committee-recover", "COMMITTEE_NOT_RECOVERABLE"),
+    ):
+        invoked = runner.invoke(app, [command, str(invalid_request)])
+        assert invoked.exit_code == 2
+        assert json.loads(invoked.output) == {
+            "error_code": error_code,
+            "status": "REJECTED",
+        }
+        assert secret not in invoked.output
+        assert str(invalid_request) not in invoked.output

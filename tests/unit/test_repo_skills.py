@@ -88,3 +88,32 @@ def test_phase4_repo_skill_commands_exist_and_use_strict_codex_binding() -> None
     assert "holding-review-run" in (
         SKILLS_ROOT / "holding-monitor" / "SKILL.md"
     ).read_text(encoding="utf-8")
+
+
+def test_phase6_repo_skill_commands_exist_and_keep_committee_offline() -> None:
+    command_names = {command.name for command in app.registered_commands if command.name}
+    expected_commands = {
+        "committee-schema",
+        "committee-input-resolve",
+        "committee-plan",
+        "committee-decide",
+        "committee-status",
+        "committee-audit",
+        "committee-recover",
+        "committee-task-status",
+        "committee-task-resolve",
+    }
+    assert expected_commands <= command_names
+    for name in (
+        "astock-research-orchestrator",
+        "company-deep-research",
+        "holding-monitor",
+        "evidence-investigation",
+    ):
+        body = (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
+        assert "committee-" in body
+        assert "Do not" in body
+    orchestrator = (
+        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "The committee never performs the search itself" in orchestrator

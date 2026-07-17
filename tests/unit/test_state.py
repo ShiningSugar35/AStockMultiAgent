@@ -47,6 +47,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0024",
         "0025",
         "0026",
+        "0027",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -57,6 +58,10 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
     with state.connect() as connection:
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='financial_audit_run'"
+        ).fetchone()
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='committee_decision_index'"
         ).fetchone()
 
 

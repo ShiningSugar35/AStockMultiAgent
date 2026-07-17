@@ -1,0 +1,25 @@
+schema_version: "1.0"
+created_at: "2026-07-17T00:00:00+00:00"
+rule_set_id: generic-a-share-committee
+rules_version: committee-rules-v1
+engine_version: committee-deterministic-v1
+effective_from: "2026-07-17T00:00:00+08:00"
+min_data_coverage: "0.80"
+min_evidence_coverage: "0.80"
+min_specialist_coverage: "0.67"
+min_pit_coverage: "0.80"
+min_liquidity_score: "0.50"
+max_single_position: "0.10"
+high_position_threshold: "0.05"
+min_expected_return_lower: "0.10"
+high_potential_return_lower: "0.20"
+max_downside_absolute: "0.25"
+low_coverage_margin: "0.10"
+financial_integrity_required: true
+financial_reject_rule_ids:
+  - balance_sheet_identity
+  - cash_flow_identity
+max_context_bytes: 1048576
+max_estimated_text_tokens: 262144
+provider_enabled: false
+provider_cost_ceiling_cny: "0"

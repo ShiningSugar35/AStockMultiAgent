@@ -176,3 +176,45 @@ def test_local_export_missing_object_is_partial_and_aggregate_remains_truthful(
         assert connection.execute(
             "SELECT COUNT(*) FROM knowledge_coverage_audit_report"
         ).fetchone()[0] == 1
+
+
+def test_online_audit_counts_missing_boundaries_not_repeated_attempts(
+    tmp_path: Path,
+    state,
+) -> None:
+    source = _online_source()
+    scope_id = state.upsert_collection_scope(
+        author_id=source.source_id,
+        content_type="answers",
+        status="ACCESS_RESTRICTED",
+    )
+    for snapshot_id in ("snapshot:first", "snapshot:retry"):
+        state.record_collection_gap(
+            scope_id=scope_id,
+            cursor={
+                "listing_page": 0,
+                "listing_cursor": None,
+                "source_snapshot_id": snapshot_id,
+            },
+            failure_class="AUTH_REQUIRED",
+            retryable=False,
+            status="OPEN",
+        )
+
+    report = KnowledgeCoverageAuditService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        tmp_path / "parquet",
+    ).audit_registry(KnowledgeSourceRegistry(sources=[source]))
+
+    source_report = report.source_reports[0]
+    answers = next(
+        item for item in source_report.scope_reports if item.content_type == "answers"
+    )
+    assert report.total_open_gap_count == 1
+    assert source_report.open_gap_count == 1
+    assert answers.open_gap_count == 1
+    with state.connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM collection_gap WHERE status='OPEN'"
+        ).fetchone()[0] == 2

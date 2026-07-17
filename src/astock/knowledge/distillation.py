@@ -20,6 +20,7 @@ from astock.core.state import StateStore
 from astock.documents import DocumentBlockRepository
 from astock.knowledge.distillation_repository import DistillationRepository
 from astock.knowledge.distillation_storage import ParquetDistillationStore
+from astock.knowledge.gaps import count_open_gap_boundaries
 from astock.schemas import (
     BOOK_DOWNWEIGHT_CLASSES,
     BOOK_KEEP_CLASSES,
@@ -829,14 +830,7 @@ class KnowledgeDistillationService:
         return report
 
     def _open_gap_count(self, author_source_id: str) -> int:
-        with self.state.connect() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) FROM collection_gap g "
-                "JOIN collection_scope s ON s.scope_id=g.scope_id "
-                "WHERE s.author_id=? AND g.status='OPEN'",
-                (author_source_id,),
-            ).fetchone()
-        return int(row[0])
+        return count_open_gap_boundaries(self.state, author_source_id)
 
     def _upstream_coverage(
         self,

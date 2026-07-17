@@ -151,6 +151,23 @@ def test_cross_source_distillation_is_idempotent_auditable_and_private(
 ) -> None:
     objects = ObjectStore(tmp_path / "objects")
     _register_sources(tmp_path, state, objects)
+    scope_id = state.upsert_collection_scope(
+        author_id="zhihu:test-distillation",
+        content_type="thoughts",
+        status="ACCESS_RESTRICTED",
+    )
+    for snapshot_id in ("snapshot:failed-first", "snapshot:failed-retry"):
+        state.record_collection_gap(
+            scope_id=scope_id,
+            cursor={
+                "listing_page": 1,
+                "listing_cursor": "same-cursor",
+                "source_snapshot_id": snapshot_id,
+            },
+            failure_class="ACCESS_RESTRICTED",
+            retryable=False,
+            status="OPEN",
+        )
     rules = load_distillation_rules(
         PROJECT_ROOT / "configs" / "knowledge_distillation_rules.yaml"
     )
@@ -169,6 +186,7 @@ def test_cross_source_distillation_is_idempotent_auditable_and_private(
     assert first.review_queue == repeated.review_queue
     assert first.report.human_review_status is HumanReviewStatus.PENDING
     assert first.report.online_content_count == 1
+    assert first.report.open_collection_gap_count == 1
     assert len(first.book_cleaning_report_ids) == 2
     assert len(first.book_method_coverage_report_ids) == 2
     units = DistillationRepository(state).units_for_run(first.run.run_id)
@@ -239,6 +257,9 @@ def test_cross_source_distillation_is_idempotent_auditable_and_private(
         assert connection.execute(
             "SELECT COUNT(*) FROM knowledge_distillation_unit"
         ).fetchone()[0] == len(units)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM collection_gap WHERE status='OPEN'"
+        ).fetchone()[0] == 2
         assert connection.execute(
             "SELECT COUNT(*) FROM author_distillation_report"
         ).fetchone()[0] == 1

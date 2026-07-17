@@ -15,6 +15,7 @@ from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import DocumentBlockRepository
+from astock.knowledge.gaps import count_open_gap_boundaries
 from astock.knowledge.repository import KnowledgeRepository
 from astock.schemas import (
     BookProcessingStatus,
@@ -621,14 +622,7 @@ class KnowledgeCoverageAuditService:
         return row is not None
 
     def _open_gap_count(self, source_id: str) -> int:
-        with self.state.connect() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) FROM collection_gap g "
-                "JOIN collection_scope s ON s.scope_id=g.scope_id "
-                "WHERE s.author_id=? AND g.status='OPEN'",
-                (source_id,),
-            ).fetchone()
-        return int(row[0])
+        return count_open_gap_boundaries(self.state, source_id)
 
     def _scope_open_gap_count(
         self,
@@ -636,15 +630,12 @@ class KnowledgeCoverageAuditService:
         content_type: ZhihuContentType,
     ) -> int:
         comment_prefix = f"comments:{content_type.value}:%"
-        with self.state.connect() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) FROM collection_gap g "
-                "JOIN collection_scope s ON s.scope_id=g.scope_id "
-                "WHERE s.author_id=? AND g.status='OPEN' "
-                "AND (s.content_type=? OR s.content_type LIKE ?)",
-                (source_id, content_type.value, comment_prefix),
-            ).fetchone()
-        return int(row[0])
+        return count_open_gap_boundaries(
+            self.state,
+            source_id,
+            content_type=content_type.value,
+            comment_scope_prefix=comment_prefix,
+        )
 
     @staticmethod
     def _select_seed(

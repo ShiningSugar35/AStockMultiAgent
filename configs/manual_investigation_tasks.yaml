@@ -15,11 +15,3 @@ tasks:
     required_fields: [profile_url, platform_user_id_or_url_token]
     status: OPEN
     blocking_scope: THIS_SOURCE_COLLECTION_ONLY
-
-  - task_id: identity:zhihu:hanwuji-de-eyu
-    task_type: IDENTITY_CONFIRMATION
-    subject_source_id: zhihu:pending:hanwuji-de-eyu
-    display_name: 寒武纪的鳄鱼
-    required_fields: [profile_url, platform_user_id_or_url_token]
-    status: OPEN
-    blocking_scope: THIS_SOURCE_COLLECTION_ONLY

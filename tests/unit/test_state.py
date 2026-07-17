@@ -24,9 +24,10 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0006",
         "0007",
         "0008",
-        "0009",
-        "0010",
-    ]
+            "0009",
+            "0010",
+            "0011",
+        ]
     assert state.migrate() == []
     with state.connect() as connection:
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1

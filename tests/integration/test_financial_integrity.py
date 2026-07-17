@@ -254,7 +254,9 @@ def test_community_lead_cannot_be_used_as_a_reported_financial_fact(
     )
 
 
-def test_deferred_score_is_explicitly_disabled_without_fake_output(state, object_store) -> None:
+def test_advanced_score_requires_real_period_history_without_fake_output(
+    state, object_store
+) -> None:
     request = make_financial_request(state, object_store).model_copy(
         update={"requested_rule_ids": ["beneish_m_score"]}
     )
@@ -265,7 +267,7 @@ def test_deferred_score_is_explicitly_disabled_without_fake_output(state, object
     assert beneish.status is FinancialFindingStatus.INSUFFICIENT_DATA
     assert beneish.actual_value is None
     assert any(
-        gap.gap_type is FinancialGapType.CAPABILITY_DISABLED
+        gap.gap_type is FinancialGapType.INSUFFICIENT_PERIODS
         and "beneish_m_score" in gap.related_rule_ids
         for gap in pack.evidence_gaps
     )

@@ -57,14 +57,14 @@ sources:
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH_PENDING_IDENTITY
     enabled: false
 
-  - source_id: zhihu:pending:hanwuji-de-eyu
+  - source_id: zhihu:hanwujideeyu
     display_name: 寒武纪的鳄鱼
     platform: zhihu
     profile_url: null
     platform_user_id: null
     url_token: null
-    identity_status: PENDING_IDENTITY_CONFIRMATION
-    access_status: PENDING_IDENTITY_CONFIRMATION
+    identity_status: LOCAL_EXPORT_USER_CONFIRMED_COMPLETE
+    access_status: LOCAL_EXPORT_PARSED_COMPLETE
     local_seed_sources:
       - source_id: zhihu-export:hanwujideeyu:articles
         source_type: PRIVATE_DOCX_EXPORT
@@ -73,14 +73,15 @@ sources:
         expected_sha256: 197ec18e6fabac4401f6412331e9aa50f919498d4e40cfddb481eeab9788852d
         rights_status: LOCAL_PRIVATE_RESEARCH
         ingestion_scope: FULL_DOCUMENT_BLOCK_PARSE
-        online_history_coverage: NOT_ESTABLISHED
+        online_history_coverage: USER_CONFIRMED_COMPLETE_EXPORT
     collection_scope:
-      history_mode: FULL_ACCESSIBLE_HISTORY
-      content_types: [answers, thoughts, articles]
+      history_mode: USER_CONFIRMED_COMPLETE_LOCAL_EXPORT
+      content_types: [exported_content]
       include_question_context: true
-      include_required_comment_pages: true
-      include_nested_replies: true
+      include_required_comment_pages: false
+      include_nested_replies: false
       derive_author_participation_chains: true
       incremental_updates: true
-    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH_PENDING_IDENTITY
-    enabled: false
+    online_collection_required: false
+    rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
+    enabled: true

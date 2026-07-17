@@ -26,6 +26,22 @@ class FinancialPeriodType(StrEnum):
     QUARTERLY = "QUARTERLY"
 
 
+class FinancialDurationSemantics(StrEnum):
+    """How a reported duration value relates to its fiscal period."""
+
+    INSTANT = "INSTANT"
+    STANDALONE_PERIOD = "STANDALONE_PERIOD"
+    YEAR_TO_DATE = "YEAR_TO_DATE"
+    REPORTED_PERIOD = "REPORTED_PERIOD"
+
+
+class FinancialDerivationType(StrEnum):
+    TTM = "TTM"
+    YEAR_OVER_YEAR = "YEAR_OVER_YEAR"
+    QUARTER_OVER_QUARTER = "QUARTER_OVER_QUARTER"
+    PER_SHARE = "PER_SHARE"
+
+
 class FinancialIndustryProfile(StrEnum):
     GENERAL_INDUSTRIAL = "GENERAL_INDUSTRIAL"
     BANK = "BANK"
@@ -46,6 +62,7 @@ class FinancialUnit(StrEnum):
     PERCENT = "PERCENT"
     SHARES = "SHARES"
     CNY_PER_SHARE = "CNY_PER_SHARE"
+    SCORE = "SCORE"
 
 
 class FinancialFieldCode(StrEnum):
@@ -71,6 +88,12 @@ class FinancialFieldCode(StrEnum):
     TOTAL_DEBT = "TOTAL_DEBT"
     RETAINED_EARNINGS = "RETAINED_EARNINGS"
     EBIT = "EBIT"
+    DEPRECIATION_AMORTIZATION = "DEPRECIATION_AMORTIZATION"
+    SELLING_GENERAL_ADMIN_EXPENSE = "SELLING_GENERAL_ADMIN_EXPENSE"
+    PROPERTY_PLANT_EQUIPMENT = "PROPERTY_PLANT_EQUIPMENT"
+    LONG_TERM_DEBT = "LONG_TERM_DEBT"
+    MARKET_CAP = "MARKET_CAP"
+    SHARES_OUTSTANDING = "SHARES_OUTSTANDING"
 
 
 class FinancialSeverity(StrEnum):
@@ -120,6 +143,14 @@ class FinancialGapType(StrEnum):
     STATEMENT_TYPE_MISMATCH = "STATEMENT_TYPE_MISMATCH"
     CONFLICTING_VALUES = "CONFLICTING_VALUES"
     CAPABILITY_DISABLED = "CAPABILITY_DISABLED"
+    AMBIGUOUS_PERIOD_SEMANTICS = "AMBIGUOUS_PERIOD_SEMANTICS"
+    INSUFFICIENT_PERIODS = "INSUFFICIENT_PERIODS"
+    NON_CONTIGUOUS_PERIODS = "NON_CONTIGUOUS_PERIODS"
+    PEER_COHORT_MISMATCH = "PEER_COHORT_MISMATCH"
+    INSUFFICIENT_PEER_SAMPLE = "INSUFFICIENT_PEER_SAMPLE"
+    PEER_LINEAGE_INVALID = "PEER_LINEAGE_INVALID"
+    MODEL_INPUT_INVALID = "MODEL_INPUT_INVALID"
+    MODEL_SAMPLE_INSUFFICIENT = "MODEL_SAMPLE_INSUFFICIENT"
 
 
 class FinancialRuleOutputType(StrEnum):
@@ -136,6 +167,8 @@ class FinancialCalibrationStatus(StrEnum):
 
 class FinancialImplementationStatus(StrEnum):
     IMPLEMENTED_M3_1 = "IMPLEMENTED_M3_1"
+    IMPLEMENTED_M3_2 = "IMPLEMENTED_M3_2"
+    IMPLEMENTED_M3_3 = "IMPLEMENTED_M3_3"
     DEFERRED_M3_2 = "DEFERRED_M3_2"
     DEFERRED_M3_3 = "DEFERRED_M3_3"
 
@@ -148,6 +181,7 @@ class FinancialFact(AStockModel):
     period_start: date | None = None
     period_end: date
     period_type: FinancialPeriodType
+    duration_semantics: FinancialDurationSemantics = FinancialDurationSemantics.REPORTED_PERIOD
     statement_type: FinancialStatementType
     field_code: FinancialFieldCode
     reported_value: Decimal = Field(allow_inf_nan=False)
@@ -162,6 +196,74 @@ class FinancialFact(AStockModel):
             raise ValueError("period_start must not follow period_end")
         if len(self.evidence_ids) != len(set(self.evidence_ids)):
             raise ValueError("evidence_ids must be unique within a fact")
+        if self.statement_type is FinancialStatementType.BALANCE_SHEET and (
+            self.duration_semantics
+            in {
+                FinancialDurationSemantics.STANDALONE_PERIOD,
+                FinancialDurationSemantics.YEAR_TO_DATE,
+            }
+        ):
+            raise ValueError("balance-sheet facts cannot use duration-period semantics")
+        if self.statement_type is not FinancialStatementType.BALANCE_SHEET and (
+            self.duration_semantics is FinancialDurationSemantics.INSTANT
+        ):
+            raise ValueError("duration-statement facts cannot use INSTANT semantics")
+        return self
+
+
+class FinancialSeriesRequest(AStockModel):
+    request_id: str = Field(min_length=1)
+    derivation_type: FinancialDerivationType
+    field_code: FinancialFieldCode
+    period_end: date | None = None
+    shares_field_code: FinancialFieldCode = FinancialFieldCode.SHARES_OUTSTANDING
+
+    @model_validator(mode="after")
+    def validate_series_request(self) -> FinancialSeriesRequest:
+        if (
+            self.derivation_type is FinancialDerivationType.PER_SHARE
+            and self.field_code is FinancialFieldCode.SHARES_OUTSTANDING
+        ):
+            raise ValueError("shares outstanding cannot be divided by itself as a per-share metric")
+        return self
+
+
+class FinancialPeerObservation(AStockModel):
+    observation_id: str = Field(min_length=1)
+    company_id: str = Field(min_length=1)
+    industry_profile: FinancialIndustryProfile
+    metric_id: str = Field(min_length=1)
+    formula_version: str = Field(min_length=1)
+    period_end: date
+    available_at: AwareDatetime
+    value: Decimal = Field(allow_inf_nan=False)
+    unit: FinancialUnit
+    source_snapshot_ids: list[str] = Field(min_length=1)
+    pit_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class FinancialPeerCohort(AStockModel):
+    cohort_id: str = Field(min_length=1)
+    industry_profile: FinancialIndustryProfile
+    metric_id: str = Field(min_length=1)
+    formula_version: str = Field(min_length=1)
+    as_of: AwareDatetime
+    minimum_sample_size: int = Field(default=8, ge=3)
+    observations: list[FinancialPeerObservation] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_cohort(self) -> FinancialPeerCohort:
+        companies = [item.company_id for item in self.observations]
+        if len(companies) != len(set(companies)):
+            raise ValueError("peer cohort company_id values must be unique")
+        for item in self.observations:
+            if item.industry_profile is not self.industry_profile:
+                raise ValueError("peer observation industry must match cohort")
+            if item.metric_id != self.metric_id or item.formula_version != self.formula_version:
+                raise ValueError("peer observation metric identity must match cohort")
+            if item.available_at > self.as_of:
+                raise ValueError("peer observation cannot be available after cohort as_of")
         return self
 
 
@@ -171,6 +273,8 @@ class FinancialAuditRequest(AStockModel):
     industry_profile: FinancialIndustryProfile
     facts: list[FinancialFact] = Field(default_factory=list)
     requested_rule_ids: list[str] = Field(default_factory=list)
+    series_requests: list[FinancialSeriesRequest] = Field(default_factory=list)
+    peer_cohorts: list[FinancialPeerCohort] = Field(default_factory=list)
     formal_historical: bool = True
     allow_approximated_pit: bool = False
 
@@ -186,6 +290,17 @@ class FinancialAuditRequest(AStockModel):
             raise ValueError(f"facts belong to another company: {', '.join(mismatched)}")
         if len(self.requested_rule_ids) != len(set(self.requested_rule_ids)):
             raise ValueError("requested_rule_ids must be unique")
+        series_ids = [item.request_id for item in self.series_requests]
+        if len(series_ids) != len(set(series_ids)):
+            raise ValueError("series request ids must be unique")
+        cohort_ids = [item.cohort_id for item in self.peer_cohorts]
+        if len(cohort_ids) != len(set(cohort_ids)):
+            raise ValueError("peer cohort ids must be unique")
+        for cohort in self.peer_cohorts:
+            if cohort.as_of > self.as_of:
+                raise ValueError("peer cohort cannot use an as_of after the audit")
+            if cohort.industry_profile is not self.industry_profile:
+                raise ValueError("peer cohort industry must match the audited company")
         if self.allow_approximated_pit and not self.formal_historical:
             raise ValueError("allow_approximated_pit only applies to formal historical audits")
         return self
@@ -259,6 +374,7 @@ class VerifiedFinancialNumber(AStockModel):
     period_start: date | None = None
     period_end: date
     period_type: FinancialPeriodType
+    duration_semantics: FinancialDurationSemantics = FinancialDurationSemantics.REPORTED_PERIOD
     value_cny: Decimal
     reporting_quantum_cny: Decimal = Field(gt=0)
     fact_ids: list[str] = Field(min_length=1)
@@ -277,6 +393,40 @@ class RecalculatedFinancialMetric(AStockModel):
     formula_version: str
     input_field_codes: list[FinancialFieldCode]
     input_fact_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+    input_period_ends: list[date] = Field(default_factory=list)
+    component_values: dict[str, Decimal] = Field(default_factory=dict)
+
+
+class FinancialDerivedMetric(AStockModel):
+    derived_metric_id: str
+    request_id: str
+    metric_key: str
+    derivation_type: FinancialDerivationType
+    field_code: FinancialFieldCode
+    period_end: date
+    comparison_period_ends: list[date]
+    value: Decimal = Field(allow_inf_nan=False)
+    unit: FinancialUnit
+    formula: str
+    formula_version: str = "m3.2-series-v1"
+    input_fact_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class FinancialPeerPercentile(AStockModel):
+    percentile_id: str
+    cohort_id: str
+    metric_id: str
+    formula_version: str
+    period_end: date
+    company_value: Decimal = Field(allow_inf_nan=False)
+    unit: FinancialUnit
+    percentile: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    sample_size: int = Field(ge=3)
+    peer_company_ids: list[str] = Field(min_length=3)
+    source_snapshot_ids: list[str] = Field(min_length=1)
+    pit_ids: list[str] = Field(min_length=1)
     evidence_ids: list[str] = Field(min_length=1)
 
 
@@ -376,6 +526,8 @@ class FinancialIntegrityEvidencePack(AStockModel):
     pit_ids: list[str]
     verified_numbers: list[VerifiedFinancialNumber]
     recalculated_metrics: list[RecalculatedFinancialMetric]
+    derived_metrics: list[FinancialDerivedMetric] = Field(default_factory=list)
+    peer_percentiles: list[FinancialPeerPercentile] = Field(default_factory=list)
     rule_findings: list[FinancialRuleFinding]
     time_series_anomalies: list[FinancialAnomaly] = Field(default_factory=list)
     peer_anomalies: list[FinancialAnomaly] = Field(default_factory=list)

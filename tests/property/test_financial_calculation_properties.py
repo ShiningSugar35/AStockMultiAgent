@@ -6,9 +6,11 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from astock.financial_integrity import (
+    altman_z_score,
     balance_identity_difference,
     cash_identity_difference,
     decimal_ratio,
+    midrank_percentile,
 )
 
 decimals = st.decimals(
@@ -68,3 +70,29 @@ def test_ratio_is_invariant_to_common_unit_scale(
     assert decimal_ratio(numerator, denominator) == decimal_ratio(
         numerator * factor, denominator * factor
     )
+
+
+@given(
+    target=decimals,
+    peers=st.lists(decimals, min_size=3, max_size=30),
+)
+def test_midrank_percentile_is_input_order_invariant(
+    target: Decimal, peers: list[Decimal]
+) -> None:
+    assert midrank_percentile(target, peers) == midrank_percentile(target, list(reversed(peers)))
+
+
+@given(scale=st.integers(1, 10000))
+def test_altman_score_is_currency_scale_invariant(scale: int) -> None:
+    values = {
+        "total_assets": Decimal("1000"),
+        "total_liabilities": Decimal("600"),
+        "current_assets": Decimal("500"),
+        "current_liabilities": Decimal("300"),
+        "retained_earnings": Decimal("160"),
+        "ebit": Decimal("120"),
+        "market_cap": Decimal("900"),
+        "revenue": Decimal("1000"),
+    }
+    scaled = {key: value * Decimal(scale) for key, value in values.items()}
+    assert altman_z_score(values)[0] == altman_z_score(scaled)[0]

@@ -9,7 +9,7 @@ from uuid import uuid4
 from astock.core.hashing import canonical_json_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.schemas import FinancialIntegrityEvidencePack, RunStatus
+from astock.schemas import FinancialIntegrityEvidencePack, FinancialPeerCohort, RunStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,3 +234,36 @@ class FinancialIntegrityRepository:
                 (audit_run_id,),
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def register_peer_cohort(
+        self,
+        *,
+        audit_run_id: str,
+        cohort: FinancialPeerCohort,
+        object_hash: str,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        with self.state.transaction() as connection:
+            connection.execute(
+                "INSERT INTO financial_peer_cohort_manifest("
+                "audit_run_id,cohort_id,industry_profile,metric_id,formula_version,as_of,"
+                "minimum_sample_size,sample_count,object_hash,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(audit_run_id,cohort_id) DO UPDATE SET "
+                "industry_profile=excluded.industry_profile,metric_id=excluded.metric_id,"
+                "formula_version=excluded.formula_version,as_of=excluded.as_of,"
+                "minimum_sample_size=excluded.minimum_sample_size,"
+                "sample_count=excluded.sample_count,object_hash=excluded.object_hash",
+                (
+                    audit_run_id,
+                    cohort.cohort_id,
+                    cohort.industry_profile.value,
+                    cohort.metric_id,
+                    cohort.formula_version,
+                    cohort.as_of.isoformat(),
+                    cohort.minimum_sample_size,
+                    len(cohort.observations),
+                    object_hash,
+                    now,
+                ),
+            )

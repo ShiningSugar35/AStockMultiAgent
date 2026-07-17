@@ -21,7 +21,7 @@ def test_knowledge_allowlist_is_exact_and_pending_identities_are_not_guessed() -
     assert mr_dang["identity_status"] == "CONFIRMED"
     assert mr_dang["enabled"] is True
 
-    for display_name in ("黄彦臻", "派大星皮皮", "寒武纪的鳄鱼"):
+    for display_name in ("黄彦臻", "派大星皮皮"):
         source = by_name[display_name]
         assert source["profile_url"] is None
         assert source["platform_user_id"] is None
@@ -34,6 +34,13 @@ def test_knowledge_allowlist_is_exact_and_pending_identities_are_not_guessed() -
         assert scope["content_types"] == ["answers", "thoughts", "articles"]
         assert scope["include_required_comment_pages"] is True
         assert scope["include_nested_replies"] is True
+
+    hanwuji = by_name["寒武纪的鳄鱼"]
+    assert hanwuji["source_id"] == "zhihu:hanwujideeyu"
+    assert hanwuji["identity_status"] == "LOCAL_EXPORT_USER_CONFIRMED_COMPLETE"
+    assert hanwuji["access_status"] == "LOCAL_EXPORT_PARSED_COMPLETE"
+    assert hanwuji["online_collection_required"] is False
+    assert hanwuji["enabled"] is True
 
 
 def test_every_pending_identity_has_an_open_manual_task() -> None:
@@ -67,17 +74,18 @@ def test_private_book_scope_is_formal_but_raw_pdf_remains_git_excluded() -> None
     assert "*.docx" in gitignore
 
 
-def test_private_docx_seed_is_registered_without_claiming_online_coverage() -> None:
+def test_private_docx_is_user_confirmed_complete_without_online_collection() -> None:
     sources = load_yaml("knowledge_sources.yaml")["sources"]
-    source = next(item for item in sources if item["source_id"] == "zhihu:pending:hanwuji-de-eyu")
+    source = next(item for item in sources if item["source_id"] == "zhihu:hanwujideeyu")
     seed = source["local_seed_sources"][0]
     assert seed["source_id"] == "zhihu-export:hanwujideeyu:articles"
     assert seed["source_type"] == "PRIVATE_DOCX_EXPORT"
     assert seed["expected_sha256"] == (
         "197ec18e6fabac4401f6412331e9aa50f919498d4e40cfddb481eeab9788852d"
     )
-    assert seed["online_history_coverage"] == "NOT_ESTABLISHED"
-    assert source["enabled"] is False
+    assert seed["online_history_coverage"] == "USER_CONFIRMED_COMPLETE_EXPORT"
+    assert source["online_collection_required"] is False
+    assert source["enabled"] is True
 
 
 def test_development_plan_names_every_source_and_book_artifact() -> None:

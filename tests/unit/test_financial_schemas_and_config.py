@@ -32,8 +32,8 @@ def test_financial_rule_registry_has_required_audit_metadata() -> None:
         PROJECT_ROOT / "configs" / "financial_industry_profiles.yaml"
     )
     validate_financial_config(rules, profiles)
-    assert rules.registry_version == "financial-rules-m3.1-v1"
-    assert rules.compatible_engine_version == "financial-deterministic-m3.1.0"
+    assert rules.registry_version == "financial-rules-m3.2-v1"
+    assert rules.compatible_engine_version == "financial-deterministic-m3.2.0"
     assert len(rules.rules) == 13
     for rule in rules.rules:
         assert rule.formula_version
@@ -43,6 +43,18 @@ def test_financial_rule_registry_has_required_audit_metadata() -> None:
         assert rule.tests
     bank = next(profile for profile in profiles.profiles if profile.profile_id == "BANK")
     assert {"beneish_m_score", "altman_z_score"}.issubset(bank.excluded_rule_ids)
+    implemented = {
+        rule.rule_id
+        for rule in rules.rules
+        if rule.implementation_status == "IMPLEMENTED_M3_2"
+    }
+    assert implemented == {
+        "beneish_m_score",
+        "altman_z_score",
+        "piotroski_f_score",
+        "sloan_accrual_ratio",
+        "dupont_decomposition",
+    }
 
 
 def test_financial_audit_request_accepts_empty_facts_for_explicit_needs_info() -> None:

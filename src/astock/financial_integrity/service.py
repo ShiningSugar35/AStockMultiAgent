@@ -13,6 +13,15 @@ from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.evidence import EvidenceRepository
+from astock.financial_integrity.advanced_calculations import (
+    altman_z_score,
+    beneish_m_score,
+    dupont_decomposition,
+    midrank_percentile,
+    percentage_change,
+    piotroski_f_score,
+    sloan_accrual_ratio,
+)
 from astock.financial_integrity.calculations import (
     balance_identity_difference,
     cash_identity_difference,
@@ -32,7 +41,10 @@ from astock.schemas import (
     FetchStatus,
     FinancialAuditRequest,
     FinancialCoverageStatus,
+    FinancialDerivationType,
+    FinancialDerivedMetric,
     FinancialDocumentConflict,
+    FinancialDurationSemantics,
     FinancialEvidenceGap,
     FinancialFact,
     FinancialFieldCode,
@@ -42,10 +54,12 @@ from astock.schemas import (
     FinancialIndustryProfileDefinition,
     FinancialIntegrityEvidencePack,
     FinancialManualTask,
+    FinancialPeerPercentile,
     FinancialPeriodType,
     FinancialRiskLevel,
     FinancialRuleDefinition,
     FinancialRuleFinding,
+    FinancialSeriesRequest,
     FinancialSeverity,
     FinancialStatementType,
     FinancialUnit,
@@ -60,6 +74,7 @@ _UNIT_MULTIPLIERS: dict[FinancialUnit, Decimal] = {
     FinancialUnit.TEN_THOUSAND_CNY: Decimal("10000"),
     FinancialUnit.MILLION_CNY: Decimal("1000000"),
     FinancialUnit.HUNDRED_MILLION_CNY: Decimal("100000000"),
+    FinancialUnit.SHARES: Decimal("1"),
 }
 
 _EXPECTED_STATEMENTS: dict[FinancialFieldCode, FinancialStatementType] = {
@@ -78,6 +93,12 @@ _EXPECTED_STATEMENTS: dict[FinancialFieldCode, FinancialStatementType] = {
     FinancialFieldCode.REVENUE: FinancialStatementType.INCOME_STATEMENT,
     FinancialFieldCode.OPERATING_COST: FinancialStatementType.INCOME_STATEMENT,
     FinancialFieldCode.EBIT: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.DEPRECIATION_AMORTIZATION: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.SELLING_GENERAL_ADMIN_EXPENSE: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.PROPERTY_PLANT_EQUIPMENT: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.LONG_TERM_DEBT: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.MARKET_CAP: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.SHARES_OUTSTANDING: FinancialStatementType.BALANCE_SHEET,
     FinancialFieldCode.CASH_BEGINNING: FinancialStatementType.CASH_FLOW_STATEMENT,
     FinancialFieldCode.CASH_ENDING: FinancialStatementType.CASH_FLOW_STATEMENT,
     FinancialFieldCode.NET_CASH_OPERATING: FinancialStatementType.CASH_FLOW_STATEMENT,
@@ -108,6 +129,14 @@ class _ValidationResult:
     conflicts: list[FinancialDocumentConflict]
     safe_snapshot_ids: list[str]
     safe_pit_ids: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _SeriesPoint:
+    period_end: date
+    value: Decimal
+    fact_ids: list[str]
+    evidence_ids: list[str]
 
 
 class _GapCollector:
@@ -157,7 +186,7 @@ class _GapCollector:
 
 
 class FinancialIntegrityService:
-    ENGINE_VERSION = "financial-deterministic-m3.1.0"
+    ENGINE_VERSION = "financial-deterministic-m3.2.0"
 
     def __init__(
         self,
@@ -223,6 +252,22 @@ class FinancialIntegrityService:
                 record.created_at,
             )
             self.repository.checkpoint(audit_run_id, "RULES_EVALUATED")
+            derived_metrics = self._derive_series_metrics(
+                request.series_requests,
+                validation.verified_numbers,
+                gaps,
+                record.created_at,
+            )
+            self.repository.checkpoint(audit_run_id, "SERIES_DERIVED")
+            peer_percentiles = self._evaluate_peer_cohorts(
+                audit_run_id,
+                request,
+                metrics,
+                derived_metrics,
+                gaps,
+                record.created_at,
+            )
+            self.repository.checkpoint(audit_run_id, "PEERS_EVALUATED")
             evidence_gaps = gaps.values()
             status = RunStatus.NEEDS_INFO if evidence_gaps else RunStatus.SUCCEEDED
             pack = FinancialIntegrityEvidencePack(
@@ -241,6 +286,8 @@ class FinancialIntegrityService:
                 pit_ids=validation.safe_pit_ids,
                 verified_numbers=validation.verified_numbers,
                 recalculated_metrics=metrics,
+                derived_metrics=derived_metrics,
+                peer_percentiles=peer_percentiles,
                 rule_findings=findings,
                 time_series_anomalies=[],
                 peer_anomalies=[],
@@ -255,15 +302,18 @@ class FinancialIntegrityService:
                 rule_versions={rule.rule_id: rule.formula_version for rule in selected_rules},
                 model_versions={
                     "deterministic_engine": self.ENGINE_VERSION,
-                    "time_series_models": "DISABLED_UNTIL_M3_2",
-                    "peer_models": "DISABLED_UNTIL_M3_2",
+                    "time_series_models": "M3_2_DECIMAL_SERIES_V1",
+                    "peer_models": "M3_2_MIDRANK_PERCENTILE_V1",
                     "pyod": "DISABLED_UNTIL_M3_3",
                 },
                 capability_status={
                     "deterministic_reconciliation": "AVAILABLE_M3_1",
                     "descriptive_ratios": "AVAILABLE_M3_1_NO_FLAG_THRESHOLDS",
-                    "time_series_anomalies": "DISABLED_UNTIL_M3_2",
-                    "peer_anomalies": "DISABLED_UNTIL_M3_2",
+                    "cross_period_metrics": "AVAILABLE_M3_2_EXPLICIT_REQUEST",
+                    "peer_percentiles": "AVAILABLE_M3_2_VALIDATED_COHORTS",
+                    "financial_scores": "AVAILABLE_M3_2_EXPLICIT_REQUEST",
+                    "time_series_anomalies": "DISABLED_UNTIL_M3_3",
+                    "peer_anomalies": "DISABLED_UNTIL_M3_3",
                     "pyod": "DISABLED_UNTIL_M3_3",
                 },
                 created_at=record.created_at,
@@ -280,6 +330,16 @@ class FinancialIntegrityService:
                     for conflict in validation.conflicts
                     for evidence_id in conflict.evidence_ids
                 }
+                | {
+                    evidence_id
+                    for metric in derived_metrics
+                    for evidence_id in metric.evidence_ids
+                }
+                | {
+                    evidence_id
+                    for percentile in peer_percentiles
+                    for evidence_id in percentile.evidence_ids
+                }
             )
             self.state.register_artifact(
                 artifact_id=f"FinancialIntegrityEvidencePack:{audit_run_id}",
@@ -291,6 +351,16 @@ class FinancialIntegrityService:
                     *validation.safe_snapshot_ids,
                     *validation.safe_pit_ids,
                     *evidence_ids,
+                    *(
+                        snapshot_id
+                        for percentile in peer_percentiles
+                        for snapshot_id in percentile.source_snapshot_ids
+                    ),
+                    *(
+                        pit_id
+                        for percentile in peer_percentiles
+                        for pit_id in percentile.pit_ids
+                    ),
                 ],
             )
             self.repository.checkpoint(audit_run_id, "ARTIFACT_REGISTERED")
@@ -334,6 +404,20 @@ class FinancialIntegrityService:
             "industry_profile": request.industry_profile.value,
             "facts": facts,
             "requested_rule_ids": sorted(request.requested_rule_ids),
+            "series_requests": [
+                item.model_dump(mode="json", exclude={"created_at"})
+                for item in sorted(request.series_requests, key=lambda value: value.request_id)
+            ],
+            "peer_cohorts": [
+                cohort.model_dump(
+                    mode="json",
+                    exclude={
+                        "created_at": True,
+                        "observations": {"__all__": {"created_at"}},
+                    },
+                )
+                for cohort in sorted(request.peer_cohorts, key=lambda value: value.cohort_id)
+            ],
             "formal_historical": request.formal_historical,
             "allow_approximated_pit": request.allow_approximated_pit,
         }
@@ -360,6 +444,20 @@ class FinancialIntegrityService:
                 gaps.add(
                     FinancialGapType.UNIT_MISMATCH,
                     "MONETARY_FIELD_REQUIRES_CNY_UNIT",
+                    period_end=fact.period_end,
+                    field_codes=[fact.field_code],
+                    fact_ids=[fact.fact_id],
+                )
+            if (
+                fact.field_code is FinancialFieldCode.SHARES_OUTSTANDING
+                and fact.unit is not FinancialUnit.SHARES
+            ) or (
+                fact.field_code is not FinancialFieldCode.SHARES_OUTSTANDING
+                and fact.unit is FinancialUnit.SHARES
+            ):
+                gaps.add(
+                    FinancialGapType.UNIT_MISMATCH,
+                    "SHARE_FIELD_REQUIRES_SHARES_AND_MONETARY_FIELDS_REQUIRE_CURRENCY",
                     period_end=fact.period_end,
                     field_codes=[fact.field_code],
                     fact_ids=[fact.fact_id],
@@ -568,7 +666,10 @@ class FinancialIntegrityService:
         conflicts: list[FinancialDocumentConflict] = []
         for key in sorted(grouped, key=lambda item: (item[0], item[1].value, item[2].value)):
             items = grouped[key]
-            signatures = {(item.value_cny, item.fact.period_start) for item in items}
+            signatures = {
+                (item.value_cny, item.fact.period_start, item.fact.duration_semantics)
+                for item in items
+            }
             if len(signatures) > 1:
                 evidence_ids = sorted(
                     {evidence_id for item in items for evidence_id in item.fact.evidence_ids}
@@ -609,6 +710,7 @@ class FinancialIntegrityService:
                     period_start=first.fact.period_start,
                     period_end=first.fact.period_end,
                     period_type=first.fact.period_type,
+                    duration_semantics=first.fact.duration_semantics,
                     value_cny=first.value_cny,
                     reporting_quantum_cny=max(
                         item.reporting_quantum_cny for item in items
@@ -695,7 +797,10 @@ class FinancialIntegrityService:
                     )
                 )
                 continue
-            if rule.implementation_status is not FinancialImplementationStatus.IMPLEMENTED_M3_1:
+            if rule.implementation_status not in {
+                FinancialImplementationStatus.IMPLEMENTED_M3_1,
+                FinancialImplementationStatus.IMPLEMENTED_M3_2,
+            }:
                 gap = gaps.add(
                     FinancialGapType.CAPABILITY_DISABLED,
                     f"{rule.implementation_status.value}_NOT_IMPLEMENTED",
@@ -713,6 +818,19 @@ class FinancialIntegrityService:
                         created_at=created_at,
                     )
                 )
+                continue
+            if rule.implementation_status is FinancialImplementationStatus.IMPLEMENTED_M3_2:
+                metric, finding = self._evaluate_m3_2_rule(
+                    request,
+                    rule,
+                    index,
+                    periods,
+                    gaps,
+                    created_at,
+                )
+                if metric is not None:
+                    metrics.append(metric)
+                findings.append(finding)
                 continue
             evaluation_periods = periods or [(None, None)]
             for period_end, period_type in evaluation_periods:
@@ -756,6 +874,771 @@ class FinancialIntegrityService:
             sorted(metrics, key=lambda metric: metric.metric_id),
             sorted(findings, key=lambda finding: finding.finding_id),
         )
+
+    def _evaluate_m3_2_rule(
+        self,
+        request: FinancialAuditRequest,
+        rule: FinancialRuleDefinition,
+        index: dict[
+            tuple[date, FinancialPeriodType, FinancialFieldCode], VerifiedFinancialNumber
+        ],
+        periods: list[tuple[date, FinancialPeriodType]],
+        gaps: _GapCollector,
+        created_at: datetime,
+    ) -> tuple[RecalculatedFinancialMetric | None, FinancialRuleFinding]:
+        period_type = FinancialPeriodType(str(rule.parameters.get("period_type", "ANNUAL")))
+        eligible = sorted({period_end for period_end, kind in periods if kind is period_type})
+        if len(eligible) < rule.minimum_periods:
+            gap = gaps.add(
+                FinancialGapType.INSUFFICIENT_PERIODS,
+                "ADVANCED_RULE_REQUIRES_MORE_PERIODS",
+                field_codes=rule.required_fields,
+                rule_ids=[rule.rule_id],
+            )
+            return None, self._finding(
+                rule,
+                eligible[-1] if eligible else None,
+                FinancialFindingStatus.INSUFFICIENT_DATA,
+                FinancialSeverity.INFO,
+                "ADVANCED_RULE_PERIOD_HISTORY_INSUFFICIENT",
+                evidence_gap_ids=[gap.gap_id],
+                created_at=created_at,
+            )
+        selected_periods = eligible[-rule.minimum_periods :]
+        if len(selected_periods) > 1 and not self._periods_are_contiguous(
+            selected_periods, period_type
+        ):
+            gap = gaps.add(
+                FinancialGapType.NON_CONTIGUOUS_PERIODS,
+                "ADVANCED_RULE_PERIODS_ARE_NOT_CONTIGUOUS",
+                period_end=selected_periods[-1],
+                field_codes=rule.required_fields,
+                rule_ids=[rule.rule_id],
+            )
+            return None, self._finding(
+                rule,
+                selected_periods[-1],
+                FinancialFindingStatus.INSUFFICIENT_DATA,
+                FinancialSeverity.INFO,
+                "ADVANCED_RULE_PERIOD_HISTORY_NON_CONTIGUOUS",
+                evidence_gap_ids=[gap.gap_id],
+                created_at=created_at,
+            )
+
+        by_period: dict[date, dict[FinancialFieldCode, VerifiedFinancialNumber]] = {}
+        missing: list[FinancialFieldCode] = []
+        for period_end in selected_periods:
+            values = {
+                field: index[(period_end, period_type, field)]
+                for field in rule.required_fields
+                if (period_end, period_type, field) in index
+            }
+            by_period[period_end] = values
+            missing.extend(field for field in rule.required_fields if field not in values)
+        if missing:
+            gap = gaps.add(
+                FinancialGapType.MISSING_FACT,
+                "ADVANCED_RULE_REQUIRED_FIELDS_UNAVAILABLE",
+                period_end=selected_periods[-1],
+                field_codes=sorted(set(missing), key=lambda item: item.value),
+                rule_ids=[rule.rule_id],
+            )
+            return None, self._finding(
+                rule,
+                selected_periods[-1],
+                FinancialFindingStatus.INSUFFICIENT_DATA,
+                FinancialSeverity.INFO,
+                "ADVANCED_RULE_REQUIRED_FIELDS_MISSING",
+                evidence_gap_ids=[gap.gap_id],
+                created_at=created_at,
+            )
+
+        current_numbers = by_period[selected_periods[-1]]
+        prior_numbers = (
+            by_period[selected_periods[-2]] if len(selected_periods) > 1 else current_numbers
+        )
+        current = self._advanced_value_map(current_numbers)
+        prior = self._advanced_value_map(prior_numbers)
+        evidence_ids = sorted(
+            {
+                evidence_id
+                for values in by_period.values()
+                for number in values.values()
+                for evidence_id in number.evidence_ids
+            }
+        )
+        fact_ids = sorted(
+            {
+                fact_id
+                for values in by_period.values()
+                for number in values.values()
+                for fact_id in number.fact_ids
+            }
+        )
+        try:
+            if rule.calculator_id == "beneish_m_score":
+                actual, components = beneish_m_score(current, prior)
+                formula = "BENEISH_M_SCORE_8_VARIABLE"
+                unit = FinancialUnit.SCORE
+            elif rule.calculator_id == "altman_z_score":
+                actual, components = altman_z_score(current)
+                formula = "ALTMAN_Z_SCORE_PUBLIC_MANUFACTURING_5_FACTOR"
+                unit = FinancialUnit.SCORE
+            elif rule.calculator_id == "piotroski_f_score":
+                actual, components = piotroski_f_score(current, prior)
+                formula = "PIOTROSKI_F_SCORE_9_SIGNAL"
+                unit = FinancialUnit.SCORE
+            elif rule.calculator_id == "sloan_accrual_ratio":
+                actual, components = sloan_accrual_ratio(current, prior)
+                formula = "(NET_PROFIT-CFO)/AVERAGE_TOTAL_ASSETS"
+                unit = FinancialUnit.RATIO
+            elif rule.calculator_id == "dupont_decomposition":
+                actual, components = dupont_decomposition(current, prior)
+                formula = "NET_MARGIN*ASSET_TURNOVER*EQUITY_MULTIPLIER"
+                unit = FinancialUnit.RATIO
+            else:
+                raise ValueError(f"unsupported M3.2 calculator: {rule.calculator_id}")
+        except ZeroDivisionError:
+            return None, self._finding(
+                rule,
+                selected_periods[-1],
+                FinancialFindingStatus.INSUFFICIENT_DATA,
+                FinancialSeverity.INFO,
+                "ADVANCED_RULE_NOT_CALCULATED_ZERO_DENOMINATOR",
+                evidence_ids=evidence_ids,
+                created_at=created_at,
+            )
+
+        metric = self._metric(
+            rule,
+            selected_periods[-1],
+            actual,
+            unit,
+            formula,
+            fact_ids,
+            evidence_ids,
+            created_at,
+            input_period_ends=selected_periods,
+            component_values=components,
+        )
+        calculation_only = {
+            str(value) for value in rule.parameters.get("calculation_only_industries", [])
+        }
+        if (
+            rule.output_type.value == "METRIC_ONLY"
+            or request.industry_profile.value in calculation_only
+        ):
+            return metric, self._finding(
+                rule,
+                selected_periods[-1],
+                FinancialFindingStatus.CALCULATED,
+                FinancialSeverity.INFO,
+                "ADVANCED_SCORE_CALCULATED_WITHOUT_INDUSTRY_FLAG_THRESHOLD",
+                actual_value=actual,
+                unit=unit,
+                evidence_ids=evidence_ids,
+                created_at=created_at,
+            )
+
+        thresholds = rule.parameters.get("thresholds", {})
+        if not isinstance(thresholds, dict) or request.industry_profile.value not in thresholds:
+            return metric, self._finding(
+                rule,
+                selected_periods[-1],
+                FinancialFindingStatus.CALCULATED,
+                FinancialSeverity.INFO,
+                "ADVANCED_SCORE_CALCULATED_WITHOUT_INDUSTRY_FLAG_THRESHOLD",
+                actual_value=actual,
+                unit=unit,
+                evidence_ids=evidence_ids,
+                created_at=created_at,
+            )
+        threshold = Decimal(str(thresholds[request.industry_profile.value]))
+        direction = str(rule.parameters.get("flag_direction", "HIGH"))
+        flagged = (
+            actual > threshold
+            if direction == "HIGH"
+            else actual < threshold
+            if direction == "LOW"
+            else abs(actual) > threshold
+            if direction == "ABS_HIGH"
+            else False
+        )
+        if direction not in {"HIGH", "LOW", "ABS_HIGH"}:
+            raise ValueError(f"unknown M3.2 threshold direction: {direction}")
+        return metric, self._finding(
+            rule,
+            selected_periods[-1],
+            FinancialFindingStatus.FLAG if flagged else FinancialFindingStatus.PASS,
+            rule.severity if flagged else FinancialSeverity.INFO,
+            "ADVANCED_SCORE_THRESHOLD_FLAG" if flagged else "ADVANCED_SCORE_THRESHOLD_PASS",
+            actual_value=actual,
+            threshold_value=threshold,
+            unit=unit,
+            evidence_ids=evidence_ids,
+            created_at=created_at,
+        )
+
+    @staticmethod
+    def _advanced_value_map(
+        values: dict[FinancialFieldCode, VerifiedFinancialNumber],
+    ) -> dict[str, Decimal]:
+        aliases = {
+            "total_assets": FinancialFieldCode.TOTAL_ASSETS,
+            "total_liabilities": FinancialFieldCode.TOTAL_LIABILITIES,
+            "total_equity": FinancialFieldCode.TOTAL_EQUITY,
+            "current_assets": FinancialFieldCode.CURRENT_ASSETS,
+            "current_liabilities": FinancialFieldCode.CURRENT_LIABILITIES,
+            "retained_earnings": FinancialFieldCode.RETAINED_EARNINGS,
+            "ebit": FinancialFieldCode.EBIT,
+            "revenue": FinancialFieldCode.REVENUE,
+            "operating_cost": FinancialFieldCode.OPERATING_COST,
+            "accounts_receivable": FinancialFieldCode.ACCOUNTS_RECEIVABLE,
+            "ppe": FinancialFieldCode.PROPERTY_PLANT_EQUIPMENT,
+            "depreciation": FinancialFieldCode.DEPRECIATION_AMORTIZATION,
+            "sga": FinancialFieldCode.SELLING_GENERAL_ADMIN_EXPENSE,
+            "net_profit": FinancialFieldCode.NET_PROFIT_INCOME,
+            "cfo": FinancialFieldCode.NET_CASH_OPERATING,
+            "long_term_debt": FinancialFieldCode.LONG_TERM_DEBT,
+            "market_cap": FinancialFieldCode.MARKET_CAP,
+            "shares_outstanding": FinancialFieldCode.SHARES_OUTSTANDING,
+        }
+        return {
+            alias: values[field].value_cny for alias, field in aliases.items() if field in values
+        }
+
+    def _derive_series_metrics(
+        self,
+        requests: list[FinancialSeriesRequest],
+        verified: list[VerifiedFinancialNumber],
+        gaps: _GapCollector,
+        created_at: datetime,
+    ) -> list[FinancialDerivedMetric]:
+        output: list[FinancialDerivedMetric] = []
+        for request in sorted(requests, key=lambda item: item.request_id):
+            metric = self._derive_one_series_metric(request, verified, gaps, created_at)
+            if metric is not None:
+                output.append(metric)
+        return sorted(output, key=lambda item: item.derived_metric_id)
+
+    def _derive_one_series_metric(
+        self,
+        request: FinancialSeriesRequest,
+        verified: list[VerifiedFinancialNumber],
+        gaps: _GapCollector,
+        created_at: datetime,
+    ) -> FinancialDerivedMetric | None:
+        numbers = sorted(
+            [number for number in verified if number.field_code is request.field_code],
+            key=lambda item: (item.period_end, item.period_type.value),
+        )
+        if not numbers:
+            gaps.add(
+                FinancialGapType.MISSING_FACT,
+                "SERIES_FIELD_UNAVAILABLE",
+                period_end=request.period_end,
+                field_codes=[request.field_code],
+            )
+            return None
+        if request.derivation_type is FinancialDerivationType.PER_SHARE:
+            target = self._select_number(numbers, request.period_end)
+            if target is None:
+                gaps.add(
+                    FinancialGapType.MISSING_FACT,
+                    "SERIES_TARGET_PERIOD_UNAVAILABLE",
+                    period_end=request.period_end,
+                    field_codes=[request.field_code],
+                )
+                return None
+            shares = next(
+                (
+                    number
+                    for number in verified
+                    if number.field_code is request.shares_field_code
+                    and number.period_end == target.period_end
+                    and number.period_type is target.period_type
+                ),
+                None,
+            )
+            if shares is None:
+                gaps.add(
+                    FinancialGapType.MISSING_FACT,
+                    "PER_SHARE_DENOMINATOR_UNAVAILABLE",
+                    period_end=target.period_end,
+                    field_codes=[request.shares_field_code],
+                )
+                return None
+            if shares.value_cny == 0:
+                gaps.add(
+                    FinancialGapType.MODEL_INPUT_INVALID,
+                    "PER_SHARE_DENOMINATOR_IS_ZERO",
+                    period_end=target.period_end,
+                    field_codes=[request.shares_field_code],
+                    fact_ids=shares.fact_ids,
+                    safe_evidence_ids=shares.evidence_ids,
+                )
+                return None
+            value = decimal_ratio(target.value_cny, shares.value_cny)
+            points = [
+                _SeriesPoint(
+                    target.period_end,
+                    target.value_cny,
+                    target.fact_ids,
+                    target.evidence_ids,
+                ),
+                _SeriesPoint(
+                    shares.period_end,
+                    shares.value_cny,
+                    shares.fact_ids,
+                    shares.evidence_ids,
+                ),
+            ]
+            formula = f"{request.field_code.value}/{request.shares_field_code.value}"
+            unit = FinancialUnit.CNY_PER_SHARE
+            period_end = target.period_end
+        elif request.derivation_type is FinancialDerivationType.YEAR_OVER_YEAR:
+            target_number = self._select_number(numbers, request.period_end)
+            if target_number is None:
+                gaps.add(
+                    FinancialGapType.MISSING_FACT,
+                    "SERIES_TARGET_PERIOD_UNAVAILABLE",
+                    period_end=request.period_end,
+                    field_codes=[request.field_code],
+                )
+                return None
+            if target_number.period_type is FinancialPeriodType.QUARTERLY:
+                quarter_points = self._quarter_series_points(numbers, request, gaps)
+                point_by_date = {point.period_end: point for point in quarter_points}
+                current = point_by_date.get(target_number.period_end)
+                comparison = point_by_date.get(
+                    target_number.period_end.replace(year=target_number.period_end.year - 1)
+                )
+            else:
+                current = self._point_from_number(target_number)
+                comparison_number = next(
+                    (
+                        number
+                        for number in numbers
+                        if number.period_type is target_number.period_type
+                        and number.period_end
+                        == target_number.period_end.replace(
+                            year=target_number.period_end.year - 1
+                        )
+                    ),
+                    None,
+                )
+                comparison = (
+                    self._point_from_number(comparison_number)
+                    if comparison_number is not None
+                    else None
+                )
+            if current is None or comparison is None:
+                gaps.add(
+                    FinancialGapType.INSUFFICIENT_PERIODS,
+                    "YEAR_OVER_YEAR_COMPARISON_UNAVAILABLE",
+                    period_end=target_number.period_end,
+                    field_codes=[request.field_code],
+                )
+                return None
+            try:
+                value = percentage_change(current.value, comparison.value)
+            except ZeroDivisionError:
+                return None
+            points = [current, comparison]
+            formula = "(CURRENT-PRIOR_YEAR_COMPARABLE)/ABS(PRIOR_YEAR_COMPARABLE)"
+            unit = FinancialUnit.RATIO
+            period_end = current.period_end
+        else:
+            quarter_points = self._quarter_series_points(numbers, request, gaps)
+            if not quarter_points:
+                return None
+            by_date = {point.period_end: point for point in quarter_points}
+            target_date = request.period_end or quarter_points[-1].period_end
+            current = by_date.get(target_date)
+            if current is None:
+                gaps.add(
+                    FinancialGapType.MISSING_FACT,
+                    "SERIES_TARGET_QUARTER_UNAVAILABLE",
+                    period_end=target_date,
+                    field_codes=[request.field_code],
+                )
+                return None
+            if request.derivation_type is FinancialDerivationType.QUARTER_OVER_QUARTER:
+                previous_date = self._previous_quarter_end(target_date)
+                comparison = by_date.get(previous_date) if previous_date is not None else None
+                if comparison is None:
+                    gaps.add(
+                        FinancialGapType.INSUFFICIENT_PERIODS,
+                        "QUARTER_OVER_QUARTER_COMPARISON_UNAVAILABLE",
+                        period_end=target_date,
+                        field_codes=[request.field_code],
+                    )
+                    return None
+                try:
+                    value = percentage_change(current.value, comparison.value)
+                except ZeroDivisionError:
+                    return None
+                points = [current, comparison]
+                formula = "(CURRENT_QUARTER-PRIOR_QUARTER)/ABS(PRIOR_QUARTER)"
+                unit = FinancialUnit.RATIO
+                period_end = target_date
+            elif request.derivation_type is FinancialDerivationType.TTM:
+                points = [current]
+                cursor = target_date
+                for _ in range(3):
+                    previous_date = self._previous_quarter_end(cursor)
+                    if previous_date is None or previous_date not in by_date:
+                        gaps.add(
+                            FinancialGapType.INSUFFICIENT_PERIODS,
+                            "TTM_REQUIRES_FOUR_CONTIGUOUS_QUARTERS",
+                            period_end=target_date,
+                            field_codes=[request.field_code],
+                        )
+                        return None
+                    points.append(by_date[previous_date])
+                    cursor = previous_date
+                value = sum((point.value for point in points), Decimal(0))
+                formula = "SUM(LATEST_FOUR_STANDALONE_QUARTERS)"
+                unit = FinancialUnit.CNY
+                period_end = target_date
+            else:  # pragma: no cover - exhaustive enum handling
+                raise ValueError(f"unsupported series derivation: {request.derivation_type}")
+
+        fact_ids = sorted({fact_id for point in points for fact_id in point.fact_ids})
+        evidence_ids = sorted(
+            {evidence_id for point in points for evidence_id in point.evidence_ids}
+        )
+        identity = {
+            "request_id": request.request_id,
+            "derivation_type": request.derivation_type.value,
+            "field_code": request.field_code.value,
+            "period_end": period_end,
+            "value": value,
+            "fact_ids": fact_ids,
+        }
+        return FinancialDerivedMetric(
+            derived_metric_id=(
+                f"financial-derived:{sha256_bytes(canonical_json_bytes(identity))}"
+            ),
+            request_id=request.request_id,
+            metric_key=f"{request.derivation_type.value}:{request.field_code.value}",
+            derivation_type=request.derivation_type,
+            field_code=request.field_code,
+            period_end=period_end,
+            comparison_period_ends=sorted({point.period_end for point in points}),
+            value=value,
+            unit=unit,
+            formula=formula,
+            input_fact_ids=fact_ids,
+            evidence_ids=evidence_ids,
+            created_at=created_at,
+        )
+
+    def _quarter_series_points(
+        self,
+        numbers: list[VerifiedFinancialNumber],
+        request: FinancialSeriesRequest,
+        gaps: _GapCollector,
+    ) -> list[_SeriesPoint]:
+        quarterly = {
+            number.period_end: number
+            for number in numbers
+            if number.period_type is FinancialPeriodType.QUARTERLY
+        }
+        output: list[_SeriesPoint] = []
+        for period_end, number in sorted(quarterly.items()):
+            if number.statement_type is FinancialStatementType.BALANCE_SHEET:
+                output.append(self._point_from_number(number))
+                continue
+            if number.duration_semantics is FinancialDurationSemantics.STANDALONE_PERIOD:
+                output.append(self._point_from_number(number))
+                continue
+            if number.duration_semantics is FinancialDurationSemantics.YEAR_TO_DATE:
+                if period_end.month == 3:
+                    output.append(self._point_from_number(number))
+                    continue
+                previous_date = self._previous_quarter_end(period_end)
+                previous = quarterly.get(previous_date) if previous_date is not None else None
+                if (
+                    previous is None
+                    or previous.period_end.year != period_end.year
+                    or previous.duration_semantics is not FinancialDurationSemantics.YEAR_TO_DATE
+                ):
+                    gaps.add(
+                        FinancialGapType.INSUFFICIENT_PERIODS,
+                        "YEAR_TO_DATE_QUARTER_REQUIRES_PRIOR_CUMULATIVE_PERIOD",
+                        period_end=period_end,
+                        field_codes=[request.field_code],
+                    )
+                    continue
+                output.append(
+                    _SeriesPoint(
+                        period_end=period_end,
+                        value=number.value_cny - previous.value_cny,
+                        fact_ids=sorted(set(number.fact_ids + previous.fact_ids)),
+                        evidence_ids=sorted(
+                            set(number.evidence_ids + previous.evidence_ids)
+                        ),
+                    )
+                )
+                continue
+            gaps.add(
+                FinancialGapType.AMBIGUOUS_PERIOD_SEMANTICS,
+                "QUARTERLY_DURATION_VALUE_REQUIRES_EXPLICIT_SEMANTICS",
+                period_end=period_end,
+                field_codes=[request.field_code],
+                fact_ids=number.fact_ids,
+                safe_evidence_ids=number.evidence_ids,
+            )
+        return sorted(output, key=lambda point: point.period_end)
+
+    @staticmethod
+    def _point_from_number(number: VerifiedFinancialNumber) -> _SeriesPoint:
+        return _SeriesPoint(
+            period_end=number.period_end,
+            value=number.value_cny,
+            fact_ids=number.fact_ids,
+            evidence_ids=number.evidence_ids,
+        )
+
+    @staticmethod
+    def _select_number(
+        numbers: list[VerifiedFinancialNumber], target: date | None
+    ) -> VerifiedFinancialNumber | None:
+        if target is not None:
+            candidates = [number for number in numbers if number.period_end == target]
+        else:
+            candidates = numbers
+        if not candidates:
+            return None
+        preference = {
+            FinancialPeriodType.ANNUAL: 2,
+            FinancialPeriodType.SEMIANNUAL: 1,
+            FinancialPeriodType.QUARTERLY: 0,
+        }
+        return max(candidates, key=lambda item: (item.period_end, preference[item.period_type]))
+
+    @staticmethod
+    def _previous_quarter_end(value: date) -> date | None:
+        mapping = {
+            (3, 31): date(value.year - 1, 12, 31),
+            (6, 30): date(value.year, 3, 31),
+            (9, 30): date(value.year, 6, 30),
+            (12, 31): date(value.year, 9, 30),
+        }
+        return mapping.get((value.month, value.day))
+
+    @classmethod
+    def _periods_are_contiguous(
+        cls, periods: list[date], period_type: FinancialPeriodType
+    ) -> bool:
+        if len(periods) < 2:
+            return True
+        if period_type is FinancialPeriodType.ANNUAL:
+            return all(
+                current.year == previous.year + 1
+                for previous, current in zip(periods[:-1], periods[1:], strict=True)
+            )
+        if period_type is FinancialPeriodType.QUARTERLY:
+            return all(
+                cls._previous_quarter_end(current) == previous
+                for previous, current in zip(periods[:-1], periods[1:], strict=True)
+            )
+        return all(
+            current.year == previous.year + 1
+            for previous, current in zip(periods[:-1], periods[1:], strict=True)
+        )
+
+    def _evaluate_peer_cohorts(
+        self,
+        audit_run_id: str,
+        request: FinancialAuditRequest,
+        metrics: list[RecalculatedFinancialMetric],
+        derived: list[FinancialDerivedMetric],
+        gaps: _GapCollector,
+        created_at: datetime,
+    ) -> list[FinancialPeerPercentile]:
+        metric_index: dict[
+            str, tuple[date, Decimal, FinancialUnit, str, list[str]]
+        ] = {}
+        for metric in metrics:
+            candidate = (
+                metric.period_end,
+                metric.value,
+                metric.unit,
+                metric.formula_version,
+                metric.evidence_ids,
+            )
+            if metric.rule_id not in metric_index or candidate[0] > metric_index[metric.rule_id][0]:
+                metric_index[metric.rule_id] = candidate
+        for metric in derived:
+            candidate = (
+                metric.period_end,
+                metric.value,
+                metric.unit,
+                metric.formula_version,
+                metric.evidence_ids,
+            )
+            if (
+                metric.metric_key not in metric_index
+                or candidate[0] > metric_index[metric.metric_key][0]
+            ):
+                metric_index[metric.metric_key] = candidate
+
+        output: list[FinancialPeerPercentile] = []
+        for cohort in sorted(request.peer_cohorts, key=lambda item: item.cohort_id):
+            subject = metric_index.get(cohort.metric_id)
+            if subject is None:
+                gaps.add(
+                    FinancialGapType.MISSING_FACT,
+                    "PEER_COHORT_SUBJECT_METRIC_UNAVAILABLE",
+                    rule_ids=[cohort.metric_id],
+                )
+                continue
+            period_end, company_value, unit, formula_version, subject_evidence = subject
+            if formula_version != cohort.formula_version:
+                gaps.add(
+                    FinancialGapType.PEER_COHORT_MISMATCH,
+                    "PEER_COHORT_FORMULA_VERSION_MISMATCH",
+                    period_end=period_end,
+                    rule_ids=[cohort.metric_id],
+                    safe_evidence_ids=subject_evidence,
+                )
+                continue
+            usable = []
+            lineage_failed = False
+            for observation in cohort.observations:
+                if observation.unit is not unit or observation.period_end != period_end:
+                    lineage_failed = True
+                    continue
+                if not self._peer_observation_is_usable(request, observation):
+                    lineage_failed = True
+                    continue
+                usable.append(observation)
+            if lineage_failed:
+                gaps.add(
+                    FinancialGapType.PEER_LINEAGE_INVALID,
+                    "PEER_COHORT_CONTAINS_UNUSABLE_OBSERVATIONS",
+                    period_end=period_end,
+                    rule_ids=[cohort.metric_id],
+                    safe_evidence_ids=subject_evidence,
+                )
+                continue
+            if len(usable) < cohort.minimum_sample_size:
+                gaps.add(
+                    FinancialGapType.INSUFFICIENT_PEER_SAMPLE,
+                    "PEER_COHORT_BELOW_MINIMUM_SAMPLE_SIZE",
+                    period_end=period_end,
+                    rule_ids=[cohort.metric_id],
+                    safe_evidence_ids=subject_evidence,
+                )
+                continue
+            percentile = midrank_percentile(
+                company_value, [observation.value for observation in usable]
+            )
+            source_snapshot_ids = sorted(
+                {
+                    snapshot_id
+                    for observation in usable
+                    for snapshot_id in observation.source_snapshot_ids
+                }
+            )
+            pit_ids = sorted(
+                {pit_id for observation in usable for pit_id in observation.pit_ids}
+            )
+            evidence_ids = sorted(
+                set(subject_evidence)
+                | {
+                    evidence_id
+                    for observation in usable
+                    for evidence_id in observation.evidence_ids
+                }
+            )
+            identity = {
+                "cohort_id": cohort.cohort_id,
+                "company_id": request.company_id,
+                "metric_id": cohort.metric_id,
+                "period_end": period_end,
+                "value": company_value,
+                "peers": sorted(observation.observation_id for observation in usable),
+            }
+            output.append(
+                FinancialPeerPercentile(
+                    percentile_id=(
+                        f"financial-peer-percentile:"
+                        f"{sha256_bytes(canonical_json_bytes(identity))}"
+                    ),
+                    cohort_id=cohort.cohort_id,
+                    metric_id=cohort.metric_id,
+                    formula_version=cohort.formula_version,
+                    period_end=period_end,
+                    company_value=company_value,
+                    unit=unit,
+                    percentile=percentile,
+                    sample_size=len(usable),
+                    peer_company_ids=sorted(observation.company_id for observation in usable),
+                    source_snapshot_ids=source_snapshot_ids,
+                    pit_ids=pit_ids,
+                    evidence_ids=evidence_ids,
+                    created_at=created_at,
+                )
+            )
+            cohort_object = self.object_store.put_json(
+                cohort.model_dump(
+                    mode="json",
+                    exclude={
+                        "created_at": True,
+                        "observations": {"__all__": {"created_at"}},
+                    },
+                )
+            )
+            self.repository.register_peer_cohort(
+                audit_run_id=audit_run_id,
+                cohort=cohort,
+                object_hash=cohort_object.sha256,
+            )
+        return sorted(output, key=lambda item: item.percentile_id)
+
+    def _peer_observation_is_usable(self, request: FinancialAuditRequest, observation: Any) -> bool:
+        if observation.available_at > request.as_of:
+            return False
+        for snapshot_id in observation.source_snapshot_ids:
+            row = self._snapshot_row(snapshot_id)
+            if row is None:
+                return False
+            if datetime.fromisoformat(str(row["availability_at"])) > request.as_of:
+                return False
+            if str(row["fetch_status"]) != FetchStatus.SUCCEEDED.value:
+                return False
+            if not self.object_store.verify(str(row["object_hash"])):
+                return False
+        for pit_id in observation.pit_ids:
+            pit = self.pit_repository.get(pit_id)
+            if pit is None:
+                return False
+            try:
+                PointInTimeService.assert_usable(
+                    pit,
+                    request.as_of,
+                    formal_historical=request.formal_historical,
+                    allow_approximated=request.allow_approximated_pit,
+                )
+            except ValueError:
+                return False
+        accepted_entities = {observation.company_id, f"company:{observation.company_id}"}
+        for evidence_id in observation.evidence_ids:
+            evidence = self.evidence_repository.get_evidence(evidence_id)
+            if evidence is None:
+                return False
+            if evidence.evidence_grade is not EvidenceGrade.PRIMARY_OFFICIAL:
+                return False
+            if evidence.fact_status is not FactStatus.DIRECT:
+                return False
+            if not accepted_entities.intersection(evidence.entity_ids):
+                return False
+            if evidence.snapshot_id not in observation.source_snapshot_ids:
+                return False
+        return True
 
     def _calculate_rule(
         self,
@@ -874,6 +1757,9 @@ class FinancialIntegrityService:
         fact_ids: list[str],
         evidence_ids: list[str],
         created_at: datetime,
+        *,
+        input_period_ends: list[date] | None = None,
+        component_values: dict[str, Decimal] | None = None,
     ) -> RecalculatedFinancialMetric:
         identity = {
             "rule_id": rule.rule_id,
@@ -893,6 +1779,8 @@ class FinancialIntegrityService:
             input_field_codes=rule.required_fields,
             input_fact_ids=fact_ids,
             evidence_ids=evidence_ids,
+            input_period_ends=sorted(set(input_period_ends or [period_end])),
+            component_values=component_values or {},
             created_at=created_at,
         )
 

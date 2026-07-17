@@ -1,6 +1,6 @@
 schema_version: "1.0"
-registry_version: "financial-rules-m3.1-v1"
-compatible_engine_version: "financial-deterministic-m3.1.0"
+registry_version: "financial-rules-m3.2-v1"
+compatible_engine_version: "financial-deterministic-m3.2.0"
 rules:
   - rule_id: balance_sheet_identity
     formula_version: "1.0.0"
@@ -160,91 +160,109 @@ rules:
     default_enabled: true
 
   - rule_id: beneish_m_score
-    formula_version: "planned-1.0.0"
+    formula_version: "2.0.0"
     source_reference: BENEISH_M_SCORE_METHOD
     applicable_industries: [GENERAL_INDUSTRIAL, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: [BANK, INSURANCE]
-    required_fields: [TOTAL_ASSETS, REVENUE, ACCOUNTS_RECEIVABLE]
+    required_fields: [TOTAL_ASSETS, TOTAL_LIABILITIES, CURRENT_ASSETS, REVENUE, OPERATING_COST, ACCOUNTS_RECEIVABLE, PROPERTY_PLANT_EQUIPMENT, DEPRECIATION_AMORTIZATION, SELLING_GENERAL_ADMIN_EXPENSE, NET_PROFIT_INCOME, NET_CASH_OPERATING]
     minimum_periods: 2
-    threshold_source: DEFERRED_TO_M3_2_CALIBRATION
-    calibration_status: DEFERRED
+    threshold_source: BENEISH_1999_GENERAL_INDUSTRIAL_THRESHOLD_WITH_EXPLICIT_INDUSTRY_GATES
+    calibration_status: DETERMINISTIC
     false_positive_modes: [HIGH_GROWTH, ACQUISITIONS, INDUSTRY_ACCOUNTING]
     severity: MEDIUM
     output_type: SCORE
-    tests: [test_bank_excludes_beneish, test_deferred_rule_is_explicit]
-    calculator_id: deferred
-    parameters: {}
-    implementation_status: DEFERRED_M3_2
+    tests: [test_bank_excludes_beneish, test_beneish_golden, test_beneish_requires_two_periods]
+    calculator_id: beneish_m_score
+    parameters:
+      period_type: ANNUAL
+      thresholds: {GENERAL_INDUSTRIAL: "-1.78"}
+      calculation_only_industries: [SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+      flag_direction: HIGH
+    implementation_status: IMPLEMENTED_M3_2
     default_enabled: false
 
   - rule_id: altman_z_score
-    formula_version: "planned-1.0.0"
+    formula_version: "2.0.0"
     source_reference: ALTMAN_Z_SCORE_METHOD
     applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: [BANK, INSURANCE, SECURITIES]
-    required_fields: [TOTAL_ASSETS, TOTAL_LIABILITIES, CURRENT_ASSETS, CURRENT_LIABILITIES, RETAINED_EARNINGS, EBIT, REVENUE]
+    required_fields: [TOTAL_ASSETS, TOTAL_LIABILITIES, CURRENT_ASSETS, CURRENT_LIABILITIES, RETAINED_EARNINGS, EBIT, REVENUE, MARKET_CAP]
     minimum_periods: 1
-    threshold_source: DEFERRED_TO_M3_2_INDUSTRY_CALIBRATION
-    calibration_status: DEFERRED
+    threshold_source: ALTMAN_PUBLIC_MANUFACTURING_DISTRESS_THRESHOLD_WITH_EXPLICIT_INDUSTRY_GATES
+    calibration_status: DETERMINISTIC
     false_positive_modes: [FINANCIAL_INSTITUTIONS, ASSET_LIGHT_MODELS, MARKET_VALUE_UNAVAILABLE]
     severity: MEDIUM
     output_type: SCORE
-    tests: [test_bank_excludes_altman, test_deferred_rule_is_explicit]
-    calculator_id: deferred
-    parameters: {}
-    implementation_status: DEFERRED_M3_2
+    tests: [test_bank_excludes_altman, test_altman_golden, test_altman_missing_market_cap]
+    calculator_id: altman_z_score
+    parameters:
+      period_type: ANNUAL
+      thresholds: {GENERAL_INDUSTRIAL: "1.81"}
+      calculation_only_industries: [REAL_ESTATE, EARLY_BIOTECH, OTHER]
+      flag_direction: LOW
+    implementation_status: IMPLEMENTED_M3_2
     default_enabled: false
 
   - rule_id: piotroski_f_score
-    formula_version: "planned-1.0.0"
+    formula_version: "2.0.0"
     source_reference: PIOTROSKI_F_SCORE_METHOD
     applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: [BANK, INSURANCE, SECURITIES]
-    required_fields: [TOTAL_ASSETS, NET_PROFIT_INCOME, NET_CASH_OPERATING, TOTAL_DEBT, CURRENT_ASSETS, CURRENT_LIABILITIES, REVENUE]
+    required_fields: [TOTAL_ASSETS, NET_PROFIT_INCOME, NET_CASH_OPERATING, LONG_TERM_DEBT, CURRENT_ASSETS, CURRENT_LIABILITIES, REVENUE, OPERATING_COST, SHARES_OUTSTANDING]
     minimum_periods: 2
-    threshold_source: DEFERRED_TO_M3_2_CALIBRATION
-    calibration_status: DEFERRED
+    threshold_source: PIOTROSKI_LOW_SCORE_RESEARCH_SCREEN_WITH_EXPLICIT_INDUSTRY_GATES
+    calibration_status: DETERMINISTIC
     false_positive_modes: [FINANCIAL_INSTITUTIONS, CORPORATE_ACTIONS, ACCOUNTING_POLICY_CHANGE]
     severity: LOW
     output_type: SCORE
-    tests: [test_deferred_rule_is_explicit]
-    calculator_id: deferred
-    parameters: {}
-    implementation_status: DEFERRED_M3_2
+    tests: [test_piotroski_golden, test_piotroski_requires_two_periods]
+    calculator_id: piotroski_f_score
+    parameters:
+      period_type: ANNUAL
+      thresholds: {GENERAL_INDUSTRIAL: "3"}
+      calculation_only_industries: [REAL_ESTATE, EARLY_BIOTECH, OTHER]
+      flag_direction: LOW
+    implementation_status: IMPLEMENTED_M3_2
     default_enabled: false
 
   - rule_id: sloan_accrual_ratio
-    formula_version: "planned-1.0.0"
+    formula_version: "2.0.0"
     source_reference: SLOAN_ACCRUALS_METHOD
     applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: [BANK, INSURANCE, SECURITIES]
     required_fields: [TOTAL_ASSETS, NET_PROFIT_INCOME, NET_CASH_OPERATING]
     minimum_periods: 2
-    threshold_source: DEFERRED_TO_M3_2_CALIBRATION
-    calibration_status: DEFERRED
+    threshold_source: VERSIONED_ABSOLUTE_ACCRUAL_RESEARCH_SCREEN_WITH_INDUSTRY_GATES
+    calibration_status: DETERMINISTIC
     false_positive_modes: [ACQUISITIONS, RAPID_GROWTH, WORKING_CAPITAL_SEASONALITY]
     severity: MEDIUM
     output_type: METRIC_ONLY
-    tests: [test_deferred_rule_is_explicit]
-    calculator_id: deferred
-    parameters: {}
-    implementation_status: DEFERRED_M3_2
+    tests: [test_sloan_golden, test_sloan_requires_two_periods]
+    calculator_id: sloan_accrual_ratio
+    parameters:
+      period_type: ANNUAL
+      thresholds: {GENERAL_INDUSTRIAL: "0.10"}
+      calculation_only_industries: [REAL_ESTATE, EARLY_BIOTECH, OTHER]
+      flag_direction: ABS_HIGH
+    implementation_status: IMPLEMENTED_M3_2
     default_enabled: false
 
   - rule_id: dupont_decomposition
-    formula_version: "planned-1.0.0"
+    formula_version: "2.0.0"
     source_reference: DUPONT_DECOMPOSITION_METHOD
     applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: []
     required_fields: [TOTAL_ASSETS, TOTAL_EQUITY, NET_PROFIT_INCOME, REVENUE]
-    minimum_periods: 1
-    threshold_source: DEFERRED_TO_M3_2_DECOMPOSITION
-    calibration_status: DEFERRED
+    minimum_periods: 2
+    threshold_source: DETERMINISTIC_THREE_FACTOR_DECOMPOSITION_NO_FLAG_THRESHOLD
+    calibration_status: DETERMINISTIC
     false_positive_modes: [AVERAGE_BALANCE_UNAVAILABLE, NEGATIVE_EQUITY]
     severity: INFO
     output_type: METRIC_ONLY
-    tests: [test_deferred_rule_is_explicit]
-    calculator_id: deferred
-    parameters: {}
-    implementation_status: DEFERRED_M3_2
+    tests: [test_dupont_golden, test_dupont_requires_two_periods]
+    calculator_id: dupont_decomposition
+    parameters:
+      period_type: ANNUAL
+      calculation_only_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    implementation_status: IMPLEMENTED_M3_2
     default_enabled: false

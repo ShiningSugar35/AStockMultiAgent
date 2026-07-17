@@ -21,6 +21,7 @@ from astock.schemas import (
     EvidenceGrade,
     FactStatus,
     FinancialAuditRequest,
+    FinancialDurationSemantics,
     FinancialFact,
     FinancialFieldCode,
     FinancialIndustryProfile,
@@ -79,6 +80,17 @@ _FINANCIAL_STATEMENTS: dict[FinancialFieldCode, FinancialStatementType] = {
     FinancialFieldCode.NET_PROFIT_INCOME: FinancialStatementType.INCOME_STATEMENT,
     FinancialFieldCode.REVENUE: FinancialStatementType.INCOME_STATEMENT,
     FinancialFieldCode.OPERATING_COST: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.EBIT: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.DEPRECIATION_AMORTIZATION: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.SELLING_GENERAL_ADMIN_EXPENSE: FinancialStatementType.INCOME_STATEMENT,
+    FinancialFieldCode.CURRENT_ASSETS: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.CURRENT_LIABILITIES: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.TOTAL_DEBT: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.RETAINED_EARNINGS: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.PROPERTY_PLANT_EQUIPMENT: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.LONG_TERM_DEBT: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.MARKET_CAP: FinancialStatementType.BALANCE_SHEET,
+    FinancialFieldCode.SHARES_OUTSTANDING: FinancialStatementType.BALANCE_SHEET,
 }
 
 
@@ -89,6 +101,10 @@ def make_financial_facts(
     source_suffix: str = "v1",
     company_id: str = "000001",
     period_end: date = date(2025, 12, 31),
+    period_type: FinancialPeriodType = FinancialPeriodType.ANNUAL,
+    duration_semantics: FinancialDurationSemantics = (
+        FinancialDurationSemantics.REPORTED_PERIOD
+    ),
     published_at: datetime = datetime(2026, 3, 20, tzinfo=UTC),
     values: dict[FinancialFieldCode, Decimal] | None = None,
     unit: FinancialUnit = FinancialUnit.TEN_THOUSAND_CNY,
@@ -175,11 +191,22 @@ def make_financial_facts(
                     else None
                 ),
                 period_end=period_end,
-                period_type=FinancialPeriodType.ANNUAL,
+                period_type=period_type,
+                duration_semantics=(
+                    FinancialDurationSemantics.INSTANT
+                    if statement is FinancialStatementType.BALANCE_SHEET
+                    and duration_semantics
+                    is not FinancialDurationSemantics.REPORTED_PERIOD
+                    else duration_semantics
+                ),
                 statement_type=statement,
                 field_code=code,
                 reported_value=value,
-                unit=unit,
+                unit=(
+                    FinancialUnit.SHARES
+                    if code is FinancialFieldCode.SHARES_OUTSTANDING
+                    else unit
+                ),
                 source_snapshot_id=snapshot.snapshot_id,
                 pit_id=pit.pit_id,
                 evidence_ids=[evidence.evidence_id],

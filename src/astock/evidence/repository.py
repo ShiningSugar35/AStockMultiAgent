@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.state import StateStore
 from astock.schemas import (
@@ -90,6 +92,26 @@ class EvidenceRepository:
             ),
             created_at=Claim.model_validate_json(claim_row["claim_json"]).created_at,
         )
+
+    def claim_bundles_for_subject(
+        self,
+        subject_id: str,
+        *,
+        as_of: datetime,
+    ) -> list[ClaimEvidenceBundle]:
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT claim_id,claim_json FROM claim_record WHERE subject_id=? "
+                "ORDER BY as_of,claim_id",
+                (subject_id,),
+            ).fetchall()
+        claim_ids = [
+            str(row["claim_id"])
+            for row in rows
+            if Claim.model_validate_json(row["claim_json"]).as_of <= as_of
+        ]
+        bundles = [self.get_claim_bundle(claim_id) for claim_id in claim_ids]
+        return [bundle for bundle in bundles if bundle is not None]
 
     def register_claim_bundle(self, bundle: ClaimEvidenceBundle) -> ClaimEvidenceBundle:
         with self.state.transaction() as connection:

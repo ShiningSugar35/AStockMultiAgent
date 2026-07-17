@@ -55,18 +55,26 @@ from astock.market_data.storage import (
 from astock.market_data.sync import MarketSyncService
 from astock.paper_trading import LedgerService, PaperReplayService, load_fee_schedule
 from astock.providers import EastMoney5mProvider, Sina5mProvider
+from astock.research import (
+    ResearchCoreService,
+    ResearchRepository,
+    load_research_core_config,
+)
 from astock.schemas import (
     AdjustmentMode,
     BarRequest,
+    BaseCaseBuildRequest,
     DisclosureCategory,
     DisclosureExchange,
     DisclosureSearchRequest,
     DistillationClassRuleSet,
     DocumentType,
+    EvidenceFreezeRequest,
     FinancialAuditRequest,
     InstrumentType,
     KnowledgeSourceRegistry,
     Market,
+    ResearchCoreConfig,
     ZhihuContentType,
     ZhihuEndpointTemplateRegistry,
     ZhihuResponseKind,
@@ -103,6 +111,10 @@ def _distillation_rules(paths: ProjectPaths) -> DistillationClassRuleSet:
     return load_distillation_rules(
         paths.root / "configs" / "knowledge_distillation_rules.yaml"
     )
+
+
+def _research_core(paths: ProjectPaths) -> ResearchCoreConfig:
+    return load_research_core_config(paths.root / "configs" / "research_core.yaml")
 
 
 def _emit(value: Any) -> None:
@@ -810,6 +822,110 @@ def context_plan(
 
     report = build_context_budget(skills=skills or [], artifact_paths=artifacts or [])
     _emit(report)
+
+
+@app.command("research-evidence-freeze")
+def research_evidence_freeze(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Freeze one company's point-in-time Claim--Evidence scope."""
+
+    paths, state, objects = _services()
+    try:
+        request = EvidenceFreezeRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+    except (OSError, ValidationError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_FREEZE_REQUEST"})
+        raise typer.Exit(code=2) from exc
+    execution = ResearchCoreService(state, objects, _research_core(paths)).freeze_evidence(
+        request
+    )
+    pack = execution.pack
+    _emit(
+        {
+            "status": "FROZEN",
+            "pack_id": pack.pack_id,
+            "object_sha256": execution.object_sha256,
+            "company_id": pack.company_id,
+            "as_of": pack.as_of,
+            "claim_count": len(pack.claim_ids),
+            "evidence_count": len(pack.evidence_ids),
+            "open_conflict_count": len(pack.open_conflict_ids),
+            "coverage_status": pack.coverage_status,
+            "degradation_codes": pack.degradation_codes,
+        }
+    )
+
+
+@app.command("research-base-case-build")
+def research_base_case_build(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Validate and store one common BaseCase over frozen evidence."""
+
+    paths, state, objects = _services()
+    try:
+        request = BaseCaseBuildRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+    except (OSError, ValidationError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_BASE_CASE_REQUEST"})
+        raise typer.Exit(code=2) from exc
+    execution = ResearchCoreService(state, objects, _research_core(paths)).build_base_case(
+        request
+    )
+    pack = execution.pack
+    _emit(
+        {
+            "status": "BUILT",
+            "base_case_id": pack.base_case_id,
+            "evidence_pack_id": pack.evidence_pack_id,
+            "object_sha256": execution.object_sha256,
+            "company_id": pack.company_id,
+            "as_of": pack.as_of,
+            "finding_count": sum(
+                len(items) for items in pack.findings_by_section.values()
+            ),
+            "evidence_count": len(pack.evidence_ids),
+            "gap_count": len(pack.evidence_gaps),
+            "coverage_status": pack.coverage_status,
+            "base_confidence": pack.base_confidence,
+            "confidence_cap": pack.confidence_cap,
+            "degradation_codes": pack.degradation_codes,
+        }
+    )
+
+
+@app.command("research-base-case-status")
+def research_base_case_status(
+    company_id: Annotated[str, typer.Argument(help="Canonical company id.")],
+) -> None:
+    """Return the latest safe BaseCase index without research prose."""
+
+    _, state, objects = _services()
+    summary = ResearchRepository(state, objects).latest_base_case_summary(company_id)
+    _emit(
+        {"status": "NOT_RUN", "base_case": None}
+        if summary is None
+        else {"status": summary["coverage_status"], "base_case": summary}
+    )
+
+
+@app.command("research-base-case-audit")
+def research_base_case_audit(
+    company_id: Annotated[str, typer.Argument(help="Canonical company id.")],
+) -> None:
+    """Audit BaseCase objects, frozen scope, citations, and index counts."""
+
+    paths, state, objects = _services()
+    _emit(ResearchCoreService(state, objects, _research_core(paths)).audit(company_id))
 
 
 @app.command("knowledge-source-list")

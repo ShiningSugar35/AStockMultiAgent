@@ -253,3 +253,21 @@ def test_financial_audit_cli_is_idempotent_and_reports_checkpoint(
     assert status_payload["status"] == "SUCCEEDED"
     assert status_payload["checkpoint_step"] == "COMPLETE"
     assert status_payload["attempt_count"] == 1
+
+
+def test_invalid_base_case_cli_request_is_redacted(tmp_path: Path, monkeypatch) -> None:
+    runtime = tmp_path / "research-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+    secret = "private-research-statement-must-not-be-echoed"
+    request = tmp_path / "private-base-case-request.json"
+    request.write_text(json.dumps({"draft": {"statement": secret}}), encoding="utf-8")
+
+    invoked = runner.invoke(app, ["research-base-case-build", str(request)])
+    assert invoked.exit_code == 2
+    assert json.loads(invoked.output) == {
+        "error_code": "INVALID_BASE_CASE_REQUEST",
+        "status": "REJECTED",
+    }
+    assert secret not in invoked.output
+    assert str(request) not in invoked.output

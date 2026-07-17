@@ -16,9 +16,11 @@ from astock.core.policy import PolicyEngine
 from astock.core.state import StateStore
 from astock.schemas import (
     AuthorCollectionCoverageReport,
+    BaseCasePack,
     CodexDraft,
     ContextBudgetReport,
     FinancialIntegrityEvidencePack,
+    FrozenEvidencePack,
     HoldingReviewPack,
     PositionMonitoringPlan,
     RunManifest,
@@ -29,6 +31,8 @@ from astock.schemas import (
 from astock.schemas.base import AStockModel
 
 _ARTIFACT_MODELS: dict[str, type[AStockModel]] = {
+    "FrozenEvidencePack": FrozenEvidencePack,
+    "BaseCasePack": BaseCasePack,
     "ContextBudgetReport": ContextBudgetReport,
     "PositionMonitoringPlan": PositionMonitoringPlan,
     "HoldingReviewPack": HoldingReviewPack,

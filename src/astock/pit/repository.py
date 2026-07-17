@@ -25,6 +25,15 @@ class PointInTimeRepository:
             ).fetchone()
         return PointInTimeMetadata.model_validate_json(row["pit_json"]) if row else None
 
+    def for_snapshot(self, snapshot_id: str) -> list[PointInTimeMetadata]:
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT pit_json FROM point_in_time_metadata WHERE source_snapshot_id=? "
+                "ORDER BY available_to_system_at,pit_id",
+                (snapshot_id,),
+            ).fetchall()
+        return [PointInTimeMetadata.model_validate_json(row["pit_json"]) for row in rows]
+
     def register(self, metadata: PointInTimeMetadata) -> PointInTimeMetadata:
         serialized = canonical_json_bytes(metadata.model_dump(mode="json")).decode("utf-8")
         with self.state.transaction() as connection:

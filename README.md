@@ -2,12 +2,61 @@
 
 这是一个面向 A 股研究、证据审计和模拟交易的本地模块化单体。主要交互入口是 Codex，确定性工作由 Python 3.12 的 `astock` CLI 完成。
 
-Phase 0、M1 和 Phase 2 已完成：除项目原生入口、可恢复状态、双源 5 分钟行情和双重记账模拟账户外，现已包含官方文档快照、PDF/OCR、页/块 Evidence、PIT，以及私有 PDF/DOCX 的内容寻址摄入。知识清洗、Skill 蒸馏和知乎线上历史采集仍属于后续阶段。
+长期架构、未完成工作和当前验收事实分别维护在根目录的
+[低成本A股多Agent投研系统方案.md](低成本A股多Agent投研系统方案.md)、
+[开发计划.md](开发计划.md) 和 [验收报告.md](验收报告.md)。三者不再在 `docs/` 保留重复副本。
+
+当前阶段矩阵：
+
+| 阶段 | 当前状态 | 边界 |
+|---|---|---|
+| Phase 0～4 | PROGRAM COMPLETE | 原生入口、可恢复状态、行情/账本、证据/PIT、财务可信度和通用投资内核已实现 |
+| Phase 5 | PARTIAL / PROVISIONAL | 3,788 篇正文已进入 Paragraph→Argument 新链；三位作者本地 Embedding 和 1,305 个完整 AU 离线包已完成，DeepSeek 执行/导入和人工 Skill 审核尚未闭合 |
+| Phase 6 | PROGRAM COMPLETE | 冻结工件委员会与选择性反方已实现 |
+| Phase 7 | PROGRAM COMPLETE / EVIDENCE NOT_RUN | 程序层完成，真实 study、决定和 observation 仍为 0 |
+| Phase 8 | P8.0 ONLY | 默认禁用状态壳已实现；P8.1～P8.4 未进入 |
+
+Phase 5 后续底座矩阵：
+
+| 能力 | 当前状态 | 边界 |
+|---|---|---|
+| Serenity v2 | ACCEPTED | 两个固定开源 commit 映射到 6 个 v2 方法合同；用户候选路由尚未接通 |
+| Provider Registry | ACCEPTED | 五个免费 Provider；recorded 默认、live 显式开启 |
+| Reference foundation | ACCEPTED | 主数据、日历、未复权日线和公司行动线索；不写模拟账本 |
+| 财务事实源 | PLANNED | 东财/Sina 辅助定位，只有精确官方 PDF 证据可认证 |
+| 候选与模拟操作层 | PLANNED | 候选不等于建议；模拟执行必须另行获得用户确认 |
+
+Phase 5 正文类型矩阵：
+
+| 类型 | 程序能力 | 线上覆盖 |
+|---|---|---|
+| 回答 | AVAILABLE | PARTIAL |
+| 想法 | AVAILABLE | PARTIAL |
+| 文章 | AVAILABLE | PARTIAL |
+| 专栏 | CONTRACT_GATE | B1b0 已验收；B1b1 等待真实枚举快照，`BLOCKED_EXTERNAL_OBSERVATION` |
+
+持久范围政策要求社区互动区数据不得进入后续采集、完成度和蒸馏；既有底层审计对象继续保留。B1a 已完成任务派生、覆盖审计、结构画像和蒸馏输入的范围退场。B1c 已统一线上审计冻结截点，默认保留 30 秒静默窗口；仅在调用方确认停写时使用 `--quiescence-lag-seconds 0`。
 
 ```powershell
 uv sync --all-groups
+uv sync --extra semantic
 uv run astock init
 uv run astock probe
+uv run astock knowledge-semantic-model-status
+uv run astock knowledge-semantic-plan <author-source-id>
+uv run astock knowledge-semantic-run <author-source-id>
+uv run astock knowledge-semantic-embedding-run <semantic-run-id>
+uv run astock knowledge-semantic-packet-export <semantic-run-id>
+# 按 OPENCODE_DEEPSEEK_TASK.md 在 OpenCode 生成结果后：
+uv run astock knowledge-semantic-result-stage <batch-id> <result.jsonl>
+uv run astock knowledge-semantic-result-import <batch-id>
+uv run astock provider-list
+uv run astock provider-probe baostock-reference
+uv run astock provider-status baostock-reference
+uv run astock sync-instruments
+uv run astock sync-calendar --exchange XSHG --start 2026-07-01 --end 2026-07-31
+uv run astock sync-daily 600519 --market XSHG --start 2026-07-01 --end 2026-07-31
+uv run astock reference-audit
 uv run astock sync-5m 600519 --market XSHG --start 2026-07-01 --end 2026-07-13
 uv run astock quality-report 600519 --market XSHG
 uv run astock private-pdf-ingest <private.pdf> --source-id <id> --title <title> --author-source-id <author-id> --file-version <version> --full

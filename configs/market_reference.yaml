@@ -1,0 +1,14 @@
+config_version: market-reference-v1
+default_provider: baostock-reference
+fallback_provider: eastmoney-reference
+sdk_version: "0.8.9"
+daily_adjustment_mode: NONE
+daily_timestamp_semantics: SHANGHAI_SESSION_CLOSE
+volume_unit: SHARE
+amount_unit: CNY
+markets: [XSHG, XSHE, BJSE, INDEX]
+corporate_actions:
+  structured_hint_provider: baostock-reference
+  official_evidence_provider: cninfo-disclosures
+  bjse_status: OFFICIAL_EVIDENCE_UNAVAILABLE
+  automatic_ledger_write: false

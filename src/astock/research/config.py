@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from astock.research.open_source_audit import validate_registry_open_source_audits
 from astock.schemas import (
     PositionLifecycleConfig,
     ResearchCoreConfig,
@@ -37,7 +38,10 @@ def load_research_skill_registry(path: Path) -> ResearchSkillRegistry:
         raise ValueError(
             f"research Skill configuration must contain a mapping: {path.name}"
         )
-    return ResearchSkillRegistry.model_validate(payload)
+    registry = ResearchSkillRegistry.model_validate(payload)
+    if registry.open_source_audit_manifest_files:
+        validate_registry_open_source_audits(registry, path.resolve().parents[1])
+    return registry
 
 
 def load_research_diagnostic_config(path: Path) -> ResearchDiagnosticConfig:

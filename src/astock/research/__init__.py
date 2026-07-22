@@ -17,6 +17,11 @@ from astock.research.lifecycle import (
     PositionPlanExecution,
 )
 from astock.research.lifecycle_repository import LifecycleRepository
+from astock.research.open_source_audit import (
+    load_open_source_audit,
+    validate_registry_open_source_audits,
+    verify_open_source_tree,
+)
 from astock.research.phase4 import Phase4ChainService
 from astock.research.repository import ResearchRepository
 from astock.research.service import (
@@ -48,8 +53,11 @@ __all__ = [
     "SkillRegistryExecution",
     "SpecialistDeltaExecution",
     "SpecialistRouteExecution",
+    "load_open_source_audit",
     "load_research_core_config",
     "load_research_diagnostic_config",
     "load_research_skill_registry",
     "load_position_lifecycle_config",
+    "validate_registry_open_source_audits",
+    "verify_open_source_tree",
 ]

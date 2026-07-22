@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from astock.knowledge import (
+    KnowledgeCoverageAuditService,
     ParquetKnowledgeStore,
     ZhihuCollectionService,
     ZhihuHttpTransport,
@@ -16,18 +18,17 @@ from astock.schemas import (
     CollectionTerminalCondition,
     CoverageStatus,
     KnowledgeSourceDefinition,
+    KnowledgeSourceRegistry,
     ZhihuContentType,
     ZhihuTransport,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PAGE_1_URL = (
-    "https://www.zhihu.com/api/v4/members/mr-dang-77/"
-    "answers?limit=2&offset=0&sort_by=created"
+    "https://www.zhihu.com/api/v4/members/mr-dang-77/answers?limit=2&offset=0&sort_by=created"
 )
 PAGE_2_URL = (
-    "https://www.zhihu.com/api/v4/members/mr-dang-77/"
-    "answers?limit=2&offset=2&sort_by=created"
+    "https://www.zhihu.com/api/v4/members/mr-dang-77/answers?limit=2&offset=2&sort_by=created"
 )
 PROFILE_URL = "https://www.zhihu.com/api/v4/members/mr-dang-77"
 
@@ -68,9 +69,7 @@ def _source() -> KnowledgeSourceDefinition:
 
 
 def _fixture(name: str) -> bytes:
-    return (
-        PROJECT_ROOT / "tests" / "fixtures" / "knowledge" / name
-    ).read_bytes()
+    return (PROJECT_ROOT / "tests" / "fixtures" / "knowledge" / name).read_bytes()
 
 
 def _service(state, object_store, tmp_path, responses):
@@ -107,44 +106,100 @@ def test_recorded_zhihu_pages_are_frozen_versioned_and_checkpointed(
 
     assert transport.requested_urls == [PAGE_1_URL, PAGE_2_URL]
     assert execution.report.coverage_status is CoverageStatus.COMPLETE
-    assert (
-        execution.report.terminal_condition
-        is CollectionTerminalCondition.PAGINATION_COMPLETE
-    )
+    assert execution.report.terminal_condition is CollectionTerminalCondition.PAGINATION_COMPLETE
     assert execution.report.discovered_count == 3
     assert execution.report.success_count == 3
     assert len(execution.listing_pages) == 2
+    assert {page.reported_total for page in execution.listing_pages} == {3}
     assert len(execution.content_records) == 3
     assert len(execution.parquet_files) == 3
     assert all(path.is_file() for path in execution.parquet_files)
     assert all(
-        object_store.verify(record.body_object_sha256)
-        for record in execution.content_records
+        object_store.verify(record.body_object_sha256) for record in execution.content_records
     )
     checkpoint = state.get_collection_checkpoint(
         "zhihu:mr-dang-77",
         "answers",
     )
     assert checkpoint is not None
-    assert (
-        checkpoint.terminal_condition
-        is CollectionTerminalCondition.PAGINATION_COMPLETE
-    )
+    assert checkpoint.terminal_condition is CollectionTerminalCondition.PAGINATION_COMPLETE
     with state.connect() as connection:
         assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM zhihu_listing_page_manifest"
-            ).fetchone()[0]
+            connection.execute("SELECT COUNT(*) FROM zhihu_listing_page_manifest").fetchone()[0]
             == 2
         )
         assert connection.execute("SELECT COUNT(*) FROM zhihu_content_version").fetchone()[0] == 3
         assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM knowledge_coverage_report"
-            ).fetchone()[0]
-            == 1
+            connection.execute("SELECT COUNT(*) FROM knowledge_coverage_report").fetchone()[0] == 1
         )
         assert connection.execute("SELECT COUNT(*) FROM source_access_decision").fetchone()[0] == 2
+
+
+def test_coverage_audit_rejects_platform_total_and_unique_id_mismatch(
+    state,
+    object_store,
+    tmp_path,
+) -> None:
+    terminal = json.loads(_fixture("zhihu_answers_page_2.json"))
+    terminal["paging"]["totals"] = 4
+    service, _ = _service(
+        state,
+        object_store,
+        tmp_path,
+        {
+            PAGE_1_URL: (200, _fixture("zhihu_answers_page_1.json")),
+            PAGE_2_URL: (200, json.dumps(terminal).encode()),
+        },
+    )
+    source = _source()
+    service.sync_listing(source, ZhihuContentType.ANSWERS, page_size=2)
+
+    report = KnowledgeCoverageAuditService(
+        state,
+        object_store,
+        tmp_path / "parquet",
+    ).audit_registry(
+        KnowledgeSourceRegistry(sources=[source]),
+        quiescence_lag=timedelta(0),
+    )
+    answers = next(
+        scope
+        for scope in report.source_reports[0].scope_reports
+        if scope.content_type == ZhihuContentType.ANSWERS.value
+    )
+
+    assert answers.listing_reported_total == 4
+    assert answers.listing_unique_content_count == 3
+    assert answers.listing_total_mismatch_count == 1
+    assert answers.listing_total_change_count == 1
+    assert "LISTING_TOTAL_MISMATCH:1" in answers.findings
+    assert "LISTING_REPORTED_TOTAL_CHANGED:1" in answers.findings
+
+
+def test_metadata_only_listing_discovers_id_without_claiming_full_body(
+    state, object_store, tmp_path
+) -> None:
+    service, _ = _service(
+        state,
+        object_store,
+        tmp_path,
+        {
+            PAGE_1_URL: (200, _fixture("zhihu_answers_metadata_only.json")),
+        },
+    )
+
+    execution = service.sync_listing(
+        _source(),
+        ZhihuContentType.ANSWERS,
+        page_size=2,
+    )
+
+    assert execution.report.coverage_status is CoverageStatus.COMPLETE
+    assert len(execution.content_records) == 1
+    record = execution.content_records[0]
+    assert record.content_id == "101"
+    assert object_store.get_bytes(record.body_object_sha256) == b""
+    assert record.content_completeness.value == "LISTING_UNVERIFIED"
 
 
 def test_checkpoint_is_not_advanced_when_boundary_commit_crashes(
@@ -169,9 +224,9 @@ def test_checkpoint_is_not_advanced_when_boundary_commit_crashes(
             page_size=2,
         )
     assert state.get_collection_checkpoint("zhihu:mr-dang-77", "answers") is None
-    assert service.repository.content_version_count(
-        "zhihu:mr-dang-77", ZhihuContentType.ANSWERS
-    ) == 2
+    assert (
+        service.repository.content_version_count("zhihu:mr-dang-77", ZhihuContentType.ANSWERS) == 2
+    )
 
     monkeypatch.setattr(state, "set_collection_checkpoint", original)
     resumed, _ = _service(
@@ -189,9 +244,9 @@ def test_checkpoint_is_not_advanced_when_boundary_commit_crashes(
         page_size=2,
     )
     assert execution.report.skipped_duplicate_count == 2
-    assert resumed.repository.content_version_count(
-        "zhihu:mr-dang-77", ZhihuContentType.ANSWERS
-    ) == 3
+    assert (
+        resumed.repository.content_version_count("zhihu:mr-dang-77", ZhihuContentType.ANSWERS) == 3
+    )
 
 
 def test_access_restriction_is_a_gap_not_a_confirmed_empty_collection(
@@ -211,10 +266,7 @@ def test_access_restriction_is_a_gap_not_a_confirmed_empty_collection(
     )
 
     assert execution.report.coverage_status is CoverageStatus.ACCESS_RESTRICTED
-    assert (
-        execution.report.terminal_condition
-        is CollectionTerminalCondition.ACCESS_RESTRICTED
-    )
+    assert execution.report.terminal_condition is CollectionTerminalCondition.ACCESS_RESTRICTED
     assert execution.report.restricted_count == 1
     assert execution.report.discovered_count == 0
     assert execution.report.gaps[0]["failure_class"] == "AUTH_REQUIRED"
@@ -265,9 +317,7 @@ def test_successful_retry_resolves_the_matching_historical_gap(
     assert statuses == ["RESOLVED"]
 
 
-def test_profile_probe_records_confirmed_platform_identity(
-    state, object_store, tmp_path
-) -> None:
+def test_profile_probe_records_confirmed_platform_identity(state, object_store, tmp_path) -> None:
     profile = json.dumps(
         {
             "id": "fixture-author-id",

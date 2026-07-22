@@ -1,0 +1,15 @@
+{
+  "status_code": 200,
+  "content_type": "application/json",
+  "latency_ms": 9,
+  "body": [
+    {
+      "day": "2026-07-22 15:00:00",
+      "open": "1498.00",
+      "high": "1503.00",
+      "low": "1497.00",
+      "close": "1501.00",
+      "volume": "120000"
+    }
+  ]
+}

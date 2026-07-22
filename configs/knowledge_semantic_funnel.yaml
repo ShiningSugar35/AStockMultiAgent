@@ -1,0 +1,47 @@
+schema_version: "1.0"
+pipeline_version: knowledge-semantic-funnel-v1
+paragraphizer_version: zhihu-visible-paragraph-v1
+role_rule_version: investment-rhetorical-role-v3
+relation_rule_version: investment-argument-relation-v2
+argument_builder_version: contiguous-argument-builder-v3
+keyword_rule_version: knowledge-keyword-recall-v1
+
+question_terms: [为什么, 怎么看, 担心什么, 意味着什么, 问题在哪, 如何理解]
+answer_terms: [因为, 原因是, 本质上, 首先, 其次, 一方面, 另一方面, 这说明, 所以, 因此]
+example_terms: [例如, 比如, 举例, 以此为例, 案例]
+counter_terms: [但是, 然而, 反过来, 反方, 反证, 例外]
+conclusion_terms: [所以, 因此, 这说明, 综上, 总之, 结论是]
+transition_terms: [首先, 其次, 再次, 另外, 一方面, 另一方面, 接下来]
+marketing_terms: [付费, 课程, 扫码, 公众号, 打赏, 广告]
+casual_terms: [哈哈, 晚安, 早安, 周末愉快, 闲聊]
+
+local_context:
+  previous_paragraphs: 1
+  following_paragraphs: 2
+
+argument_builder:
+  prefer_merge_on_uncertainty: true
+  maximum_embedding_window_chars: 1800
+  standalone_methodological_threshold: 0.70
+  review_boundary_threshold: 0.55
+
+semantic_screen:
+  exploratory_keep_threshold: 0.40
+  exploratory_review_threshold: 0.30
+  automatic_exclusion_requires_calibration: true
+
+method_anchors:
+  STOCK_SELECTION: [如何筛选值得深入研究的公司, 候选股票需要满足哪些条件]
+  BUSINESS_MODEL: [公司如何赚钱以及竞争优势是否可持续, 商业模式和护城河]
+  INDUSTRY: [行业供需产业链周期和渗透率, 行业格局与竞争结构]
+  VALUATION: [估值方法安全边际和价格假设, 市盈率市净率现金流折现]
+  FINANCIAL_QUALITY: [现金流利润质量负债应收存货与ROE, 财务报表质量]
+  ENTRY: [何时首次买入和怎样建立初始仓位, 入场条件]
+  HOLDING: [持有期间需要持续验证哪些基本面假设, 持仓跟踪]
+  ADD: [什么条件下可以加仓, 加仓需要新增证据而不是只因下跌]
+  TRIM: [什么条件下应降低仓位, 估值风险和组合约束下的减仓]
+  EXIT: [什么情况应卖出或退出, 投资逻辑失效后的清仓]
+  RISK: [风险识别仓位控制止损和回撤管理, 避免永久损失]
+  FAILURE_CASE: [投资失败案例以及错误原因, 从踩雷中总结方法]
+  COUNTEREVIDENCE_INVALIDATION: [哪些反证会推翻原判断, 投资逻辑的失效条件]
+  REVIEW: [如何复盘投资决策和修正研究流程, 事后评估方法]

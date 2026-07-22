@@ -20,13 +20,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_diagnostic_config_keeps_daily_and_hourly_rules_independent() -> None:
-    config = load_research_diagnostic_config(
-        PROJECT_ROOT / "configs" / "research_diagnostics.yaml"
-    )
-    assert config.diagnostics_version == "research-diagnostics-v1"
+    config = load_research_diagnostic_config(PROJECT_ROOT / "configs" / "research_diagnostics.yaml")
+    assert config.diagnostics_version == "research-diagnostics-v2"
     assert config.daily.frequency is Frequency.D1
     assert config.hourly.frequency is Frequency.H1
-    assert config.daily.minimum_bars == 60
+    assert config.daily.minimum_bars == 200
     assert config.hourly.minimum_bars == 40
     assert config.daily.drawdown_alert != config.hourly.drawdown_alert
 

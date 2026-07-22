@@ -1,0 +1,14 @@
+{
+  "status_code": 200,
+  "content_type": "application/json",
+  "latency_ms": 1,
+  "body": {
+    "sdk_version": "0.8.9",
+    "capability": "instrument.master",
+    "fields": ["code", "code_name", "ipoDate", "outDate", "type", "status"],
+    "rows": [["sh.600519", "贵州茅台", "2001-08-27", "", "1", "1"]],
+    "complete": true,
+    "login_error_code": "0",
+    "result_error_code": "0"
+  }
+}

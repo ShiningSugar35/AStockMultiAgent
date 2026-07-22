@@ -1,0 +1,16 @@
+{
+  "available_to_system_at": "2026-07-22T00:00:02Z",
+  "announcements": [
+    {
+      "announcement_id": "official-cash-dividend-2025-600519",
+      "symbol": "600519",
+      "market": "XSHG",
+      "published_date": "2026-06-01",
+      "report_period": "2025",
+      "action_type": "CASH_DIVIDEND_HINT",
+      "title": "贵州茅台2025年年度权益分派实施公告",
+      "source_url": "https://static.cninfo.com.cn/finalpage/2026-06-15/official-cash-dividend.PDF",
+      "pdf_base64": "JVBERi0xLjQKJUF1ZGl0ZWQgbGluayBmaXh0dXJlCg=="
+    }
+  ]
+}

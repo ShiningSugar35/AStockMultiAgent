@@ -1,0 +1,19 @@
+{
+  "schema_version": "baostock-raw-envelope-v1",
+  "sdk_version": "0.8.9",
+  "capability": "market.calendar",
+  "request": {},
+  "request_started_at": "2026-07-22T00:00:00Z",
+  "request_finished_at": "2026-07-22T00:00:01Z",
+  "login_error_code": "0",
+  "login_error_message": "success",
+  "result_error_code": "0",
+  "result_error_message": "success",
+  "fields": ["calendar_date", "is_trading_day"],
+  "rows": [
+    ["2026-07-20", "1"],
+    ["2026-07-21", "1"],
+    ["2026-07-22", "1"]
+  ],
+  "complete": true
+}

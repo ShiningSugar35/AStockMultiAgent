@@ -1,11 +1,11 @@
-diagnostics_version: research-diagnostics-v1
+diagnostics_version: research-diagnostics-v2
 industry:
   max_substitutability_ratio: "0.50"
 valuation:
   neutral_growth_gap: "0.02"
 daily:
   frequency: 1d
-  minimum_bars: 60
+  minimum_bars: 200
   drawdown_alert: "-0.15"
   volatility_alert: null
   positive_min_score: 2

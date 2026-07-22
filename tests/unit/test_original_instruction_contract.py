@@ -26,47 +26,40 @@ def _fields(model: type) -> set[str]:
     return set(model.model_fields)
 
 
-def test_development_plan_keeps_every_original_architecture_change() -> None:
-    plan = (PROJECT_ROOT / "docs" / "开发计划.md").read_text(encoding="utf-8")
-    for section in (
-        "## 1.",
-        "## 3.",
-        "## 4.",
-        "## 5.",
-        "## 6.",
-        "## 7.",
-        "## 8.",
-        "## 11.",
-        "## 12.",
-        "## 13.",
-        "## 14.",
-        "## 16.",
-        "## 17.",
-        "## 18.",
-        "## 19.",
-        "## 20.",
-        "## 21.",
-    ):
-        assert section in plan
+def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
+    design = (PROJECT_ROOT / "低成本A股多Agent投研系统方案.md").read_text(
+        encoding="utf-8"
+    )
+    plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
+    acceptance = (PROJECT_ROOT / "验收报告.md").read_text(encoding="utf-8")
     for required in (
-        "CODEX_INTERACTIVE_MODE",
-        "DETERMINISTIC_MODE",
-        "官方/已验证 API 或本地数据 -> 受控 MCP -> Browser/Chrome -> ManualInvestigationTask",
-        "不做全知乎、全平台或非白名单用户采集",
-        "当前登录账号可访问历史内容全集",
-        "同一根 5m 同时触及止盈和止损",
-        "合格 1m 诊断数据",
-        "ambiguous_intrabar_path=true",
+        "总方案只写长期设计",
+        "不自动向券商发送订单",
+        "官方/已验证 API 或本地数据 → MCP → Browser → Manual Task",
+        "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate",
+        "Phase 8",
+    ):
+        assert required in design
+    for required in (
+        "开发计划只写未完成项",
+        "K5-E",
+        "SER-3",
+        "P5X-3",
     ):
         assert required in plan
-    for obsolete in (
-        "LLM Provider 是正式投研的必要入口",
-        "主要通过 Manual Packet 或 OpenAI-compatible API 决策",
-        "1m 是模拟交易的首选精度",
-        "自动批量知乎全量采集推迟",
-        "Skill 主要只覆盖选股和公司分析",
+    for required in (
+        "验收报告只记录当前已经实现",
+        "当前能力矩阵",
+        "P5X-1：Provider Registry",
+        "P5X-2：免费 reference foundation",
+        "research-skills-v2",
     ):
-        assert obsolete not in plan
+        assert required in acceptance
+    assert "SER-1" not in plan
+    assert "SER-2" not in plan
+    assert "P5X-1：" not in plan
+    assert "P5X-2：" not in plan
+    assert "旧段落级链" not in design
 
 
 def test_original_instruction_public_schemas_keep_all_required_fields() -> None:

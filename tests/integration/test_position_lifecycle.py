@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -12,16 +11,21 @@ from astock.schemas import (
     DecisionReferenceStatus,
     HoldingReviewRequest,
     HoldingRuleSignal,
-    IndustryBottleneckDiagnosticRequest,
+    IndustryBottleneckDiagnosticRequestV2,
     LifecycleCondition,
     LifecycleMetricDefinition,
     LifecycleSourceType,
     PositionAction,
     PositionPlanCreateRequest,
-    ResearchMemoComposeRequest,
+    ResearchMemoComposeRequestV2,
 )
 from tests.integration.test_research_core import _fixture, _specialist_fixture
-from tests.integration.test_research_diagnostics import _diagnostics, _route
+from tests.integration.test_research_diagnostics import (
+    _diagnostics,
+    _industry_contract,
+    _route,
+    _structured_memo,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _PRIVATE_THESIS = "Private synthetic lifecycle thesis that must stay out of SQLite."
@@ -43,34 +47,24 @@ def _service_and_plan(tmp_path: Path, state):
         horizon="long",
     )
     delta = diagnostics.diagnose(
-        IndustryBottleneckDiagnosticRequest(
+        IndustryBottleneckDiagnosticRequestV2(
             base_case_id=base_case.base_case_id,
             route_plan_id=route.route_plan_id,
-            system_change_verified=True,
-            system_change_evidence_ids=[baseline_evidence.evidence_id],
-            necessary_link_verified=True,
-            necessary_link_evidence_ids=[baseline_evidence.evidence_id],
-            scarcity_verified=True,
-            scarcity_evidence_ids=[baseline_evidence.evidence_id],
-            substitutability_ratio=Decimal("0.10"),
-            substitutability_evidence_ids=[baseline_evidence.evidence_id],
-            value_capture_verified=True,
-            value_capture_evidence_ids=[baseline_evidence.evidence_id],
+            method_contract=_industry_contract(base_case, [baseline_evidence.evidence_id]),
         )
     )
     memo = diagnostics.compose_memo(
-        ResearchMemoComposeRequest(
+        ResearchMemoComposeRequestV2(
             base_case_id=base_case.base_case_id,
             route_plan_id=route.route_plan_id,
             delta_ids=[delta.delta.delta_id],
+            structured_memo=_structured_memo(delta.delta, base_case),
         )
     ).memo
     service = PositionLifecycleService(
         state,
         skills.object_store,
-        load_position_lifecycle_config(
-            PROJECT_ROOT / "configs" / "position_lifecycle.yaml"
-        ),
+        load_position_lifecycle_config(PROJECT_ROOT / "configs" / "position_lifecycle.yaml"),
     )
     plan_request = PositionPlanCreateRequest(
         position_id="monitor:company:000001",
@@ -221,9 +215,7 @@ def test_incremental_lifecycle_is_contiguous_prioritized_private_and_ledger_safe
         available_at=t1 + timedelta(hours=12),
     )
     with pytest.raises(ValueError, match="outside the incremental window"):
-        service.review(
-            _review(plan.plan_id, t0, t1, evidence_ids=[future_evidence.evidence_id])
-        )
+        service.review(_review(plan.plan_id, t0, t1, evidence_ids=[future_evidence.evidence_id]))
     foreign_evidence = future_evidence.model_copy(
         update={
             "evidence_id": "evidence:position-lifecycle-foreign-company",
@@ -233,9 +225,7 @@ def test_incremental_lifecycle_is_contiguous_prioritized_private_and_ledger_safe
     )
     EvidenceRepository(state).register_evidence(foreign_evidence)
     with pytest.raises(ValueError, match="another company"):
-        service.review(
-            _review(plan.plan_id, t0, t1, evidence_ids=[foreign_evidence.evidence_id])
-        )
+        service.review(_review(plan.plan_id, t0, t1, evidence_ids=[foreign_evidence.evidence_id]))
 
     hold = service.review(_review(plan.plan_id, t0, t1))
     assert hold.proposal.action is PositionAction.HOLD
@@ -398,9 +388,7 @@ def test_holding_review_recovers_when_review_index_precedes_proposal(
     with state.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM holding_review_index").fetchone()[0] == 1
         assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM position_action_proposal_index"
-            ).fetchone()[0]
+            connection.execute("SELECT COUNT(*) FROM position_action_proposal_index").fetchone()[0]
             == 0
         )
 

@@ -58,6 +58,7 @@ def _fixture(
     pit_status: PointInTimeStatus = PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
     conflict: bool = False,
     available_at: datetime | None = None,
+    additional_evidence_grade: EvidenceGrade | None = None,
 ):
     text = "Revenue grew. Demand may weaken."
     pdf = pymupdf.open()
@@ -126,6 +127,22 @@ def _fixture(
             relation=EvidenceRelation.SUPPORT,
         )
     ]
+    if additional_evidence_grade is not None:
+        start = text.index("Revenue grew.")
+        additional_support = claim_service.create_page_evidence(
+            page_id=parse.page_ids[0],
+            char_start=start,
+            char_end=start + len("Revenue grew."),
+            evidence_grade=additional_evidence_grade,
+            fact_status=FactStatus.DIRECT,
+            entity_ids=["company:000001"],
+        )
+        attachments.append(
+            EvidenceAttachment(
+                evidence_id=additional_support.evidence_id,
+                relation=EvidenceRelation.SUPPORT,
+            )
+        )
     if conflict:
         refute = evidence("Demand may weaken.")
         attachments.append(
@@ -190,11 +207,24 @@ def _draft(as_of: datetime, evidence_id: str, *, critical: bool = True) -> BaseC
     )
 
 
-def _specialist_fixture(tmp_path: Path, state, *, suffix: str):
+def _specialist_fixture(
+    tmp_path: Path,
+    state,
+    *,
+    suffix: str,
+    evidence_grade: EvidenceGrade = EvidenceGrade.PRIMARY_OFFICIAL,
+    pit_status: PointInTimeStatus = PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
+    conflict: bool = False,
+    additional_evidence_grade: EvidenceGrade | None = None,
+):
     core, objects, bundle, evidence, available = _fixture(
         tmp_path,
         state,
         suffix=suffix,
+        evidence_grade=evidence_grade,
+        pit_status=pit_status,
+        conflict=conflict,
+        additional_evidence_grade=additional_evidence_grade,
     )
     as_of = available + timedelta(seconds=2)
     frozen = core.freeze_evidence(
@@ -202,12 +232,17 @@ def _specialist_fixture(tmp_path: Path, state, *, suffix: str):
             company_id="company:000001",
             as_of=as_of,
             claim_ids=[bundle.claim.claim_id],
+            allow_approximated=pit_status is PointInTimeStatus.APPROXIMATED,
         )
     )
     base = core.build_base_case(
         BaseCaseBuildRequest(
             evidence_pack_id=frozen.pack.pack_id,
-            draft=_draft(as_of, evidence.evidence_id),
+            draft=_draft(
+                as_of,
+                evidence.evidence_id,
+                critical=evidence_grade is EvidenceGrade.PRIMARY_OFFICIAL,
+            ),
         )
     )
     skills = ResearchSkillService(
@@ -472,20 +507,20 @@ def test_specialist_delta_is_incremental_cited_idempotent_and_private(
     route = skills.route(
         SpecialistRouteRequest(
             base_case_id=base_case.base_case_id,
-            thesis_tags=["industry"],
-            industry_tags=["semiconductor"],
+            thesis_tags=["swing"],
+            industry_tags=[],
             event_tags=[],
-            horizon="long",
-            available_inputs=["industry_evidence"],
-            available_frequencies=[],
-            explicit_skill_ids=["IndustryBottleneckSkill"],
+            horizon="short",
+            available_inputs=["hourly_market_quality"],
+            available_frequencies=["60m"],
+            explicit_skill_ids=["HourlySwingSkill"],
         )
     ).plan
     request = SpecialistDeltaBuildRequest(
         base_case_id=base_case.base_case_id,
         route_plan_id=route.route_plan_id,
-        skill_id="IndustryBottleneckSkill",
-        skill_version="industry-bottleneck-v1",
+        skill_id="HourlySwingSkill",
+        skill_version="hourly-swing-v1",
         incremental_findings=[
             ResearchFindingInput(
                 statement="Synthetic incremental bottleneck finding kept out of SQLite.",

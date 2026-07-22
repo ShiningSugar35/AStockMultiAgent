@@ -51,6 +51,15 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0028",
         "0029",
         "0030",
+        "0031",
+        "0032",
+        "0033",
+        "0034",
+        "0035",
+        "0036",
+        "0037",
+        "0038",
+        "0039",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -69,6 +78,89 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='shadow_study_index'"
+        ).fetchone()
+
+
+def test_market_reference_migration_upgrades_cleanly_from_0037(tmp_path: Path) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 38):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    assert state.migrate()[-1] == "0037"
+
+    migration = PROJECT_ROOT / "migrations" / "0038_market_reference_releases.sql"
+    shutil.copy(migration, migrations / migration.name)
+    assert state.migrate() == ["0038"]
+
+    with state.transaction() as connection:
+        connection.execute(
+            "INSERT INTO artifact_registry(artifact_id,type,schema_version,object_hash,"
+            "input_hashes_json,created_at) VALUES(?,?,?,?,?,?)",
+            (
+                "legacy-manifest",
+                "DatasetReleaseManifest",
+                "market-reference-release-manifest-v1",
+                "manifest-hash",
+                '["snapshot-id","content-hash"]',
+                "2026-07-22T15:01:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO market_reference_release(release_id,dataset_kind,scope_key,"
+            "provider_id,batch_id,content_hash,previous_release_id,manifest_artifact_id,"
+            "manifest_object_hash,available_to_system_at,coverage_status,pit_status,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-release",
+                "DAILY_UNADJUSTED",
+                "XSHG:600519",
+                "baostock-reference",
+                "legacy-batch",
+                "content-hash",
+                None,
+                "legacy-manifest",
+                "manifest-hash",
+                "2026-07-22T15:00:00+00:00",
+                "COMPLETE",
+                "CERTIFIED",
+                "2026-07-22T15:01:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO market_reference_head(dataset_kind,scope_key,release_id,updated_at) "
+            "VALUES(?,?,?,?)",
+            (
+                "DAILY_UNADJUSTED",
+                "XSHG:600519",
+                "legacy-release",
+                "2026-07-22T15:01:00+00:00",
+            ),
+        )
+
+    integrity = PROJECT_ROOT / "migrations" / "0039_market_reference_release_integrity.sql"
+    shutil.copy(integrity, migrations / integrity.name)
+    assert state.migrate() == ["0039"]
+    assert state.migrate() == []
+    with state.connect() as connection:
+        row = connection.execute(
+            "SELECT manifest_schema_version,raw_snapshot_ids_json,coverage_json,pit_status "
+            "FROM market_reference_release WHERE release_id='legacy-release'"
+        ).fetchone()
+        assert tuple(row) == (
+            "market-reference-release-manifest-v1",
+            '["snapshot-id"]',
+            '{"legacy_0038":true,"status":"COMPLETE"}',
+            "UNVERIFIED",
+        )
+        assert connection.execute(
+            "SELECT release_id FROM market_reference_head WHERE dataset_kind=? AND scope_key=?",
+            ("DAILY_UNADJUSTED", "XSHG:600519"),
+        ).fetchone()[0] == "legacy-release"
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='reference_provider_lease'"
         ).fetchone()
 
 
@@ -164,6 +256,70 @@ def test_cursor_idempotency_and_collection_interfaces(state: StateStore) -> None
         ).fetchone()
     assert gap["retryable"] == 1
     assert gap["status"] == "OPEN"
+
+
+def test_gap_event_migration_preserves_rows_and_tracks_direct_state_changes(
+    tmp_path: Path,
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 34):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    state.migrate()
+    scope_id = state.upsert_collection_scope(
+        author_id="zhihu:temporal-gap",
+        content_type="answers",
+        status="PARTIAL",
+    )
+    gap_id = state.record_collection_gap(
+        scope_id=scope_id,
+        cursor={"offset": 0},
+        failure_class="AUTH_REQUIRED",
+        retryable=False,
+        status="OPEN",
+    )
+
+    migration = PROJECT_ROOT / "migrations" / "0034_knowledge_gap_state_events.sql"
+    shutil.copy(migration, migrations / migration.name)
+    assert state.migrate() == ["0034"]
+    with state.connect() as connection:
+        assert connection.execute(
+            "SELECT status FROM collection_gap WHERE gap_id=?", (gap_id,)
+        ).fetchone()[0] == "OPEN"
+        assert connection.execute(
+            "SELECT status FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
+        ).fetchall()[0][0] == "OPEN"
+        reliable_from = connection.execute(
+            "SELECT reliable_from FROM collection_gap_temporal_meta WHERE singleton=1"
+        ).fetchone()[0]
+        assert reliable_from.endswith("+00:00")
+
+    with state.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_gap SET status='OPEN' WHERE gap_id=?",
+            (gap_id,),
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
+        ).fetchone()[0] == 1
+        connection.execute(
+            "UPDATE collection_gap SET status='RESOLVED' WHERE gap_id=?",
+            (gap_id,),
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
+        ).fetchone()[0] == 2
+        connection.execute(
+            "INSERT OR REPLACE INTO collection_gap("
+            "gap_id,scope_id,cursor_json,failure_class,retryable,status) "
+            "VALUES(?,?,?,?,?,?)",
+            (gap_id, scope_id, '{"offset":0}', "AUTH_REQUIRED", 0, "OPEN"),
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
+        ).fetchone()[0] == 3
 
 
 def test_collection_checkpoint_round_trips_every_required_cursor_level(

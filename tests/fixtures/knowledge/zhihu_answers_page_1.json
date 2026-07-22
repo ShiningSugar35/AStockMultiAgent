@@ -21,6 +21,7 @@
   ],
   "paging": {
     "is_end": false,
+    "totals": 3,
     "next": "https://www.zhihu.com/api/v4/members/mr-dang-77/answers?limit=2&offset=2&sort_by=created",
     "previous": ""
   }

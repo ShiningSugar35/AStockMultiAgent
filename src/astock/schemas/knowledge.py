@@ -56,6 +56,15 @@ class ZhihuContentType(StrEnum):
     THOUGHTS = "thoughts"
 
 
+class ZhihuContainerType(StrEnum):
+    COLUMNS = "columns"
+
+
+class ZhihuContentCompleteness(StrEnum):
+    LISTING_UNVERIFIED = "LISTING_UNVERIFIED"
+    DETAIL_VERIFIED = "DETAIL_VERIFIED"
+
+
 class ZhihuTransport(StrEnum):
     PYTHON_HTTP = "PYTHON_HTTP"
     MCP = "MCP"
@@ -77,6 +86,11 @@ class ZhihuImportStatus(StrEnum):
     REJECTED = "REJECTED"
 
 
+class ZhihuManualTaskStatus(StrEnum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+
+
 class ZhihuEndpointTemplateStatus(StrEnum):
     VERIFIED = "VERIFIED"
     PENDING_OBSERVATION = "PENDING_OBSERVATION"
@@ -86,6 +100,7 @@ class ZhihuCommentEndpointTemplate(AStockModel):
     template_id: str = Field(min_length=1)
     response_kind: ZhihuResponseKind
     content_types: list[ZhihuContentType] = Field(min_length=1)
+    request_origin: str = "https://www.zhihu.com"
     path_template: str | None = None
     default_query: dict[str, str] = Field(default_factory=dict)
     status: ZhihuEndpointTemplateStatus
@@ -94,15 +109,30 @@ class ZhihuCommentEndpointTemplate(AStockModel):
     @model_validator(mode="after")
     def validate_template_status(self) -> ZhihuCommentEndpointTemplate:
         if self.response_kind not in {
+            ZhihuResponseKind.CONTENT_DETAIL,
             ZhihuResponseKind.ROOT_COMMENTS,
             ZhihuResponseKind.CHILD_COMMENTS,
         }:
-            raise ValueError("comment endpoint templates only cover comment responses")
+            raise ValueError("endpoint templates only cover detail and comment responses")
         if self.status is ZhihuEndpointTemplateStatus.VERIFIED:
-            if not self.path_template or not self.path_template.startswith("/api/"):
-                raise ValueError("verified endpoint templates require an API path")
-        elif self.path_template is not None:
-            raise ValueError("pending endpoint templates cannot contain a guessed path")
+            is_article_html = (
+                self.response_kind is ZhihuResponseKind.CONTENT_DETAIL
+                and self.content_types == [ZhihuContentType.ARTICLES]
+                and self.request_origin == "https://zhuanlan.zhihu.com"
+                and self.path_template == "/p/{content_id}"
+                and not self.default_query
+            )
+            is_structured_api = (
+                self.request_origin == "https://www.zhihu.com"
+                and self.path_template is not None
+                and self.path_template.startswith("/api/")
+            )
+            if not is_article_html and not is_structured_api:
+                raise ValueError(
+                    "verified endpoints require an exact Zhihu API or article HTML boundary"
+                )
+        elif self.path_template is not None or self.request_origin != "https://www.zhihu.com":
+            raise ValueError("pending endpoint templates cannot contain a guessed boundary")
         if len(self.content_types) != len(set(self.content_types)):
             raise ValueError("endpoint template content types must be unique")
         return self
@@ -116,6 +146,13 @@ class ZhihuEndpointTemplateRegistry(AStockModel):
         template_ids = [item.template_id for item in self.templates]
         if len(template_ids) != len(set(template_ids)):
             raise ValueError("Zhihu endpoint template ids must be unique")
+        boundaries = [
+            (template.response_kind, content_type)
+            for template in self.templates
+            for content_type in template.content_types
+        ]
+        if len(boundaries) != len(set(boundaries)):
+            raise ValueError("Zhihu endpoint template boundaries must be unique")
         return self
 
 
@@ -131,7 +168,7 @@ class ZhihuBrowserResponseEnvelope(AStockModel):
     requested_url: str = Field(min_length=1)
     status_code: int = Field(ge=100, le=599)
     response_mime: str = Field(min_length=1, max_length=255)
-    body_base64: str = Field(min_length=1, max_length=90_000_000)
+    body_base64: str = Field(max_length=90_000_000)
     transport: ZhihuTransport
     captured_at: AwareDatetime
 
@@ -148,8 +185,12 @@ class ZhihuBrowserResponseEnvelope(AStockModel):
 
     @model_validator(mode="after")
     def validate_scope(self) -> ZhihuBrowserResponseEnvelope:
-        if self.transport not in {ZhihuTransport.CHROME, ZhihuTransport.MANUAL_IMPORT}:
-            raise ValueError("response envelopes only accept Chrome or manual imports")
+        if self.transport not in {
+            ZhihuTransport.PYTHON_HTTP,
+            ZhihuTransport.CHROME,
+            ZhihuTransport.MANUAL_IMPORT,
+        }:
+            raise ValueError("response envelopes only accept Python, Chrome, or manual imports")
         if self.response_kind is ZhihuResponseKind.PROFILE:
             if self.content_type is not None or self.content_id is not None:
                 raise ValueError("profile responses cannot identify content")
@@ -189,10 +230,7 @@ class ZhihuBrowserResponseEnvelope(AStockModel):
             or self.request_cursor is not None
         ):
             raise ValueError("profile responses cannot declare page cursors")
-        if (
-            self.response_kind is ZhihuResponseKind.CHILD_COMMENTS
-            and not self.parent_comment_id
-        ):
+        if self.response_kind is ZhihuResponseKind.CHILD_COMMENTS and not self.parent_comment_id:
             raise ValueError("child comment responses require parent_comment_id")
         if (
             self.response_kind is not ZhihuResponseKind.CHILD_COMMENTS
@@ -228,9 +266,49 @@ class ZhihuImportedResponse(AStockModel):
     consumed_at: AwareDatetime | None = None
 
 
+class ZhihuManualCollectionTask(AStockModel):
+    task_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    content_type: str = Field(min_length=1)
+    response_kind: str = Field(min_length=1)
+    content_id: str | None = None
+    parent_comment_id: str | None = None
+    public_url: str = Field(min_length=1)
+    last_cursor: str | None = None
+    failure_class: str = Field(min_length=1)
+    source_snapshot_id: str | None = None
+    expected_count: int | None = Field(default=None, ge=0)
+    collected_count: int | None = Field(default=None, ge=0)
+    required_action: str = Field(min_length=1)
+    status: ZhihuManualTaskStatus = ZhihuManualTaskStatus.OPEN
+    updated_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_manual_boundary(self) -> ZhihuManualCollectionTask:
+        if (
+            self.response_kind
+            in {
+                ZhihuResponseKind.CONTENT_DETAIL.value,
+                ZhihuResponseKind.ROOT_COMMENTS.value,
+            }
+            and not self.content_id
+        ):
+            raise ValueError("detail and root-comment tasks require content_id")
+        if self.response_kind == ZhihuResponseKind.CHILD_COMMENTS.value and (
+            not self.content_id or not self.parent_comment_id
+        ):
+            raise ValueError("child-comment tasks require content and parent ids")
+        if (self.expected_count is None) != (self.collected_count is None):
+            raise ValueError("manual task counts must be supplied together")
+        if self.updated_at < self.created_at:
+            raise ValueError("manual task updated_at cannot precede created_at")
+        return self
+
+
 class KnowledgeCollectionScope(AStockModel):
     history_mode: str = Field(min_length=1)
     content_types: list[str] = Field(min_length=1)
+    container_types: list[ZhihuContainerType] = Field(default_factory=list)
     include_question_context: bool
     include_required_comment_pages: bool
     include_nested_replies: bool
@@ -241,6 +319,10 @@ class KnowledgeCollectionScope(AStockModel):
     def validate_content_types(self) -> KnowledgeCollectionScope:
         if len(self.content_types) != len(set(self.content_types)):
             raise ValueError("knowledge content types must be unique")
+        if ZhihuContainerType.COLUMNS.value in self.content_types:
+            raise ValueError("columns must be declared as a container type")
+        if len(self.container_types) != len(set(self.container_types)):
+            raise ValueError("knowledge container types must be unique")
         return self
 
 
@@ -281,10 +363,7 @@ class KnowledgeSourceDefinition(AStockModel):
                 raise ValueError("pending Zhihu identities cannot be enabled")
             if self.profile_url or self.platform_user_id or self.url_token:
                 raise ValueError("pending Zhihu identities cannot contain guessed identifiers")
-        if (
-            self.identity_status
-            is KnowledgeIdentityStatus.LOCAL_EXPORT_USER_CONFIRMED_COMPLETE
-        ):
+        if self.identity_status is KnowledgeIdentityStatus.LOCAL_EXPORT_USER_CONFIRMED_COMPLETE:
             if self.online_collection_required or not self.local_seed_sources:
                 raise ValueError("complete local exports require a seed and no online collection")
         for seed in self.local_seed_sources:
@@ -325,6 +404,7 @@ class ZhihuListingPage(AStockModel):
     request_cursor: str | None = None
     next_cursor: str | None = None
     is_end: bool
+    reported_total: int | None = Field(default=None, ge=0)
     content_ids: list[str]
     source_snapshot_id: str = Field(min_length=1)
     raw_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -358,6 +438,7 @@ class ZhihuContentRecord(AStockModel):
     body_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     metadata_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     raw_source_snapshot_id: str = Field(min_length=1)
+    content_completeness: ZhihuContentCompleteness = ZhihuContentCompleteness.LISTING_UNVERIFIED
     previous_version_id: str | None = None
 
 
@@ -404,6 +485,7 @@ class ZhihuCommentPage(AStockModel):
     request_cursor: str | None = None
     next_cursor: str | None = None
     is_end: bool
+    reported_total: int | None = Field(default=None, ge=0)
     comment_ids: list[str]
     source_snapshot_id: str = Field(min_length=1)
     raw_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -431,21 +513,28 @@ class ZhihuAuthorParticipationChain(AStockModel):
     ordered_context_comment_ids: list[str] = Field(min_length=1)
     source_snapshot_ids: list[str] = Field(min_length=1)
     selection_rule_version: str = Field(min_length=1)
+    keyword_filter_rule_version: str | None = None
+    matched_keyword_terms: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_participation_chain(self) -> ZhihuAuthorParticipationChain:
         if len(self.target_author_comment_ids) != len(set(self.target_author_comment_ids)):
             raise ValueError("target author comment ids must be unique")
-        if len(self.ordered_context_comment_ids) != len(
-            set(self.ordered_context_comment_ids)
-        ):
+        if len(self.ordered_context_comment_ids) != len(set(self.ordered_context_comment_ids)):
             raise ValueError("participation context comment ids must be unique")
-        if not set(self.target_author_comment_ids).issubset(
-            self.ordered_context_comment_ids
-        ):
+        if not set(self.target_author_comment_ids).issubset(self.ordered_context_comment_ids):
             raise ValueError("participation context must contain every target author comment")
         if len(self.source_snapshot_ids) != len(set(self.source_snapshot_ids)):
             raise ValueError("participation chain snapshot ids must be unique")
+        normalized_terms = [item.strip().casefold() for item in self.matched_keyword_terms]
+        if any(not item for item in normalized_terms) or len(normalized_terms) != len(
+            set(normalized_terms)
+        ):
+            raise ValueError("participation chain keyword terms must be nonempty and unique")
+        if self.keyword_filter_rule_version is None and self.matched_keyword_terms:
+            raise ValueError("participation chain keyword terms require a filter version")
+        if self.keyword_filter_rule_version is not None and not self.matched_keyword_terms:
+            raise ValueError("filtered participation chains require at least one keyword match")
         return self
 
 
@@ -765,12 +854,22 @@ class KnowledgeLocalCoverageReport(AStockModel):
 
 class KnowledgeScopeCoverageAudit(AStockModel):
     content_type: str = Field(min_length=1)
+    data_cutoff_at: AwareDatetime | None = None
     listing_report_id: str | None = None
     listing_terminal_condition: CollectionTerminalCondition | None = None
     listing_coverage_status: CoverageStatus | None = None
+    listing_reported_total: int | None = Field(default=None, ge=0)
+    listing_unique_content_count: int = Field(default=0, ge=0)
+    listing_total_mismatch_count: int = Field(default=0, ge=0)
+    listing_total_change_count: int = Field(default=0, ge=0)
+    listing_page_decode_error_count: int = Field(default=0, ge=0)
+    listing_total_read_error_count: int = Field(default=0, ge=0)
     sqlite_content_version_count: int = Field(ge=0)
     parquet_content_version_count: int = Field(ge=0)
     verified_content_body_count: int = Field(ge=0)
+    detail_required_count: int = Field(default=0, ge=0)
+    detail_verified_count: int = Field(default=0, ge=0)
+    detail_stale_count: int = Field(default=0, ge=0)
     missing_content_body_count: int = Field(ge=0)
     missing_content_parquet_count: int = Field(ge=0)
     orphan_content_parquet_count: int = Field(ge=0)
@@ -786,8 +885,18 @@ class KnowledgeScopeCoverageAudit(AStockModel):
     comment_parquet_read_error_count: int = Field(ge=0)
     root_comment_required_count: int = Field(ge=0)
     root_comment_terminal_count: int = Field(ge=0)
+    # Deprecated compatibility fields: older reports incorrectly interpreted
+    # Zhihu paging.totals as a root-only count. New reports keep these at zero.
+    root_comment_total_mismatch_count: int = Field(default=0, ge=0)
+    root_comment_total_change_count: int = Field(default=0, ge=0)
+    platform_comment_total_mismatch_count: int = Field(default=0, ge=0)
+    platform_comment_total_change_count: int = Field(default=0, ge=0)
+    comment_page_decode_error_count: int = Field(default=0, ge=0)
+    comment_total_read_error_count: int = Field(default=0, ge=0)
+    comment_pagination_cycle_count: int = Field(default=0, ge=0)
     child_reply_required_count: int = Field(ge=0)
     child_reply_terminal_count: int = Field(ge=0)
+    child_reply_count_mismatch_count: int = Field(default=0, ge=0)
     open_gap_count: int = Field(ge=0)
     status: KnowledgeAuditStatus
     findings: list[str] = Field(default_factory=list)
@@ -816,4 +925,5 @@ class KnowledgeCoverageAuditReport(AStockModel):
     parquet_mismatch_count: int = Field(ge=0)
     status: KnowledgeAuditStatus
     findings: list[str] = Field(default_factory=list)
+    data_cutoff_at: AwareDatetime | None = None
     audited_at: AwareDatetime

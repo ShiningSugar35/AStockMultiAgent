@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import html
+import re
+import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
@@ -15,6 +20,7 @@ from astock.knowledge.transport import PersistedZhihuResponse
 from astock.schemas import (
     CollectionCheckpoint,
     CollectionTerminalCondition,
+    DistillationClassRuleSet,
     KnowledgeSourceDefinition,
     ZhihuAuthorParticipationChain,
     ZhihuCommentNode,
@@ -22,7 +28,10 @@ from astock.schemas import (
     ZhihuContentType,
 )
 
-_PARTICIPATION_RULE_VERSION = "target-author-ancestor-chain-v1"
+_PARTICIPATION_RULE_VERSION = "target-author-reply-ancestor-chain-v2"
+_HTML_TAG = re.compile(r"<[^>]+>")
+_ZERO_WIDTH = re.compile("[\u200b-\u200d\ufeff]")
+_WHITESPACE = re.compile(r"\s+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +76,26 @@ class ZhihuCommentService:
             request_cursor=request_cursor,
             response=response,
         )
+        existing_ids = {
+            item.comment_id
+            for item in self.repository.latest_comments(
+                source.source_id,
+                content_type,
+                content_id,
+            )
+        }
+        if (
+            not page.is_end
+            and page.comment_ids
+            and self.repository.get_comment_page(page.page_id) is None
+            and not (set(page.comment_ids) - existing_ids)
+        ):
+            raise ProviderError(
+                "Zhihu comment page added no new comment ids before its terminal page",
+                failure_class=FailureClass.PAGINATION_CYCLE,
+                retryable=False,
+                details={"snapshot_id": response.snapshot.snapshot_id},
+            )
         registrations: list[CommentRegistration] = []
         files: list[Path] = []
         stored_records: list[ZhihuCommentNode] = []
@@ -121,12 +150,17 @@ class ZhihuCommentService:
 def derive_author_participation_chains(
     comments: list[ZhihuCommentNode],
 ) -> list[ZhihuAuthorParticipationChain]:
-    by_root: dict[str, list[ZhihuCommentNode]] = {}
+    by_root: dict[tuple[str, str, str], list[ZhihuCommentNode]] = {}
     for comment in comments:
-        by_root.setdefault(comment.root_comment_id, []).append(comment)
+        key = (comment.content_type.value, comment.content_id, comment.root_comment_id)
+        by_root.setdefault(key, []).append(comment)
     chains: list[ZhihuAuthorParticipationChain] = []
-    for root_id, root_comments in sorted(by_root.items()):
-        targets = [item for item in root_comments if item.is_target_author]
+    for (_, _, root_id), root_comments in sorted(by_root.items()):
+        targets = [
+            item
+            for item in root_comments
+            if item.is_target_author and item.parent_comment_id is not None
+        ]
         if not targets:
             continue
         by_id = {item.comment_id: item for item in root_comments}
@@ -176,6 +210,79 @@ def derive_author_participation_chains(
     return chains
 
 
+def derive_keyword_filtered_author_participation_chains(
+    comments: list[ZhihuCommentNode],
+    bodies_by_comment_id: Mapping[tuple[str, str, str], str],
+    rules: DistillationClassRuleSet,
+    *,
+    terminal_root_ids: set[tuple[str, str, str]] | None = None,
+) -> list[ZhihuAuthorParticipationChain]:
+    """Keep complete target-author reply paths with any configured chain keyword."""
+
+    filtered: list[ZhihuAuthorParticipationChain] = []
+    for base in derive_author_participation_chains(comments):
+        root_key = (base.content_type.value, base.content_id, base.root_comment_id)
+        if terminal_root_ids is not None and root_key not in terminal_root_ids:
+            continue
+        normalized_bodies = [
+            _normalize_comment_text(
+                bodies_by_comment_id.get(
+                    (base.content_type.value, base.content_id, comment_id),
+                    "",
+                )
+            )
+            for comment_id in base.ordered_context_comment_ids
+        ]
+        matched_terms = sorted(
+            {
+                term.strip()
+                for terms in rules.content_class_terms.values()
+                for term in terms
+                if term.strip()
+                and any(term.strip().casefold() in body for body in normalized_bodies)
+            },
+            key=lambda item: (item.casefold(), item),
+        )
+        if not matched_terms:
+            continue
+        selection_rule_version = (
+            f"{_PARTICIPATION_RULE_VERSION}+{rules.comment_chain_filter_version}"
+        )
+        keyword_filter_rule_version = (
+            f"{rules.comment_chain_filter_version}@{rules.rule_version}"
+        )
+        identity = {
+            "author_source_id": base.author_source_id,
+            "content_type": base.content_type.value,
+            "content_id": base.content_id,
+            "root_comment_id": base.root_comment_id,
+            "target_author_comment_ids": base.target_author_comment_ids,
+            "ordered_context_comment_ids": base.ordered_context_comment_ids,
+            "source_snapshot_ids": base.source_snapshot_ids,
+            "selection_rule_version": selection_rule_version,
+            "keyword_filter_rule_version": keyword_filter_rule_version,
+            "matched_keyword_terms": matched_terms,
+        }
+        filtered.append(
+            base.model_copy(
+                update={
+                    "chain_id": f"zhihu-participation:{content_hash(identity)}",
+                    "selection_rule_version": selection_rule_version,
+                    "keyword_filter_rule_version": keyword_filter_rule_version,
+                    "matched_keyword_terms": matched_terms,
+                }
+            )
+        )
+    return filtered
+
+
+def _normalize_comment_text(value: str) -> str:
+    value = _HTML_TAG.sub(" ", html.unescape(value))
+    value = unicodedata.normalize("NFKC", value)
+    value = _ZERO_WIDTH.sub("", value)
+    return _WHITESPACE.sub(" ", value).strip().casefold()
+
+
 def _next_comment_checkpoint(page: ZhihuCommentPage) -> CollectionCheckpoint:
     terminal: CollectionTerminalCondition | None = None
     if page.is_end:
@@ -205,4 +312,5 @@ __all__ = [
     "ZhihuCommentIngestExecution",
     "ZhihuCommentService",
     "derive_author_participation_chains",
+    "derive_keyword_filtered_author_participation_chains",
 ]

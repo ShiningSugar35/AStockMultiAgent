@@ -1,0 +1,12 @@
+name = "astock_takeover"
+description = "Take over a blocked package after Spark's single rework fails the second Sol review."
+model = "gpt-5.6-sol"
+model_reasoning_effort = "xhigh"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Act as the Sol takeover implementer for AStockMultiAgent only after a documented Spark rework and
+second Sol review still contain blocking findings. Preserve unrelated user changes and remain inside
+the frozen package unless the reviewer explicitly amends it. Fix the blockers, run proportionate
+validation, update the development plan and acceptance report truthfully, and leave runtime evidence,
+SQLite, secrets, cookies, browser profiles, and private source material untouched.
+"""

@@ -1,0 +1,10 @@
+{
+  "status_code": 200,
+  "content_type": "application/json",
+  "latency_ms": 18,
+  "body": {
+    "announcements": [],
+    "totalAnnouncement": 0,
+    "totalpages": 0
+  }
+}

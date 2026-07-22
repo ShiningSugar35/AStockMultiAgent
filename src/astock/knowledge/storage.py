@@ -29,6 +29,7 @@ _KNOWLEDGE_SCHEMA = pa.schema(
         ("body_object_sha256", pa.string()),
         ("metadata_sha256", pa.string()),
         ("raw_source_snapshot_id", pa.string()),
+        ("content_completeness", pa.string()),
         ("previous_version_id", pa.string()),
     ]
 )
@@ -94,6 +95,7 @@ class ParquetKnowledgeStore:
                     "body_object_sha256": record.body_object_sha256,
                     "metadata_sha256": record.metadata_sha256,
                     "raw_source_snapshot_id": record.raw_source_snapshot_id,
+                    "content_completeness": record.content_completeness.value,
                     "previous_version_id": record.previous_version_id,
                 }
             ],

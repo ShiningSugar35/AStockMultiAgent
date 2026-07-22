@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.13"
 license = { text = "Proprietary" }
 authors = [{ name = "AStockMultiAgent contributors" }]
 dependencies = [
+  "baostock==0.8.9",
   "httpx>=0.28.1,<1",
   "pdfplumber>=0.11.10,<0.12",
   "pyarrow>=25.0.0,<26",
@@ -22,6 +23,11 @@ dependencies = [
   "scikit-learn>=1.9.0,<1.10",
   "typer>=0.21.0,<1",
   "tzdata>=2025.2,<2027",
+]
+
+[project.optional-dependencies]
+semantic = [
+  "sentence-transformers>=5.1.0,<6",
 ]
 
 [project.scripts]

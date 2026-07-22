@@ -1,0 +1,22 @@
+[features]
+multi_agent = true
+
+[agents]
+max_threads = 3
+max_depth = 1
+
+[agents.astock_planner]
+description = "Use 5.6 Sol xhigh to freeze one bounded work package before implementation. Read-only."
+config_file = "./agents/astock_planner.toml"
+
+[agents.astock_implementer]
+description = "Use 5.3 Codex Spark xhigh to implement one frozen work package. Single writer."
+config_file = "./agents/astock_implementer.toml"
+
+[agents.astock_reviewer]
+description = "Use 5.6 Sol xhigh to review the complete diff and evidence after implementation. Read-only."
+config_file = "./agents/astock_reviewer.toml"
+
+[agents.astock_takeover]
+description = "Use 5.6 Sol xhigh to take over only after one Spark rework still fails review."
+config_file = "./agents/astock_takeover.toml"

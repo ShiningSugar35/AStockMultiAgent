@@ -1,0 +1,10 @@
+{
+  "id": 101,
+  "type": "answer",
+  "content": "<p>synthetic fixture answer one with the complete detail body and final paragraph</p>",
+  "created_time": 1704067200,
+  "updated_time": 1704153600,
+  "author": {"id": "fixture-author-id", "url_token": "mr-dang-77"},
+  "question": {"id": 9001, "title": "Synthetic fixture question one"},
+  "is_truncated": false
+}

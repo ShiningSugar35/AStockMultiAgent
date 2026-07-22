@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
-from astock.core.errors import StorageError
+from astock.core.errors import FailureClass, PolicyError, StorageError
 from astock.core.hashing import content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
@@ -28,8 +28,7 @@ from astock.schemas import (
     ViewpointDraftDerivation,
 )
 
-_GENERATION_RULE_VERSION = "private-excerpt-draft-v1"
-_MAX_VIEWPOINTS_PER_METHOD = 12
+_GENERATION_RULE_VERSION = "private-excerpt-draft-v2-all-eligible"
 _TARGET_BY_METHOD = {
     BookMethodCategory.STOCK_SELECTION: BookSkillTarget.CANDIDATE_SELECTION,
     BookMethodCategory.BUSINESS_MODEL: BookSkillTarget.CANDIDATE_SELECTION,
@@ -87,19 +86,47 @@ class KnowledgeDraftExecution:
 
 
 class KnowledgeDraftService:
-    def __init__(self, state: StateStore, object_store: ObjectStore) -> None:
+    generation_rule_version = _GENERATION_RULE_VERSION
+
+    def __init__(
+        self,
+        state: StateStore,
+        object_store: ObjectStore,
+        *,
+        required_classification_rule_version: str | None = None,
+    ) -> None:
         self.state = state
         self.object_store = object_store
+        self.required_classification_rule_version = required_classification_rule_version
         self.distillation_repository = DistillationRepository(state)
         self.repository = KnowledgeDraftRepository(state)
 
-    def generate(self, author_source_id: str) -> KnowledgeDraftExecution:
+    def generate(
+        self,
+        author_source_id: str,
+        *,
+        materialize_output: bool = True,
+    ) -> KnowledgeDraftExecution:
+        raise PolicyError(
+            "legacy paragraph-level draft generation is paused",
+            failure_class=FailureClass.POLICY_REJECTED,
+            details={"reason_code": "LEGACY_SEMANTIC_PIPELINE_PAUSED"},
+        )
+
         source_report = self.distillation_repository.latest_author_report(author_source_id)
         if source_report is None:
             raise ValueError(f"distillation has not run for {author_source_id}")
         run = self.distillation_repository.get_run(source_report.run_id)
         if run is None or run.finished_at is None:
             raise ValueError(f"completed distillation run is unavailable: {source_report.run_id}")
+        if (
+            self.required_classification_rule_version is not None
+            and run.classification_rule_version
+            != self.required_classification_rule_version
+        ):
+            raise ValueError(
+                "latest distillation run uses a stale classification rule version"
+            )
         units = self.distillation_repository.units_for_run(run.run_id)
         keep_units = [
             unit
@@ -115,55 +142,57 @@ class KnowledgeDraftService:
 
         selected: dict[BookMethodCategory, list[DistillationUnit]] = {}
         viewpoints: list[PrivateViewpointDraft] = []
+        viewpoint_draft_ids: list[str] = []
+        candidates: list[PrivateSkillCandidateDraft] = []
         for method in sorted(grouped, key=lambda item: item.value):
             selected[method] = sorted(
                 grouped[method],
                 key=lambda unit: self._selection_key(method, unit),
-            )[:_MAX_VIEWPOINTS_PER_METHOD]
-            viewpoints.extend(
+            )
+            method_viewpoints = [
                 self._viewpoint_draft(run.run_id, author_source_id, method, unit, run.finished_at)
                 for unit in selected[method]
+            ]
+            self.repository.register_viewpoint_drafts(method_viewpoints)
+            self.state.register_artifacts(
+                (
+                    f"PrivateViewpointDraft:{draft.draft_id}",
+                    "PrivateViewpointDraft",
+                    draft.schema_version,
+                    draft.payload_object_sha256,
+                    draft.source_excerpt_hashes,
+                )
+                for draft in method_viewpoints
             )
-        self.repository.register_viewpoint_drafts(viewpoints)
-        self.state.set_checkpoint(
-            scope_type="knowledge-drafts",
-            scope_key=run.run_id,
-            cursor={"viewpoint_draft_count": len(viewpoints), "skill_candidate_count": 0},
-            status="RUNNING",
-            object_hash=content_hash([item.draft_id for item in viewpoints]),
-        )
-        for draft in viewpoints:
-            self.state.register_artifact(
-                artifact_id=f"PrivateViewpointDraft:{draft.draft_id}",
-                artifact_type="PrivateViewpointDraft",
-                schema_version=draft.schema_version,
-                object_hash=draft.payload_object_sha256,
-                input_hashes=draft.source_excerpt_hashes,
-            )
-
-        viewpoints_by_method: dict[BookMethodCategory, list[PrivateViewpointDraft]] = (
-            defaultdict(list)
-        )
-        for draft in viewpoints:
-            viewpoints_by_method[draft.method_category].append(draft)
-        candidates = [
-            self._skill_candidate(
+            viewpoint_draft_ids.extend(draft.draft_id for draft in method_viewpoints)
+            if materialize_output:
+                viewpoints.extend(method_viewpoints)
+            candidate = self._skill_candidate(
                 run.run_id,
                 author_source_id,
                 method,
-                viewpoints_by_method[method],
+                method_viewpoints,
                 run.finished_at,
             )
-            for method in sorted(viewpoints_by_method, key=lambda item: item.value)
-        ]
-        self.repository.register_skill_candidates(candidates)
-        for candidate in candidates:
+            candidates.append(candidate)
+            self.repository.register_skill_candidates([candidate])
             self.state.register_artifact(
                 artifact_id=f"PrivateSkillCandidateDraft:{candidate.candidate_id}",
                 artifact_type="PrivateSkillCandidateDraft",
                 schema_version=candidate.schema_version,
                 object_hash=candidate.payload_object_sha256,
                 input_hashes=[content_hash(candidate.source_viewpoint_draft_ids)],
+            )
+            self.state.set_checkpoint(
+                scope_type="knowledge-drafts",
+                scope_key=run.run_id,
+                cursor={
+                    "method_category": method.value,
+                    "viewpoint_draft_count": len(viewpoint_draft_ids),
+                    "skill_candidate_count": len(candidates),
+                },
+                status="RUNNING",
+                object_hash=content_hash(viewpoint_draft_ids),
             )
 
         report = self._report(
@@ -173,7 +202,7 @@ class KnowledgeDraftService:
             eligible_units,
             grouped,
             selected,
-            viewpoints,
+            viewpoint_draft_ids,
             candidates,
             run.finished_at,
         )
@@ -185,7 +214,7 @@ class KnowledgeDraftService:
             schema_version=report.schema_version,
             object_hash=report_object.sha256,
             input_hashes=[
-                content_hash([item.draft_id for item in viewpoints]),
+                content_hash(viewpoint_draft_ids),
                 content_hash([item.candidate_id for item in candidates]),
             ],
         )
@@ -193,7 +222,7 @@ class KnowledgeDraftService:
             scope_type="knowledge-drafts",
             scope_key=run.run_id,
             cursor={
-                "viewpoint_draft_count": len(viewpoints),
+                "viewpoint_draft_count": len(viewpoint_draft_ids),
                 "skill_candidate_count": len(candidates),
                 "report_id": report.report_id,
             },
@@ -206,16 +235,23 @@ class KnowledgeDraftService:
             skill_candidates=tuple(candidates),
         )
 
+    def current_report(self, author_source_id: str) -> AuthorDraftGenerationReport | None:
+        source_report = self.distillation_repository.latest_author_report(author_source_id)
+        if source_report is None:
+            return None
+        return self.repository.report_for_run(
+            source_report.run_id,
+            self.generation_rule_version,
+        )
+
     def audit(self, author_source_id: str) -> dict[str, object]:
         source_report = self.distillation_repository.latest_author_report(author_source_id)
-        report = (
-            self.repository.report_for_run(
-                source_report.run_id,
-                _GENERATION_RULE_VERSION,
-            )
+        run = (
+            self.distillation_repository.get_run(source_report.run_id)
             if source_report is not None
             else None
         )
+        report = self.current_report(author_source_id)
         if report is None:
             return {"status": "NOT_RUN", "author_source_id": author_source_id}
         units = {
@@ -337,6 +373,14 @@ class KnowledgeDraftService:
             "PENDING_GATE_MISMATCH": pending_gate_mismatches,
             "REPORT_OBJECT_MISSING": missing_report_object,
             "REPORT_COUNT_MISMATCH": report_count_mismatch,
+            "CLASSIFICATION_RULE_VERSION_STALE": int(
+                self.required_classification_rule_version is not None
+                and (
+                    run is None
+                    or run.classification_rule_version
+                    != self.required_classification_rule_version
+                )
+            ),
         }
         finding_codes = sorted(code for code, count in findings.items() if count)
         return {
@@ -344,6 +388,12 @@ class KnowledgeDraftService:
             "author_source_id": author_source_id,
             "run_id": report.run_id,
             "generation_rule_version": report.generation_rule_version,
+            "classification_rule_version": (
+                run.classification_rule_version if run is not None else None
+            ),
+            "required_classification_rule_version": (
+                self.required_classification_rule_version
+            ),
             "viewpoint_draft_count": len(drafts),
             "skill_candidate_count": len(candidates),
             "missing_payload_object_count": missing_payloads,
@@ -462,7 +512,7 @@ class KnowledgeDraftService:
         eligible_units: list[DistillationUnit],
         grouped: dict[BookMethodCategory, list[DistillationUnit]],
         selected: dict[BookMethodCategory, list[DistillationUnit]],
-        viewpoints: list[PrivateViewpointDraft],
+        viewpoint_draft_ids: list[str],
         candidates: list[PrivateSkillCandidateDraft],
         created_at,
     ) -> AuthorDraftGenerationReport:
@@ -470,7 +520,7 @@ class KnowledgeDraftService:
         identity = {
             "run_id": run_id,
             "generation_rule_version": _GENERATION_RULE_VERSION,
-            "viewpoint_draft_ids": [item.draft_id for item in viewpoints],
+            "viewpoint_draft_ids": viewpoint_draft_ids,
             "skill_candidate_ids": [item.candidate_id for item in candidates],
         }
         return AuthorDraftGenerationReport(
@@ -480,7 +530,7 @@ class KnowledgeDraftService:
             generation_rule_version=_GENERATION_RULE_VERSION,
             source_keep_unit_count=len(keep_units),
             eligible_method_unit_count=len(eligible_units),
-            viewpoint_draft_count=len(viewpoints),
+            viewpoint_draft_count=len(viewpoint_draft_ids),
             skill_candidate_count=len(candidates),
             method_category_unit_counts={
                 method.value: len(grouped[method])

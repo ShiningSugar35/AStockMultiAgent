@@ -24,6 +24,11 @@ _DISTILLATION_SCHEMA = pa.schema(
         ("locator_type", pa.string()),
         ("source_item_ordinal", pa.int64()),
         ("segment_ordinal", pa.int64()),
+        ("classification_scope", pa.string()),
+        ("classification_piece_id", pa.string()),
+        ("classification_piece_sha256", pa.string()),
+        ("classification_piece_source_item_count", pa.int64()),
+        ("classification_piece_segment_count", pa.int64()),
         ("page_number", pa.int64()),
         ("block_index", pa.int64()),
         ("content_id", pa.string()),
@@ -79,6 +84,13 @@ class ParquetDistillationStore:
                 "locator_type": unit.locator.locator_type.value,
                 "source_item_ordinal": unit.source_item_ordinal,
                 "segment_ordinal": unit.segment_ordinal,
+                "classification_scope": unit.classification_scope.value,
+                "classification_piece_id": unit.classification_piece_id,
+                "classification_piece_sha256": unit.classification_piece_sha256,
+                "classification_piece_source_item_count": (
+                    unit.classification_piece_source_item_count
+                ),
+                "classification_piece_segment_count": (unit.classification_piece_segment_count),
                 "page_number": unit.locator.page_number,
                 "block_index": unit.locator.block_index,
                 "content_id": unit.locator.content_id,
@@ -115,13 +127,8 @@ class ParquetDistillationStore:
         path = self.path_for_run(author_source_id, run_id)
         if not path.is_file():
             return {}
-        rows = pq.ParquetFile(path).read(
-            columns=["unit_id", "normalized_text_sha256"]
-        ).to_pylist()
-        return {
-            str(row["unit_id"]): str(row["normalized_text_sha256"])
-            for row in rows
-        }
+        rows = pq.ParquetFile(path).read(columns=["unit_id", "normalized_text_sha256"]).to_pylist()
+        return {str(row["unit_id"]): str(row["normalized_text_sha256"]) for row in rows}
 
 
 __all__ = ["ParquetDistillationStore"]

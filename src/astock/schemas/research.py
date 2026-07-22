@@ -9,6 +9,15 @@ from pydantic import AwareDatetime, Field, model_validator
 from astock.schemas.base import AStockModel
 from astock.schemas.evidence import EvidenceGrade
 from astock.schemas.pit import PointInTimeStatus
+from astock.schemas.serenity_v2 import SerenityMethodContractV2
+
+_SERENITY_V2_SKILL_VERSIONS = {
+    "IndustryBottleneckSkill": "industry-bottleneck-v2",
+    "EventToAlphaSkill": "event-to-alpha-v2",
+    "GrowthProbabilitySkill": "growth-probability-v2",
+    "GrowthValuationLens": "growth-valuation-v2",
+    "DailyTrendHealthSkill": "daily-trend-health-v2",
+}
 
 
 class ResearchCoverageStatus(StrEnum):
@@ -356,12 +365,17 @@ class ResearchSkillManifest(AStockModel):
 
 class ResearchSkillRegistry(AStockModel):
     registry_version: str = Field(min_length=1)
+    open_source_audit_manifest_files: list[str] = Field(default_factory=list)
     max_specialists: int = Field(ge=1, le=3)
     coverage_confidence_caps: dict[SpecialistCoverageStatus, float]
     skills: list[ResearchSkillManifest] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_registry(self) -> ResearchSkillRegistry:
+        if len(self.open_source_audit_manifest_files) != len(
+            set(self.open_source_audit_manifest_files)
+        ):
+            raise ValueError("open-source audit manifest files must be unique")
         skill_ids = [skill.skill_id for skill in self.skills]
         if len(skill_ids) != len(set(skill_ids)):
             raise ValueError("research Skill ids must be unique")
@@ -530,6 +544,7 @@ class SpecialistDeltaBuildRequest(AStockModel):
     valuation_adjustments: list[SpecialistAdjustmentInput]
     risk_adjustments: list[SpecialistAdjustmentInput]
     coverage_delta: dict[BaseCaseSection, float]
+    method_contract: SerenityMethodContractV2 | None = None
 
     @model_validator(mode="after")
     def validate_delta_request(self) -> SpecialistDeltaBuildRequest:
@@ -540,6 +555,14 @@ class SpecialistDeltaBuildRequest(AStockModel):
             raise ValueError("specialist evidence request codes must be unique")
         if len(self.failure_modes) != len(set(self.failure_modes)):
             raise ValueError("specialist failure modes must be unique")
+        expected_v2 = _SERENITY_V2_SKILL_VERSIONS.get(self.skill_id)
+        if self.skill_version == expected_v2:
+            if self.method_contract is None:
+                raise ValueError("v2 SpecialistDelta requires its method contract")
+            if self.method_contract.contract_version != self.skill_version:
+                raise ValueError("method contract version must match the selected Skill")
+        elif self.method_contract is not None:
+            raise ValueError("v1 SpecialistDelta cannot carry a v2 method contract")
         return self
 
 
@@ -560,6 +583,7 @@ class SpecialistDelta(AStockModel):
     risk_adjustments: list[SpecialistAdjustment]
     coverage_delta: dict[BaseCaseSection, float]
     evidence_ids: list[str]
+    method_contract: SerenityMethodContractV2 | None = None
 
     @model_validator(mode="after")
     def validate_delta_conservation(self) -> SpecialistDelta:
@@ -576,10 +600,20 @@ class SpecialistDelta(AStockModel):
             )
             for evidence_id in item.evidence_ids
         }
+        if self.method_contract is not None:
+            cited.update(self.method_contract.evidence_ids)
         if self.evidence_ids != sorted(cited):
             raise ValueError("SpecialistDelta evidence ids must equal the cited union")
         if len(self.failure_modes) != len(set(self.failure_modes)):
             raise ValueError("SpecialistDelta failure modes must be unique")
+        expected_v2 = _SERENITY_V2_SKILL_VERSIONS.get(self.skill_id)
+        if self.skill_version == expected_v2:
+            if self.method_contract is None:
+                raise ValueError("v2 SpecialistDelta requires its method contract")
+            if self.method_contract.contract_version != self.skill_version:
+                raise ValueError("method contract version must match the selected Skill")
+        elif self.method_contract is not None:
+            raise ValueError("v1 SpecialistDelta cannot carry a v2 method contract")
         return self
 
 

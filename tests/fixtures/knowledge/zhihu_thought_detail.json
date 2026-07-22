@@ -1,0 +1,22 @@
+{
+  "id": "2055972101819986793",
+  "type": "pin",
+  "author": {
+    "id": "fixture-author-id",
+    "url_token": "xiao-peng-61-47"
+  },
+  "created": 1782960000,
+  "updated": 1782963600,
+  "state": "normal",
+  "is_deleted": false,
+  "view_permission": "all",
+  "content_html": "<p>Synthetic complete thought body.</p>",
+  "content": [
+    {
+      "type": "text",
+      "fold_type": "raw",
+      "own_text": "Synthetic complete thought body.",
+      "content": "Synthetic complete thought body."
+    }
+  ]
+}

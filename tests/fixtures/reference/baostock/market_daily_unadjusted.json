@@ -1,0 +1,20 @@
+{
+  "schema_version": "baostock-raw-envelope-v1",
+  "sdk_version": "0.8.9",
+  "capability": "market.daily_unadjusted",
+  "request": {},
+  "request_started_at": "2026-07-22T00:00:00Z",
+  "request_finished_at": "2026-07-22T07:00:01Z",
+  "login_error_code": "0",
+  "login_error_message": "success",
+  "result_error_code": "0",
+  "result_error_message": "success",
+  "fields": ["date", "code", "open", "high", "low", "close", "preclose", "volume", "amount", "adjustflag", "tradestatus", "isST"],
+  "rows": [
+    ["2026-07-20", "sh.600519", "1450.00", "1472.00", "1445.00", "1468.00", "1448.00", "2500000", "3650000000", "3", "1", "0"],
+    ["2026-07-21", "sh.600519", "1468.00", "1480.00", "1455.00", "1475.00", "1468.00", "2300000", "3380000000", "3", "1", "0"],
+    ["2026-07-22", "sh.600519", "1475.00", "1490.00", "1460.00", "1488.00", "1475.00", "2700000", "4000000000", "3", "1", "0"]
+  ],
+  "row_contexts": [{}, {}, {}],
+  "complete": true
+}

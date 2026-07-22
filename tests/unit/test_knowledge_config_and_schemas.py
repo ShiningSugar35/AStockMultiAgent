@@ -10,7 +10,9 @@ from astock.core.errors import ProviderError
 from astock.knowledge import load_knowledge_sources
 from astock.knowledge.transport import normalize_zhihu_api_url
 from astock.schemas import (
+    KnowledgeCollectionScope,
     KnowledgeIdentityStatus,
+    ZhihuContainerType,
     ZhihuContentType,
     ZhihuListingPage,
     ZhihuTransport,
@@ -27,15 +29,44 @@ def test_knowledge_allowlist_validates_three_online_and_one_local_source() -> No
         "黄彦臻",
         "派大星皮皮",
     }
+    assert all(
+        source.collection_scope.container_types == [ZhihuContainerType.COLUMNS]
+        for source in online
+    )
     local = next(source for source in registry.sources if source.display_name == "寒武纪的鳄鱼")
     assert (
         local.identity_status
         is KnowledgeIdentityStatus.LOCAL_EXPORT_USER_CONFIRMED_COMPLETE
     )
     assert not local.online_collection_required
+    assert local.collection_scope.container_types == []
     assert local.local_seed_sources[0].expected_sha256 == (
         "197ec18e6fabac4401f6412331e9aa50f919498d4e40cfddb481eeab9788852d"
     )
+
+
+def test_columns_are_declared_only_as_unique_container_types() -> None:
+    base = {
+        "history_mode": "FULL_ACCESSIBLE_HISTORY",
+        "content_types": ["answers"],
+        "include_question_context": True,
+        "include_required_comment_pages": False,
+        "include_nested_replies": False,
+        "derive_author_participation_chains": False,
+        "incremental_updates": True,
+    }
+    scope = KnowledgeCollectionScope.model_validate(
+        {**base, "container_types": ["columns"]}
+    )
+    assert scope.container_types == [ZhihuContainerType.COLUMNS]
+    with pytest.raises(ValidationError, match="container type"):
+        KnowledgeCollectionScope.model_validate(
+            {**base, "content_types": ["answers", "columns"]}
+        )
+    with pytest.raises(ValidationError, match="container types must be unique"):
+        KnowledgeCollectionScope.model_validate(
+            {**base, "container_types": ["columns", "columns"]}
+        )
 
 
 def test_non_terminal_zhihu_page_requires_resumable_next_cursor() -> None:

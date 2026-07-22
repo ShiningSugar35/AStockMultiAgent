@@ -146,7 +146,9 @@ class PositionLifecycleService:
         skill_versions = {
             item.skill_id: item.skill_version for item in route.selected
         }
-        skill_versions["ResearchMemoComposer"] = "research-memo-composer-v1"
+        skill_versions["ResearchMemoComposer"] = (
+            memo.composer_version or "research-memo-composer-v1"
+        )
         plan = PositionMonitoringPlan(
             plan_id=plan_id,
             position_id=request.position_id,

@@ -36,8 +36,15 @@ def test_knowledge_allowlist_is_exact_and_online_identities_are_confirmed() -> N
         scope = source["collection_scope"]
         assert scope["history_mode"] == "FULL_ACCESSIBLE_HISTORY"
         assert scope["content_types"] == ["answers", "thoughts", "articles"]
-        assert scope["include_required_comment_pages"] is True
-        assert scope["include_nested_replies"] is True
+        assert scope["container_types"] == ["columns"]
+        assert scope["include_required_comment_pages"] is False
+        assert scope["include_nested_replies"] is False
+        assert scope["derive_author_participation_chains"] is False
+
+    assert all(
+        source["collection_scope"]["derive_author_participation_chains"] is False
+        for source in sources
+    )
 
     hanwuji = by_name["寒武纪的鳄鱼"]
     assert hanwuji["source_id"] == "zhihu:hanwujideeyu"
@@ -45,6 +52,7 @@ def test_knowledge_allowlist_is_exact_and_online_identities_are_confirmed() -> N
     assert hanwuji["access_status"] == "LOCAL_EXPORT_PARSED_COMPLETE"
     assert hanwuji["online_collection_required"] is False
     assert hanwuji["enabled"] is True
+    assert hanwuji["collection_scope"]["container_types"] == []
 
 
 def test_resolved_identity_tasks_leave_no_open_identity_blocker() -> None:
@@ -93,20 +101,22 @@ def test_private_docx_is_user_confirmed_complete_without_online_collection() -> 
     assert source["enabled"] is True
 
 
-def test_development_plan_names_every_source_and_book_artifact() -> None:
-    plan = (PROJECT_ROOT / "docs" / "开发计划.md").read_text(encoding="utf-8")
+def test_root_documents_name_current_sources_and_knowledge_boundaries() -> None:
+    design = (PROJECT_ROOT / "低成本A股多Agent投研系统方案.md").read_text(
+        encoding="utf-8"
+    )
+    plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
+    acceptance = (PROJECT_ROOT / "验收报告.md").read_text(encoding="utf-8")
     for text in (
         "MR Dang",
         "黄彦臻",
         "派大星皮皮",
         "寒武纪的鳄鱼",
-        "《价值投资功法》",
-        "BookSourceManifest",
-        "BookParseReport",
-        "BookCleaningReport",
-        "BookMethodCoverageReport",
-        "BookViewpointCard",
-        "BookSkillCandidate",
-        "HumanReviewDecision",
     ):
-        assert text in plan
+        assert text in acceptance
+    for text in (
+        "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate",
+        "生产范围永久排除评论和子回复",
+        "PENDING/NOT_RUN",
+    ):
+        assert text in design + plan

@@ -11,11 +11,12 @@ from urllib.parse import quote
 import pyarrow.parquet as pq
 
 from astock.books import BookRepository, PrivateDocxRepository
+from astock.core.errors import AStockError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import DocumentBlockRepository
-from astock.knowledge.gaps import count_open_gap_boundaries
+from astock.knowledge.gaps import count_open_gap_boundaries, gap_cutoff_history_available
 from astock.knowledge.repository import KnowledgeRepository
 from astock.schemas import (
     BookProcessingStatus,
@@ -29,17 +30,32 @@ from astock.schemas import (
     KnowledgeSourceCoverageAudit,
     KnowledgeSourceDefinition,
     KnowledgeSourceRegistry,
+    ZhihuCommentPage,
+    ZhihuContainerType,
+    ZhihuContentCompleteness,
+    ZhihuContentRecord,
     ZhihuContentType,
+    ZhihuListingPage,
+    ZhihuResponseKind,
 )
 
 _LOCAL_COVERAGE_BASIS = "USER_CONFIRMED_COMPLETE_EXPORT"
 _STALE_RUNNING_AFTER = timedelta(hours=1)
+_AUDIT_QUIESCENCE_LAG = timedelta(seconds=30)
+_ACTIVE_RESPONSE_KINDS = (
+    ZhihuResponseKind.LISTING,
+    ZhihuResponseKind.CONTENT_DETAIL,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class _ParquetIndex:
     body_hash_by_version: dict[str, str]
     read_error_count: int
+
+
+def _content_freshness(record: ZhihuContentRecord) -> datetime:
+    return record.updated_at or record.published_at or record.collected_at
 
 
 class KnowledgeCoverageAuditService:
@@ -119,9 +135,9 @@ class KnowledgeCoverageAuditService:
             if not snapshot_matches:
                 findings.append("SOURCE_SNAPSHOT_MISSING_OR_MISMATCHED")
 
-            parse_report = PrivateDocxRepository(
-                self.state
-            ).latest_parse_report_for_manifest(manifest.manifest_id)
+            parse_report = PrivateDocxRepository(self.state).latest_parse_report_for_manifest(
+                manifest.manifest_id
+            )
             if parse_report is None:
                 findings.append("DOCX_PARSE_REPORT_NOT_FOUND")
             else:
@@ -232,10 +248,17 @@ class KnowledgeCoverageAuditService:
     def audit_registry(
         self,
         registry: KnowledgeSourceRegistry,
+        *,
+        quiescence_lag: timedelta = _AUDIT_QUIESCENCE_LAG,
     ) -> KnowledgeCoverageAuditReport:
+        if quiescence_lag < timedelta(0):
+            raise ValueError("quiescence_lag cannot be negative")
         audited_at = datetime.now(UTC)
+        data_cutoff_at = audited_at - quiescence_lag
         source_reports = [
-            self._audit_source(source) for source in registry.sources if source.enabled
+            self._audit_source(source, data_cutoff_at)
+            for source in registry.sources
+            if source.enabled
         ]
         total_open_gaps = sum(item.open_gap_count for item in source_reports)
         total_pending = sum(item.pending_import_count for item in source_reports)
@@ -257,9 +280,7 @@ class KnowledgeCoverageAuditService:
             for scope in source.scope_reports
         )
         local_report_ids = {
-            report_id
-            for source in source_reports
-            for report_id in source.local_report_ids
+            report_id for source in source_reports for report_id in source.local_report_ids
         }
         if local_report_ids:
             with self.state.connect() as connection:
@@ -270,18 +291,30 @@ class KnowledgeCoverageAuditService:
                     tuple(sorted(local_report_ids)),
                 ).fetchall()
             missing_objects += sum(
-                KnowledgeLocalCoverageReport.model_validate_json(row["report_json"]).missing_object_count
+                KnowledgeLocalCoverageReport.model_validate_json(
+                    row["report_json"]
+                ).missing_object_count
                 for row in rows
             )
-        stale_before = (audited_at - _STALE_RUNNING_AFTER).isoformat()
         with self.state.connect() as connection:
-            stale_running_jobs = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM job WHERE type LIKE 'zhihu-%' "
-                    "AND status='RUNNING' AND updated_at<?",
-                    (stale_before,),
-                ).fetchone()[0]
-            )
+            attempt_rows = connection.execute(
+                "SELECT j.job_id,a.started_at,a.ended_at FROM job_attempt a "
+                "JOIN job j ON j.job_id=a.job_id WHERE j.type LIKE 'zhihu-%'"
+            ).fetchall()
+        stale_before = data_cutoff_at - _STALE_RUNNING_AFTER
+        stale_running_jobs = len(
+            {
+                str(row["job_id"])
+                for row in attempt_rows
+                if (started_at := _parse_utc_text(str(row["started_at"])))
+                <= data_cutoff_at
+                and started_at < stale_before
+                and (
+                    row["ended_at"] is None
+                    or _parse_utc_text(str(row["ended_at"])) > data_cutoff_at
+                )
+            }
+        )
         findings: list[str] = []
         if total_open_gaps:
             findings.append("OPEN_COLLECTION_GAPS")
@@ -293,6 +326,17 @@ class KnowledgeCoverageAuditService:
             findings.append("MISSING_OR_INVALID_OBJECTS")
         if parquet_mismatches:
             findings.append("PARQUET_SQLITE_MISMATCH")
+        if any(
+            "GAP_CUTOFF_HISTORY_UNAVAILABLE" in source.findings
+            or any(
+                "GAP_CUTOFF_HISTORY_UNAVAILABLE" in scope.findings
+                for scope in source.scope_reports
+            )
+            for source in source_reports
+        ):
+            findings.append("GAP_CUTOFF_HISTORY_UNAVAILABLE")
+        if any("IMPORT_CUTOFF_HISTORY_UNAVAILABLE" in source.findings for source in source_reports):
+            findings.append("IMPORT_CUTOFF_HISTORY_UNAVAILABLE")
         complete_statuses = {
             KnowledgeAuditStatus.PASS,
             KnowledgeAuditStatus.USER_CONFIRMED_COMPLETE_EXPORT,
@@ -309,6 +353,7 @@ class KnowledgeCoverageAuditService:
             "missing_object_count": missing_objects,
             "parquet_mismatch_count": parquet_mismatches,
             "findings": findings,
+            "data_cutoff_at": data_cutoff_at,
             "audited_at": audited_at,
         }
         report = KnowledgeCoverageAuditReport(
@@ -321,6 +366,7 @@ class KnowledgeCoverageAuditService:
             parquet_mismatch_count=parquet_mismatches,
             status=status,
             findings=findings,
+            data_cutoff_at=data_cutoff_at,
             audited_at=audited_at,
             created_at=audited_at,
         )
@@ -330,6 +376,7 @@ class KnowledgeCoverageAuditService:
     def _audit_source(
         self,
         source: KnowledgeSourceDefinition,
+        data_cutoff_at: datetime,
     ) -> KnowledgeSourceCoverageAudit:
         if not source.online_collection_required:
             local_reports = [
@@ -340,29 +387,61 @@ class KnowledgeCoverageAuditService:
                 report.status is KnowledgeAuditStatus.USER_CONFIRMED_COMPLETE_EXPORT
                 for report in local_reports
             )
+            pending_imports = self.repository.pending_import_count(
+                source.source_id,
+                response_kinds=_ACTIVE_RESPONSE_KINDS,
+                data_cutoff_at=data_cutoff_at,
+            )
+            open_gaps = self._open_gap_count(source.source_id, data_cutoff_at)
+            findings = [] if complete else ["LOCAL_EXPORT_INTEGRITY_INCOMPLETE"]
+            if pending_imports:
+                findings.append("PENDING_IMPORTED_RESPONSES")
+            if open_gaps:
+                findings.append("OPEN_COLLECTION_GAPS")
+            if (
+                self._gap_events_exist(source.source_id)
+                and not gap_cutoff_history_available(self.state, data_cutoff_at)
+            ):
+                findings.append("GAP_CUTOFF_HISTORY_UNAVAILABLE")
+            if self.repository.rejected_import_temporal_count(
+                source.source_id,
+                response_kinds=_ACTIVE_RESPONSE_KINDS,
+                data_cutoff_at=data_cutoff_at,
+            ):
+                findings.append("IMPORT_CUTOFF_HISTORY_UNAVAILABLE")
+            findings = sorted(set(findings))
             return KnowledgeSourceCoverageAudit(
                 source_id=source.source_id,
                 online_collection_required=False,
                 identity_status=source.identity_status,
                 identity_registered=True,
                 local_report_ids=[report.report_id for report in local_reports],
-                pending_import_count=self.repository.pending_import_count(source.source_id),
-                open_gap_count=self._open_gap_count(source.source_id),
+                pending_import_count=pending_imports,
+                open_gap_count=open_gaps,
                 status=(
                     KnowledgeAuditStatus.USER_CONFIRMED_COMPLETE_EXPORT
-                    if complete
+                    if complete and not findings
                     else KnowledgeAuditStatus.PARTIAL
                 ),
-                findings=([] if complete else ["LOCAL_EXPORT_INTEGRITY_INCOMPLETE"]),
+                findings=findings,
             )
 
-        identity_registered = self._identity_registered(source.source_id)
+        identity_registered = self._identity_registered(source.source_id, data_cutoff_at)
+        gap_history_available = gap_cutoff_history_available(self.state, data_cutoff_at)
         scope_reports = [
-            self._audit_online_scope(source, ZhihuContentType(content_type))
+            self._audit_online_scope(
+                source,
+                ZhihuContentType(content_type),
+                data_cutoff_at,
+            )
             for content_type in source.collection_scope.content_types
         ]
-        pending_imports = self.repository.pending_import_count(source.source_id)
-        open_gaps = self._open_gap_count(source.source_id)
+        pending_imports = self.repository.pending_import_count(
+            source.source_id,
+            response_kinds=_ACTIVE_RESPONSE_KINDS,
+            data_cutoff_at=data_cutoff_at,
+        )
+        open_gaps = self._open_gap_count(source.source_id, data_cutoff_at)
         findings: list[str] = []
         if not identity_registered:
             findings.append("CONFIRMED_IDENTITY_NOT_REGISTERED")
@@ -370,6 +449,16 @@ class KnowledgeCoverageAuditService:
             findings.append("PENDING_IMPORTED_RESPONSES")
         if open_gaps:
             findings.append("OPEN_COLLECTION_GAPS")
+        if self._gap_events_exist(source.source_id) and not gap_history_available:
+            findings.append("GAP_CUTOFF_HISTORY_UNAVAILABLE")
+        if self.repository.rejected_import_temporal_count(
+            source.source_id,
+            response_kinds=_ACTIVE_RESPONSE_KINDS,
+            data_cutoff_at=data_cutoff_at,
+        ):
+            findings.append("IMPORT_CUTOFF_HISTORY_UNAVAILABLE")
+        if ZhihuContainerType.COLUMNS in source.collection_scope.container_types:
+            findings.append("COLUMN_ENUMERATION_NOT_VERIFIED")
         if any(
             scope.status in {KnowledgeAuditStatus.PARTIAL, KnowledgeAuditStatus.NOT_COLLECTED}
             for scope in scope_reports
@@ -378,9 +467,7 @@ class KnowledgeCoverageAuditService:
         findings = sorted(set(findings))
         if findings:
             status = KnowledgeAuditStatus.PARTIAL
-        elif any(
-            scope.status is KnowledgeAuditStatus.ACCESS_RESTRICTED for scope in scope_reports
-        ):
+        elif any(scope.status is KnowledgeAuditStatus.ACCESS_RESTRICTED for scope in scope_reports):
             status = KnowledgeAuditStatus.ACCESS_RESTRICTED
         else:
             status = KnowledgeAuditStatus.PASS
@@ -400,119 +487,162 @@ class KnowledgeCoverageAuditService:
         self,
         source: KnowledgeSourceDefinition,
         content_type: ZhihuContentType,
+        data_cutoff_at: datetime,
     ) -> KnowledgeScopeCoverageAudit:
-        latest = self.repository.latest_coverage_report(source.source_id, content_type)
+        latest = self.repository.latest_coverage_report(
+            source.source_id,
+            content_type,
+            data_cutoff_at=data_cutoff_at,
+        )
         with self.state.connect() as connection:
             content_rows = connection.execute(
-                "SELECT version_id,body_object_hash,content_id FROM zhihu_content_version "
+                "SELECT version_id,body_object_hash,content_id,record_json,collected_at "
+                "FROM zhihu_content_version "
                 "WHERE source_id=? AND content_type=?",
                 (source.source_id, content_type.value),
             ).fetchall()
-            comment_rows = connection.execute(
-                "SELECT version_id,body_object_hash FROM zhihu_comment_version "
+            listing_page_rows = connection.execute(
+                "SELECT page_json,fetched_at FROM zhihu_listing_page_manifest "
                 "WHERE source_id=? AND content_type=?",
                 (source.source_id, content_type.value),
             ).fetchall()
-            participation_rows = connection.execute(
-                "SELECT DISTINCT content_id,root_comment_id "
-                "FROM zhihu_author_participation_chain "
-                "WHERE source_id=? AND content_type=?",
-                (source.source_id, content_type.value),
-            ).fetchall()
+        content_rows = [
+            row
+            for row in content_rows
+            if _parse_utc_text(str(row["collected_at"])) <= data_cutoff_at
+        ]
+        listing_page_rows = [
+            row
+            for row in listing_page_rows
+            if _parse_utc_text(str(row["fetched_at"])) <= data_cutoff_at
+        ]
         sqlite_content = {
             str(row["version_id"]): str(row["body_object_hash"]) for row in content_rows
         }
-        sqlite_comment = {
-            str(row["version_id"]): str(row["body_object_hash"]) for row in comment_rows
-        }
         content_parquet = self._read_parquet_index(
-            "knowledge_content", source.source_id, content_type
-        )
-        comment_parquet = self._read_parquet_index(
-            "knowledge_comments", source.source_id, content_type
+            "knowledge_content",
+            source.source_id,
+            content_type,
+            data_cutoff_at,
         )
         content_ids = set(sqlite_content)
         content_parquet_ids = set(content_parquet.body_hash_by_version)
-        comment_ids = set(sqlite_comment)
-        comment_parquet_ids = set(comment_parquet.body_hash_by_version)
         missing_content_bodies = sum(
             not self.object_store.verify(body_hash) for body_hash in sqlite_content.values()
         )
-        missing_comment_bodies = sum(
-            not self.object_store.verify(body_hash) for body_hash in sqlite_comment.values()
-        )
         content_hash_mismatches = sum(
-            sqlite_content[version_id]
-            != content_parquet.body_hash_by_version[version_id]
+            sqlite_content[version_id] != content_parquet.body_hash_by_version[version_id]
             for version_id in content_ids & content_parquet_ids
         )
-        comment_hash_mismatches = sum(
-            sqlite_comment[version_id]
-            != comment_parquet.body_hash_by_version[version_id]
-            for version_id in comment_ids & comment_parquet_ids
+        content_records = [
+            ZhihuContentRecord.model_validate_json(row["record_json"]) for row in content_rows
+        ]
+        discovered_content_ids = {record.content_id for record in content_records}
+        listing_pages: list[ZhihuListingPage] = []
+        listing_page_decode_errors = 0
+        for row in listing_page_rows:
+            try:
+                listing_pages.append(ZhihuListingPage.model_validate_json(row["page_json"]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                listing_page_decode_errors += 1
+        terminal_pages = [page for page in listing_pages if page.is_end]
+        latest_terminal_page = (
+            max(terminal_pages, key=lambda page: (page.listing_page, page.fetched_at))
+            if terminal_pages
+            else None
         )
-        root_required_ids = (
-            {str(row["content_id"]) for row in content_rows}
-            if source.collection_scope.include_required_comment_pages
-            else set()
+        reported_totals: set[int] = set()
+        listing_total_read_errors = 0
+        listing_reported_total: int | None = None
+        for page in listing_pages:
+            reported_total, read_error = self._listing_reported_total(page)
+            listing_total_read_errors += int(read_error)
+            if reported_total is not None:
+                reported_totals.add(reported_total)
+            if latest_terminal_page is not None and page.page_id == latest_terminal_page.page_id:
+                listing_reported_total = reported_total
+        listing_total_mismatch = (
+            abs(len(discovered_content_ids) - listing_reported_total)
+            if listing_reported_total is not None
+            else 0
         )
-        child_required = {
-            (str(row["content_id"]), str(row["root_comment_id"]))
-            for row in participation_rows
-        }
-        root_terminal, child_terminal, checkpoint_errors = self._comment_terminals(
+        listing_total_changes = max(0, len(reported_totals) - 1)
+        detail_verified_ids: set[str] = set()
+        detail_stale_ids: set[str] = set()
+        for content_id in discovered_content_ids:
+            listing_records = [
+                record
+                for record in content_records
+                if record.content_id == content_id
+                and record.content_completeness is ZhihuContentCompleteness.LISTING_UNVERIFIED
+            ]
+            detail_records = [
+                record
+                for record in content_records
+                if record.content_id == content_id
+                and record.content_completeness is ZhihuContentCompleteness.DETAIL_VERIFIED
+            ]
+            if not detail_records:
+                continue
+            latest_detail = max(detail_records, key=_content_freshness)
+            latest_listing = (
+                max(listing_records, key=_content_freshness) if listing_records else None
+            )
+            if latest_listing is None or _content_freshness(latest_detail) >= _content_freshness(
+                latest_listing
+            ):
+                detail_verified_ids.add(content_id)
+            else:
+                detail_stale_ids.add(content_id)
+        gap_history_available = gap_cutoff_history_available(self.state, data_cutoff_at)
+        open_gaps = self._scope_open_gap_count(
             source.source_id,
             content_type,
+            data_cutoff_at,
         )
-        root_terminal_count = len(root_required_ids & root_terminal)
-        child_terminal_count = len(child_required & child_terminal)
-        open_gaps = self._scope_open_gap_count(source.source_id, content_type)
         missing_content_parquet = len(content_ids - content_parquet_ids)
         orphan_content_parquet = len(content_parquet_ids - content_ids)
-        missing_comment_parquet = len(comment_ids - comment_parquet_ids)
-        orphan_comment_parquet = len(comment_parquet_ids - comment_ids)
         findings: list[str] = []
         counts = {
             "MISSING_CONTENT_BODY_OBJECTS": missing_content_bodies,
-            "MISSING_COMMENT_BODY_OBJECTS": missing_comment_bodies,
             "MISSING_CONTENT_PARQUET_ROWS": missing_content_parquet,
             "ORPHAN_CONTENT_PARQUET_ROWS": orphan_content_parquet,
             "CONTENT_PARQUET_HASH_MISMATCH": content_hash_mismatches,
             "CONTENT_PARQUET_READ_ERRORS": content_parquet.read_error_count,
-            "MISSING_COMMENT_PARQUET_ROWS": missing_comment_parquet,
-            "ORPHAN_COMMENT_PARQUET_ROWS": orphan_comment_parquet,
-            "COMMENT_PARQUET_HASH_MISMATCH": comment_hash_mismatches,
-            "COMMENT_PARQUET_READ_ERRORS": comment_parquet.read_error_count,
-            "COMMENT_CHECKPOINT_DECODE_ERRORS": checkpoint_errors,
-            "ROOT_COMMENT_SCOPES_INCOMPLETE": len(root_required_ids) - root_terminal_count,
-            "CHILD_REPLY_SCOPES_INCOMPLETE": len(child_required) - child_terminal_count,
+            "LISTING_PAGE_DECODE_ERRORS": listing_page_decode_errors,
+            "LISTING_TOTAL_READ_ERRORS": listing_total_read_errors,
+            "LISTING_TOTAL_MISMATCH": listing_total_mismatch,
+            "LISTING_REPORTED_TOTAL_CHANGED": listing_total_changes,
+            "CONTENT_DETAILS_INCOMPLETE": (len(discovered_content_ids) - len(detail_verified_ids)),
+            "CONTENT_DETAILS_STALE": len(detail_stale_ids),
             "OPEN_COLLECTION_GAPS": open_gaps,
         }
         findings.extend(f"{code}:{count}" for code, count in counts.items() if count)
+        if not gap_history_available:
+            findings.append("GAP_CUTOFF_HISTORY_UNAVAILABLE")
         integrity_failure = any(
             counts[key]
             for key in (
                 "MISSING_CONTENT_BODY_OBJECTS",
-                "MISSING_COMMENT_BODY_OBJECTS",
                 "MISSING_CONTENT_PARQUET_ROWS",
                 "ORPHAN_CONTENT_PARQUET_ROWS",
                 "CONTENT_PARQUET_HASH_MISMATCH",
                 "CONTENT_PARQUET_READ_ERRORS",
-                "MISSING_COMMENT_PARQUET_ROWS",
-                "ORPHAN_COMMENT_PARQUET_ROWS",
-                "COMMENT_PARQUET_HASH_MISMATCH",
-                "COMMENT_PARQUET_READ_ERRORS",
-                "COMMENT_CHECKPOINT_DECODE_ERRORS",
+                "LISTING_PAGE_DECODE_ERRORS",
+                "LISTING_TOTAL_READ_ERRORS",
             )
         )
-        comment_incomplete = (
-            root_terminal_count != len(root_required_ids)
-            or child_terminal_count != len(child_required)
-        )
+        detail_incomplete = len(detail_verified_ids) != len(discovered_content_ids)
+        listing_incomplete = bool(listing_total_mismatch or listing_total_changes)
         if latest is None:
             status = KnowledgeAuditStatus.NOT_COLLECTED
             findings.append("LISTING_COVERAGE_REPORT_NOT_FOUND")
-        elif integrity_failure or comment_incomplete:
+        elif (
+            integrity_failure
+            or listing_incomplete
+            or detail_incomplete
+            or not gap_history_available
+        ):
             status = KnowledgeAuditStatus.PARTIAL
         elif latest.coverage_status is CoverageStatus.ACCESS_RESTRICTED:
             status = KnowledgeAuditStatus.ACCESS_RESTRICTED
@@ -522,42 +652,106 @@ class KnowledgeCoverageAuditService:
             status = KnowledgeAuditStatus.PASS
         return KnowledgeScopeCoverageAudit(
             content_type=content_type.value,
+            data_cutoff_at=data_cutoff_at,
             listing_report_id=latest.report_id if latest else None,
             listing_terminal_condition=latest.terminal_condition if latest else None,
             listing_coverage_status=latest.coverage_status if latest else None,
+            listing_reported_total=listing_reported_total,
+            listing_unique_content_count=len(discovered_content_ids),
+            listing_total_mismatch_count=listing_total_mismatch,
+            listing_total_change_count=listing_total_changes,
+            listing_page_decode_error_count=listing_page_decode_errors,
+            listing_total_read_error_count=listing_total_read_errors,
             sqlite_content_version_count=len(content_ids),
             parquet_content_version_count=len(content_parquet_ids),
             verified_content_body_count=len(content_ids) - missing_content_bodies,
+            detail_required_count=len(discovered_content_ids),
+            detail_verified_count=len(detail_verified_ids),
+            detail_stale_count=len(detail_stale_ids),
             missing_content_body_count=missing_content_bodies,
             missing_content_parquet_count=missing_content_parquet,
             orphan_content_parquet_count=orphan_content_parquet,
             content_parquet_hash_mismatch_count=content_hash_mismatches,
             content_parquet_read_error_count=content_parquet.read_error_count,
-            sqlite_comment_version_count=len(comment_ids),
-            parquet_comment_version_count=len(comment_parquet_ids),
-            verified_comment_body_count=len(comment_ids) - missing_comment_bodies,
-            missing_comment_body_count=missing_comment_bodies,
-            missing_comment_parquet_count=missing_comment_parquet,
-            orphan_comment_parquet_count=orphan_comment_parquet,
-            comment_parquet_hash_mismatch_count=comment_hash_mismatches,
-            comment_parquet_read_error_count=comment_parquet.read_error_count,
-            root_comment_required_count=len(root_required_ids),
-            root_comment_terminal_count=root_terminal_count,
-            child_reply_required_count=len(child_required),
-            child_reply_terminal_count=child_terminal_count,
+            sqlite_comment_version_count=0,
+            parquet_comment_version_count=0,
+            verified_comment_body_count=0,
+            missing_comment_body_count=0,
+            missing_comment_parquet_count=0,
+            orphan_comment_parquet_count=0,
+            comment_parquet_hash_mismatch_count=0,
+            comment_parquet_read_error_count=0,
+            root_comment_required_count=0,
+            root_comment_terminal_count=0,
+            root_comment_total_mismatch_count=0,
+            root_comment_total_change_count=0,
+            platform_comment_total_mismatch_count=0,
+            platform_comment_total_change_count=0,
+            comment_page_decode_error_count=0,
+            comment_total_read_error_count=0,
+            comment_pagination_cycle_count=0,
+            child_reply_required_count=0,
+            child_reply_terminal_count=0,
+            child_reply_count_mismatch_count=0,
             open_gap_count=open_gaps,
             status=status,
             findings=sorted(set(findings)),
         )
 
+    def _listing_reported_total(self, page: ZhihuListingPage) -> tuple[int | None, bool]:
+        if page.reported_total is not None:
+            return page.reported_total, False
+        try:
+            payload = json.loads(self.object_store.get_bytes(page.raw_object_sha256))
+        except (AStockError, UnicodeDecodeError, json.JSONDecodeError):
+            return None, True
+        if not isinstance(payload, dict):
+            return None, True
+        paging = payload.get("paging")
+        if not isinstance(paging, dict):
+            return None, True
+        reported_total = paging.get("totals")
+        if reported_total is None:
+            return None, False
+        if (
+            isinstance(reported_total, bool)
+            or not isinstance(reported_total, int)
+            or reported_total < 0
+        ):
+            return None, True
+        return reported_total, False
+
+    def _comment_reported_total(self, page: ZhihuCommentPage) -> tuple[int | None, bool]:
+        if page.reported_total is not None:
+            return page.reported_total, False
+        try:
+            payload = json.loads(self.object_store.get_bytes(page.raw_object_sha256))
+        except (AStockError, UnicodeDecodeError, json.JSONDecodeError):
+            return None, True
+        if not isinstance(payload, dict) or not isinstance(payload.get("paging"), dict):
+            return None, True
+        reported_total = payload["paging"].get("totals")
+        if reported_total is None:
+            return None, False
+        if (
+            isinstance(reported_total, bool)
+            or not isinstance(reported_total, int)
+            or reported_total < 0
+        ):
+            return None, True
+        return reported_total, False
+
     def _comment_terminals(
         self,
         source_id: str,
         content_type: ZhihuContentType,
+        data_cutoff_at: datetime,
     ) -> tuple[set[str], set[tuple[str, str]], int]:
         with self.state.connect() as connection:
             rows = connection.execute(
-                "SELECT cursor_json FROM checkpoint WHERE scope_type='author-collection'"
+                "SELECT cursor_json FROM checkpoint WHERE scope_type='author-collection' "
+                "AND committed_at<=?",
+                (data_cutoff_at.isoformat(),),
             ).fetchall()
         root_terminal: set[str] = set()
         child_terminal: set[tuple[str, str]] = set()
@@ -578,9 +772,7 @@ class KnowledgeCoverageAuditService:
             if checkpoint.comment_parent_id is None:
                 root_terminal.add(checkpoint.content_id)
             else:
-                child_terminal.add(
-                    (checkpoint.content_id, checkpoint.comment_parent_id)
-                )
+                child_terminal.add((checkpoint.content_id, checkpoint.comment_parent_id))
         return root_terminal, child_terminal, decode_errors
 
     def _read_parquet_index(
@@ -588,6 +780,7 @@ class KnowledgeCoverageAuditService:
         dataset_name: str,
         source_id: str,
         content_type: ZhihuContentType,
+        data_cutoff_at: datetime,
     ) -> _ParquetIndex:
         source_root = (
             self.parquet_root
@@ -599,10 +792,18 @@ class KnowledgeCoverageAuditService:
         read_errors = 0
         for path in sorted(source_root.rglob("*.parquet")) if source_root.exists() else []:
             try:
-                rows = pq.ParquetFile(path).read(
-                    columns=["version_id", "body_object_sha256"]
-                ).to_pylist()
+                rows = (
+                    pq.ParquetFile(path)
+                    .read(columns=["version_id", "body_object_sha256", "collected_at"])
+                    .to_pylist()
+                )
                 for row in rows:
+                    collected_at = row.get("collected_at")
+                    if not isinstance(collected_at, datetime):
+                        read_errors += 1
+                        continue
+                    if collected_at > data_cutoff_at:
+                        continue
                     version_id = str(row["version_id"])
                     body_hash = str(row["body_object_sha256"])
                     previous = body_hash_by_version.get(version_id)
@@ -613,28 +814,43 @@ class KnowledgeCoverageAuditService:
                 read_errors += 1
         return _ParquetIndex(body_hash_by_version, read_errors)
 
-    def _identity_registered(self, source_id: str) -> bool:
+    def _identity_registered(self, source_id: str, data_cutoff_at: datetime) -> bool:
         with self.state.connect() as connection:
             row = connection.execute(
-                "SELECT 1 FROM knowledge_source_identity WHERE source_id=?",
+                "SELECT verified_at FROM knowledge_source_identity WHERE source_id=?",
+                (source_id,),
+            ).fetchone()
+        return row is not None and _parse_utc_text(str(row["verified_at"])) <= data_cutoff_at
+
+    def _gap_events_exist(self, source_id: str) -> bool:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM collection_gap_state_event e "
+                "JOIN collection_scope s ON s.scope_id=e.scope_id "
+                "WHERE s.author_id=? AND s.content_type NOT LIKE 'comments:%' LIMIT 1",
                 (source_id,),
             ).fetchone()
         return row is not None
 
-    def _open_gap_count(self, source_id: str) -> int:
-        return count_open_gap_boundaries(self.state, source_id)
+    def _open_gap_count(self, source_id: str, data_cutoff_at: datetime) -> int:
+        return count_open_gap_boundaries(
+            self.state,
+            source_id,
+            excluded_scope_prefix="comments:%",
+            data_cutoff_at=data_cutoff_at,
+        )
 
     def _scope_open_gap_count(
         self,
         source_id: str,
         content_type: ZhihuContentType,
+        data_cutoff_at: datetime,
     ) -> int:
-        comment_prefix = f"comments:{content_type.value}:%"
         return count_open_gap_boundaries(
             self.state,
             source_id,
             content_type=content_type.value,
-            comment_scope_prefix=comment_prefix,
+            data_cutoff_at=data_cutoff_at,
         )
 
     @staticmethod
@@ -678,6 +894,14 @@ class KnowledgeCoverageAuditService:
             object_hash=object_ref.sha256,
             input_hashes=[content_hash(item) for item in report.source_reports],
         )
+
+
+def _parse_utc_text(value: str) -> datetime:
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("persisted timestamp must include a UTC offset")
+    return parsed.astimezone(UTC)
 
 
 __all__ = ["KnowledgeCoverageAuditService"]

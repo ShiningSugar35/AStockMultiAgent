@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "id": 101,
+      "type": "answer",
+      "created_time": 1704067200,
+      "updated_time": 1704153600,
+      "content_need_truncated": true,
+      "author": {"id": "fixture-author-id", "url_token": "mr-dang-77"},
+      "question": {"id": 9001, "title": "Synthetic metadata-only question"}
+    }
+  ],
+  "paging": {
+    "is_end": true,
+    "next": "",
+    "previous": ""
+  }
+}

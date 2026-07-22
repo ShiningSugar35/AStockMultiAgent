@@ -1,0 +1,10 @@
+{
+  "status_code": 200,
+  "content_type": "application/json",
+  "latency_ms": 12,
+  "body": {
+    "data": {
+      "klines": ["2026-07-22 15:00,1498.00,1501.00,1503.00,1497.00,1200,1800000"]
+    }
+  }
+}

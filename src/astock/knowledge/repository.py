@@ -23,6 +23,7 @@ from astock.schemas import (
     ZhihuImportedResponse,
     ZhihuImportStatus,
     ZhihuListingPage,
+    ZhihuResponseKind,
 )
 
 
@@ -43,11 +44,11 @@ class KnowledgeRepository:
         self.state = state
 
     def register_identity(self, identity: ZhihuAuthorIdentity) -> ZhihuAuthorIdentity:
-        identity_json = canonical_json_bytes(identity.model_dump(mode="json")).decode("utf-8")
-        now = datetime.now(UTC).isoformat()
+        now = _utc_text(datetime.now(UTC))
         with self.state.transaction() as connection:
             row = connection.execute(
-                "SELECT platform_user_id,url_token FROM knowledge_source_identity "
+                "SELECT platform_user_id,url_token,verified_at "
+                "FROM knowledge_source_identity "
                 "WHERE source_id=?",
                 (identity.author_source_id,),
             ).fetchone()
@@ -59,6 +60,16 @@ class KnowledgeRepository:
                     f"Zhihu identity changed for {identity.author_source_id}; "
                     "manual review required"
                 )
+            stored_identity = (
+                identity.model_copy(
+                    update={"verified_at": _parse_utc_text(str(row["verified_at"]))}
+                )
+                if row is not None
+                else identity
+            )
+            identity_json = canonical_json_bytes(
+                stored_identity.model_dump(mode="json")
+            ).decode("utf-8")
             connection.execute(
                 "INSERT INTO knowledge_source_identity("
                 "source_id,platform_user_id,url_token,display_name,profile_url,identity_status,"
@@ -68,7 +79,7 @@ class KnowledgeRepository:
                 "identity_status=excluded.identity_status,"
                 "profile_snapshot_id=excluded.profile_snapshot_id,"
                 "profile_object_hash=excluded.profile_object_hash,"
-                "identity_json=excluded.identity_json,verified_at=excluded.verified_at,"
+                "identity_json=excluded.identity_json,"
                 "updated_at=excluded.updated_at",
                 (
                     identity.author_source_id,
@@ -80,11 +91,11 @@ class KnowledgeRepository:
                     identity.profile_snapshot_id,
                     identity.profile_object_sha256,
                     identity_json,
-                    identity.verified_at.isoformat(),
+                    _utc_text(stored_identity.verified_at),
                     now,
                 ),
             )
-        return identity
+        return stored_identity
 
     def get_identity(self, source_id: str) -> ZhihuAuthorIdentity | None:
         with self.state.connect() as connection:
@@ -136,9 +147,9 @@ class KnowledgeRepository:
                     record.raw_object_sha256,
                     record.body_byte_size,
                     record.import_status.value,
-                    record.captured_at.isoformat(),
-                    record.imported_at.isoformat(),
-                    record.consumed_at.isoformat() if record.consumed_at else None,
+                    _utc_text(record.captured_at),
+                    _utc_text(record.imported_at),
+                    _utc_text(record.consumed_at) if record.consumed_at else None,
                     record_json,
                 ),
             )
@@ -152,14 +163,67 @@ class KnowledgeRepository:
             ).fetchone()
         return ZhihuImportedResponse.model_validate_json(row["record_json"]) if row else None
 
-    def pending_import_count(self, source_id: str | None = None) -> int:
-        query = "SELECT COUNT(*) FROM zhihu_imported_response WHERE import_status='PENDING'"
-        parameters: tuple[str, ...] = ()
+    def pending_import_count(
+        self,
+        source_id: str | None = None,
+        *,
+        response_kinds: tuple[ZhihuResponseKind, ...] | None = None,
+        data_cutoff_at: datetime | None = None,
+    ) -> int:
+        query = (
+            "SELECT imported_at,consumed_at,import_status FROM zhihu_imported_response "
+            "WHERE 1=1"
+        )
+        parameters: list[str] = []
         if source_id is not None:
             query += " AND source_id=?"
-            parameters = (source_id,)
+            parameters.append(source_id)
+        if response_kinds is not None:
+            if not response_kinds:
+                raise ValueError("response_kinds must not be empty")
+            placeholders = ",".join("?" for _ in response_kinds)
+            query += f" AND response_kind IN ({placeholders})"
+            parameters.extend(kind.value for kind in response_kinds)
         with self.state.connect() as connection:
-            return int(connection.execute(query, parameters).fetchone()[0])
+            rows = connection.execute(query, parameters).fetchall()
+        if data_cutoff_at is None:
+            return sum(str(row["import_status"]) == "PENDING" for row in rows)
+        cutoff = data_cutoff_at.astimezone(UTC)
+        return sum(
+            _parse_utc_text(str(row["imported_at"])) <= cutoff
+            and (
+                str(row["import_status"]) == "PENDING"
+                or (
+                    str(row["import_status"]) == "CONSUMED"
+                    and row["consumed_at"] is not None
+                    and _parse_utc_text(str(row["consumed_at"])) > cutoff
+                )
+            )
+            for row in rows
+        )
+
+    def rejected_import_temporal_count(
+        self,
+        source_id: str,
+        *,
+        response_kinds: tuple[ZhihuResponseKind, ...],
+        data_cutoff_at: datetime,
+    ) -> int:
+        """Count rejected rows whose transition time cannot be reconstructed."""
+
+        if not response_kinds:
+            raise ValueError("response_kinds must not be empty")
+        placeholders = ",".join("?" for _ in response_kinds)
+        parameters = [source_id, *(kind.value for kind in response_kinds)]
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT imported_at FROM zhihu_imported_response "
+                "WHERE source_id=? AND import_status='REJECTED' "
+                f"AND response_kind IN ({placeholders})",
+                parameters,
+            ).fetchall()
+        cutoff = data_cutoff_at.astimezone(UTC)
+        return sum(_parse_utc_text(str(row["imported_at"])) <= cutoff for row in rows)
 
     def list_pending_imports(
         self,
@@ -208,7 +272,7 @@ class KnowledgeRepository:
                 "record_json=? WHERE envelope_id=?",
                 (
                     consumed.import_status.value,
-                    consumed_at.isoformat(),
+                    _utc_text(consumed_at),
                     record_json,
                     envelope_id,
                 ),
@@ -251,7 +315,7 @@ class KnowledgeRepository:
                     page.http_status,
                     page.response_structure_version,
                     page_json,
-                    page.fetched_at.isoformat(),
+                    _utc_text(page.fetched_at),
                 ),
             )
         return page
@@ -294,10 +358,22 @@ class KnowledgeRepository:
                     page.http_status,
                     page.response_structure_version,
                     page_json,
-                    page.fetched_at.isoformat(),
+                    _utc_text(page.fetched_at),
                 ),
             )
         return page
+
+    def get_comment_page(self, page_id: str) -> ZhihuCommentPage | None:
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT page_json FROM zhihu_comment_page_manifest WHERE page_id=?",
+                (page_id,),
+            ).fetchone()
+        return (
+            ZhihuCommentPage.model_validate_json(row["page_json"])
+            if row is not None
+            else None
+        )
 
     def register_comment(self, record: ZhihuCommentNode) -> CommentRegistration:
         with self.state.transaction() as connection:
@@ -351,9 +427,9 @@ class KnowledgeRepository:
                     stored.parent_comment_id,
                     stored.reply_to_comment_id,
                     stored.platform_author_id,
-                    stored.published_at.isoformat() if stored.published_at else None,
-                    stored.updated_at.isoformat() if stored.updated_at else None,
-                    stored.collected_at.isoformat(),
+                    _utc_text(stored.published_at) if stored.published_at else None,
+                    _utc_text(stored.updated_at) if stored.updated_at else None,
+                    _utc_text(stored.collected_at),
                     stored.body_object_sha256,
                     stored.metadata_sha256,
                     stored.raw_source_snapshot_id,
@@ -421,7 +497,7 @@ class KnowledgeRepository:
                     chain.selection_rule_version,
                     object_hash,
                     chain_json,
-                    chain.created_at.isoformat(),
+                    _utc_text(chain.created_at),
                 ),
             )
         return chain
@@ -458,19 +534,21 @@ class KnowledgeRepository:
                 "INSERT INTO zhihu_content_version("
                 "version_id,source_id,content_id,content_type,canonical_url,published_at,"
                 "updated_at,collected_at,body_object_hash,metadata_hash,raw_source_snapshot_id,"
-                "previous_version_id,record_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "content_completeness,previous_version_id,record_json) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     stored.version_id,
                     stored.author_source_id,
                     stored.content_id,
                     stored.content_type.value,
                     stored.canonical_url,
-                    stored.published_at.isoformat() if stored.published_at else None,
-                    stored.updated_at.isoformat() if stored.updated_at else None,
-                    stored.collected_at.isoformat(),
+                    _utc_text(stored.published_at) if stored.published_at else None,
+                    _utc_text(stored.updated_at) if stored.updated_at else None,
+                    _utc_text(stored.collected_at),
                     stored.body_object_sha256,
                     stored.metadata_sha256,
                     stored.raw_source_snapshot_id,
+                    stored.content_completeness.value,
                     stored.previous_version_id,
                     record_json,
                 ),
@@ -598,7 +676,7 @@ class KnowledgeRepository:
                     report.coverage_status.value,
                     object_hash,
                     report_json,
-                    report.created_at.isoformat(),
+                    _utc_text(report.created_at),
                 ),
             )
 
@@ -606,14 +684,31 @@ class KnowledgeRepository:
         self,
         source_id: str,
         content_type: ZhihuContentType,
+        *,
+        data_cutoff_at: datetime | None = None,
     ) -> AuthorCollectionCoverageReport | None:
+        query = (
+            "SELECT report_id,report_json,created_at FROM knowledge_coverage_report "
+            "WHERE source_id=? AND content_type=?"
+        )
+        parameters = [source_id, content_type.value]
         with self.state.connect() as connection:
-            row = connection.execute(
-                "SELECT report_json FROM knowledge_coverage_report "
-                "WHERE source_id=? AND content_type=? "
-                "ORDER BY created_at DESC,report_id DESC LIMIT 1",
-                (source_id, content_type.value),
-            ).fetchone()
+            rows = connection.execute(query, parameters).fetchall()
+        if data_cutoff_at is not None:
+            cutoff = data_cutoff_at.astimezone(UTC)
+            rows = [
+                row
+                for row in rows
+                if _parse_utc_text(str(row["created_at"])) <= cutoff
+            ]
+        row = max(
+            rows,
+            key=lambda item: (
+                _parse_utc_text(str(item["created_at"])),
+                str(item["report_id"]),
+            ),
+            default=None,
+        )
         return (
             AuthorCollectionCoverageReport.model_validate_json(row["report_json"])
             if row
@@ -627,6 +722,44 @@ class KnowledgeRepository:
                 (source_id, content_type.value),
             ).fetchone()
         return int(row[0]) if row else 0
+    def latest_content_records(
+        self,
+        source_id: str,
+        content_type: ZhihuContentType,
+    ) -> list[ZhihuContentRecord]:
+        """Return exactly one deterministic latest version for every discovered content id."""
+
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT record_json FROM ("
+                "SELECT record_json,content_id,ROW_NUMBER() OVER ("
+                "PARTITION BY content_id ORDER BY collected_at DESC,version_id DESC"
+                ") AS latest_rank FROM zhihu_content_version "
+                "WHERE source_id=? AND content_type=?"
+                ") WHERE latest_rank=1 ORDER BY content_id",
+                (source_id, content_type.value),
+            ).fetchall()
+        return [ZhihuContentRecord.model_validate_json(row["record_json"]) for row in rows]
+
+    def latest_detail_content_records(
+        self,
+        source_id: str,
+        content_type: ZhihuContentType,
+    ) -> list[ZhihuContentRecord]:
+        """Return the latest verified full-body version without listing regressions."""
+
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT record_json FROM ("
+                "SELECT record_json,content_id,ROW_NUMBER() OVER ("
+                "PARTITION BY content_id ORDER BY collected_at DESC,version_id DESC"
+                ") AS latest_rank FROM zhihu_content_version "
+                "WHERE source_id=? AND content_type=? "
+                "AND content_completeness='DETAIL_VERIFIED'"
+                ") WHERE latest_rank=1 ORDER BY content_id",
+                (source_id, content_type.value),
+            ).fetchall()
+        return [ZhihuContentRecord.model_validate_json(row["record_json"]) for row in rows]
 
     def register_local_coverage_report(
         self,
@@ -699,6 +832,18 @@ class KnowledgeRepository:
             )
 
 
+def _utc_text(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat()
+
+
+def _parse_utc_text(value: str) -> datetime:
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("persisted timestamp must include a UTC offset")
+    return parsed.astimezone(UTC)
+
+
 def _listing_semantic(page: ZhihuListingPage) -> dict[str, object]:
     return page.model_dump(mode="json", exclude={"created_at", "fetched_at"})
 
@@ -749,7 +894,6 @@ def _import_semantic(record: ZhihuImportedResponse) -> dict[str, object]:
         "source_snapshot_id": record.source_snapshot_id,
         "raw_object_sha256": record.raw_object_sha256,
         "body_byte_size": record.body_byte_size,
-        "captured_at": record.captured_at.isoformat(),
     }
 
 

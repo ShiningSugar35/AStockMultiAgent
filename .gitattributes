@@ -1,0 +1,11 @@
+*.py text eol=lf
+*.pyi text eol=lf
+*.md text eol=lf
+*.markdown text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.sql text eol=lf
+*.toml text eol=lf
+uv.lock text eol=lf

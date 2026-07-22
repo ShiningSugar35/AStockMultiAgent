@@ -1,0 +1,11 @@
+{
+  "status_code": 200,
+  "content_type": "application/json",
+  "latency_ms": 1,
+  "body": {
+    "data": {
+      "diff": [{"f12": "920015", "f13": 0, "f14": "锦波生物"}],
+      "total": 1
+    }
+  }
+}

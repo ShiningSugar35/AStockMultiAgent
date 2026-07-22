@@ -1,5 +1,6 @@
 schema_version: "1.0"
-rule_version: knowledge-classification-v1
+rule_version: knowledge-classification-v5-item-chain-scope
+comment_chain_filter_version: knowledge-comment-chain-filter-v1
 minimum_unit_char_count: 6
 content_class_terms:
   REPEATED_SLOGAN: [口号, 信仰, 永远的神]

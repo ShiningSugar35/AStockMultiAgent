@@ -1,0 +1,22 @@
+{
+  "schema_version": "baostock-raw-envelope-v1",
+  "sdk_version": "0.8.9",
+  "capability": "corporate_actions.structured_hint",
+  "request": {},
+  "request_started_at": "2026-07-22T00:00:00Z",
+  "request_finished_at": "2026-07-22T00:00:01Z",
+  "login_error_code": "0",
+  "login_error_message": "success",
+  "result_error_code": "0",
+  "result_error_message": "success",
+  "fields": ["code", "dividPlanAnnounceDate", "dividRegistDate", "dividOperateDate", "dividPayDate", "dividCashPsBeforeTax", "dividStocksPs", "dividReserveToStockPs"],
+  "rows": [
+    ["sh.600519", "2026-06-01", "2026-06-20", "2026-06-23", "2026-06-23", "30.876", "0", "0"],
+    ["bj.920015", "2026-05-10", "2026-05-25", "2026-05-28", "2026-05-28", "1.200", "0", "0"]
+  ],
+  "row_contexts": [
+    {"report_period": "2025"},
+    {"report_period": "2025"}
+  ],
+  "complete": true
+}

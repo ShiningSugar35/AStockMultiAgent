@@ -989,7 +989,9 @@ class CommitteeService:
             raise ValueError("trade protocol must reference the frozen EvidencePack")
 
         skill_versions = dict(route_skill_versions)
-        skill_versions["ResearchMemoComposer"] = "research-memo-composer-v1"
+        skill_versions["ResearchMemoComposer"] = (
+            memo.composer_version or "research-memo-composer-v1"
+        )
         if plans:
             plan = cast(PositionMonitoringPlan, plans[0])
             for skill_id, version in plan.skill_versions.items():

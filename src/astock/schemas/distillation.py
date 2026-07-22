@@ -33,10 +33,29 @@ class DistillationDecision(StrEnum):
     UNCLASSIFIED = "UNCLASSIFIED"
 
 
+class DistillationClassificationScope(StrEnum):
+    """Boundary at which the field library was evaluated."""
+
+    LEGACY_SEGMENT = "LEGACY_SEGMENT"
+    SOURCE_PIECE = "SOURCE_PIECE"
+
+
 class DistillationRunStatus(StrEnum):
     RUNNING = "RUNNING"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
+
+
+class KnowledgeMaterialKind(StrEnum):
+    PRIVATE_PDF = "PRIVATE_PDF"
+    PRIVATE_DOCX = "PRIVATE_DOCX"
+    ZHIHU_ONLINE = "ZHIHU_ONLINE"
+
+
+class KnowledgeProcessingStrategy(StrEnum):
+    PDF_PAGE_WRAPPED_PARAGRAPH_V1 = "PDF_PAGE_WRAPPED_PARAGRAPH_V1"
+    DOCX_STABLE_BLOCK_V1 = "DOCX_STABLE_BLOCK_V1"
+    ZHIHU_VERIFIED_VISIBLE_HTML_V2 = "ZHIHU_VERIFIED_VISIBLE_HTML_V2"
 
 
 class ViewpointDraftDerivation(StrEnum):
@@ -96,6 +115,7 @@ class DistillationSourceLocator(AStockModel):
 
 class DistillationClassRuleSet(AStockModel):
     rule_version: str = Field(min_length=1)
+    comment_chain_filter_version: str = Field(min_length=1)
     minimum_unit_char_count: int = Field(ge=1)
     content_class_terms: dict[BookContentClass, list[str]]
 
@@ -120,6 +140,16 @@ class DistillationUnit(AStockModel):
     source_id: str = Field(min_length=1)
     source_item_ordinal: int = Field(ge=1)
     segment_ordinal: int = Field(ge=1)
+    classification_scope: DistillationClassificationScope = (
+        DistillationClassificationScope.LEGACY_SEGMENT
+    )
+    classification_piece_id: str | None = None
+    classification_piece_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    classification_piece_source_item_count: int = Field(default=1, ge=1)
+    classification_piece_segment_count: int = Field(default=1, ge=1)
     locator: DistillationSourceLocator
     normalized_text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     normalized_char_count: int = Field(ge=1)
@@ -139,13 +169,15 @@ class DistillationUnit(AStockModel):
             raise ValueError("distillation method categories must be unique")
         if len(self.reason_codes) != len(set(self.reason_codes)):
             raise ValueError("distillation reason codes must be unique")
+        if self.classification_scope is DistillationClassificationScope.SOURCE_PIECE:
+            if not self.classification_piece_id or not self.classification_piece_sha256:
+                raise ValueError("piece-scoped classification requires piece identity and hash")
         if self.duplicate_of_unit_id is not None:
             if self.duplicate_of_unit_id == self.unit_id:
                 raise ValueError("a distillation unit cannot duplicate itself")
-            if (
+            if self.classification_scope is DistillationClassificationScope.LEGACY_SEGMENT and (
                 self.decision is not DistillationDecision.DOWNWEIGHT_CANDIDATE
-                or BookContentClass.REPETITION_WITHOUT_NEW_INFORMATION
-                not in self.content_classes
+                or BookContentClass.REPETITION_WITHOUT_NEW_INFORMATION not in self.content_classes
                 or "EXACT_DUPLICATE" not in self.reason_codes
             ):
                 raise ValueError("duplicate units require an explicit downweight decision")
@@ -182,6 +214,48 @@ class DistillationRun(AStockModel):
         return self
 
 
+class KnowledgeSourceStructureProfile(AStockModel):
+    """Text-free structural metrics and the selected processing strategy."""
+
+    profile_id: str = Field(min_length=1)
+    author_source_id: str = Field(min_length=1)
+    input_source_id: str = Field(min_length=1)
+    material_kind: KnowledgeMaterialKind
+    processing_strategy: KnowledgeProcessingStrategy
+    input_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    input_object_count: int = Field(ge=0)
+    source_item_count: int = Field(ge=0)
+    zero_length_source_item_count: int = Field(ge=0)
+    semantic_empty_source_item_count: int = Field(ge=0)
+    structure_unit_count: int = Field(ge=0)
+    semantic_segment_count: int = Field(ge=0)
+    page_count: int = Field(ge=0)
+    block_count: int = Field(ge=0)
+    heading_count: int = Field(ge=0)
+    table_cell_block_count: int = Field(ge=0)
+    verified_content_count: int = Field(ge=0)
+    target_author_comment_count: int = Field(ge=0)
+    content_type_counts: dict[str, int]
+    char_count_p50: int = Field(ge=0)
+    char_count_p90: int = Field(ge=0)
+    char_count_max: int = Field(ge=0)
+    recommended_action_codes: list[str] = Field(min_length=1)
+    coverage_status: CoverageStatus
+    human_review_status: HumanReviewStatus = HumanReviewStatus.PENDING
+
+    @model_validator(mode="after")
+    def validate_structure_counts(self) -> KnowledgeSourceStructureProfile:
+        if self.zero_length_source_item_count > self.source_item_count:
+            raise ValueError("zero-length items cannot exceed source items")
+        if self.semantic_empty_source_item_count > self.source_item_count:
+            raise ValueError("semantic-empty items cannot exceed source items")
+        if len(self.recommended_action_codes) != len(set(self.recommended_action_codes)):
+            raise ValueError("structure-profile action codes must be unique")
+        if any(count < 0 for count in self.content_type_counts.values()):
+            raise ValueError("content type counts cannot be negative")
+        return self
+
+
 class AuthorDistillationReport(AStockModel):
     report_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
@@ -190,6 +264,12 @@ class AuthorDistillationReport(AStockModel):
     local_manifest_ids: list[str]
     input_source_item_count: int = Field(ge=0)
     empty_source_item_count: int = Field(ge=0)
+    classification_scope: DistillationClassificationScope = (
+        DistillationClassificationScope.LEGACY_SEGMENT
+    )
+    classification_piece_count: int = Field(default=0, ge=0)
+    dropped_source_item_count: int = Field(default=0, ge=0)
+    dropped_segment_count: int = Field(default=0, ge=0)
     unit_count: int = Field(ge=0)
     canonical_unit_count: int = Field(ge=0)
     duplicate_unit_count: int = Field(ge=0)
@@ -200,6 +280,9 @@ class AuthorDistillationReport(AStockModel):
     method_category_counts: dict[str, int]
     online_content_count: int = Field(ge=0)
     target_author_comment_count: int = Field(ge=0)
+    qualified_comment_chain_count: int = Field(default=0, ge=0)
+    qualified_comment_context_count: int = Field(default=0, ge=0)
+    comment_chain_filter_version: str | None = None
     open_collection_gap_count: int = Field(ge=0)
     missing_object_count: int = Field(ge=0)
     coverage_status: CoverageStatus
@@ -212,12 +295,19 @@ class AuthorDistillationReport(AStockModel):
         if self.canonical_unit_count + self.duplicate_unit_count != self.unit_count:
             raise ValueError("report canonical and duplicate counts must equal units")
         decisions = (
-            self.keep_candidate_count
-            + self.downweight_candidate_count
-            + self.unclassified_count
+            self.keep_candidate_count + self.downweight_candidate_count + self.unclassified_count
         )
         if decisions != self.unit_count:
             raise ValueError("every distillation unit requires exactly one decision")
+        if self.classification_scope is DistillationClassificationScope.SOURCE_PIECE:
+            if self.unit_count and not self.classification_piece_count:
+                raise ValueError("piece-scoped reports require classification pieces")
+            if self.dropped_source_item_count or self.dropped_segment_count:
+                raise ValueError("piece-scoped distillation may not drop source material")
+        if (self.qualified_comment_chain_count or self.qualified_comment_context_count) and not (
+            self.comment_chain_filter_version
+        ):
+            raise ValueError("qualified comment chains require a filter version")
         if self.human_review_status is HumanReviewStatus.APPROVED:
             raise ValueError("automatic distillation reports cannot self-approve")
         return self
@@ -309,9 +399,7 @@ class PrivateSkillCandidateDraft(AStockModel):
             raise ValueError("automatic Skill candidates cannot claim an evaluation result")
         if self.approval_status is not BookApprovalStatus.PENDING:
             raise ValueError("automatic Skill candidates must remain PENDING")
-        if len(self.source_viewpoint_draft_ids) != len(
-            set(self.source_viewpoint_draft_ids)
-        ):
+        if len(self.source_viewpoint_draft_ids) != len(set(self.source_viewpoint_draft_ids)):
             raise ValueError("Skill candidate viewpoint drafts must be unique")
         if len(self.source_unit_ids) != len(set(self.source_unit_ids)):
             raise ValueError("Skill candidate source units must be unique")

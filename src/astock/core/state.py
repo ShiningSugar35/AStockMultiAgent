@@ -5,15 +5,22 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from astock.core.hashing import canonical_json_bytes, sha256_bytes
-from astock.schemas import CollectionCheckpoint, SourceAccessDecision, SourceSnapshot
+from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
+from astock.schemas import (
+    CollectionCheckpoint,
+    DatasetReleaseManifest,
+    ProviderHealthStatus,
+    ProviderProbeReport,
+    SourceAccessDecision,
+    SourceSnapshot,
+)
 
 _MIGRATION_PATTERN = re.compile(r"^(?P<version>\d{4})_.+\.sql$")
 
@@ -410,6 +417,97 @@ class StateStore:
             )
         return True
 
+    def release_lock(self, lock_key: str, owner_run_id: str) -> bool:
+        with self.transaction() as connection:
+            deleted = connection.execute(
+                "DELETE FROM lease_lock WHERE lock_key=? AND owner_run_id=?",
+                (lock_key, owner_run_id),
+            ).rowcount
+        return deleted == 1
+
+    def acquire_reference_provider_lease(
+        self,
+        lock_key: str,
+        owner_run_id: str,
+        *,
+        now: datetime,
+        lease_until: datetime,
+    ) -> int | None:
+        """Acquire a cross-process provider lease and return its fencing token."""
+
+        now_text = now.astimezone(UTC).isoformat()
+        lease_text = lease_until.astimezone(UTC).isoformat()
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT owner_run_id,fencing_token,lease_until "
+                "FROM reference_provider_lease WHERE lock_key=?",
+                (lock_key,),
+            ).fetchone()
+            if (
+                existing is not None
+                and existing["owner_run_id"] is not None
+                and existing["owner_run_id"] != owner_run_id
+                and str(existing["lease_until"]) > now_text
+            ):
+                return None
+            token = (int(existing["fencing_token"]) if existing is not None else 0) + 1
+            connection.execute(
+                "INSERT INTO reference_provider_lease(lock_key,owner_run_id,fencing_token,"
+                "lease_until) VALUES(?,?,?,?) ON CONFLICT(lock_key) DO UPDATE SET "
+                "owner_run_id=excluded.owner_run_id,fencing_token=excluded.fencing_token,"
+                "lease_until=excluded.lease_until",
+                (lock_key, owner_run_id, token, lease_text),
+            )
+        return token
+
+    def renew_reference_provider_lease(
+        self,
+        lock_key: str,
+        owner_run_id: str,
+        fencing_token: int,
+        *,
+        now: datetime,
+        lease_until: datetime,
+    ) -> bool:
+        """Renew only the still-current, unexpired fenced lease."""
+
+        with self.transaction() as connection:
+            updated = connection.execute(
+                "UPDATE reference_provider_lease SET lease_until=? WHERE lock_key=? "
+                "AND owner_run_id=? AND fencing_token=? AND lease_until>?",
+                (
+                    lease_until.astimezone(UTC).isoformat(),
+                    lock_key,
+                    owner_run_id,
+                    fencing_token,
+                    now.astimezone(UTC).isoformat(),
+                ),
+            ).rowcount
+        return updated == 1
+
+    def release_reference_provider_lease(
+        self,
+        lock_key: str,
+        owner_run_id: str,
+        fencing_token: int,
+        *,
+        now: datetime,
+    ) -> bool:
+        """Release a lease without deleting its monotonic fencing counter."""
+
+        with self.transaction() as connection:
+            updated = connection.execute(
+                "UPDATE reference_provider_lease SET owner_run_id=NULL,lease_until=? "
+                "WHERE lock_key=? AND owner_run_id=? AND fencing_token=?",
+                (
+                    now.astimezone(UTC).isoformat(),
+                    lock_key,
+                    owner_run_id,
+                    fencing_token,
+                ),
+            ).rowcount
+        return updated == 1
+
     def register_snapshot(self, snapshot: SourceSnapshot) -> None:
         with self.transaction() as connection:
             connection.execute(
@@ -451,6 +549,7 @@ class StateStore:
             return None
         return SourceSnapshot.model_validate(
             {
+                "created_at": row["fetched_at"],
                 "snapshot_id": row["snapshot_id"],
                 "source_id": row["source_id"],
                 "object_sha256": row["object_hash"],
@@ -506,7 +605,8 @@ class StateStore:
                 "status=excluded.status,last_probe_at=excluded.last_probe_at,"
                 "failure_count=CASE WHEN excluded.status='AVAILABLE' THEN 0 "
                 "ELSE provider_health.failure_count+1 END,"
-                "last_error_class=excluded.last_error_class",
+                "last_error_class=excluded.last_error_class "
+                "WHERE provider_health.latest_probe_id IS NULL",
                 (
                     provider_id,
                     capability_hash,
@@ -517,6 +617,189 @@ class StateStore:
                 ),
             )
 
+    def get_provider_probe_health(self, provider_id: str) -> dict[str, Any] | None:
+        """Return the latest durable probe pointer without mutating provider state."""
+
+        row, _ = self.get_provider_probe_health_snapshot(provider_id)
+        return row
+
+    def get_provider_probe_health_snapshot(
+        self,
+        provider_id: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Read the health pointer and deterministic event head in one SQLite snapshot."""
+
+        with closing(self.connect()) as connection:
+            connection.execute("BEGIN")
+            try:
+                row = connection.execute(
+                    "SELECT provider_id,capability_hash,status,last_probe_at,failure_count,"
+                    "last_error_class,"
+                    "registry_version,probe_mode,report_artifact_id,report_object_hash,"
+                    "failure_code,latest_probe_id FROM provider_health WHERE provider_id=?",
+                    (provider_id,),
+                ).fetchone()
+                events = connection.execute(
+                    "SELECT probe_id,status FROM provider_probe_event WHERE provider_id=? "
+                    "ORDER BY completed_at DESC,probe_id DESC",
+                    (provider_id,),
+                ).fetchall()
+            finally:
+                connection.rollback()
+        head = (
+            {
+                "latest_probe_id": str(events[0]["probe_id"]),
+                "failure_count": _consecutive_provider_failures(events),
+            }
+            if events
+            else None
+        )
+        return (dict(row) if row is not None else None), head
+
+    def get_provider_probe_head(self, provider_id: str) -> dict[str, Any] | None:
+        """Return the true deterministic event head, independent of provider_health."""
+
+        _, head = self.get_provider_probe_health_snapshot(provider_id)
+        return head
+
+    def get_provider_probe_event(self, probe_id: str) -> dict[str, Any] | None:
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                "SELECT e.*,a.type AS artifact_type,a.schema_version AS artifact_schema_version,"
+                "a.object_hash AS artifact_object_hash,"
+                "a.input_hashes_json AS artifact_input_hashes_json "
+                "FROM provider_probe_event e LEFT JOIN artifact_registry a "
+                "ON a.artifact_id=e.report_artifact_id WHERE e.probe_id=?",
+                (probe_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def provider_has_probe_events(self, provider_id: str) -> bool:
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM provider_probe_event WHERE provider_id=? LIMIT 1",
+                (provider_id,),
+            ).fetchone()
+        return row is not None
+
+    def provider_probe_consecutive_failures(
+        self,
+        provider_id: str,
+        probe_id: str,
+    ) -> int | None:
+        """Return the deterministic failure streak ending at one immutable event."""
+
+        with closing(self.connect()) as connection:
+            target = connection.execute(
+                "SELECT completed_at FROM provider_probe_event "
+                "WHERE provider_id=? AND probe_id=?",
+                (provider_id, probe_id),
+            ).fetchone()
+            if target is None:
+                return None
+            rows = connection.execute(
+                "SELECT status FROM provider_probe_event WHERE provider_id=? AND "
+                "(completed_at < ? OR (completed_at = ? AND probe_id <= ?)) "
+                "ORDER BY completed_at DESC,probe_id DESC",
+                (provider_id, target["completed_at"], target["completed_at"], probe_id),
+            ).fetchall()
+        return _consecutive_provider_failures(rows)
+
+    def record_provider_probe(self, report: ProviderProbeReport, object_hash: str) -> bool:
+        """Atomically register a verified report, immutable event, and latest health pointer."""
+
+        if report.status in {ProviderHealthStatus.NOT_PROBED, ProviderHealthStatus.CORRUPT}:
+            raise ValueError("non-terminal provider status cannot be persisted")
+        artifact_id = f"provider-probe:{report.probe_id}"
+        serialized_inputs = json.dumps([report.capability_hash], separators=(",", ":"))
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT provider_id,registry_version,capability_hash,probe_mode,status,"
+                "completed_at,report_artifact_id,report_object_hash,failure_code,failure_count "
+                "FROM provider_probe_event WHERE probe_id=?",
+                (report.probe_id,),
+            ).fetchone()
+            event_values = (
+                report.provider_id,
+                report.registry_version,
+                report.capability_hash,
+                report.probe_mode.value,
+                report.status.value,
+                report.completed_at.isoformat(),
+                artifact_id,
+                object_hash,
+                report.failure_code.value if report.failure_code else None,
+                report.failure_count,
+            )
+            if existing is not None:
+                if tuple(existing) != event_values:
+                    raise ValueError(f"Provider probe identity collision: {report.probe_id}")
+                return False
+
+            artifact = connection.execute(
+                "SELECT type,schema_version,object_hash,input_hashes_json "
+                "FROM artifact_registry WHERE artifact_id=?",
+                (artifact_id,),
+            ).fetchone()
+            artifact_values = (
+                "ProviderProbeReport",
+                report.schema_version,
+                object_hash,
+                serialized_inputs,
+            )
+            if artifact is not None and tuple(artifact) != artifact_values:
+                raise ValueError(f"Artifact identity collision: {artifact_id}")
+            if artifact is None:
+                connection.execute(
+                    "INSERT INTO artifact_registry(artifact_id,type,schema_version,object_hash,"
+                    "input_hashes_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (*((artifact_id,) + artifact_values), utc_now_text()),
+                )
+            connection.execute(
+                "INSERT INTO provider_probe_event(probe_id,provider_id,registry_version,"
+                "capability_hash,probe_mode,status,completed_at,report_artifact_id,"
+                "report_object_hash,failure_code,failure_count) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (report.probe_id, *event_values),
+            )
+            ordered_events = connection.execute(
+                "SELECT probe_id,registry_version,capability_hash,probe_mode,status,"
+                "completed_at,report_artifact_id,report_object_hash,failure_code "
+                "FROM provider_probe_event WHERE provider_id=? "
+                "ORDER BY completed_at DESC,probe_id DESC",
+                (report.provider_id,),
+            ).fetchall()
+            latest = ordered_events[0]
+            consecutive_failures = _consecutive_provider_failures(ordered_events)
+            connection.execute(
+                "INSERT INTO provider_health(provider_id,capability_hash,status,last_probe_at,"
+                "failure_count,last_error_class,registry_version,probe_mode,report_artifact_id,"
+                "report_object_hash,failure_code,latest_probe_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(provider_id) DO UPDATE SET "
+                "capability_hash=excluded.capability_hash,status=excluded.status,"
+                "last_probe_at=excluded.last_probe_at,failure_count=excluded.failure_count,"
+                "last_error_class=excluded.last_error_class,"
+                "registry_version=excluded.registry_version,probe_mode=excluded.probe_mode,"
+                "report_artifact_id=excluded.report_artifact_id,"
+                "report_object_hash=excluded.report_object_hash,"
+                "failure_code=excluded.failure_code,latest_probe_id=excluded.latest_probe_id",
+                (
+                    report.provider_id,
+                    latest["capability_hash"],
+                    latest["status"],
+                    latest["completed_at"],
+                    consecutive_failures,
+                    latest["failure_code"],
+                    latest["registry_version"],
+                    latest["probe_mode"],
+                    latest["report_artifact_id"],
+                    latest["report_object_hash"],
+                    latest["failure_code"],
+                    latest["probe_id"],
+                ),
+            )
+        return True
+
     def register_artifact(
         self,
         *,
@@ -526,31 +809,261 @@ class StateStore:
         object_hash: str,
         input_hashes: list[str],
     ) -> None:
-        with self.transaction() as connection:
-            existing = connection.execute(
-                "SELECT type,schema_version,object_hash,input_hashes_json "
-                "FROM artifact_registry WHERE artifact_id=?",
-                (artifact_id,),
-            ).fetchone()
-            serialized_inputs = json.dumps(input_hashes, separators=(",", ":"))
-            if existing is not None:
-                expected = (artifact_type, schema_version, object_hash, serialized_inputs)
-                actual = tuple(existing)
-                if actual != expected:
-                    raise ValueError(f"Artifact identity collision: {artifact_id}")
-                return
-            connection.execute(
-                "INSERT INTO artifact_registry(artifact_id,type,schema_version,object_hash,"
-                "input_hashes_json,created_at) VALUES(?,?,?,?,?,?)",
+        self.register_artifacts(
+            [
                 (
                     artifact_id,
                     artifact_type,
                     schema_version,
                     object_hash,
-                    serialized_inputs,
-                    utc_now_text(),
+                    input_hashes,
+                )
+            ]
+        )
+
+    def register_artifacts(
+        self,
+        artifacts: Iterable[tuple[str, str, str, str, list[str]]],
+    ) -> None:
+        """Idempotently register multiple artifacts in one durable transaction."""
+
+        with self.transaction() as connection:
+            created_at = utc_now_text()
+            for artifact_id, artifact_type, schema_version, object_hash, input_hashes in artifacts:
+                existing = connection.execute(
+                    "SELECT type,schema_version,object_hash,input_hashes_json "
+                    "FROM artifact_registry WHERE artifact_id=?",
+                    (artifact_id,),
+                ).fetchone()
+                serialized_inputs = json.dumps(input_hashes, separators=(",", ":"))
+                if existing is not None:
+                    expected = (artifact_type, schema_version, object_hash, serialized_inputs)
+                    actual = tuple(existing)
+                    if actual != expected:
+                        raise ValueError(f"Artifact identity collision: {artifact_id}")
+                    continue
+                connection.execute(
+                    "INSERT INTO artifact_registry(artifact_id,type,schema_version,object_hash,"
+                    "input_hashes_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (
+                        artifact_id,
+                        artifact_type,
+                        schema_version,
+                        object_hash,
+                        serialized_inputs,
+                        created_at,
+                    ),
+                )
+
+    def publish_market_reference_release(
+        self,
+        manifest: DatasetReleaseManifest,
+        manifest_object_hash: str,
+    ) -> bool:
+        """Atomically register one immutable release and advance its canonical head."""
+
+        release_identity = {
+            "dataset_kind": manifest.dataset_kind.value,
+            "scope_key": manifest.scope_key,
+            "provider_id": manifest.provider_id,
+            "batch_id": manifest.batch_id,
+            "content_hash": manifest.content_hash,
+            "previous_release_id": manifest.previous_release_id,
+            "available_to_system_at": manifest.available_to_system_at.isoformat(),
+        }
+        if manifest.release_id != content_hash(release_identity):
+            raise ValueError("market-reference release identity mismatch")
+        artifact_id = f"market-reference:{manifest.release_id}"
+        inputs = json.dumps(
+            [*manifest.raw_snapshot_ids, manifest.content_hash], separators=(",", ":")
+        )
+        raw_snapshot_ids_json = canonical_json_bytes(manifest.raw_snapshot_ids).decode("utf-8")
+        observation_files_json = canonical_json_bytes(manifest.observation_files).decode("utf-8")
+        canonical_files_json = canonical_json_bytes(manifest.canonical_files).decode("utf-8")
+        coverage_json = canonical_json_bytes(manifest.coverage).decode("utf-8")
+        kind = manifest.dataset_kind.value
+        now = utc_now_text()
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT dataset_kind,scope_key,provider_id,batch_id,content_hash,"
+                "previous_release_id,manifest_artifact_id,manifest_object_hash,"
+                "manifest_schema_version,raw_snapshot_ids_json,observation_files_json,"
+                "canonical_files_json,coverage_json,"
+                "available_to_system_at,coverage_status,pit_status "
+                "FROM market_reference_release WHERE release_id=?",
+                (manifest.release_id,),
+            ).fetchone()
+            expected_release = (
+                kind,
+                manifest.scope_key,
+                manifest.provider_id,
+                manifest.batch_id,
+                manifest.content_hash,
+                manifest.previous_release_id,
+                artifact_id,
+                manifest_object_hash,
+                manifest.schema_version,
+                raw_snapshot_ids_json,
+                observation_files_json,
+                canonical_files_json,
+                coverage_json,
+                manifest.available_to_system_at.isoformat(),
+                manifest.coverage.status.value,
+                manifest.pit_status.value,
+            )
+            if existing is not None:
+                if tuple(existing) != expected_release:
+                    raise ValueError(f"Market-reference identity collision: {manifest.release_id}")
+                return False
+
+            for snapshot_id in manifest.raw_snapshot_ids:
+                if connection.execute(
+                    "SELECT 1 FROM source_snapshot_index WHERE snapshot_id=?", (snapshot_id,)
+                ).fetchone() is None:
+                    raise ValueError(f"Unknown market-reference snapshot: {snapshot_id}")
+
+            head = connection.execute(
+                "SELECT h.release_id,r.available_to_system_at FROM market_reference_head h "
+                "JOIN market_reference_release r ON r.dataset_kind=h.dataset_kind "
+                "AND r.scope_key=h.scope_key AND r.release_id=h.release_id "
+                "WHERE h.dataset_kind=? AND h.scope_key=?",
+                (kind, manifest.scope_key),
+            ).fetchone()
+            current_head = str(head["release_id"]) if head is not None else None
+            if current_head != manifest.previous_release_id:
+                raise ValueError("market-reference previous head mismatch")
+            if (
+                head is not None
+                and str(head["available_to_system_at"])
+                > manifest.available_to_system_at.isoformat()
+            ):
+                raise ValueError("market-reference head availability cannot move backwards")
+
+            artifact = connection.execute(
+                "SELECT type,schema_version,object_hash,input_hashes_json "
+                "FROM artifact_registry WHERE artifact_id=?",
+                (artifact_id,),
+            ).fetchone()
+            expected_artifact = (
+                "DatasetReleaseManifest",
+                manifest.schema_version,
+                manifest_object_hash,
+                inputs,
+            )
+            if artifact is not None and tuple(artifact) != expected_artifact:
+                raise ValueError(f"Artifact identity collision: {artifact_id}")
+            if artifact is None:
+                connection.execute(
+                    "INSERT INTO artifact_registry(artifact_id,type,schema_version,object_hash,"
+                    "input_hashes_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (artifact_id, *expected_artifact, now),
+                )
+            connection.execute(
+                "INSERT INTO market_reference_release(release_id,dataset_kind,scope_key,"
+                "provider_id,batch_id,content_hash,previous_release_id,manifest_artifact_id,"
+                "manifest_object_hash,manifest_schema_version,raw_snapshot_ids_json,"
+                "observation_files_json,canonical_files_json,coverage_json,"
+                "available_to_system_at,coverage_status,pit_status,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (manifest.release_id, *expected_release[:6], *expected_release[6:], now),
+            )
+            connection.execute(
+                "INSERT INTO market_reference_head(dataset_kind,scope_key,release_id,updated_at) "
+                "VALUES(?,?,?,?) ON CONFLICT(dataset_kind,scope_key) DO UPDATE SET "
+                "release_id=excluded.release_id,updated_at=excluded.updated_at",
+                (kind, manifest.scope_key, manifest.release_id, now),
+            )
+            checkpoint_scope = f"{kind}:{manifest.scope_key}"
+            connection.execute(
+                "INSERT INTO checkpoint(checkpoint_id,job_id,scope_type,scope_key,cursor_json,"
+                "status,object_hash,committed_at) VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(scope_type,scope_key) DO UPDATE SET "
+                "cursor_json=excluded.cursor_json,status=excluded.status,"
+                "object_hash=excluded.object_hash,committed_at=excluded.committed_at",
+                (
+                    sha256_bytes(f"market-reference:{checkpoint_scope}".encode()),
+                    None,
+                    "market-reference",
+                    checkpoint_scope,
+                    canonical_json_bytes(
+                        {"release_id": manifest.release_id, "content_hash": manifest.content_hash}
+                    ).decode("utf-8"),
+                    "SUCCEEDED",
+                    manifest_object_hash,
+                    now,
                 ),
             )
+        return True
+
+    def get_market_reference_release(
+        self,
+        dataset_kind: str,
+        scope_key: str,
+        *,
+        as_of: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """Read the canonical head, or the latest release visible at ``as_of``."""
+
+        with closing(self.connect()) as connection:
+            if as_of is None:
+                row = connection.execute(
+                    "SELECT r.*,a.type AS artifact_type,"
+                    "a.schema_version AS artifact_schema_version,"
+                    "a.object_hash AS artifact_object_hash,a.input_hashes_json "
+                    "FROM market_reference_head h JOIN market_reference_release r "
+                    "ON r.dataset_kind=h.dataset_kind AND r.scope_key=h.scope_key "
+                    "AND r.release_id=h.release_id JOIN artifact_registry a "
+                    "ON a.artifact_id=r.manifest_artifact_id "
+                    "WHERE h.dataset_kind=? AND h.scope_key=?",
+                    (dataset_kind, scope_key),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT r.*,a.type AS artifact_type,"
+                    "a.schema_version AS artifact_schema_version,"
+                    "a.object_hash AS artifact_object_hash,a.input_hashes_json "
+                    "FROM market_reference_release r JOIN artifact_registry a "
+                    "ON a.artifact_id=r.manifest_artifact_id "
+                    "WHERE r.dataset_kind=? AND r.scope_key=? "
+                    "AND r.available_to_system_at<=? "
+                    "ORDER BY r.available_to_system_at DESC,r.release_id DESC LIMIT 1",
+                    (dataset_kind, scope_key, as_of.astimezone(UTC).isoformat()),
+                ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_market_reference_releases(
+        self, dataset_kind: str | None = None, scope_key: str | None = None
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[str] = []
+        if dataset_kind is not None:
+            clauses.append("r.dataset_kind=?")
+            params.append(dataset_kind)
+        if scope_key is not None:
+            clauses.append("r.scope_key=?")
+            params.append(scope_key)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with closing(self.connect()) as connection:
+            rows = connection.execute(
+                "SELECT r.*,a.type AS artifact_type,"
+                "a.schema_version AS artifact_schema_version,"
+                "a.object_hash AS artifact_object_hash,a.input_hashes_json "
+                "FROM market_reference_release r JOIN artifact_registry a "
+                "ON a.artifact_id=r.manifest_artifact_id"
+                + where
+                + " ORDER BY r.available_to_system_at DESC,r.release_id DESC",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def _consecutive_provider_failures(rows: Iterable[sqlite3.Row]) -> int:
+    count = 0
+    for row in rows:
+        if str(row["status"]) == ProviderHealthStatus.HEALTHY.value:
+            break
+        count += 1
+    return count
 
 
 def _normalized_migration_sql(sql: str) -> str:

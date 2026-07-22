@@ -1,0 +1,117 @@
+schema_version: "1.0"
+cases:
+  - id: question_answer_reason
+    paragraphs: ["为什么低估值不等于安全边际？", "因为估值必须结合现金流质量和增长持续性。"]
+    expected_roles: [[QUESTION], [CAUSAL_REASON, EXPLANATION]]
+    expected_relations: [QUESTION_ANSWER]
+  - id: multiple_questions_one_answer
+    paragraphs: ["行业增长来自哪里？", "竞争优势能维持多久？", "核心是供需改善且客户粘性足够强。"]
+    expected_roles: [[QUESTION], [QUESTION], [CLAIM]]
+    expected_relations: [QUESTION_ANSWER]
+  - id: story_then_rule
+    paragraphs: ["过去一次追涨让我承受了很大回撤。", "所以买入前必须先写清风险和失效条件。"]
+    expected_roles: [[EXAMPLE, RISK], [OPERATIONAL_RULE, CONCLUSION]]
+    expected_relations: [CONTINUATION]
+    expected_statuses: [READY]
+    expected_standalone: [true]
+  - id: claim_then_example
+    paragraphs: ["我认为好公司也需要合理估值。", "例如市盈率过高时，小幅下修就可能带来较大回撤。"]
+    expected_roles: [[CLAIM], [EXAMPLE]]
+    expected_relations: [EXAMPLE_OF]
+    expected_statuses: [READY]
+    expected_standalone: [true]
+  - id: claim_then_evidence
+    paragraphs: ["关键是检验财务利润是否真实。", "根据财报，经营现金流连续三年低于净利润。"]
+    expected_roles: [[CLAIM], [EVIDENCE]]
+    expected_relations: [CLAIM_EVIDENCE]
+    expected_statuses: [READY]
+    expected_standalone: [true]
+  - id: claim_counter_conclusion
+    paragraphs: ["我认为行业集中度提升有利于龙头。", "然而需求下滑可能抵消竞争格局改善。", "因此结论是仍要跟踪供需和库存。"]
+    expected_roles: [[CLAIM], [COUNTERARGUMENT], [CONCLUSION]]
+    expected_relations: [COUNTER_TO, CONCLUSION_OF]
+  - id: rhetorical_question_claim
+    paragraphs: ["难道股价下跌就一定更安全吗？", "本质是估值下跌是否伴随基本面失效。"]
+    expected_roles: [[QUESTION, CLAIM], [CLAIM]]
+    expected_relations: [QUESTION_ANSWER]
+  - id: title_background_explanation
+    title: "如何理解安全边际"
+    paragraphs: ["市场波动只是观察起点。", "因为安全边际来自价格与保守价值之间的差额。"]
+    expected_roles: [[TITLE], [MARKET_OBSERVATION], [CAUSAL_REASON]]
+    expected_relations: [CONTINUATION]
+  - id: transition_keeps_context
+    paragraphs: ["我认为先确认商业模式。", "其次，再检查现金流和负债。", "因此才能形成完整的财务判断。"]
+    expected_roles: [[CLAIM], [TRANSITION], [CONCLUSION]]
+    expected_relations: [CONTINUATION, CONCLUSION_OF]
+  - id: anaphora_previous_context
+    paragraphs: ["存货周转持续变慢是一个财务风险。", "这意味着需求或产品竞争力可能下降。"]
+    expected_roles: [[EVIDENCE, RISK], [CLAIM]]
+    expected_relations: [CONTINUATION]
+  - id: risk_to_operational_rule
+    paragraphs: ["永久损失风险来自逻辑失效而非日常波动。", "只有反证被排除后才可以加仓。"]
+    expected_roles: [[RISK], [OPERATIONAL_RULE]]
+    expected_relations: [CONTINUATION]
+  - id: valuation_chain
+    paragraphs: ["估值不能只看静态市盈率。", "因为现金流折现还依赖增长、资本开支和折现率。"]
+    expected_roles: [[BACKGROUND], [CAUSAL_REASON, EXPLANATION]]
+    expected_relations: [CONTINUATION]
+  - id: financial_quality_chain
+    paragraphs: ["财务质量先看利润与现金流是否匹配。", "数据显示应收增速明显高于收入增速。"]
+    expected_roles: [[EVIDENCE], [EVIDENCE]]
+    expected_relations: [CONTINUATION]
+  - id: industry_chain
+    paragraphs: ["行业研究要先拆产业链。", "例如供需缺口只有落到稀缺环节才可能形成价值捕获。"]
+    expected_roles: [[BACKGROUND], [EXAMPLE]]
+    expected_relations: [EXAMPLE_OF]
+  - id: business_model_chain
+    paragraphs: ["商业模式回答公司如何赚钱。", "关键是竞争优势能否转化成持续现金流。"]
+    expected_roles: [[BACKGROUND], [CLAIM]]
+    expected_relations: [CONTINUATION]
+  - id: holding_validation_chain
+    paragraphs: ["持仓不是买入后的静止状态。", "应该持续跟踪基本面变化并验证原假设。"]
+    expected_roles: [[BACKGROUND], [OPERATIONAL_RULE]]
+    expected_relations: [CONTINUATION]
+  - id: add_requires_new_evidence
+    paragraphs: ["下跌本身不是加仓理由。", "只有新增证据强化原判断才可以增加仓位。"]
+    expected_roles: [[BACKGROUND], [OPERATIONAL_RULE]]
+    expected_relations: [CONTINUATION]
+  - id: trim_chain
+    paragraphs: ["估值进入极端区间会放大组合风险。", "因此应当减仓而不是继续外推乐观假设。"]
+    expected_roles: [[RISK], [OPERATIONAL_RULE, CONCLUSION]]
+    expected_relations: [CONCLUSION_OF]
+  - id: exit_chain
+    paragraphs: ["反证确认商业模式已经失效。", "所以必须卖出并退出，而不是等待回本。"]
+    expected_roles: [[COUNTERARGUMENT], [OPERATIONAL_RULE, CONCLUSION]]
+    expected_relations: [CONCLUSION_OF]
+  - id: failure_review_chain
+    paragraphs: ["这次失败源于忽略了负债和现金流。", "复盘时应该把错误假设写入检查清单。"]
+    expected_roles: [[EVIDENCE], [OPERATIONAL_RULE]]
+    expected_relations: [CONTINUATION]
+  - id: two_argument_boundaries
+    paragraphs: ["我认为估值必须保守。", "因此要预留安全边际。", "行业供需为什么突然变化？", "因为新增产能集中投放。"]
+    expected_roles: [[CLAIM], [CONCLUSION], [QUESTION], [CAUSAL_REASON]]
+    expected_argument_ranges: [[1, 2], [3, 4]]
+    expected_relations: [QUESTION_ANSWER]
+  - id: image_between_claim_and_evidence
+    html: "<p>我认为财务趋势需要连续验证。</p><p><img alt='现金流表'></p><p>根据财报，经营现金流同比下降20%。</p>"
+    expected_roles: [[CLAIM], [EVIDENCE], [EVIDENCE]]
+    expected_relations: [CLAIM_EVIDENCE]
+  - id: synthetic_comment_followup_only
+    scope: SYNTHETIC_GOLDEN_COMMENT_ONLY
+    paragraphs: ["你说风险下降，原因是什么？", "因为负债率下降且现金流改善。"]
+    expected_roles: [[QUESTION, RISK], [CAUSAL_REASON, EXPLANATION]]
+    expected_relations: [QUESTION_ANSWER]
+  - id: html_heading_keeps_title_role
+    html: "<h2>估值研究框架</h2><p>我认为安全边际必须来自保守假设。</p><p>根据财报，现金流是验证依据。</p>"
+    expected_roles: [[TITLE], [CLAIM], [EVIDENCE]]
+    expected_relations: [CLAIM_EVIDENCE]
+  - id: separated_evidence_chain
+    paragraphs: ["我认为需要警惕利润质量。", "中间先说明公司的商业模式。", "根据财报，应收账款占比持续上升。", "因此风险尚未解除。"]
+    expected_roles: [[CLAIM], [BACKGROUND], [EVIDENCE], [CONCLUSION, RISK]]
+    expected_relations: [CLAIM_EVIDENCE, CONCLUSION_OF]
+  - id: marketing_negative
+    paragraphs: ["欢迎关注公众号。", "扫码购买付费课程。"]
+    expected_screen: EXCLUDED_DERIVED
+  - id: casual_negative
+    paragraphs: ["哈哈。", "周末愉快！"]
+    expected_screen: EXCLUDED_DERIVED

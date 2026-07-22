@@ -1,4 +1,7 @@
-registry_version: research-skills-v1
+registry_version: research-skills-v2
+open_source_audit_manifest_files:
+  - third_party/audits/serenity/muxuuu-c2fe93de-v2.json
+  - third_party/audits/serenity/haskaomni-332037ea-v2.json
 max_specialists: 3
 coverage_confidence_caps:
   SUFFICIENT: 0.90
@@ -6,10 +9,13 @@ coverage_confidence_caps:
   INSUFFICIENT: 0.45
 skills:
   - skill_id: IndustryBottleneckSkill
-    skill_version: industry-bottleneck-v1
+    skill_version: industry-bottleneck-v2
     kind: INDUSTRY_BOTTLENECK
     source_references:
-      - https://github.com/muxuuu/serenity-skill/commit/c2fe93deedfd0d1bd9fe7ef0601ea1b9c20ea24a
+      - audit:serenity-muxuuu-c2fe93de-local-v2#SKILL.md
+      - audit:serenity-muxuuu-c2fe93de-local-v2#references/deep-research-workflow.md
+      - audit:serenity-muxuuu-c2fe93de-local-v2#references/evidence-ladder.md
+      - audit:serenity-muxuuu-c2fe93de-local-v2#references/risk-and-compliance.md
       - local:A-share-evidence-adaptation-v1
     trigger_tags: [industry, bottleneck, supply_chain, scarcity]
     industry_tags: [semiconductor, manufacturing, materials, equipment]
@@ -20,8 +26,8 @@ skills:
     required_frequencies: []
     required_evidence_grades: [PRIMARY_OFFICIAL]
     reasoning_steps:
-      - Trace system change to a necessary industry link.
-      - Test scarcity, substitutability, and listed-company value capture.
+      - Freeze the candidate universe and trace each supply-chain level.
+      - Test necessity, scarcity, substitutability, and listed-company value capture.
       - Record disconfirming evidence and missing links.
     positive_signals: [necessary_link_verified, scarcity_verified, value_capture_verified]
     negative_signals: [easy_substitution, no_listed_company_capture, story_only]
@@ -35,10 +41,11 @@ skills:
     status: ENABLED_CONTRACT
 
   - skill_id: EventToAlphaSkill
-    skill_version: event-to-alpha-v1
+    skill_version: event-to-alpha-v2
     kind: EVENT_TO_ALPHA
     source_references:
-      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/serenity-alpha/SKILL.md
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/serenity-alpha/references/original-framework.md
       - local:A-share-event-transmission-v1
     trigger_tags: [event, catalyst, policy, announcement]
     industry_tags: []
@@ -50,7 +57,8 @@ skills:
     required_evidence_grades: [PRIMARY_OFFICIAL]
     reasoning_steps:
       - Verify the event and its point-in-time availability.
-      - Map it to an operating metric, financial direction, and time window.
+      - Verify demand occurrence, business purity, scale elasticity and market misclassification.
+      - Map it to an operating metric, financial direction, and a one-to-four-quarter window.
       - Define a falsifier before stating an incremental implication.
     positive_signals: [verified_event, measurable_transmission, bounded_window]
     negative_signals: [headline_only, no_financial_transmission, stale_event]
@@ -64,10 +72,11 @@ skills:
     status: ENABLED_CONTRACT
 
   - skill_id: GrowthProbabilitySkill
-    skill_version: growth-probability-v1
+    skill_version: growth-probability-v2
     kind: GROWTH_PROBABILITY
     source_references:
-      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/bayesian-intrinsic-growth-valuation/SKILL.md
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/bayesian-intrinsic-growth-valuation/references/original-framework.md
       - local:A-share-growth-probability-v1
     trigger_tags: [growth, scenario, probability]
     industry_tags: []
@@ -79,8 +88,8 @@ skills:
     required_frequencies: []
     required_evidence_grades: [PRIMARY_OFFICIAL]
     reasoning_steps:
-      - Define mutually exclusive growth scenarios and explicit drivers.
-      - Assign probabilities that conserve to one.
+      - Define H0 through H5 with explicit drivers and failure conditions.
+      - Freeze priors and likelihoods, then verify normalized posteriors.
       - Bind duration and failure conditions to evidence.
     positive_signals: [driver_verified, probability_conserved, duration_bounded]
     negative_signals: [scenario_overlap, unsupported_probability, perpetual_growth]
@@ -94,10 +103,11 @@ skills:
     status: ENABLED_CONTRACT
 
   - skill_id: GrowthValuationLens
-    skill_version: growth-valuation-v1
+    skill_version: growth-valuation-v2
     kind: GROWTH_VALUATION
     source_references:
-      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/tam-adj-peg/SKILL.md
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/tam-adj-peg/references/original-framework.md
       - local:A-share-valuation-expectations-v1
     trigger_tags: [valuation, growth, expectations]
     industry_tags: []
@@ -110,6 +120,7 @@ skills:
     required_evidence_grades: [PRIMARY_OFFICIAL]
     reasoning_steps:
       - Separate market-implied expectations from the research scenario.
+      - Report TAM runway, quality factor and PEG with explicit units.
       - Test duration, dilution, reinvestment, and terminal assumptions.
       - Emit adjustments rather than a standalone target price.
     positive_signals: [expectations_explicit, scenario_bounded, dilution_included]
@@ -124,25 +135,29 @@ skills:
     status: ENABLED_CONTRACT
 
   - skill_id: DailyTrendHealthSkill
-    skill_version: daily-trend-health-v1
+    skill_version: daily-trend-health-v2
     kind: DAILY_TREND_HEALTH
     source_references:
-      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/gf-dma-health-index/SKILL.md
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/gf-dma-health-index/references/original-framework.md
       - local:A-share-daily-quality-gate-v1
     trigger_tags: [trend, daily, market_health]
     industry_tags: []
     event_tags: []
     horizons: [short, medium]
     required_inputs: [daily_market_quality]
-    optional_input_degradation_codes: {}
+    optional_input_degradation_codes:
+      fundamental_evidence: FUNDAMENTAL_GROWTH_UNAVAILABLE
+      estimate_revision_evidence: EXPECTATION_REVISION_UNAVAILABLE
     required_frequencies: [1d]
     required_evidence_grades: [SECONDARY]
     reasoning_steps:
       - Require a passing daily data-quality report.
-      - Calculate only versioned daily indicators.
+      - Treat caller-supplied, dataset-bound 20/50/100/200DMA values as unverified report-only inputs.
+      - Combine available fundamental growth and expectation revisions; degrade when absent.
       - Describe trend context without emitting a buy signal.
-    positive_signals: [daily_quality_pass, trend_confirmed]
-    negative_signals: [daily_quality_fail, unstable_trend]
+    positive_signals: [daily_quality_pass, caller_supplied_components_reported]
+    negative_signals: [daily_quality_fail, caller_supplied_dma_unverified, unstable_trend]
     invalidation_conditions: [daily_series_revised, quality_gate_failed]
     known_failure_modes: [lookahead_window, threshold_transfer, trend_as_fundamental_fact]
     output_schema: SpecialistDelta
@@ -181,10 +196,11 @@ skills:
     status: ENABLED_CONTRACT
 
   - skill_id: ResearchMemoComposer
-    skill_version: research-memo-composer-v1
+    skill_version: research-memo-composer-v2
     kind: RESEARCH_MEMO
     source_references:
-      - https://github.com/haskaomni/serenity-skill/commit/332037ea5f41ce7f150afbedb3517bcd1f1b2833
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/buy-side-equity-research-memo/SKILL.md
+      - audit:serenity-haskaomni-332037ea-local-v2#skills/buy-side-equity-research-memo/references/original-framework.md
       - local:citation-preserving-memo-v1
     trigger_tags: []
     industry_tags: []
@@ -197,6 +213,7 @@ skills:
     reasoning_steps:
       - Compose only frozen BaseCase and selected SpecialistDelta content.
       - Preserve evidence identifiers and explicit gaps.
+      - Reference key controversies, Bull/Base/Bear, catalysts, invalidations and monitoring metrics.
       - Add no new research fact or evidence identifier.
     positive_signals: [citation_union_preserved, gaps_visible]
     negative_signals: [new_uncited_fact, hidden_gap]

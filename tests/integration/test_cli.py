@@ -24,6 +24,35 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 runner = CliRunner()
 
 
+def test_legacy_paragraph_semantic_writes_are_rejected_without_runtime_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "legacy-must-remain-empty"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+    for command in ("knowledge-distill-run", "knowledge-draft-generate"):
+        result = runner.invoke(app, [command, "zhihu:test"])
+        assert result.exit_code == 2
+        payload = json.loads(result.output)
+        assert payload["status"] == "POLICY_REJECTED"
+        assert payload["reason_code"] == "LEGACY_SEMANTIC_PIPELINE_PAUSED"
+    assert not runtime.exists()
+
+
+def test_knowledge_coverage_audit_cli_exposes_non_negative_quiescence_lag() -> None:
+    help_result = runner.invoke(app, ["knowledge-coverage-audit", "--help"])
+    assert help_result.exit_code == 0, help_result.output
+    assert "--quiescence-lag-seco" in help_result.output
+
+    rejected = runner.invoke(
+        app,
+        ["knowledge-coverage-audit", "--quiescence-lag-seconds", "-1"],
+    )
+    assert rejected.exit_code == 2
+    assert "Invalid value" in rejected.output
+
+
 def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
     runtime = tmp_path / "中文运行目录"
     monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
@@ -348,9 +377,20 @@ def test_research_diagnostic_cli_schema_and_invalid_requests_are_safe(
     schema = runner.invoke(app, ["research-diagnostic-schema"])
     assert schema.exit_code == 0, schema.output
     payload = json.loads(schema.output)
-    assert payload["diagnostics_version"] == "research-diagnostics-v1"
+    assert payload["diagnostics_version"] == "research-diagnostics-v2"
     assert len(payload["diagnostics"]) == 6
+    assert {
+        item["skill_id"]: item["input_schema"] for item in payload["diagnostics"]
+    } == {
+        "IndustryBottleneckSkill": "IndustryBottleneckDiagnosticRequestV2",
+        "EventToAlphaSkill": "EventToAlphaDiagnosticRequestV2",
+        "GrowthProbabilitySkill": "GrowthProbabilityDiagnosticRequestV2",
+        "GrowthValuationLens": "GrowthValuationDiagnosticRequestV2",
+        "DailyTrendHealthSkill": "DailyTrendDiagnosticRequestV2",
+        "HourlySwingSkill": "HourlySwingDiagnosticRequest",
+    }
     assert payload["memo"]["skill_id"] == "ResearchMemoComposer"
+    assert payload["memo"]["input_schema"] == "ResearchMemoComposeRequestV2"
 
     secret = "private-diagnostic-statement-must-not-be-echoed"
     request = tmp_path / "private-diagnostic-request.json"

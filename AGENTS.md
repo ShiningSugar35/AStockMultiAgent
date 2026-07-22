@@ -14,6 +14,7 @@
 - 任务、游标、工件注册和模拟账本：SQLite。
 - Codex 草稿：`runtime/codex_runs/<run_id>/`，校验后才能进入 ArtifactStore。
 - 不直接编辑 SQLite，不在聊天结论和数据库之间建立旁路。
+- 根目录《低成本A股多Agent投研系统方案》只写长期设计，《开发计划》只写未完成项，《验收报告》只写有证据的当前事实；验收时必须在同一次修改中迁移状态。
 
 ## 数据与证据
 
@@ -23,12 +24,16 @@
 - 投资结论必须引用 evidence_id/source_snapshot_id，或明确标记为推断/缺口。
 - 社区内容只能作线索；关键事实必须回到公告、交易所、财报等更强来源。
 - 委员会只读冻结工件，禁止重新联网、抓取或启动新研究；缺证据返回 `NEEDS_INFO`。
+- Phase 5 当前目标仅为白名单作者的回答、想法、文章和专栏正文；持久范围政策禁止把社区互动区数据调度到采集、覆盖或蒸馏。B1a 已完成该政策在业务代码中的落实与回归，B1c 已完成统一覆盖审计冻结截点及并发回归。专栏按容器关系建模，B1b0 合同门已验收，B1b1 在取得真实无凭据枚举快照前为 `BLOCKED_EXTERNAL_OBSERVATION`，不得猜接口或声称可用。
+- Phase 5 蒸馏粒度固定为 `SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate`；Paragraph 只是存储和定位单元，Embedding、DeepSeek 和 Skill 候选必须以完整 ArgumentUnit 为最小单位。
 
 ## 行情与模拟盘
 
 - 默认回放使用未复权原始 5m；东方财富为主源，新浪为备用/交叉验证源。
 - 1m 不在默认链。缺失数据不得静默插值或虚构。
 - 复权研究序列由原始价格与版本化公司行为派生；复权价不得当作真实成交价。
+- 免费 reference 主源为 BaoStock 0.8.9，东方财富 direct HTTP 为备用/北交所补充；原始响应先入 ObjectStore，未复权日线在上海收盘前不可见。
+- 公司行动结构化结果只作线索；精确官方文档和条款核验完成前不得写模拟账本。
 - Repo Skill 不得直接修改账本，只能调用已校验的 `astock` 命令。
 
 ## 常用任务路由
@@ -45,6 +50,10 @@
 ## 稳定命令
 
 使用 `uv run astock --help` 查看完整参数。M1 稳定入口包括：`init`、`probe`、`sync-market`、`sync-5m`、`quality-report`、`paper-status`、`paper-replay`、`context-plan`、`codex-run-init`、`codex-run-import`。Phase 3 M3.1 入口包括：`financial-audit-schema`、`financial-audit`、`financial-audit-status`；同行分位和 PyOD 尚未启用。
+
+Phase 5 论证链入口包括：`knowledge-semantic-plan`、`knowledge-semantic-run`、`knowledge-semantic-status`、`knowledge-semantic-model-status`、`knowledge-semantic-embedding-run` 和 `knowledge-semantic-packet-export`。未校准相似度不得自动删除，DeepSeek 包不得自动外发。
+
+Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`provider-status`、`sync-instruments`、`sync-calendar`、`sync-daily`、`sync-corporate-actions`、`reference-status` 和 `reference-audit`。Provider 默认使用 recorded 探针；live 必须显式开启。财务 source、候选扫描和公开模拟下单接口尚未验收。
 
 ## 开发约定
 

@@ -77,7 +77,9 @@ def _service_and_request(
     skill_versions = {
         item.skill_id: item.skill_version for item in route.selected
     }
-    skill_versions["ResearchMemoComposer"] = "research-memo-composer-v1"
+    skill_versions["ResearchMemoComposer"] = (
+        memo.composer_version or "research-memo-composer-v1"
+    )
     if scope is not CommitteeDecisionScope.NEW_CANDIDATE:
         plan = artifacts["PositionMonitoringPlan"]
         review = artifacts["HoldingReviewPack"]

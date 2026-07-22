@@ -1,5 +1,32 @@
 schema_version: "1.0"
 templates:
+  - template_id: zhihu-answer-detail
+    response_kind: CONTENT_DETAIL
+    content_types: [answers]
+    path_template: /api/v4/answers/{content_id}
+    default_query:
+      include: content
+    status: VERIFIED
+    observation_evidence: PYTHON_HTTP_RAW_SNAPSHOT_86794B31_AND_CHROME_PAGE_ASSET_2026_07_18
+
+  - template_id: zhihu-article-detail
+    response_kind: CONTENT_DETAIL
+    content_types: [articles]
+    request_origin: https://zhuanlan.zhihu.com
+    path_template: /p/{content_id}
+    default_query: {}
+    status: VERIFIED
+    observation_evidence: CHROME_CANONICAL_ARTICLE_HTML_PAGE_2026_07_18
+
+  - template_id: zhihu-thought-detail
+    response_kind: CONTENT_DETAIL
+    content_types: [thoughts]
+    path_template: /api/v4/pins/{content_id}
+    default_query:
+      include: content
+    status: VERIFIED
+    observation_evidence: PYTHON_HTTP_RAW_SNAPSHOTS_86A4351D_AND_050D64AB_2026_07_18
+
   - template_id: zhihu-comment-v5-answer-root
     response_kind: ROOT_COMMENTS
     content_types: [answers]
@@ -11,10 +38,35 @@ templates:
     status: VERIFIED
     observation_evidence: CHROME_PAGE_ASSET_2026-07-17
 
+  - template_id: zhihu-comment-article-root
+    response_kind: ROOT_COMMENTS
+    content_types: [articles]
+    path_template: /api/v4/comment_v5/articles/{content_id}/root_comment
+    default_query:
+      order_by: score
+      limit: "20"
+      offset: ""
+    status: VERIFIED
+    observation_evidence: CHROME_ARTICLE_PAGE_ASSET_2026_07_18
+
+  - template_id: zhihu-comment-thought-root
+    response_kind: ROOT_COMMENTS
+    content_types: [thoughts]
+    path_template: /api/v4/comment_v5/pins/{content_id}/root_comment
+    default_query:
+      order_by: score
+      limit: "20"
+      offset: ""
+    status: VERIFIED
+    observation_evidence: CHROME_THOUGHT_PAGE_ASSET_2026_07_18
+
   - template_id: zhihu-comment-v5-child
     response_kind: CHILD_COMMENTS
     content_types: [answers, articles, thoughts]
-    path_template: null
-    default_query: {}
-    status: PENDING_OBSERVATION
-    observation_evidence: CHILD_REPLY_UI_NOT_YET_OBSERVED
+    path_template: /api/v4/comment_v5/comment/{parent_comment_id}/child_comment
+    default_query:
+      order_by: ts
+      limit: "20"
+      offset: ""
+    status: VERIFIED
+    observation_evidence: PYTHON_HTTP_RAW_SNAPSHOT_EEAAEF62_2026_07_19

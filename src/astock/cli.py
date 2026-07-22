@@ -19,6 +19,7 @@ from astock import __version__
 from astock.adaptive import AdaptiveResearchStatusService
 from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
 from astock.committee import CommitteeService, load_committee_rules
+from astock.core.atomic import atomic_write_text
 from astock.core.codex_runs import (
     CodexRunService,
     build_context_budget,
@@ -45,17 +46,38 @@ from astock.knowledge import (
     DistillationRepository,
     KnowledgeCoverageAuditService,
     KnowledgeDistillationService,
-    KnowledgeDraftRepository,
     KnowledgeDraftService,
     KnowledgeRepository,
+    KnowledgeStructureProfileService,
     ParquetKnowledgeStore,
+    ParquetSemanticStore,
+    SemanticEmbeddingService,
+    SemanticFunnelRepository,
+    SemanticFunnelService,
+    SemanticPacketService,
+    SentenceTransformerBackend,
+    ZhihuArticleRecoveryService,
     ZhihuCollectionService,
+    ZhihuFullCaptureSession,
+    ZhihuLoopbackCaptureSession,
+    ZhihuManualTaskService,
+    ZhihuPythonRecoveryService,
     ZhihuResponseImportService,
+    build_coordinator_capture_extension,
+    create_loopback_capture_server,
+    default_model_directory,
     get_knowledge_source,
+    install_local_model,
     load_distillation_rules,
     load_knowledge_sources,
+    load_semantic_funnel_config,
     load_zhihu_endpoint_templates,
+    loopback_installer_url,
+    loopback_status_url,
+    serve_loopback_capture,
+    verify_local_model,
 )
+from astock.market_data import MarketReferenceService, ReferenceParquetStore
 from astock.market_data.storage import (
     CanonicalMarketStore,
     ParquetMarketStore,
@@ -63,7 +85,12 @@ from astock.market_data.storage import (
 )
 from astock.market_data.sync import MarketSyncService
 from astock.paper_trading import LedgerService, PaperReplayService, load_fee_schedule
-from astock.providers import EastMoney5mProvider, Sina5mProvider
+from astock.providers import (
+    EastMoney5mProvider,
+    ProviderProbeService,
+    Sina5mProvider,
+    load_provider_registry,
+)
 from astock.research import (
     Phase4ChainService,
     PositionLifecycleService,
@@ -75,6 +102,8 @@ from astock.research import (
     load_research_core_config,
     load_research_diagnostic_config,
     load_research_skill_registry,
+    validate_registry_open_source_audits,
+    verify_open_source_tree,
 )
 from astock.schemas import (
     AdjustmentMode,
@@ -99,15 +128,20 @@ from astock.schemas import (
     MarketRegimeFeatures,
     PositionLifecycleConfig,
     PositionPlanCreateRequest,
+    ReferenceCoverageStatus,
+    ReferenceDatasetKind,
     ResearchCoreConfig,
     ResearchDiagnosticConfig,
     ResearchMemoComposeRequest,
+    ResearchMemoComposeRequestV2,
     ResearchSkillRegistry,
+    SemanticFunnelRun,
     ShadowDecisionAssignmentRequest,
     ShadowExecutionObservationDraft,
     ShadowStudyCreateRequest,
     SpecialistDeltaBuildRequest,
     SpecialistDiagnosticRequest,
+    SpecialistDiagnosticRequestV2,
     SpecialistRouteRequest,
     ZhihuContentType,
     ZhihuEndpointTemplateRegistry,
@@ -141,14 +175,26 @@ def _knowledge_sources(paths: ProjectPaths) -> KnowledgeSourceRegistry:
 
 
 def _zhihu_endpoint_templates(paths: ProjectPaths) -> ZhihuEndpointTemplateRegistry:
-    return load_zhihu_endpoint_templates(
-        paths.root / "configs" / "zhihu_endpoint_templates.yaml"
-    )
+    return load_zhihu_endpoint_templates(paths.root / "configs" / "zhihu_endpoint_templates.yaml")
 
 
 def _distillation_rules(paths: ProjectPaths) -> DistillationClassRuleSet:
-    return load_distillation_rules(
-        paths.root / "configs" / "knowledge_distillation_rules.yaml"
+    return load_distillation_rules(paths.root / "configs" / "knowledge_distillation_rules.yaml")
+
+
+def _semantic_funnel_service(
+    paths: ProjectPaths,
+    state: StateStore,
+    objects: ObjectStore,
+) -> SemanticFunnelService:
+    return SemanticFunnelService(
+        KnowledgeRepository(state),
+        SemanticFunnelRepository(state),
+        objects,
+        load_semantic_funnel_config(
+            paths.root / "configs" / "knowledge_semantic_funnel.yaml"
+        ),
+        _distillation_rules(paths),
     )
 
 
@@ -161,15 +207,11 @@ def _research_skills(paths: ProjectPaths) -> ResearchSkillRegistry:
 
 
 def _research_diagnostics(paths: ProjectPaths) -> ResearchDiagnosticConfig:
-    return load_research_diagnostic_config(
-        paths.root / "configs" / "research_diagnostics.yaml"
-    )
+    return load_research_diagnostic_config(paths.root / "configs" / "research_diagnostics.yaml")
 
 
 def _position_lifecycle(paths: ProjectPaths) -> PositionLifecycleConfig:
-    return load_position_lifecycle_config(
-        paths.root / "configs" / "position_lifecycle.yaml"
-    )
+    return load_position_lifecycle_config(paths.root / "configs" / "position_lifecycle.yaml")
 
 
 def _committee_service(
@@ -192,9 +234,7 @@ def _shadow_service(
     return ShadowEvaluationService(
         state,
         objects,
-        load_shadow_evaluation_policy(
-            paths.root / "configs" / "shadow_evaluation.yaml"
-        ),
+        load_shadow_evaluation_policy(paths.root / "configs" / "shadow_evaluation.yaml"),
         ParquetShadowStore(paths.parquet),
     )
 
@@ -435,24 +475,136 @@ def probe() -> None:
                 "phase8_admission_status": adaptive.phase8_admission_status,
                 "adaptive_weights": adaptive.adaptive_weights_enabled,
                 "online_learning": adaptive.online_learning_allowed,
-                "main_paper_ledger_write": (
-                    adaptive.main_paper_ledger_write_allowed
-                ),
+                "main_paper_ledger_write": (adaptive.main_paper_ledger_write_allowed),
                 "broker_execution": adaptive.broker_execution_allowed,
                 "next_permitted_stage": adaptive.next_permitted_stage,
                 "reason_codes": adaptive.reason_codes,
                 "sample_gaps": {
                     "observation_months": adaptive.observation_month_gap,
                     "independent_decisions": adaptive.independent_decision_gap,
-                    "walk_forward_folds": (
-                        adaptive.qualifying_walk_forward_fold_gap
-                    ),
+                    "walk_forward_folds": (adaptive.qualifying_walk_forward_fold_gap),
                     "market_regimes": adaptive.qualifying_market_regime_gap,
                 },
             },
             "providers": [provider.capability() for provider in providers],
         }
     )
+
+
+def _provider_probe_service(
+    paths: ProjectPaths, state: StateStore, objects: ObjectStore
+) -> ProviderProbeService:
+    return ProviderProbeService(
+        project_root=paths.root,
+        registry=load_provider_registry(paths.root / "configs" / "provider_registry.yaml"),
+        state=state,
+        objects=objects,
+    )
+
+
+def _market_reference_service(
+    paths: ProjectPaths, state: StateStore, objects: ObjectStore
+) -> MarketReferenceService:
+    return MarketReferenceService(
+        state,
+        objects,
+        ReferenceParquetStore(paths.parquet),
+        paths.root / "tests" / "fixtures" / "reference",
+    )
+
+
+@app.command("provider-list")
+def provider_list() -> None:
+    """List declared providers and durable health without calling the network."""
+
+    paths, state, objects = _services()
+    service = _provider_probe_service(paths, state, objects)
+    _emit(
+        {
+            "schema_version": "provider-list-v1",
+            "registry_version": service.registry.registry_version,
+            "providers": [item.model_dump(mode="json") for item in service.list()],
+        }
+    )
+
+
+@app.command("provider-status")
+def provider_status(
+    provider_id: Annotated[
+        str | None, typer.Argument(help="Registered provider identifier; omit to list all.")
+    ] = None,
+) -> None:
+    """Read verified provider health without calling the network."""
+
+    paths, state, objects = _services()
+    service = _provider_probe_service(paths, state, objects)
+    try:
+        if provider_id is not None:
+            _emit(service.status(provider_id).model_dump(mode="json"))
+        else:
+            _emit(
+                {
+                    "schema_version": "provider-status-list-v1",
+                    "registry_version": service.registry.registry_version,
+                    "providers": [item.model_dump(mode="json") for item in service.list()],
+                }
+            )
+    except ValueError:
+        _emit({"status": "FAILED", "failure_code": "UNKNOWN_PROVIDER"})
+        raise typer.Exit(code=1) from None
+
+
+@app.command("provider-probe")
+def provider_probe(
+    provider_id: Annotated[
+        str | None, typer.Argument(help="Registered provider identifier; omit to probe all.")
+    ] = None,
+    live: Annotated[
+        bool,
+        typer.Option(
+            "--live",
+            help="Explicitly call the remote provider; default uses recorded fixtures.",
+        ),
+    ] = False,
+    probe_key: Annotated[
+        str | None,
+        typer.Option(
+            "--probe-key",
+            help="Stable retry/idempotency key; required for live probes.",
+        ),
+    ] = None,
+) -> None:
+    """Run a recorded probe, or an explicitly requested low-frequency live probe."""
+
+    paths, state, objects = _services()
+    service = _provider_probe_service(paths, state, objects)
+    if live and probe_key is None:
+        _emit({"status": "FAILED", "failure_code": "PROBE_KEY_REQUIRED"})
+        raise typer.Exit(code=1)
+    try:
+        provider_ids = (
+            [provider_id]
+            if provider_id is not None
+            else [item.provider_id for item in service.registry.providers]
+        )
+        results = [service.probe(item, live=live, probe_key=probe_key) for item in provider_ids]
+        if provider_id is not None:
+            _emit(results[0].model_dump(mode="json"))
+        else:
+            _emit(
+                {
+                    "schema_version": "provider-probe-list-v1",
+                    "registry_version": service.registry.registry_version,
+                    "probe_mode": "LIVE" if live else "RECORDED",
+                    "providers": [item.model_dump(mode="json") for item in results],
+                }
+            )
+    except ValueError:
+        _emit({"status": "FAILED", "failure_code": "UNKNOWN_OR_UNSUPPORTED_PROVIDER"})
+        raise typer.Exit(code=1) from None
+    except RuntimeError:
+        _emit({"status": "FAILED", "failure_code": "CORRUPT_PROVIDER_STATE"})
+        raise typer.Exit(code=1) from None
 
 
 @app.command("sync-5m")
@@ -495,6 +647,136 @@ def sync_market(
     except AStockError as exc:
         _emit({"status": "FAILED", "failure_class": exc.failure_class.value, "message": str(exc)})
         raise typer.Exit(code=2) from exc
+
+
+@app.command("sync-instruments")
+def sync_instruments(
+    market: Annotated[Market | None, typer.Option(case_sensitive=False)] = None,
+    live: Annotated[bool, typer.Option("--live")] = False,
+) -> None:
+    """Publish an immutable instrument-master release; recorded unless --live is explicit."""
+
+    paths, state, objects = _services()
+    try:
+        report = _market_reference_service(paths, state, objects).sync_instruments(
+            market, live=live
+        )
+    except (AStockError, OSError, RuntimeError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "REFERENCE_SYNC_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
+    if report.status is ReferenceCoverageStatus.FAILED:
+        raise typer.Exit(code=2)
+
+
+@app.command("sync-calendar")
+def sync_calendar(
+    exchange: Annotated[Market, typer.Option(case_sensitive=False)],
+    start: Annotated[str, typer.Option(help="Inclusive YYYY-MM-DD date.")],
+    end: Annotated[str, typer.Option(help="Inclusive YYYY-MM-DD date.")],
+    live: Annotated[bool, typer.Option("--live")] = False,
+) -> None:
+    """Publish a point-in-time exchange-calendar release."""
+
+    paths, state, objects = _services()
+    try:
+        report = _market_reference_service(paths, state, objects).sync_calendar(
+            exchange, date.fromisoformat(start), date.fromisoformat(end), live=live
+        )
+    except (AStockError, OSError, RuntimeError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "REFERENCE_SYNC_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
+    if report.status is ReferenceCoverageStatus.FAILED:
+        raise typer.Exit(code=2)
+
+
+@app.command("sync-daily")
+def sync_daily(
+    symbol: Annotated[str, typer.Argument(help="Six-digit stock or index code.")],
+    market: Annotated[Market, typer.Option(case_sensitive=False)],
+    start: Annotated[str, typer.Option(help="Inclusive YYYY-MM-DD date.")],
+    end: Annotated[str, typer.Option(help="Inclusive YYYY-MM-DD date.")],
+    live: Annotated[bool, typer.Option("--live")] = False,
+) -> None:
+    """Publish unadjusted daily observations with Shanghai close semantics."""
+
+    paths, state, objects = _services()
+    try:
+        report = _market_reference_service(paths, state, objects).sync_daily(
+            symbol,
+            market,
+            date.fromisoformat(start),
+            date.fromisoformat(end),
+            live=live,
+        )
+    except (AStockError, OSError, RuntimeError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "REFERENCE_SYNC_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
+    if report.status is ReferenceCoverageStatus.FAILED:
+        raise typer.Exit(code=2)
+
+
+@app.command("sync-corporate-actions")
+def sync_corporate_actions(
+    symbol: Annotated[str, typer.Argument(help="Six-digit stock code.")],
+    market: Annotated[Market, typer.Option(case_sensitive=False)],
+    start: Annotated[str, typer.Option(help="Inclusive YYYY-MM-DD date.")],
+    end: Annotated[str, typer.Option(help="Inclusive YYYY-MM-DD date.")],
+    live: Annotated[bool, typer.Option("--live")] = False,
+) -> None:
+    """Record secondary action hints and deterministic official-document linkage only."""
+
+    paths, state, objects = _services()
+    try:
+        report = _market_reference_service(paths, state, objects).sync_corporate_actions(
+            symbol,
+            market,
+            date.fromisoformat(start),
+            date.fromisoformat(end),
+            live=live,
+        )
+    except (AStockError, OSError, RuntimeError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "REFERENCE_SYNC_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
+    if report.status is ReferenceCoverageStatus.FAILED:
+        raise typer.Exit(code=2)
+
+
+@app.command("reference-status")
+def reference_status(
+    dataset_kind: Annotated[ReferenceDatasetKind, typer.Argument(case_sensitive=False)],
+    scope_key: Annotated[str, typer.Argument()],
+    as_of: Annotated[str | None, typer.Option(help="Aware ISO timestamp.")] = None,
+) -> None:
+    """Read a verified current or point-in-time reference release without networking."""
+
+    paths, state, objects = _services()
+    try:
+        parsed_as_of = datetime.fromisoformat(as_of) if as_of else None
+        if parsed_as_of is not None and parsed_as_of.tzinfo is None:
+            raise ValueError("--as-of must include a timezone")
+        _emit(
+            _market_reference_service(paths, state, objects).status(
+                dataset_kind, scope_key, as_of=parsed_as_of
+            )
+        )
+    except ValueError as exc:
+        _emit({"status": "FAILED", "failure_code": "INVALID_INPUT"})
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("reference-audit")
+def reference_audit() -> None:
+    """Verify release objects, SQLite pointers, and immutable Parquet files."""
+
+    paths, state, objects = _services()
+    result = _market_reference_service(paths, state, objects).audit()
+    _emit(result)
+    if result["status"] != "PASS":
+        raise typer.Exit(code=2)
 
 
 @app.command("quality-report")
@@ -890,8 +1172,7 @@ def financial_audit(
             objects,
             rule_config_path=rule_config or paths.root / "configs" / "financial_rules.yaml",
             industry_profile_path=(
-                industry_profiles
-                or paths.root / "configs" / "financial_industry_profiles.yaml"
+                industry_profiles or paths.root / "configs" / "financial_industry_profiles.yaml"
             ),
         )
         execution = service.run(request)
@@ -1051,9 +1332,7 @@ def research_evidence_freeze(
     except (OSError, ValidationError) as exc:
         _emit({"status": "REJECTED", "error_code": "INVALID_FREEZE_REQUEST"})
         raise typer.Exit(code=2) from exc
-    execution = ResearchCoreService(state, objects, _research_core(paths)).freeze_evidence(
-        request
-    )
+    execution = ResearchCoreService(state, objects, _research_core(paths)).freeze_evidence(request)
     pack = execution.pack
     _emit(
         {
@@ -1082,15 +1361,11 @@ def research_base_case_build(
 
     paths, state, objects = _services()
     try:
-        request = BaseCaseBuildRequest.model_validate_json(
-            request_file.read_text(encoding="utf-8")
-        )
+        request = BaseCaseBuildRequest.model_validate_json(request_file.read_text(encoding="utf-8"))
     except (OSError, ValidationError) as exc:
         _emit({"status": "REJECTED", "error_code": "INVALID_BASE_CASE_REQUEST"})
         raise typer.Exit(code=2) from exc
-    execution = ResearchCoreService(state, objects, _research_core(paths)).build_base_case(
-        request
-    )
+    execution = ResearchCoreService(state, objects, _research_core(paths)).build_base_case(request)
     pack = execution.pack
     _emit(
         {
@@ -1100,9 +1375,7 @@ def research_base_case_build(
             "object_sha256": execution.object_sha256,
             "company_id": pack.company_id,
             "as_of": pack.as_of,
-            "finding_count": sum(
-                len(items) for items in pack.findings_by_section.values()
-            ),
+            "finding_count": sum(len(items) for items in pack.findings_by_section.values()),
             "evidence_count": len(pack.evidence_ids),
             "gap_count": len(pack.evidence_gaps),
             "coverage_status": pack.coverage_status,
@@ -1136,6 +1409,66 @@ def research_base_case_audit(
 
     paths, state, objects = _services()
     _emit(ResearchCoreService(state, objects, _research_core(paths)).audit(company_id))
+
+
+@app.command("open-source-audit-status")
+def open_source_audit_status() -> None:
+    """Validate fixed Serenity source, license, file and local mapping manifests."""
+
+    paths, _, _ = _services()
+    registry = _research_skills(paths)
+    manifests = validate_registry_open_source_audits(registry, paths.root)
+    _emit(
+        {
+            "status": "PASS",
+            "registry_version": registry.registry_version,
+            "audits": [
+                {
+                    "audit_id": manifest.audit_id,
+                    "upstream_repository": manifest.upstream_repository,
+                    "commit_sha": manifest.commit_sha,
+                    "license_id": manifest.license_id,
+                    "license_sha256": manifest.license_sha256,
+                    "reviewed_file_count": len(manifest.reviewed_files),
+                    "local_contracts": [
+                        mapping.local_contract_id for mapping in manifest.local_mappings
+                    ],
+                    "local_patch_sha256": manifest.local_patch_sha256,
+                    "local_adaptation_sha256": manifest.local_adaptation_sha256,
+                    "local_adaptation_file_count": len(
+                        manifest.local_adaptation_files
+                    ),
+                    "normal_runtime_network_required": (
+                        manifest.normal_runtime_network_required
+                    ),
+                    "source_vendored": manifest.source_vendored,
+                }
+                for manifest in manifests
+            ],
+        }
+    )
+
+
+@app.command("open-source-audit-verify")
+def open_source_audit_verify(
+    audit_id: Annotated[str, typer.Argument(help="Frozen open-source audit id.")],
+    source_root: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    ],
+) -> None:
+    """Recompute one audit against a local checkout of its exact commit."""
+
+    paths, _, _ = _services()
+    manifests = validate_registry_open_source_audits(_research_skills(paths), paths.root)
+    manifest = next((item for item in manifests if item.audit_id == audit_id), None)
+    if manifest is None:
+        _emit({"status": "REJECTED", "reason_code": "UNKNOWN_OPEN_SOURCE_AUDIT"})
+        raise typer.Exit(code=2)
+    report = verify_open_source_tree(manifest, source_root)
+    _emit(report)
+    if report["status"] != "PASS":
+        raise typer.Exit(code=2)
 
 
 @app.command("research-specialist-list")
@@ -1316,22 +1649,50 @@ def research_diagnostic_schema() -> None:
                 {
                     "skill_id": item.skill_id,
                     "skill_version": item.skill_version,
-                    "input_schema": {
+                    "input_schema": (
+                        {
+                            "IndustryBottleneckSkill": (
+                                "IndustryBottleneckDiagnosticRequestV2"
+                            ),
+                            "EventToAlphaSkill": "EventToAlphaDiagnosticRequestV2",
+                            "GrowthProbabilitySkill": (
+                                "GrowthProbabilityDiagnosticRequestV2"
+                            ),
+                            "GrowthValuationLens": (
+                                "GrowthValuationDiagnosticRequestV2"
+                            ),
+                            "DailyTrendHealthSkill": "DailyTrendDiagnosticRequestV2",
+                        }[item.skill_id]
+                        if item.skill_version.endswith("-v2")
+                        else {
                         "IndustryBottleneckSkill": "IndustryBottleneckDiagnosticRequest",
                         "EventToAlphaSkill": "EventToAlphaDiagnosticRequest",
                         "GrowthProbabilitySkill": "GrowthProbabilityDiagnosticRequest",
                         "GrowthValuationLens": "GrowthValuationDiagnosticRequest",
                         "DailyTrendHealthSkill": "DailyTrendDiagnosticRequest",
                         "HourlySwingSkill": "HourlySwingDiagnosticRequest",
-                    }[item.skill_id],
+                        }[item.skill_id]
+                    ),
                 }
                 for item in registry.skills
                 if item.counts_as_specialist
             ],
             "memo": {
                 "skill_id": "ResearchMemoComposer",
-                "skill_version": "research-memo-composer-v1",
-                "input_schema": "ResearchMemoComposeRequest",
+                "skill_version": next(
+                    item.skill_version
+                    for item in registry.skills
+                    if item.skill_id == "ResearchMemoComposer"
+                ),
+                "input_schema": (
+                    "ResearchMemoComposeRequestV2"
+                    if next(
+                        item.skill_version
+                        for item in registry.skills
+                        if item.skill_id == "ResearchMemoComposer"
+                    ).endswith("-v2")
+                    else "ResearchMemoComposeRequest"
+                ),
             },
         }
     )
@@ -1348,9 +1709,15 @@ def research_specialist_diagnose(
 
     paths, state, objects = _services()
     try:
-        request = TypeAdapter(SpecialistDiagnosticRequest).validate_json(
-            request_file.read_text(encoding="utf-8")
+        raw_request = request_file.read_text(encoding="utf-8")
+        raw_payload = json.loads(raw_request)
+        adapter = (
+            TypeAdapter(SpecialistDiagnosticRequestV2)
+            if isinstance(raw_payload, dict)
+            and str(raw_payload.get("skill_version", "")).endswith("-v2")
+            else TypeAdapter(SpecialistDiagnosticRequest)
         )
+        request = adapter.validate_json(raw_request)
         execution = ResearchDiagnosticsService(
             state,
             objects,
@@ -1394,8 +1761,12 @@ def research_memo_compose(
 
     paths, state, objects = _services()
     try:
-        request = ResearchMemoComposeRequest.model_validate_json(
-            request_file.read_text(encoding="utf-8")
+        raw_request = request_file.read_text(encoding="utf-8")
+        raw_payload = json.loads(raw_request)
+        request = (
+            ResearchMemoComposeRequestV2.model_validate_json(raw_request)
+            if isinstance(raw_payload, dict) and "structured_memo" in raw_payload
+            else ResearchMemoComposeRequest.model_validate_json(raw_request)
         )
         execution = ResearchDiagnosticsService(
             state,
@@ -1519,9 +1890,7 @@ def position_plan_create(
             "rules_version": plan.rules_version,
             "as_of": plan.as_of,
             "next_review_at": plan.next_review_at,
-            "condition_count": len(
-                [*plan.price_rules, *plan.fundamental_rules, *plan.event_rules]
-            ),
+            "condition_count": len([*plan.price_rules, *plan.fundamental_rules, *plan.event_rules]),
             "baseline_evidence_count": len(plan.baseline_evidence_ids),
             "coverage_status": plan.coverage_status,
             "object_sha256": execution.object_sha256,
@@ -1556,9 +1925,7 @@ def holding_review_run(
 
     paths, state, objects = _services()
     try:
-        request = HoldingReviewRequest.model_validate_json(
-            request_file.read_text(encoding="utf-8")
-        )
+        request = HoldingReviewRequest.model_validate_json(request_file.read_text(encoding="utf-8"))
         execution = PositionLifecycleService(
             state,
             objects,
@@ -1872,9 +2239,7 @@ def shadow_independence_key(
             {
                 "status": "FROZEN",
                 "study_id": study_id,
-                "independence_rule_version": (
-                    service.configured_policy.independence_rule_version
-                ),
+                "independence_rule_version": (service.configured_policy.independence_rule_version),
                 "independence_key": service.build_independence_key(
                     study_id,
                     company_id=company_id,
@@ -2137,14 +2502,322 @@ def knowledge_local_coverage(
 
 
 @app.command("knowledge-coverage-audit")
-def knowledge_coverage_audit() -> None:
+def knowledge_coverage_audit(
+    quiescence_lag_seconds: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Seconds before audit start used as the frozen online-data cutoff.",
+        ),
+    ] = 30,
+) -> None:
     """Reconcile allowlisted coverage, objects, SQLite, and Parquet indexes."""
 
     paths, state, objects = _services()
     report = KnowledgeCoverageAuditService(state, objects, paths.parquet).audit_registry(
-        _knowledge_sources(paths)
+        _knowledge_sources(paths),
+        quiescence_lag=timedelta(seconds=quiescence_lag_seconds),
     )
     _emit({"status": report.status, "report": report})
+
+
+@app.command("knowledge-structure-analyze")
+def knowledge_structure_analyze(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Record text-free source structure metrics and the selected processing strategy."""
+
+    paths, state, objects = _services()
+    source = get_knowledge_source(_knowledge_sources(paths), source_id)
+    profiles = KnowledgeStructureProfileService(state, objects).analyze(source)
+    _emit(
+        {
+            "status": "PENDING_REVIEW",
+            "source_id": source_id,
+            "profile_count": len(profiles),
+            "profiles": profiles,
+        }
+    )
+
+
+@app.command("knowledge-structure-status")
+def knowledge_structure_status(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Return the latest text-free source structure profiles for one author."""
+
+    paths, state, objects = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    _emit(KnowledgeStructureProfileService(state, objects).status(source_id))
+
+
+@app.command("knowledge-structure-audit")
+def knowledge_structure_audit(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
+) -> None:
+    """Verify current structure profiles, immutable objects, and artifact links."""
+
+    paths, state, objects = _services()
+    source = get_knowledge_source(_knowledge_sources(paths), source_id)
+    _emit(KnowledgeStructureProfileService(state, objects).audit(source))
+
+
+@app.command("knowledge-semantic-plan")
+def knowledge_semantic_plan(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted Zhihu author source id.")],
+) -> None:
+    """Preview DETAIL_VERIFIED full-item inputs without emitting source text."""
+
+    paths, state, objects = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    plan = _semantic_funnel_service(paths, state, objects).plan(source_id)
+    _emit({"status": "PLANNED", "plan": plan})
+
+
+@app.command("knowledge-semantic-run")
+def knowledge_semantic_run(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted Zhihu author source id.")],
+) -> None:
+    """Build ParagraphUnits and complete ArgumentUnits without comments or external models."""
+
+    paths, state, objects = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    execution = _semantic_funnel_service(paths, state, objects).run(source_id)
+    _emit(
+        {
+            "status": execution.run.stage,
+            "run_id": execution.run.run_id,
+            "content_item_count": execution.run.content_item_count,
+            "paragraph_count": execution.run.paragraph_count,
+            "argument_unit_count": execution.run.argument_unit_count,
+            "candidate_item_count": execution.candidate_item_count,
+            "excluded_item_count": execution.excluded_item_count,
+            "ready_argument_count": execution.ready_argument_count,
+            "review_argument_count": execution.review_argument_count,
+            "excluded_argument_count": execution.excluded_argument_count,
+            "comments_included": False,
+        }
+    )
+
+
+@app.command("knowledge-semantic-status")
+def knowledge_semantic_status(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted Zhihu author source id.")],
+) -> None:
+    """Return private-safe metadata for the latest argument-aware run."""
+
+    paths, state, _ = _services()
+    get_knowledge_source(_knowledge_sources(paths), source_id)
+    repository = SemanticFunnelRepository(state)
+    active_run = repository.latest_run(source_id)
+    completed_run = repository.latest_completed_run(source_id)
+    if active_run is None:
+        _emit({"status": "NOT_RUN", "active_run": None, "latest_usable_run": None})
+        return
+
+    def compact(semantic_run: SemanticFunnelRun) -> dict[str, object]:
+        return {
+            "run_id": semantic_run.run_id,
+            "stage": semantic_run.stage,
+            "input_manifest_sha256": semantic_run.input_manifest_sha256,
+            "input_hash_count": len(semantic_run.input_hashes),
+            "rule_config_sha256": semantic_run.rule_config_sha256,
+            "versions": {
+                "pipeline": semantic_run.pipeline_version,
+                "paragraphizer": semantic_run.paragraphizer_version,
+                "role_rule": semantic_run.role_rule_version,
+                "relation_rule": semantic_run.relation_rule_version,
+                "argument_builder": semantic_run.argument_builder_version,
+                "keyword_rule": semantic_run.keyword_rule_version,
+            },
+        }
+
+    usable_payload = None
+    if completed_run is not None:
+        usable_payload = {
+            **compact(completed_run),
+            "counts": repository.counts(completed_run.run_id),
+            "summary": repository.summary(completed_run.run_id),
+        }
+    _emit(
+        {
+            "status": active_run.stage,
+            "active_run": compact(active_run),
+            "latest_usable_run": usable_payload,
+        }
+    )
+
+
+@app.command("knowledge-semantic-model-install")
+def knowledge_semantic_model_install() -> None:
+    """Install and hash the approved fixed local BGE model revision."""
+
+    paths, _, _ = _services()
+    directory = default_model_directory(paths.runtime)
+    manifest = install_local_model(directory)
+    _emit(
+        {
+            "status": "AVAILABLE",
+            "model_id": manifest.model_id,
+            "model_revision": manifest.model_revision,
+            "bundle_sha256": manifest.bundle_sha256,
+            "dimension": manifest.dimension,
+            "local_only": True,
+        }
+    )
+
+
+@app.command("knowledge-semantic-model-status")
+def knowledge_semantic_model_status() -> None:
+    """Verify the approved local semantic model without network access."""
+
+    paths, _, _ = _services()
+    try:
+        manifest = verify_local_model(default_model_directory(paths.runtime))
+    except FileNotFoundError:
+        _emit({"status": "UNAVAILABLE", "reason_code": "LOCAL_MODEL_NOT_INSTALLED"})
+        return
+    except ValueError:
+        _emit({"status": "REJECTED", "reason_code": "LOCAL_MODEL_HASH_MISMATCH"})
+        return
+    _emit(
+        {
+            "status": "AVAILABLE",
+            "model_id": manifest.model_id,
+            "model_revision": manifest.model_revision,
+            "bundle_sha256": manifest.bundle_sha256,
+            "dimension": manifest.dimension,
+            "local_only": True,
+        }
+    )
+
+
+@app.command("knowledge-semantic-embedding-run")
+def knowledge_semantic_embedding_run(
+    run_id: Annotated[str, typer.Argument(help="Argument-aware semantic run id.")],
+    batch_size: Annotated[int, typer.Option(min=1, max=128)] = 16,
+) -> None:
+    """Generate the three required local embedding views and uncalibrated scores."""
+
+    paths, state, objects = _services()
+    model_directory = default_model_directory(paths.runtime)
+    asset = verify_local_model(model_directory)
+    config = load_semantic_funnel_config(
+        paths.root / "configs" / "knowledge_semantic_funnel.yaml"
+    )
+    execution = SemanticEmbeddingService(
+        SemanticFunnelRepository(state),
+        objects,
+        ParquetSemanticStore(paths.parquet),
+        config,
+        SentenceTransformerBackend(model_directory, batch_size=batch_size),
+        asset,
+    ).run(run_id)
+    _emit(
+        {
+            "status": "EMBEDDING_SCREENED",
+            "run_id": run_id,
+            "embedding_manifest_id": execution.manifest.manifest_id,
+            "vector_count": execution.vector_count,
+            "score_count": execution.score_count,
+            "keep_count": execution.keep_count,
+            "review_count": execution.review_count,
+            "calibration_required_count": execution.calibration_required_count,
+            "automatic_exclusion_enabled": False,
+            "parquet_file_count": 2,
+        }
+    )
+
+
+@app.command("knowledge-semantic-packet-export")
+def knowledge_semantic_packet_export(
+    run_id: Annotated[str, typer.Argument(help="Embedding-screened semantic run id.")],
+) -> None:
+    """Materialize complete ArgumentUnits for a manual OpenCode/DeepSeek run."""
+
+    paths, state, objects = _services()
+    execution = SemanticPacketService(
+        SemanticFunnelRepository(state),
+        objects,
+        ParquetSemanticStore(paths.parquet),
+        paths.runtime,
+        paths.root / "OPENCODE_DEEPSEEK_PROMPT.md",
+    ).export(run_id)
+    relative_directory = (
+        execution.batch_directory.relative_to(paths.root).as_posix()
+        if execution.batch_directory.is_relative_to(paths.root)
+        else execution.batch_directory.name
+    )
+    _emit(
+        {
+            "status": execution.batch.status,
+            "batch_id": execution.batch.batch_id,
+            "run_id": run_id,
+            "exported_argument_count": execution.batch.exported_argument_count,
+            "held_back_calibration_count": execution.held_back_calibration_count,
+            "held_back_structural_count": execution.held_back_structural_count,
+            "held_back_oversize_count": execution.held_back_oversize_count,
+            "batch_directory": relative_directory,
+            "prompt_file": "OPENCODE_DEEPSEEK_PROMPT.md",
+            "expected_result_file": "deepseek-results.jsonl",
+            "external_request_sent": False,
+        }
+    )
+
+
+@app.command("knowledge-semantic-result-stage")
+def knowledge_semantic_result_stage(
+    batch_id: Annotated[str, typer.Argument(help="Offline semantic batch id.")],
+    result_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Validate and stage one complete OpenCode/DeepSeek JSONL response."""
+
+    paths, state, objects = _services()
+    batch = SemanticPacketService(
+        SemanticFunnelRepository(state),
+        objects,
+        ParquetSemanticStore(paths.parquet),
+        paths.runtime,
+        paths.root / "OPENCODE_DEEPSEEK_PROMPT.md",
+    ).stage_results(batch_id, result_file)
+    _emit(
+        {
+            "status": batch.status,
+            "batch_id": batch.batch_id,
+            "run_id": batch.run_id,
+            "validated_result_count": batch.imported_result_count,
+        }
+    )
+
+
+@app.command("knowledge-semantic-result-import")
+def knowledge_semantic_result_import(
+    batch_id: Annotated[str, typer.Argument(help="Staged offline semantic batch id.")],
+) -> None:
+    """Atomically create pending AU-level candidates from validated kept results."""
+
+    paths, state, objects = _services()
+    batch, candidate_count = SemanticPacketService(
+        SemanticFunnelRepository(state),
+        objects,
+        ParquetSemanticStore(paths.parquet),
+        paths.runtime,
+        paths.root / "OPENCODE_DEEPSEEK_PROMPT.md",
+    ).import_results(batch_id)
+    _emit(
+        {
+            "status": batch.status,
+            "batch_id": batch.batch_id,
+            "run_id": batch.run_id,
+            "validated_result_count": batch.imported_result_count,
+            "skill_candidate_count": candidate_count,
+            "evaluation_status": "NOT_RUN",
+            "approval_status": "PENDING",
+        }
+    )
 
 
 @app.command("knowledge-distill-plan")
@@ -2166,31 +2839,17 @@ def knowledge_distill_plan(
 def knowledge_distill_run(
     source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
 ) -> None:
-    """Classify immutable author material and create a pending review queue."""
+    """Reject the legacy paragraph-level write path; use knowledge-semantic-run."""
 
-    paths, state, objects = _services()
-    source = get_knowledge_source(_knowledge_sources(paths), source_id)
-    execution = KnowledgeDistillationService(state, objects, paths.parquet).run(
-        source,
-        _distillation_rules(paths),
-    )
     _emit(
         {
-            "status": execution.run.status,
-            "run_id": execution.run.run_id,
-            "report": execution.report,
-            "review_queue": {
-                "queue_id": execution.review_queue.queue_id,
-                "candidate_count": len(execution.review_queue.unit_ids),
-                "human_review_status": execution.review_queue.human_review_status,
-            },
-            "parquet_file_count": 1,
-            "book_cleaning_report_ids": execution.book_cleaning_report_ids,
-            "book_method_coverage_report_ids": (
-                execution.book_method_coverage_report_ids
-            ),
+            "status": "POLICY_REJECTED",
+            "reason_code": "LEGACY_SEMANTIC_PIPELINE_PAUSED",
+            "source_id": source_id,
+            "replacement_command": "knowledge-semantic-run",
         }
     )
+    raise typer.Exit(code=2)
 
 
 @app.command("knowledge-distill-status")
@@ -2201,11 +2860,26 @@ def knowledge_distill_status(
 
     paths, state, _ = _services()
     get_knowledge_source(_knowledge_sources(paths), source_id)
-    report = DistillationRepository(state).latest_author_report(source_id)
+    repository = DistillationRepository(state)
+    report = repository.latest_author_report(source_id)
+    rules = _distillation_rules(paths)
+    run = repository.get_run(report.run_id) if report is not None else None
+    stale = bool(
+        run is None
+        or run.classification_rule_version != rules.rule_version
+    ) if report is not None else False
     _emit(
         {"status": "NOT_RUN", "report": None}
         if report is None
-        else {"status": report.coverage_status, "report": report}
+        else {
+            "status": "STALE" if stale else report.coverage_status,
+            "stale": stale,
+            "current_rule_version": rules.rule_version,
+            "current_generation_rule_version": (
+                KnowledgeDraftService.generation_rule_version
+            ),
+            "report": report,
+        }
     )
 
 
@@ -2217,7 +2891,11 @@ def knowledge_distill_audit(
 
     paths, state, objects = _services()
     get_knowledge_source(_knowledge_sources(paths), source_id)
-    audit = KnowledgeDistillationService(state, objects, paths.parquet).audit(source_id)
+    rules = _distillation_rules(paths)
+    audit = KnowledgeDistillationService(state, objects, paths.parquet).audit(
+        source_id,
+        expected_rule_version=rules.rule_version,
+    )
     _emit(audit)
 
 
@@ -2229,11 +2907,24 @@ def knowledge_review_queue(
 
     paths, state, _ = _services()
     get_knowledge_source(_knowledge_sources(paths), source_id)
-    summary = DistillationRepository(state).latest_review_queue_summary(source_id)
+    repository = DistillationRepository(state)
+    report = repository.latest_author_report(source_id)
+    summary = repository.latest_review_queue_summary(source_id)
+    run = repository.get_run(report.run_id) if report is not None else None
+    rules = _distillation_rules(paths)
+    stale = bool(
+        run is None
+        or run.classification_rule_version != rules.rule_version
+    ) if report is not None else False
     _emit(
         {"status": "NOT_RUN", "queue": None}
         if summary is None
-        else {"status": summary["human_review_status"], "queue": summary}
+        else {
+            "status": "STALE" if stale else summary["human_review_status"],
+            "stale": stale,
+            "current_rule_version": rules.rule_version,
+            "queue": summary,
+        }
     )
 
 
@@ -2241,19 +2932,17 @@ def knowledge_review_queue(
 def knowledge_draft_generate(
     source_id: Annotated[str, typer.Argument(help="Allowlisted author source id.")],
 ) -> None:
-    """Generate private excerpt drafts and unevaluated Skill candidates."""
+    """Reject legacy paragraph-to-Skill writes; use the AU/DeepSeek import path."""
 
-    paths, state, objects = _services()
-    get_knowledge_source(_knowledge_sources(paths), source_id)
-    execution = KnowledgeDraftService(state, objects).generate(source_id)
     _emit(
         {
-            "status": "PENDING_REVIEW",
-            "report": execution.report,
-            "viewpoint_draft_count": len(execution.viewpoint_drafts),
-            "skill_candidate_count": len(execution.skill_candidates),
+            "status": "POLICY_REJECTED",
+            "reason_code": "LEGACY_SEMANTIC_PIPELINE_PAUSED",
+            "source_id": source_id,
+            "replacement_command": "knowledge-semantic-packet-export",
         }
     )
+    raise typer.Exit(code=2)
 
 
 @app.command("knowledge-draft-status")
@@ -2262,13 +2951,33 @@ def knowledge_draft_status(
 ) -> None:
     """Return private draft metadata without source excerpts or private paths."""
 
-    paths, state, _ = _services()
+    paths, state, objects = _services()
     get_knowledge_source(_knowledge_sources(paths), source_id)
-    report = KnowledgeDraftRepository(state).latest_report(source_id)
+    rules = _distillation_rules(paths)
+    report = KnowledgeDraftService(
+        state,
+        objects,
+        required_classification_rule_version=rules.rule_version,
+    ).current_report(source_id)
+    distillation_repository = DistillationRepository(state)
+    run = (
+        distillation_repository.get_run(report.run_id)
+        if report is not None
+        else None
+    )
+    stale = bool(
+        run is None
+        or run.classification_rule_version != rules.rule_version
+    ) if report is not None else False
     _emit(
         {"status": "NOT_RUN", "report": None}
         if report is None
-        else {"status": report.human_review_status, "report": report}
+        else {
+            "status": "STALE" if stale else report.human_review_status,
+            "stale": stale,
+            "current_rule_version": rules.rule_version,
+            "report": report,
+        }
     )
 
 
@@ -2280,7 +2989,14 @@ def knowledge_draft_audit(
 
     paths, state, objects = _services()
     get_knowledge_source(_knowledge_sources(paths), source_id)
-    _emit(KnowledgeDraftService(state, objects).audit(source_id))
+    rules = _distillation_rules(paths)
+    _emit(
+        KnowledgeDraftService(
+            state,
+            objects,
+            required_classification_rule_version=rules.rule_version,
+        ).audit(source_id)
+    )
 
 
 @app.command("zhihu-author-probe")
@@ -2356,9 +3072,153 @@ def zhihu_response_import(
     )
 
 
+@app.command("zhihu-capture-serve")
+def zhihu_capture_serve(
+    source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
+    content_type: Annotated[
+        ZhihuContentType,
+        typer.Option(case_sensitive=False, help="answers, articles, or thoughts"),
+    ] = ZhihuContentType.ANSWERS,
+    port: Annotated[int, typer.Option(min=0, max=65535)] = 8765,
+    page_size: Annotated[int, typer.Option(min=1, max=100)] = 20,
+    request_interval_seconds: Annotated[
+        float,
+        typer.Option(min=2, help="Delay between browser requests; minimum 2 seconds."),
+    ] = 2.0,
+    ttl_seconds: Annotated[
+        int,
+        typer.Option(min=60, max=3600, help="One-time capture session lifetime."),
+    ] = 900,
+) -> None:
+    """Serve one credential-free, localhost-only Zhihu capture session."""
+
+    paths, state, objects = _services()
+    try:
+        session = ZhihuLoopbackCaptureSession(
+            state,
+            objects,
+            paths.runtime,
+            ParquetKnowledgeStore(paths.parquet),
+            _knowledge_sources(paths),
+            _zhihu_endpoint_templates(paths),
+            source_id=source_id,
+            content_type=content_type,
+            page_size=page_size,
+            request_interval_seconds=request_interval_seconds,
+            ttl_seconds=ttl_seconds,
+        )
+        server = create_loopback_capture_server(session, port=port)
+    except (AStockError, OSError, ValueError) as exc:
+        failure = exc.failure_class if isinstance(exc, AStockError) else "INVALID_ARGUMENT"
+        _emit(
+            {
+                "status": "REJECTED",
+                "failure_class": failure,
+                "message": str(exc),
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit(
+        {
+            **session.safe_status(),
+            "bind_host": "127.0.0.1",
+            "installer_url": loopback_installer_url(server),
+            "status_url": loopback_status_url(server),
+        }
+    )
+    try:
+        final_status = serve_loopback_capture(server, session)
+    except KeyboardInterrupt:
+        _emit({**session.safe_status(), "status": "INTERRUPTED"})
+        return
+    _emit(final_status)
+
+
+@app.command("zhihu-full-capture-serve")
+def zhihu_full_capture_serve(
+    port: Annotated[int, typer.Option(min=0, max=65535)] = 8765,
+    page_size: Annotated[int, typer.Option(min=1, max=100)] = 20,
+    request_interval_seconds: Annotated[
+        float,
+        typer.Option(min=2, help="Delay between browser requests; minimum 2 seconds."),
+    ] = 2.0,
+    ttl_seconds: Annotated[
+        int,
+        typer.Option(min=60, max=86_400, help="Full capture session lifetime."),
+    ] = 21_600,
+    session_token: Annotated[
+        str | None,
+        typer.Option(
+            hidden=True,
+            envvar="ASTOCK_ZHIHU_CAPTURE_SESSION_TOKEN",
+        ),
+    ] = None,
+) -> None:
+    """Serve one localhost session for all online authors and verified boundaries."""
+
+    paths, state, objects = _services()
+    try:
+        session = ZhihuFullCaptureSession(
+            state,
+            objects,
+            paths.runtime,
+            ParquetKnowledgeStore(paths.parquet),
+            _knowledge_sources(paths),
+            _zhihu_endpoint_templates(paths),
+            page_size=page_size,
+            request_interval_seconds=request_interval_seconds,
+            ttl_seconds=ttl_seconds,
+            session_token=session_token,
+        )
+        server = create_loopback_capture_server(session, port=port)
+    except (AStockError, OSError, ValueError) as exc:
+        failure = exc.failure_class if isinstance(exc, AStockError) else "INVALID_ARGUMENT"
+        _emit(
+            {
+                "status": "REJECTED",
+                "failure_class": failure,
+                "message": str(exc),
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit(
+        {
+            **session.safe_status(),
+            "bind_host": "127.0.0.1",
+            "installer_url": loopback_installer_url(server),
+            "status_url": loopback_status_url(server),
+            "extension_directory": str(
+                build_coordinator_capture_extension(
+                    runtime_root=paths.runtime,
+                    bridge_origin=loopback_installer_url(server).split(
+                        "/install/", maxsplit=1
+                    )[0],
+                    session_token=session.session_token,
+                    interval_ms=round(request_interval_seconds * 1000),
+                ).relative_to(paths.root)
+            ),
+        }
+    )
+    try:
+        final_status = serve_loopback_capture(server, session)
+    except KeyboardInterrupt:
+        _emit({**session.safe_status(), "status": "INTERRUPTED"})
+        return
+    _emit(final_status)
+
+
 @app.command("zhihu-import-replay")
 def zhihu_import_replay(
     envelope_id: Annotated[str, typer.Argument(help="Registered response envelope id.")],
+    recover_consumed: Annotated[
+        bool,
+        typer.Option(
+            help=(
+                "Replay a consumed raw listing only when no page manifest was committed; "
+                "used after a parser upgrade."
+            )
+        ),
+    ] = False,
 ) -> None:
     """Consume one imported listing response through the normal checkpoint pipeline."""
 
@@ -2398,9 +3258,38 @@ def zhihu_import_replay(
                     "response_kind": comment_replay.record.response_kind,
                     "comment_page_id": comment_execution.page.page_id,
                     "comment_record_count": len(comment_execution.comment_records),
-                    "participation_chain_count": len(
-                        comment_execution.participation_chains
-                    ),
+                    "participation_chain_count": len(comment_execution.participation_chains),
+                }
+            )
+            return
+        if imported is not None and imported.response_kind is ZhihuResponseKind.CONTENT_DETAIL:
+            detail_replay = service.replay_detail(
+                envelope_id,
+                _knowledge_sources(paths),
+                ParquetKnowledgeStore(paths.parquet),
+            )
+            if detail_replay.content_record is None:
+                _emit(
+                    {
+                        "status": (
+                            "CONSUMED_WITH_GAP"
+                            if detail_replay.response_failure
+                            else "ALREADY_CONSUMED"
+                        ),
+                        "envelope_id": detail_replay.record.envelope_id,
+                        "import_status": detail_replay.record.import_status,
+                        "response_failure": detail_replay.response_failure,
+                    }
+                )
+                return
+            _emit(
+                {
+                    "status": "CONSUMED",
+                    "envelope_id": detail_replay.record.envelope_id,
+                    "import_status": detail_replay.record.import_status,
+                    "content_id": detail_replay.content_record.content_id,
+                    "content_type": detail_replay.content_record.content_type,
+                    "content_completeness": (detail_replay.content_record.content_completeness),
                 }
             )
             return
@@ -2408,6 +3297,7 @@ def zhihu_import_replay(
             envelope_id,
             _knowledge_sources(paths),
             ParquetKnowledgeStore(paths.parquet),
+            recover_consumed=recover_consumed,
         )
     except AStockError as exc:
         _emit(
@@ -2440,6 +3330,104 @@ def zhihu_import_replay(
             "content_record_count": len(execution.content_records),
         }
     )
+
+
+@app.command("zhihu-python-recover")
+def zhihu_python_recover(
+    source_ids: Annotated[
+        list[str] | None,
+        typer.Option("--source-id", help="Optional allowlisted author; repeat for several."),
+    ] = None,
+    response_kinds: Annotated[
+        list[ZhihuResponseKind] | None,
+        typer.Option(
+            "--response-kind",
+            help="Optional verified CONTENT_DETAIL task kind.",
+        ),
+    ] = None,
+    max_requests: Annotated[
+        int | None,
+        typer.Option(min=1, help="Optional smoke limit; omitted means run to a hard boundary."),
+    ] = None,
+    request_interval_seconds: Annotated[
+        float,
+        typer.Option(min=2, help="Minimum delay between verified Python API requests."),
+    ] = 2.0,
+) -> None:
+    """Recover active Zhihu listings and verified content details with Python HTTP."""
+
+    paths, state, objects = _services()
+    service = ZhihuPythonRecoveryService(
+        state,
+        objects,
+        paths.runtime,
+        ParquetKnowledgeStore(paths.parquet),
+        _knowledge_sources(paths),
+        _zhihu_endpoint_templates(paths),
+        request_interval_seconds=request_interval_seconds,
+    )
+    try:
+        execution = service.run(
+            source_ids=source_ids,
+            response_kinds=response_kinds,
+            max_requests=max_requests,
+        )
+    except (AStockError, ValueError) as exc:
+        _emit(
+            {
+                "status": "FAILED",
+                "failure_class": (
+                    exc.failure_class if isinstance(exc, AStockError) else "INVALID_ARGUMENT"
+                ),
+                "message": str(exc),
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit(execution)
+
+
+@app.command("zhihu-article-html-recover")
+def zhihu_article_html_recover(
+    source_ids: Annotated[
+        list[str] | None,
+        typer.Option("--source-id", help="Optional allowlisted author; repeat for several."),
+    ] = None,
+    max_requests: Annotated[
+        int | None,
+        typer.Option(min=1, help="Optional smoke limit; omitted means run to a hard boundary."),
+    ] = None,
+    request_interval_seconds: Annotated[
+        float,
+        typer.Option(min=2, help="Minimum delay between canonical article page requests."),
+    ] = 2.0,
+) -> None:
+    """Recover enumerated article full text from strict canonical HTML pages."""
+
+    paths, state, objects = _services()
+    service = ZhihuArticleRecoveryService(
+        state,
+        objects,
+        ParquetKnowledgeStore(paths.parquet),
+        _knowledge_sources(paths),
+        request_interval_seconds=request_interval_seconds,
+    )
+    try:
+        execution = service.run(
+            source_ids=source_ids,
+            max_requests=max_requests,
+        )
+    except (AStockError, ValueError) as exc:
+        _emit(
+            {
+                "status": "FAILED",
+                "failure_class": (
+                    exc.failure_class if isinstance(exc, AStockError) else "INVALID_ARGUMENT"
+                ),
+                "message": str(exc),
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit(execution)
 
 
 @app.command("zhihu-author-sync")
@@ -2496,6 +3484,43 @@ def zhihu_author_sync(
             "parquet_file_count": len(execution.parquet_files),
         }
     )
+
+
+@app.command("zhihu-manual-tasks")
+def zhihu_manual_tasks(
+    include_tasks: Annotated[
+        bool,
+        typer.Option(help="Also print every task; the full list is always saved locally."),
+    ] = False,
+) -> None:
+    """Refresh and export exact manual recovery boundaries without source text."""
+
+    paths, state, objects = _services()
+    tasks = ZhihuManualTaskService(state, objects).refresh(_knowledge_sources(paths))
+    report_path = paths.runtime / "reports" / "zhihu-manual-tasks.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at": datetime.now(ZoneInfo("UTC")),
+        "open_task_count": len(tasks),
+        "tasks": tasks,
+    }
+    atomic_write_text(
+        report_path,
+        json.dumps(_jsonable(payload), ensure_ascii=False, indent=2, sort_keys=True),
+    )
+    counts: dict[str, int] = {}
+    for task in tasks:
+        key = f"{task.author_source_id}|{task.response_kind}"
+        counts[key] = counts.get(key, 0) + 1
+    output: dict[str, Any] = {
+        "status": "COMPLETE" if not tasks else "MANUAL_ACTION_REQUIRED",
+        "open_task_count": len(tasks),
+        "count_by_author_and_kind": counts,
+        "report_file": "runtime/reports/zhihu-manual-tasks.json",
+    }
+    if include_tasks:
+        output["tasks"] = tasks
+    _emit(output)
 
 
 @app.command("zhihu-coverage")

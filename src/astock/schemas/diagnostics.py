@@ -12,6 +12,7 @@ from pydantic import AwareDatetime, Field, model_validator
 from astock.schemas.base import AStockModel
 from astock.schemas.market import Frequency, QualityStatus
 from astock.schemas.research import BASE_CASE_SECTIONS, BaseCaseSection, SpecialistCoverageStatus
+from astock.schemas.serenity_v2 import StructuredResearchMemoV2
 
 
 class DiagnosticStatus(StrEnum):
@@ -276,6 +277,7 @@ class SpecialistDiagnosticReport(AStockModel):
     evidence_ids: list[str]
     input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    method_contract_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def validate_report_sets(self) -> SpecialistDiagnosticReport:
@@ -351,9 +353,13 @@ class ResearchMemoArtifact(AStockModel):
     confidence_cap: float = Field(ge=0, le=1)
     degradation_codes: list[str]
     evidence_ids: list[str]
+    composer_version: Literal["research-memo-composer-v2"] | None = None
+    structured_memo: StructuredResearchMemoV2 | None = None
 
     @model_validator(mode="after")
     def validate_memo_conservation(self) -> ResearchMemoArtifact:
+        if (self.composer_version is None) != (self.structured_memo is None):
+            raise ValueError("v2 memo composer version and structured memo must appear together")
         sections = [item.section for item in self.base_sections]
         if len(sections) != len(set(sections)) or set(sections) != set(BASE_CASE_SECTIONS):
             raise ValueError("research memo must reference every BaseCase section exactly once")

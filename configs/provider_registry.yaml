@@ -1,0 +1,48 @@
+registry_version: provider-registry-v2
+capability_gaps:
+  - corporate_actions.ledger_ready
+  - financial.structured
+  - model.inference
+providers:
+  - provider_id: eastmoney-5m
+    capabilities: [market.raw_5m]
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    recorded_fixture: tests/fixtures/providers/eastmoney-5m-success.json
+  - provider_id: sina-5m
+    capabilities: [market.raw_5m]
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    recorded_fixture: tests/fixtures/providers/sina-5m-success.json
+  - provider_id: cninfo-disclosures
+    capabilities: [disclosures.search, disclosures.download, corporate_actions.official_evidence]
+    transport: HTTP
+    officiality: PRIMARY_OFFICIAL
+    live_supported: true
+    timeout_seconds: 30
+    recorded_fixture: tests/fixtures/providers/cninfo-disclosures-success.json
+  - provider_id: baostock-reference
+    capabilities:
+      - instrument.master
+      - market.calendar
+      - market.daily_unadjusted
+      - corporate_actions.structured_hint
+    transport: SDK_TCP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 30
+    recorded_fixture: tests/fixtures/providers/baostock-reference-success.json
+  - provider_id: eastmoney-reference
+    capabilities:
+      - instrument.master_backup
+      - market.daily_unadjusted_backup
+      - instrument.bjse_coverage
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    recorded_fixture: tests/fixtures/providers/eastmoney-reference-success.json

@@ -11,10 +11,11 @@ sources:
     collection_scope:
       history_mode: FULL_ACCESSIBLE_HISTORY
       content_types: [answers, thoughts, articles]
+      container_types: [columns]
       include_question_context: true
-      include_required_comment_pages: true
-      include_nested_replies: true
-      derive_author_participation_chains: true
+      include_required_comment_pages: false
+      include_nested_replies: false
+      derive_author_participation_chains: false
       incremental_updates: true
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
     enabled: true
@@ -30,10 +31,11 @@ sources:
     collection_scope:
       history_mode: FULL_ACCESSIBLE_HISTORY
       content_types: [answers, thoughts, articles]
+      container_types: [columns]
       include_question_context: true
-      include_required_comment_pages: true
-      include_nested_replies: true
-      derive_author_participation_chains: true
+      include_required_comment_pages: false
+      include_nested_replies: false
+      derive_author_participation_chains: false
       incremental_updates: true
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
     enabled: true
@@ -49,10 +51,11 @@ sources:
     collection_scope:
       history_mode: FULL_ACCESSIBLE_HISTORY
       content_types: [answers, thoughts, articles]
+      container_types: [columns]
       include_question_context: true
-      include_required_comment_pages: true
-      include_nested_replies: true
-      derive_author_participation_chains: true
+      include_required_comment_pages: false
+      include_nested_replies: false
+      derive_author_participation_chains: false
       incremental_updates: true
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
     enabled: true
@@ -78,10 +81,11 @@ sources:
     collection_scope:
       history_mode: USER_CONFIRMED_COMPLETE_LOCAL_EXPORT
       content_types: [exported_content]
+      container_types: []
       include_question_context: true
       include_required_comment_pages: false
       include_nested_replies: false
-      derive_author_participation_chains: true
+      derive_author_participation_chains: false
       incremental_updates: true
     online_collection_required: false
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH

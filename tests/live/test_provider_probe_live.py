@@ -15,7 +15,16 @@ pytestmark = [
 ]
 
 
-@pytest.mark.parametrize("provider_id", ["eastmoney-5m", "sina-5m", "cninfo-disclosures"])
+@pytest.mark.parametrize(
+    "provider_id",
+    [
+        "eastmoney-5m",
+        "sina-5m",
+        "cninfo-disclosures",
+        "eastmoney-financial",
+        "sina-financial",
+    ],
+)
 def test_explicit_live_provider_probe(tmp_path: Path, provider_id: str) -> None:
     state = StateStore(tmp_path / "state.sqlite", Path("migrations"))
     state.migrate()

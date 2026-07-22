@@ -182,6 +182,15 @@ from astock.schemas.financial import (
     RecalculatedFinancialMetric,
     VerifiedFinancialNumber,
 )
+from astock.schemas.financial_sources import (
+    FinancialSourceCoverage,
+    FinancialSourceFileDescriptor,
+    FinancialSourceObservation,
+    FinancialSourceReleaseManifest,
+    FinancialSourceReleaseStatus,
+    FinancialSourceSyncReport,
+    FinancialStatementScope,
+)
 from astock.schemas.knowledge import (
     AuthorCollectionCoverageReport,
     AuthorSkillCoverage,
@@ -583,6 +592,13 @@ __all__ = [
     "FinancialDurationSemantics",
     "FinancialEvidenceGap",
     "FinancialFact",
+    "FinancialSourceCoverage",
+    "FinancialSourceFileDescriptor",
+    "FinancialSourceObservation",
+    "FinancialSourceReleaseManifest",
+    "FinancialSourceReleaseStatus",
+    "FinancialSourceSyncReport",
+    "FinancialStatementScope",
     "FinancialFieldCode",
     "FinancialFindingStatus",
     "FinancialGapType",

@@ -44,7 +44,7 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
         "开发计划只写未完成项",
         "K5-E",
         "SER-3",
-        "P5X-3",
+        "P5X-4",
     ):
         assert required in plan
     for required in (
@@ -52,6 +52,7 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
         "当前能力矩阵",
         "P5X-1：Provider Registry",
         "P5X-2：免费 reference foundation",
+        "P5X-3：财务事实源到现有审计链",
         "research-skills-v2",
     ):
         assert required in acceptance
@@ -59,6 +60,7 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     assert "SER-2" not in plan
     assert "P5X-1：" not in plan
     assert "P5X-2：" not in plan
+    assert "P5X-3：" not in plan
     assert "旧段落级链" not in design
 
 

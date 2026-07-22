@@ -1,0 +1,12 @@
+{
+  "status_code": 200,
+  "content_type": "application/json",
+  "latency_ms": 12,
+  "body": {
+    "responses": {
+      "BALANCE_SHEET": {"success": true, "result": {"data": [{"SECURITY_CODE": "600519", "REPORT_DATE": "2025-12-31", "TOTAL_ASSETS": "1000"}]}},
+      "INCOME_STATEMENT": {"success": true, "result": {"data": [{"SECURITY_CODE": "600519", "REPORT_DATE": "2025-12-31", "REVENUE": "1000"}]}},
+      "CASH_FLOW_STATEMENT": {"success": true, "result": {"data": [{"SECURITY_CODE": "600519", "REPORT_DATE": "2025-12-31", "NET_CASH_OPERATING": "200"}]}}
+    }
+  }
+}

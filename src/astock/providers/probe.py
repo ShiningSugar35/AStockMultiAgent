@@ -516,6 +516,10 @@ class ProviderProbeService:
                         "fields": "f12,f13,f14",
                     },
                 )
+            elif provider.provider_id == "eastmoney-financial":
+                return _live_financial_probe(client, provider.provider_id, started)
+            elif provider.provider_id == "sina-financial":
+                return _live_financial_probe(client, provider.provider_id, started)
             else:
                 raise ValueError(f"No live probe adapter for {provider.provider_id}")
         latency_ms = round((time.perf_counter() - started) * 1000)
@@ -623,6 +627,51 @@ def _validate_payload(provider_id: str, payload: object) -> tuple[bool, int]:
             isinstance(row, dict) and {"f12", "f13", "f14"} <= row.keys() for row in rows
         )
         return quality, len(rows) if isinstance(rows, list) else 0
+    if provider_id == "eastmoney-financial":
+        if not isinstance(payload, dict) or not isinstance(payload.get("responses"), dict):
+            return False, 0
+        responses = payload["responses"]
+        required = {
+            "BALANCE_SHEET": "TOTAL_ASSETS",
+            "INCOME_STATEMENT": "REVENUE",
+            "CASH_FLOW_STATEMENT": "NET_CASH_OPERATING",
+        }
+        counts = []
+        for statement, field in required.items():
+            response = responses.get(statement)
+            result = response.get("result") if isinstance(response, dict) else None
+            rows = result.get("data") if isinstance(result, dict) else None
+            if not isinstance(rows, list) or not rows or any(
+                not isinstance(row, dict)
+                or {"SECURITY_CODE", "REPORT_DATE", field} - row.keys()
+                for row in rows
+            ):
+                return False, sum(counts)
+            counts.append(len(rows))
+        return True, sum(counts)
+    if provider_id == "sina-financial":
+        if not isinstance(payload, dict) or not isinstance(payload.get("responses"), dict):
+            return False, 0
+        responses = payload["responses"]
+        required = {
+            "BALANCE_SHEET": "total_assets",
+            "INCOME_STATEMENT": "revenue",
+            "CASH_FLOW_STATEMENT": "net_cash_operating",
+        }
+        counts = []
+        for statement, field in required.items():
+            response = responses.get(statement)
+            result = response.get("result") if isinstance(response, dict) else None
+            outer = result.get("data") if isinstance(result, dict) else None
+            rows = outer.get("data") if isinstance(outer, dict) else None
+            if not isinstance(rows, list) or not rows or any(
+                not isinstance(row, dict)
+                or {"symbol", "report_date", field} - row.keys()
+                for row in rows
+            ):
+                return False, sum(counts)
+            counts.append(len(rows))
+        return True, sum(counts)
     return False, 0
 
 
@@ -633,6 +682,16 @@ def _checked_capabilities(provider_id: str) -> list[str]:
         "cninfo-disclosures": ["disclosures.search"],
         "baostock-reference": ["instrument.master"],
         "eastmoney-reference": ["instrument.bjse_coverage"],
+        "eastmoney-financial": [
+            "financial.balance_sheet.secondary",
+            "financial.income_statement.secondary",
+            "financial.cash_flow_statement.secondary",
+        ],
+        "sina-financial": [
+            "financial.balance_sheet.secondary_backup",
+            "financial.income_statement.secondary_backup",
+            "financial.cash_flow_statement.secondary_backup",
+        ],
     }
     try:
         return list(checked[provider_id])
@@ -724,6 +783,85 @@ def _live_baostock_probe(started: float) -> RawProbeResponse:
     return RawProbeResponse(
         status_code=200,
         content=body,
+        latency_ms=round((time.perf_counter() - started) * 1000),
+    )
+
+
+def _live_financial_probe(
+    client: httpx.Client, provider_id: str, started: float
+) -> RawProbeResponse:
+    responses: dict[str, object] = {}
+    status_code = 200
+    content_type = "application/json"
+    if provider_id == "eastmoney-financial":
+        endpoint = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+        sources = {
+            "BALANCE_SHEET": "RPT_DMSK_FN_BALANCE",
+            "INCOME_STATEMENT": "RPT_DMSK_FN_INCOME",
+            "CASH_FLOW_STATEMENT": "RPT_DMSK_FN_CASHFLOW",
+        }
+        for statement, report_name in sources.items():
+            response = client.get(
+                endpoint,
+                params={
+                    "reportName": report_name,
+                    "columns": "ALL",
+                    "filter": '(SECURITY_CODE="600519")',
+                    "pageNumber": 1,
+                    "pageSize": 200,
+                    "sortColumns": "REPORT_DATE",
+                    "sortTypes": -1,
+                },
+            )
+            status_code = response.status_code if response.status_code != 200 else status_code
+            content_type = response.headers.get("content-type", content_type)
+            try:
+                responses[statement] = response.json()
+            except json.JSONDecodeError:
+                return RawProbeResponse(
+                    response.status_code,
+                    response.content,
+                    response.headers.get("content-type", "application/octet-stream"),
+                    round((time.perf_counter() - started) * 1000),
+                )
+    elif provider_id == "sina-financial":
+        endpoint = (
+            "https://quotes.sina.cn/cn/api/openapi.php/"
+            "CompanyFinanceService.getFinanceReport2022"
+        )
+        sources = {
+            "BALANCE_SHEET": "fzb",
+            "INCOME_STATEMENT": "lrb",
+            "CASH_FLOW_STATEMENT": "llb",
+        }
+        for statement, source in sources.items():
+            response = client.get(
+                endpoint,
+                params={
+                    "paperCode": "sh600519",
+                    "source": source,
+                    "type": 0,
+                    "page": 1,
+                    "num": 100,
+                },
+            )
+            status_code = response.status_code if response.status_code != 200 else status_code
+            content_type = response.headers.get("content-type", content_type)
+            try:
+                responses[statement] = response.json()
+            except json.JSONDecodeError:
+                return RawProbeResponse(
+                    response.status_code,
+                    response.content,
+                    response.headers.get("content-type", "application/octet-stream"),
+                    round((time.perf_counter() - started) * 1000),
+                )
+    else:
+        raise ValueError("Unknown financial probe provider")
+    return RawProbeResponse(
+        status_code=status_code,
+        content=canonical_json_bytes({"responses": responses}),
+        content_type=content_type,
         latency_ms=round((time.perf_counter() - started) * 1000),
     )
 

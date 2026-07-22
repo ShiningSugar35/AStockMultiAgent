@@ -3,17 +3,21 @@
 from astock.providers.baostock import BaoStockReferenceProvider
 from astock.providers.config import get_provider, load_provider_registry
 from astock.providers.eastmoney import EastMoney5mProvider
+from astock.providers.eastmoney_financial import EastMoneyFinancialProvider
 from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
 from astock.providers.probe import ProviderProbeService, RawProbeResponse
 from astock.providers.sina import Sina5mProvider
+from astock.providers.sina_financial import SinaFinancialProvider
 
 __all__ = [
     "EastMoney5mProvider",
+    "EastMoneyFinancialProvider",
     "EastMoneyReferenceProvider",
     "BaoStockReferenceProvider",
     "ProviderProbeService",
     "RawProbeResponse",
     "Sina5mProvider",
+    "SinaFinancialProvider",
     "get_provider",
     "load_provider_registry",
 ]

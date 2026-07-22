@@ -1,0 +1,31 @@
+{
+  "schema_version": "sina-financial-raw-fixture-v1",
+  "available_to_system_at": "2026-07-22T09:05:00Z",
+  "responses": {
+    "BALANCE_SHEET": {
+      "result": {"data": {"data": [{
+        "symbol": "000001", "report_date": "2025-12-31",
+        "statement_scope": "CONSOLIDATED", "currency": "CNY",
+        "total_assets": "1000", "total_liabilities": "600", "total_equity": "400",
+        "accounts_receivable": "100", "inventory": "120", "prepayments": "20",
+        "other_receivables": "10", "shares_outstanding": "19405918198"
+      }]}}
+    },
+    "INCOME_STATEMENT": {
+      "result": {"data": {"data": [{
+        "symbol": "000001", "report_date": "2025-12-31",
+        "statement_scope": "CONSOLIDATED", "currency": "CNY",
+        "net_profit_income": "100", "revenue": "1001", "operating_cost": "600"
+      }]}}
+    },
+    "CASH_FLOW_STATEMENT": {
+      "result": {"data": {"data": [{
+        "symbol": "000001", "report_date": "2025-12-31",
+        "statement_scope": "CONSOLIDATED", "currency": "CNY",
+        "cash_beginning": "100", "cash_ending": "250", "net_cash_operating": "200",
+        "net_cash_investing": "(80)", "net_cash_financing": "30", "exchange_effect": "0",
+        "net_profit_cash_flow": "100"
+      }]}}
+    }
+  }
+}

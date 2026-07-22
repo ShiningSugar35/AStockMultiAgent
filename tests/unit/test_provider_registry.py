@@ -19,9 +19,12 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
         "cninfo-disclosures",
         "baostock-reference",
         "eastmoney-reference",
+        "eastmoney-financial",
+        "sina-financial",
     ]
     assert "corporate_actions.ledger_ready" in registry.capability_gaps
-    assert "financial.structured" in registry.capability_gaps
+    assert "financial.structured" not in registry.capability_gaps
+    assert "model.inference" in registry.capability_gaps
     assert all((Path.cwd() / item.recorded_fixture).is_file() for item in registry.providers)
 
 

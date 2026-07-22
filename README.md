@@ -23,7 +23,7 @@ Phase 5 后续底座矩阵：
 | Serenity v2 | ACCEPTED | 两个固定开源 commit 映射到 6 个 v2 方法合同；用户候选路由尚未接通 |
 | Provider Registry | ACCEPTED | 五个免费 Provider；recorded 默认、live 显式开启 |
 | Reference foundation | ACCEPTED | 主数据、日历、未复权日线和公司行动线索；不写模拟账本 |
-| 财务事实源 | PLANNED | 东财/Sina 辅助定位，只有精确官方 PDF 证据可认证 |
+| 财务事实源 | ACCEPTED | 东财/Sina 辅助定位；只有精确官方 PDF 证据可认证，当前真实 release 为 0 |
 | 候选与模拟操作层 | PLANNED | 候选不等于建议；模拟执行必须另行获得用户确认 |
 
 Phase 5 正文类型矩阵：
@@ -57,6 +57,9 @@ uv run astock sync-instruments
 uv run astock sync-calendar --exchange XSHG --start 2026-07-01 --end 2026-07-31
 uv run astock sync-daily 600519 --market XSHG --start 2026-07-01 --end 2026-07-31
 uv run astock reference-audit
+uv run astock sync-financial 000001 --market XSHE --period-end 2025-12-31
+uv run astock financial-source-status 000001 --period-end 2025-12-31
+uv run astock financial-source-audit
 uv run astock sync-5m 600519 --market XSHG --start 2026-07-01 --end 2026-07-13
 uv run astock quality-report 600519 --market XSHG
 uv run astock private-pdf-ingest <private.pdf> --source-id <id> --title <title> --author-source-id <author-id> --file-version <version> --full

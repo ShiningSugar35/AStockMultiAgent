@@ -60,6 +60,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0037",
         "0038",
         "0039",
+        "0040",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -161,6 +162,38 @@ def test_market_reference_migration_upgrades_cleanly_from_0037(tmp_path: Path) -
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='reference_provider_lease'"
+        ).fetchone()
+
+
+def test_financial_source_migration_upgrades_cleanly_from_0039(tmp_path: Path) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 40):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    assert state.migrate()[-1] == "0039"
+
+    migration = PROJECT_ROOT / "migrations" / "0040_financial_source_release.sql"
+    shutil.copy(migration, migrations / migration.name)
+    assert state.migrate() == ["0040"]
+    assert state.migrate() == []
+    with state.connect() as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(financial_source_release)"
+            ).fetchall()
+        }
+        assert {
+            "instrument_id",
+            "instrument_release_id",
+            "instrument_manifest_artifact_id",
+            "official_index_snapshot_id",
+        } <= columns
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='financial_source_head'"
         ).fetchone()
 
 

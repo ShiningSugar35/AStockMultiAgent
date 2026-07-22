@@ -1,7 +1,6 @@
-registry_version: provider-registry-v2
+registry_version: provider-registry-v3
 capability_gaps:
   - corporate_actions.ledger_ready
-  - financial.structured
   - model.inference
 providers:
   - provider_id: eastmoney-5m
@@ -46,3 +45,23 @@ providers:
     live_supported: true
     timeout_seconds: 20
     recorded_fixture: tests/fixtures/providers/eastmoney-reference-success.json
+  - provider_id: eastmoney-financial
+    capabilities:
+      - financial.balance_sheet.secondary
+      - financial.income_statement.secondary
+      - financial.cash_flow_statement.secondary
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    recorded_fixture: tests/fixtures/providers/eastmoney-financial-success.json
+  - provider_id: sina-financial
+    capabilities:
+      - financial.balance_sheet.secondary_backup
+      - financial.income_statement.secondary_backup
+      - financial.cash_flow_statement.secondary_backup
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    recorded_fixture: tests/fixtures/providers/sina-financial-success.json

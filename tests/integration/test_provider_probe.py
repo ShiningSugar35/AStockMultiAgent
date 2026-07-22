@@ -134,6 +134,16 @@ def test_damaged_latest_object_is_corrupt_and_probe_fails_closed(tmp_path: Path)
     assert corrupt.status == ProviderHealthStatus.CORRUPT
     with pytest.raises(RuntimeError, match="CORRUPT"):
         service.probe("eastmoney-5m")
+
+
+def test_damaged_financial_probe_is_corrupt_and_fails_closed(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    result = service.probe("eastmoney-financial")
+    assert result.report_object_hash is not None
+    service.objects.path_for(result.report_object_hash).write_bytes(b"tampered")
+    assert service.status("eastmoney-financial").status is ProviderHealthStatus.CORRUPT
+    with pytest.raises(RuntimeError, match="CORRUPT"):
+        service.probe("eastmoney-financial")
     with sqlite3.connect(service.state.path) as connection:
         assert connection.execute("SELECT count(*) FROM provider_probe_event").fetchone()[0] == 1
 
@@ -224,7 +234,7 @@ def test_registry_version_and_same_version_capability_drift_require_new_probe(
     payload = original.registry.model_dump(mode="python")
 
     version_payload = dict(payload)
-    version_payload["registry_version"] = "provider-registry-v3"
+    version_payload["registry_version"] = "provider-registry-v4-test"
     version_service = ProviderProbeService(
         project_root=Path.cwd(),
         registry=ProviderRegistry.model_validate(version_payload),
@@ -251,7 +261,7 @@ def test_registry_version_and_same_version_capability_drift_require_new_probe(
     assert "market.experimental" in refreshed_capability.capability_gaps
     refreshed_version = version_service.probe("eastmoney-5m")
     assert refreshed_version.status == ProviderHealthStatus.HEALTHY
-    assert refreshed_version.registry_version == "provider-registry-v3"
+    assert refreshed_version.registry_version == "provider-registry-v4-test"
 
 
 def test_idempotent_event_lookup_returns_requested_report_not_latest(tmp_path: Path) -> None:

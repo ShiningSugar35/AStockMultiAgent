@@ -42,6 +42,7 @@ from astock.financial_integrity import (
     FinancialIntegrityRepository,
     FinancialIntegrityService,
 )
+from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
 from astock.knowledge import (
     DistillationRepository,
     KnowledgeCoverageAuditService,
@@ -121,6 +122,9 @@ from astock.schemas import (
     DocumentType,
     EvidenceFreezeRequest,
     FinancialAuditRequest,
+    FinancialIndustryProfile,
+    FinancialPeriodType,
+    FinancialSourceReleaseStatus,
     HoldingReviewRequest,
     InstrumentType,
     KnowledgeSourceRegistry,
@@ -513,6 +517,17 @@ def _market_reference_service(
     )
 
 
+def _financial_source_service(
+    paths: ProjectPaths, state: StateStore, objects: ObjectStore
+) -> FinancialSourceService:
+    return FinancialSourceService(
+        state,
+        objects,
+        FinancialSourceParquetStore(paths.parquet / "financial_sources"),
+        paths.root,
+    )
+
+
 @app.command("provider-list")
 def provider_list() -> None:
     """List declared providers and durable health without calling the network."""
@@ -777,6 +792,125 @@ def reference_audit() -> None:
     _emit(result)
     if result["status"] != "PASS":
         raise typer.Exit(code=2)
+
+
+@app.command("sync-financial")
+def sync_financial(
+    company_id: Annotated[str, typer.Argument(help="Six-digit A-share company code.")],
+    period_end: Annotated[str, typer.Option(help="Financial period end YYYY-MM-DD.")],
+    market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    period_type: Annotated[
+        FinancialPeriodType, typer.Option(case_sensitive=False)
+    ] = FinancialPeriodType.ANNUAL,
+    as_of: Annotated[str | None, typer.Option(help="Aware ISO cutoff timestamp.")] = None,
+    live: Annotated[bool, typer.Option("--live")] = False,
+    cross_check: Annotated[bool, typer.Option("--cross-check")] = False,
+) -> None:
+    """Certify secondary financial hints against exact official PDF evidence."""
+
+    paths, state, objects = _services()
+    try:
+        parsed_end = date.fromisoformat(period_end)
+        parsed_as_of = datetime.fromisoformat(as_of) if as_of else None
+        if parsed_as_of is not None and (
+            parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None
+        ):
+            raise ValueError("as_of requires timezone")
+        report = _financial_source_service(paths, state, objects).sync(
+            company_id,
+            market,
+            parsed_end,
+            period_type,
+            as_of=parsed_as_of,
+            live=live,
+            cross_check=cross_check,
+        )
+    except (AStockError, OSError, RuntimeError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "FINANCIAL_SOURCE_SYNC_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
+    if report.status is not FinancialSourceReleaseStatus.CERTIFIED:
+        raise typer.Exit(code=3)
+
+
+@app.command("financial-source-status")
+def financial_source_status(
+    company_id: Annotated[str, typer.Argument(help="Six-digit A-share company code.")],
+    period_end: Annotated[str, typer.Option(help="Financial period end YYYY-MM-DD.")],
+    period_type: Annotated[
+        FinancialPeriodType, typer.Option(case_sensitive=False)
+    ] = FinancialPeriodType.ANNUAL,
+    as_of: Annotated[str | None, typer.Option(help="Aware ISO cutoff timestamp.")] = None,
+) -> None:
+    """Read one verified current or point-in-time financial-source release."""
+
+    paths, state, objects = _services()
+    try:
+        parsed_as_of = datetime.fromisoformat(as_of) if as_of else None
+        if parsed_as_of is not None and (
+            parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None
+        ):
+            raise ValueError("as_of requires timezone")
+        result = _financial_source_service(paths, state, objects).status(
+            company_id,
+            date.fromisoformat(period_end),
+            period_type,
+            as_of=parsed_as_of,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "INVALID_FINANCIAL_SOURCE_QUERY"})
+        raise typer.Exit(code=2) from exc
+    _emit(result)
+    if result["status"] == "CORRUPT":
+        raise typer.Exit(code=2)
+    if result["status"] == "NOT_AVAILABLE":
+        raise typer.Exit(code=3)
+
+
+@app.command("financial-source-audit")
+def financial_source_audit(
+    company_id: Annotated[
+        str | None,
+        typer.Argument(help="Optional company code; omit to audit all release chains."),
+    ] = None,
+    period_end: Annotated[
+        str | None, typer.Option(help="Financial period end YYYY-MM-DD.")
+    ] = None,
+    period_type: Annotated[
+        FinancialPeriodType, typer.Option(case_sensitive=False)
+    ] = FinancialPeriodType.ANNUAL,
+    as_of: Annotated[str | None, typer.Option(help="Aware ISO cutoff timestamp.")] = None,
+    industry_profile: Annotated[
+        FinancialIndustryProfile, typer.Option(case_sensitive=False)
+    ] = FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+) -> None:
+    """Audit release integrity, or run the existing evidence pack for one release."""
+
+    paths, state, objects = _services()
+    service = _financial_source_service(paths, state, objects)
+    if company_id is None:
+        result = service.audit()
+        _emit(result)
+        if result["status"] != "PASS":
+            raise typer.Exit(code=2)
+        return
+    try:
+        if period_end is None or as_of is None:
+            raise ValueError("period_end and as_of are required for company audit")
+        parsed_as_of = datetime.fromisoformat(as_of)
+        if parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None:
+            raise ValueError("as_of requires timezone")
+        pack = service.run_audit(
+            company_id,
+            date.fromisoformat(period_end),
+            period_type,
+            as_of=parsed_as_of,
+            industry_profile=industry_profile,
+        )
+    except (AStockError, OSError, RuntimeError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "FINANCIAL_SOURCE_AUDIT_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit({"schema_version": "financial-source-audit-pack-v1", "pack": pack})
 
 
 @app.command("quality-report")

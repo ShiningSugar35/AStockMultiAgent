@@ -1,0 +1,34 @@
+{
+  "schema_version": "eastmoney-financial-raw-fixture-v1",
+  "available_to_system_at": "2026-07-22T09:00:00Z",
+  "responses": {
+    "BALANCE_SHEET": {
+      "success": true,
+      "result": {"data": [{
+        "SECURITY_CODE": "000001", "REPORT_DATE": "2025-12-31T00:00:00",
+        "STATEMENT_SCOPE": "CONSOLIDATED", "CURRENCY": "CNY",
+        "TOTAL_ASSETS": "1000", "TOTAL_LIABILITIES": "600", "TOTAL_EQUITY": "400",
+        "ACCOUNTS_RECEIVABLE": "100", "INVENTORY": "120", "PREPAYMENTS": "20",
+        "OTHER_RECEIVABLES": "10", "SHARES_OUTSTANDING": "19405918198"
+      }]}
+    },
+    "INCOME_STATEMENT": {
+      "success": true,
+      "result": {"data": [{
+        "SECURITY_CODE": "000001", "REPORT_DATE": "2025-12-31T00:00:00",
+        "STATEMENT_SCOPE": "CONSOLIDATED", "CURRENCY": "CNY",
+        "NET_PROFIT_INCOME": "100", "REVENUE": "1000", "OPERATING_COST": "600"
+      }]}
+    },
+    "CASH_FLOW_STATEMENT": {
+      "success": true,
+      "result": {"data": [{
+        "SECURITY_CODE": "000001", "REPORT_DATE": "2025-12-31T00:00:00",
+        "STATEMENT_SCOPE": "CONSOLIDATED", "CURRENCY": "CNY",
+        "CASH_BEGINNING": "100", "CASH_ENDING": "250", "NET_CASH_OPERATING": "200",
+        "NET_CASH_INVESTING": "-80", "NET_CASH_FINANCING": "30", "EXCHANGE_EFFECT": "0",
+        "NET_PROFIT_CASH_FLOW": "100"
+      }]}
+    }
+  }
+}

@@ -40,8 +40,8 @@
   "local_adaptation_files": [
     {"path": "configs/research_skills.yaml", "sha256": "9ffd6a408ecb0e96b664d9045b5de21d7ee249788431f803c702500a0342606f", "purpose": "active v2 Skill registry and audited source mapping"},
     {"path": "configs/research_diagnostics.yaml", "sha256": "ae45f1272e194982af9c23594b763bd004a3d7989b851a951f1f9b42e79cbba4", "purpose": "versioned diagnostic thresholds"},
-    {"path": "src/astock/cli.py", "sha256": "f536d2d8cfaef077f21466828c30c2885857b77c3cbcb228d73af69a8677df7d", "purpose": "v1 and v2 request discrimination"},
-    {"path": "src/astock/schemas/__init__.py", "sha256": "93dbec3a42d279a5f974389de4ce8233c210898f7ea0a74044c9abfe33666f61", "purpose": "public v2 schema exports"},
+    {"path": "src/astock/cli.py", "sha256": "6a333a303449f8fe401da5af2003aea2c7a1f32256dd71e4bc8d28fea18582a2", "purpose": "v1 and v2 request discrimination"},
+    {"path": "src/astock/schemas/__init__.py", "sha256": "d65a24627a5371536fd2448a6cd629156f785be807f81c1e180d89d980c1fc88", "purpose": "public v2 schema exports"},
     {"path": "src/astock/schemas/research.py", "sha256": "3743bdc2ae06d5d435e3c33106d3530f6d65a43be0856049e2e37ae5e431e028", "purpose": "v1/v2 SpecialistDelta conservation"},
     {"path": "src/astock/schemas/diagnostics.py", "sha256": "45923c4985b1c5389e4598a24aa7bdb0ef64c6eeab36e7e2f9ee8ca50b404635", "purpose": "diagnostic report and memo lineage"},
     {"path": "src/astock/schemas/serenity_v2.py", "sha256": "4fd9f1902522f1cff0e90ee494433f0ae99da57ff6bf46fd32ea786a9b820413", "purpose": "strict Serenity v2 method contracts"},
@@ -58,7 +58,7 @@
     {"path": "tests/integration/test_research_diagnostics.py", "sha256": "d8885883edf58ff62c95782485cd3a0ff20ae5055f38f41c833ba2348d13b97e", "purpose": "v2 diagnostics, PIT and false-precision regression"},
     {"path": "tests/integration/test_position_lifecycle.py", "sha256": "bfa031503449205d810262441372a04af5f4e90a7b763f0774b66798d5cde77f", "purpose": "v2 memo lifecycle regression"}
   ],
-  "local_adaptation_sha256": "e026e5a772d21c1ec3ece8f78cc8499b212675be7c02794281e8b0015303c6ca",
+  "local_adaptation_sha256": "07f7715cb3d492b24702730e50966fd2b864805dd48a71026d0303b479f11cdd",
   "normal_runtime_network_required": false,
   "source_vendored": false,
   "upgrade_policy": "A new upstream commit or local contract version requires a new audit_id and manifest; v1 manifests and artifacts remain immutable."

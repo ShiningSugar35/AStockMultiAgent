@@ -18,6 +18,13 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from astock import __version__
 from astock.adaptive import AdaptiveResearchStatusService
 from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
+from astock.candidates import (
+    CandidateParquetStore,
+    CandidateRepository,
+    CandidateScanService,
+    ProductionCandidateInputVerifier,
+    load_candidate_scan_config,
+)
 from astock.committee import CommitteeService, load_committee_rules
 from astock.core.atomic import atomic_write_text
 from astock.core.codex_runs import (
@@ -110,6 +117,9 @@ from astock.schemas import (
     AdjustmentMode,
     BarRequest,
     BaseCaseBuildRequest,
+    CandidateAuditStatus,
+    CandidateScanRequest,
+    CandidateScanStatus,
     CodexArtifactReference,
     CodexRunInputManifest,
     CommitteeAccessPolicy,
@@ -444,6 +454,16 @@ def probe() -> None:
                 "strict_shadow_types": registered_shadow_artifact_types(),
                 "strict_all_types": registered_strict_artifact_types(),
             },
+            "candidate_registry": {
+                "status": "AVAILABLE",
+                "rules_version": load_candidate_scan_config(
+                    paths.root / "configs" / "candidate_scan.yaml"
+                ).rules_version,
+                "network_access": False,
+                "broker_execution": False,
+                "paper_ledger_write": False,
+                "committee_write": False,
+            },
             "committee": {
                 "status": "AVAILABLE",
                 "rules_version": _committee_service(
@@ -525,6 +545,24 @@ def _financial_source_service(
         objects,
         FinancialSourceParquetStore(paths.parquet / "financial_sources"),
         paths.root,
+    )
+
+
+def _candidate_scan_service(
+    paths: ProjectPaths, state: StateStore, objects: ObjectStore
+) -> CandidateScanService:
+    parquet = CandidateParquetStore(paths.parquet / "candidates")
+    return CandidateScanService(
+        CandidateRepository(state),
+        objects,
+        parquet,
+        load_candidate_scan_config(paths.root / "configs" / "candidate_scan.yaml"),
+        ProductionCandidateInputVerifier(
+            state,
+            objects,
+            paths.parquet,
+            paths.root / "tests" / "fixtures" / "reference",
+        ),
     )
 
 
@@ -911,6 +949,63 @@ def financial_source_audit(
         _emit({"status": "FAILED", "failure_code": "FINANCIAL_SOURCE_AUDIT_FAILED"})
         raise typer.Exit(code=2) from exc
     _emit({"schema_version": "financial-source-audit-pack-v1", "pack": pack})
+
+
+@app.command("candidate-scan")
+def candidate_scan(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, readable=True),
+    ],
+) -> None:
+    """Run candidate-scan-v1 from one immutable input-release reference."""
+
+    paths, state, objects = _services()
+    try:
+        request = CandidateScanRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        report = _candidate_scan_service(paths, state, objects).scan(request)
+    except (OSError, RuntimeError, ValidationError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "CANDIDATE_SCAN_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit(report)
+    if report.status is CandidateScanStatus.NEEDS_INFO:
+        raise typer.Exit(code=3)
+
+
+@app.command("candidate-status")
+def candidate_status(
+    scan_id: Annotated[str | None, typer.Option(help="Candidate scan id.")] = None,
+    company_id: Annotated[str | None, typer.Option(help="Canonical company id.")] = None,
+) -> None:
+    """Read one scan or the latest immutable candidate version for a company."""
+
+    paths, state, objects = _services()
+    try:
+        result = _candidate_scan_service(paths, state, objects).status(
+            scan_id=scan_id,
+            company_id=company_id,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "CANDIDATE_STATUS_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit(result)
+    if result["status"] == "NOT_FOUND":
+        raise typer.Exit(code=3)
+
+
+@app.command("candidate-audit")
+def candidate_audit(
+    scan_id: Annotated[str, typer.Argument(help="Candidate scan id.")],
+) -> None:
+    """Verify candidate objects, Parquet facts, registry pointers, and evidence bindings."""
+
+    paths, state, objects = _services()
+    report = _candidate_scan_service(paths, state, objects).audit(scan_id)
+    _emit(report)
+    if report.status is CandidateAuditStatus.FAIL:
+        raise typer.Exit(code=2)
 
 
 @app.command("quality-report")

@@ -61,6 +61,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0038",
         "0039",
         "0040",
+        "0041",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -195,6 +196,37 @@ def test_financial_source_migration_upgrades_cleanly_from_0039(tmp_path: Path) -
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='financial_source_head'"
         ).fetchone()
+
+
+def test_candidate_registry_migration_upgrades_cleanly_from_0040(tmp_path: Path) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 41):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    assert state.migrate()[-1] == "0040"
+
+    migration = PROJECT_ROOT / "migrations" / "0041_candidate_registry.sql"
+    shutil.copy(migration, migrations / migration.name)
+    assert state.migrate() == ["0041"]
+    assert state.migrate() == []
+    with state.connect() as connection:
+        for table in (
+            "candidate_input_release",
+            "candidate_scan_run",
+            "candidate_scan_attempt",
+            "candidate_signal_manifest",
+            "candidate_identity",
+            "candidate_record_version",
+            "candidate_scan_member",
+            "candidate_universe_snapshot",
+            "candidate_audit",
+        ):
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
 
 
 def test_checkpoint_updates_only_one_scope_row(state: StateStore) -> None:

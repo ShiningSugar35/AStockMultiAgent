@@ -1,0 +1,17 @@
+schema_version: candidate-scan-v1
+minimum_trading_days: 20
+minimum_median_turnover_cny: 20000000
+minimum_nonzero_turnover_ratio: 0.90
+minimum_absolute_price_change: 0.15
+minimum_volume_ratio: 1.50
+canonical_announcement_events:
+  - EARNINGS_PREANNOUNCEMENT
+  - MERGER_RESTRUCTURING
+  - MAJOR_CONTRACT
+  - REGULATORY_PENALTY
+  - CONTROLLER_CHANGE
+  - DIVIDEND
+  - SUSPENSION_RESUMPTION
+formal_historical_pit_statuses:
+  - CERTIFIED
+  - DOCUMENT_RECONSTRUCTED

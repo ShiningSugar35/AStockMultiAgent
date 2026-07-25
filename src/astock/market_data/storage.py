@@ -16,7 +16,7 @@ import pyarrow.parquet as pq
 
 from astock.core.atomic import atomic_write_bytes
 from astock.core.errors import DataQualityError, FailureClass
-from astock.core.hashing import canonical_json_bytes, content_hash
+from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.market_data.quality import normalize_volume_to_shares
 from astock.schemas import (
     AdjustmentMode,
@@ -183,8 +183,9 @@ class CanonicalMarketStore:
             }
         )
         files = self.writer.write_batch(canonical_batch)
+        relative_files = [str(path.relative_to(self.data_root)) for path in files]
         manifest: dict[str, object] = {
-            "schema_version": "1.1",
+            "schema_version": "1.2",
             "market": selected.request.market.value,
             "instrument_type": selected.request.instrument_type.value,
             "symbol": selected.request.symbol,
@@ -204,7 +205,11 @@ class CanonicalMarketStore:
             if canonical_batch.actual_end
             else None,
             "bar_count": canonical_batch.bar_count,
-            "files": [str(path.relative_to(self.data_root)) for path in files],
+            "files": relative_files,
+            "file_hashes": {
+                relative_path: sha256_bytes(path.read_bytes())
+                for relative_path, path in zip(relative_files, files, strict=True)
+            },
         }
         manifest["content_hash"] = content_hash(manifest)
         path = self.manifest_path(selected.request)
@@ -214,20 +219,45 @@ class CanonicalMarketStore:
     def _read_manifest_bars(self, manifest: dict[str, object] | None) -> list[MarketBar]:
         if manifest is None:
             return []
-        raw_files = manifest.get("files", [])
-        if not isinstance(raw_files, list):
+        manifest_without_hash = dict(manifest)
+        stored_manifest_hash = manifest_without_hash.pop("content_hash", None)
+        if stored_manifest_hash != content_hash(manifest_without_hash):
             raise DataQualityError(
-                "Canonical manifest files must be a list",
+                "Canonical manifest content hash mismatch",
+                failure_class=FailureClass.DATA_QUALITY,
+            )
+        raw_files = manifest.get("files", [])
+        raw_hashes = manifest.get("file_hashes")
+        if (
+            not isinstance(raw_files, list)
+            or not all(isinstance(item, str) for item in raw_files)
+            or not isinstance(raw_hashes, dict)
+            or set(raw_hashes) != set(raw_files)
+        ):
+            raise DataQualityError(
+                "Canonical manifest files and content hashes are invalid",
                 failure_class=FailureClass.DATA_QUALITY,
             )
         bars: dict[datetime, MarketBar] = {}
         for raw_path in raw_files:
-            path = Path(str(raw_path))
+            path = Path(raw_path)
             if not path.is_absolute():
                 path = self.data_root / path
-            if not path.is_file():
+            path = path.resolve()
+            if not path.is_relative_to(self.data_root) or not path.is_file():
                 raise DataQualityError(
-                    "Canonical Parquet referenced by manifest is missing",
+                    "Canonical Parquet path is outside the store or missing",
+                    failure_class=FailureClass.DATA_QUALITY,
+                    details={"file": str(path)},
+                )
+            expected_hash = raw_hashes[raw_path]
+            if (
+                not isinstance(expected_hash, str)
+                or len(expected_hash) != 64
+                or sha256_bytes(path.read_bytes()) != expected_hash
+            ):
+                raise DataQualityError(
+                    "Canonical Parquet content hash mismatch",
                     failure_class=FailureClass.DATA_QUALITY,
                     details={"file": str(path)},
                 )

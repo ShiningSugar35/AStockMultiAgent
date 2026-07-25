@@ -62,6 +62,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0039",
         "0040",
         "0041",
+        "0042",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -227,6 +228,66 @@ def test_candidate_registry_migration_upgrades_cleanly_from_0040(tmp_path: Path)
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             ).fetchone()
+
+
+def test_paper_operation_migration_upgrades_from_0041_and_rolls_back(
+    tmp_path: Path,
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 42):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    assert state.migrate()[-1] == "0041"
+    with state.transaction() as connection:
+        connection.execute(
+            "INSERT INTO paper_account(account_id,status,created_at) VALUES(?,?,?)",
+            ("legacy-paper", "OPEN", "2026-07-20T00:00:00+00:00"),
+        )
+
+    source = PROJECT_ROOT / "migrations" / "0042_paper_operation_layer.sql"
+    target = migrations / source.name
+    target.write_text(
+        source.read_text(encoding="utf-8") + "\nTHIS IS NOT VALID SQL;\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(sqlite3.OperationalError):
+        state.migrate()
+    with state.connect() as connection:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='paper_operation_request'"
+        ).fetchone() is None
+        assert connection.execute(
+            "SELECT 1 FROM schema_migration WHERE version='0042'"
+        ).fetchone() is None
+
+    shutil.copy(source, target)
+    assert state.migrate() == ["0042"]
+    assert state.migrate() == []
+    with state.connect() as connection:
+        for table in (
+            "paper_operation_request",
+            "paper_operation_confirmation",
+            "paper_operation_execution",
+            "paper_order_rule_binding",
+            "paper_fee_schedule_release",
+            "paper_replay_bar_commit",
+            "paper_settlement_policy",
+            "paper_mark_snapshot",
+            "paper_recovery_snapshot",
+            "paper_corporate_action_application",
+        ):
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        dividend = connection.execute(
+            "SELECT account_type,normal_balance FROM ledger_account WHERE account_id=?",
+            ("legacy-paper:DIVIDEND_INCOME",),
+        ).fetchone()
+        assert tuple(dividend) == ("INCOME", "CREDIT")
 
 
 def test_checkpoint_updates_only_one_scope_row(state: StateStore) -> None:

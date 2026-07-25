@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import AwareDatetime, Field, model_validator
 
@@ -153,6 +154,8 @@ class CorporateActionEvent(AStockModel):
 
 class ReplayCheckpoint(AStockModel):
     account_id: str
+    market: Market | None = None
+    instrument_id: str | None = None
     symbol: str
     requested_resolution: str = "5m"
     actual_resolution: str
@@ -193,3 +196,133 @@ class ReplayExecutionReport(AStockModel):
     fee_assumptions_require_broker_confirmation: bool
     maximum_participation_rate: Decimal = Field(gt=0, le=1)
     checkpoint: ReplayCheckpoint | None = None
+
+
+class PaperOrderValidity(StrEnum):
+    DAY = "DAY"
+    GTC = "GTC"
+
+
+class PaperOperationStatus(StrEnum):
+    PLANNED = "PLANNED"
+    VALIDATED = "VALIDATED"
+    COMMITTED = "COMMITTED"
+    COMPLETE = "COMPLETE"
+    REJECTED = "REJECTED"
+    NEEDS_INFO = "NEEDS_INFO"
+    INTERRUPTED = "INTERRUPTED"
+    RECOVERED = "RECOVERED"
+
+
+class PaperPlaceOrderPayload(AStockModel):
+    operation_type: Literal["PLACE_ORDER"] = "PLACE_ORDER"
+    order_type: Literal["LIMIT"] = "LIMIT"
+    market: Market
+    symbol: str = Field(pattern=r"^\d{6}$")
+    side: OrderSide
+    qty: int = Field(gt=0)
+    limit_price_fen: int = Field(gt=0)
+    validity: PaperOrderValidity = PaperOrderValidity.DAY
+    calendar_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    instrument_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    daily_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fee_rule_version: str = Field(min_length=1)
+
+
+class PaperCancelOrderPayload(AStockModel):
+    operation_type: Literal["CANCEL_ORDER"] = "CANCEL_ORDER"
+    order_id: str = Field(min_length=1)
+
+
+class PaperSettlePayload(AStockModel):
+    operation_type: Literal["SETTLE"] = "SETTLE"
+    as_of: AwareDatetime
+    market: Market
+    calendar_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    corporate_action_release_ids: list[str] = Field(default_factory=list)
+
+
+class PaperMarkPayload(AStockModel):
+    operation_type: Literal["MARK"] = "MARK"
+    as_of: AwareDatetime
+    daily_release_ids: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _valid_release_ids(self) -> PaperMarkPayload:
+        if any(
+            len(instrument_id.split(":", maxsplit=1)) != 2
+            or instrument_id.split(":", maxsplit=1)[0] not in {"XSHG", "XSHE", "BJSE"}
+            or len(instrument_id.split(":", maxsplit=1)[1]) != 6
+            or not instrument_id.split(":", maxsplit=1)[1].isdigit()
+            or len(release_id) != 64
+            or bool(set(release_id) - set("0123456789abcdef"))
+            for instrument_id, release_id in self.daily_release_ids.items()
+        ):
+            raise ValueError(
+                "daily release ids must map MARKET:SYMBOL identities to lowercase sha256 values"
+            )
+        return self
+
+
+class PaperRecoverPayload(AStockModel):
+    operation_type: Literal["RECOVER"] = "RECOVER"
+    as_of: AwareDatetime
+    expire_day_orders: bool = True
+
+
+PaperOperationPayload = (
+    PaperPlaceOrderPayload
+    | PaperCancelOrderPayload
+    | PaperSettlePayload
+    | PaperMarkPayload
+    | PaperRecoverPayload
+)
+
+
+class PaperOperationRequest(AStockModel):
+    schema_version: str = "paper-operation-request-v1"
+    operation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    account_id: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1)
+    requested_at: AwareDatetime
+    expires_at: AwareDatetime
+    payload: PaperOperationPayload = Field(discriminator="operation_type")
+
+    @model_validator(mode="after")
+    def _valid_window(self) -> PaperOperationRequest:
+        if self.expires_at <= self.requested_at:
+            raise ValueError("operation request expires_at must follow requested_at")
+        return self
+
+
+class PaperUserConfirmation(AStockModel):
+    schema_version: str = "paper-user-confirmation-v2"
+    confirmation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    account_id: str = Field(min_length=1)
+    operation_type: Literal["PLACE_ORDER", "CANCEL_ORDER", "SETTLE", "MARK", "RECOVER"]
+    confirmed_at: AwareDatetime
+    expires_at: AwareDatetime
+    nonce: str = Field(min_length=16, max_length=256)
+    key_id: str = Field(min_length=1, max_length=128)
+    signature_algorithm: Literal["ED25519", "ECDSA_P256_SHA256"]
+    signature_base64: str = Field(min_length=16)
+
+    @model_validator(mode="after")
+    def _valid_window(self) -> PaperUserConfirmation:
+        if self.expires_at <= self.confirmed_at:
+            raise ValueError("confirmation expires_at must follow confirmed_at")
+        return self
+
+
+class PaperOperationReport(AStockModel):
+    schema_version: str = "paper-operation-report-v1"
+    operation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation_type: str
+    account_id: str
+    status: PaperOperationStatus
+    request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    result: dict[str, object] = Field(default_factory=dict)
+    completed_at: AwareDatetime

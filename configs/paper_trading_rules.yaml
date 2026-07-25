@@ -1,0 +1,28 @@
+schema_version: paper-trading-rules-v1
+rule_version: cn-a-share-price-limit-2026-07-06-v1
+effective_from: 2026-07-06
+policy:
+  history_before_effective_from: FAIL_CLOSED
+  unknown_board_or_risk_status: FAIL_CLOSED
+  unsupported_regimes:
+    - IPO_FIRST_FIVE_DAYS
+    - RELISTING_FIRST_DAY
+    - DELISTING_CONSOLIDATION_FIRST_DAY
+    - NO_FIXED_PRICE_LIMIT
+    - EX_RIGHT_EX_DIVIDEND_UNVERIFIED_BASE
+    - TEMPORARY_ADJUSTMENT
+    - NON_ORDINARY_A_SHARE
+    - SUSPENDED
+authorization_keys: []
+price_limit_rules:
+  - {market: XSHG, board: MAIN, risk_status: NORMAL, effective_from: 2026-07-06, rate_bps: 1000, source_urls: ["https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"]}
+  - {market: XSHG, board: MAIN, risk_status: RISK_WARNING, effective_from: 2026-07-06, rate_bps: 1000, source_urls: ["https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"]}
+  - {market: XSHG, board: STAR, risk_status: NORMAL, effective_from: 2026-07-06, rate_bps: 2000, source_urls: ["https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"]}
+  - {market: XSHG, board: STAR, risk_status: RISK_WARNING, effective_from: 2026-07-06, rate_bps: 2000, source_urls: ["https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"]}
+  - {market: XSHE, board: MAIN, risk_status: NORMAL, effective_from: 2026-07-06, rate_bps: 1000, source_urls: ["https://www.szse.cn/lawrules/rule/allrules/bussiness/t20260424_620190.html", "https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf"]}
+  - {market: XSHE, board: MAIN, risk_status: RISK_WARNING, effective_from: 2026-07-06, rate_bps: 1000, source_urls: ["https://www.szse.cn/lawrules/rule/allrules/bussiness/t20260424_620190.html", "https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf"]}
+  - {market: XSHE, board: CHINEXT, risk_status: NORMAL, effective_from: 2026-07-06, rate_bps: 2000, source_urls: ["https://www.szse.cn/lawrules/rule/allrules/bussiness/t20260424_620190.html", "https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf"]}
+  - {market: XSHE, board: CHINEXT, risk_status: RISK_WARNING, effective_from: 2026-07-06, rate_bps: 2000, source_urls: ["https://www.szse.cn/lawrules/rule/allrules/bussiness/t20260424_620190.html", "https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf"]}
+  # The BSE percentage is frozen, but order-price rounding is not; execution remains fail-closed.
+  - {market: BJSE, board: BSE, risk_status: NORMAL, effective_from: 2026-07-06, rate_bps: 3000, source_urls: ["https://www.bse.cn/jygl_list/200028217.html"]}
+  - {market: BJSE, board: BSE, risk_status: RISK_WARNING, effective_from: 2026-07-06, rate_bps: 3000, source_urls: ["https://www.bse.cn/jygl_list/200028217.html"]}

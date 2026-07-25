@@ -12,6 +12,7 @@ license = { text = "Proprietary" }
 authors = [{ name = "AStockMultiAgent contributors" }]
 dependencies = [
   "baostock==0.8.9",
+  "cryptography>=49.0.0,<50",
   "httpx>=0.28.1,<1",
   "pdfplumber>=0.11.10,<0.12",
   "pyarrow>=25.0.0,<26",

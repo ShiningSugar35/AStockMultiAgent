@@ -44,6 +44,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "baostock" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "pdfplumber" },
     { name = "pyarrow" },
@@ -74,6 +75,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "baostock", specifier = "==0.8.9" },
+    { name = "cryptography", specifier = ">=49.0.0,<50" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "pdfplumber", specifier = ">=0.11.10,<0.12" },
     { name = "pyarrow", specifier = ">=25.0.0,<26" },

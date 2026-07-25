@@ -35,7 +35,7 @@ from astock.core.codex_runs import (
     registered_shadow_artifact_types,
     registered_strict_artifact_types,
 )
-from astock.core.errors import AStockError
+from astock.core.errors import AStockError, FailureClass
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import (
@@ -92,7 +92,17 @@ from astock.market_data.storage import (
     canonical_manifest_path,
 )
 from astock.market_data.sync import MarketSyncService
-from astock.paper_trading import LedgerService, PaperReplayService, load_fee_schedule
+from astock.paper_trading import (
+    LedgerService,
+    MarketReferencePaperVerifier,
+    PaperOperationService,
+    PaperReplayService,
+    load_fee_schedule,
+    load_paper_authorization_keys,
+    load_paper_confirmation,
+    load_paper_operation,
+    load_paper_trading_rules,
+)
 from astock.providers import (
     EastMoney5mProvider,
     ProviderProbeService,
@@ -534,6 +544,27 @@ def _market_reference_service(
         objects,
         ReferenceParquetStore(paths.parquet),
         paths.root / "tests" / "fixtures" / "reference",
+    )
+
+
+def _paper_operation_service(
+    paths: ProjectPaths,
+    state: StateStore,
+    objects: ObjectStore,
+    fee_rules: Path | None = None,
+) -> PaperOperationService:
+    schedule = load_fee_schedule(fee_rules or paths.root / "configs" / "fee_rules.yaml")
+    paper_rules_path = paths.root / "configs" / "paper_trading_rules.yaml"
+    return PaperOperationService(
+        state,
+        objects,
+        LedgerService(state, objects),
+        MarketReferencePaperVerifier(_market_reference_service(paths, state, objects)),
+        schedule,
+        trusted_confirmation_keys=load_paper_authorization_keys(paper_rules_path),
+        trading_rules=load_paper_trading_rules(
+            paper_rules_path
+        ),
     )
 
 
@@ -1474,6 +1505,131 @@ def paper_status(
     _emit(status)
 
 
+def _run_confirmed_paper_operation(
+    *,
+    request_path: Path,
+    confirmation_path: Path | None,
+    expected_operation_type: str,
+    fee_rules: Path | None,
+) -> None:
+    paths, state, objects = _services()
+    try:
+        request = load_paper_operation(request_path)
+        confirmation = (
+            load_paper_confirmation(confirmation_path) if confirmation_path else None
+        )
+        report = _paper_operation_service(paths, state, objects, fee_rules).execute(
+            request,
+            confirmation,
+            expected_operation_type=expected_operation_type,
+        )
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        emitted_status = (
+            "NEEDS_INFO"
+            if isinstance(exc, AStockError)
+            and exc.failure_class is FailureClass.DATA_QUALITY
+            else "REJECTED"
+        )
+        _emit(
+            {
+                "status": emitted_status,
+                "failure_class": (
+                    exc.failure_class.value if isinstance(exc, AStockError) else "INVALID_INPUT"
+                ),
+                "message": str(exc),
+                "ledger_write_allowed": False,
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit({"status": "COMPLETE", "report": report})
+
+
+@app.command("paper-order-place")
+def paper_order_place(
+    request: Annotated[Path, typer.Argument(help="Immutable PLACE_ORDER request JSON.")],
+    confirmation: Annotated[
+        Path | None,
+        typer.Option(help="Independent MANUAL_CLI confirmation JSON."),
+    ] = None,
+    fee_rules: Annotated[
+        Path | None,
+        typer.Option(help="Effective-dated paper fee schedule."),
+    ] = None,
+) -> None:
+    """Place a simulated order only from an exact, unexpired user confirmation."""
+
+    _run_confirmed_paper_operation(
+        request_path=request,
+        confirmation_path=confirmation,
+        expected_operation_type="PLACE_ORDER",
+        fee_rules=fee_rules,
+    )
+
+
+@app.command("paper-order-cancel")
+def paper_order_cancel(
+    request: Annotated[Path, typer.Argument(help="Immutable CANCEL_ORDER request JSON.")],
+    confirmation: Annotated[Path | None, typer.Option()] = None,
+    fee_rules: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Cancel one simulated order through the confirmed operation boundary."""
+
+    _run_confirmed_paper_operation(
+        request_path=request,
+        confirmation_path=confirmation,
+        expected_operation_type="CANCEL_ORDER",
+        fee_rules=fee_rules,
+    )
+
+
+@app.command("paper-settle")
+def paper_settle(
+    request: Annotated[Path, typer.Argument(help="Immutable SETTLE request JSON.")],
+    confirmation: Annotated[Path | None, typer.Option()] = None,
+    fee_rules: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Settle T+1 lots against an exact verified-calendar release."""
+
+    _run_confirmed_paper_operation(
+        request_path=request,
+        confirmation_path=confirmation,
+        expected_operation_type="SETTLE",
+        fee_rules=fee_rules,
+    )
+
+
+@app.command("paper-mark")
+def paper_mark(
+    request: Annotated[Path, typer.Argument(help="Immutable MARK request JSON.")],
+    confirmation: Annotated[Path | None, typer.Option()] = None,
+    fee_rules: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Persist a read-only NAV mark from unadjusted reference releases."""
+
+    _run_confirmed_paper_operation(
+        request_path=request,
+        confirmation_path=confirmation,
+        expected_operation_type="MARK",
+        fee_rules=fee_rules,
+    )
+
+
+@app.command("paper-recover")
+def paper_recover(
+    request: Annotated[Path, typer.Argument(help="Immutable RECOVER request JSON.")],
+    confirmation: Annotated[Path | None, typer.Option()] = None,
+    fee_rules: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Audit and recover only deterministic paper-account invariants."""
+
+    _run_confirmed_paper_operation(
+        request_path=request,
+        confirmation_path=confirmation,
+        expected_operation_type="RECOVER",
+        fee_rules=fee_rules,
+    )
+
+
 @app.command("paper-replay")
 def paper_replay(
     symbol: Annotated[str, typer.Argument()],
@@ -1491,12 +1647,16 @@ def paper_replay(
 ) -> None:
     """Match open paper limit orders on canonical 5m bars and advance the checkpoint."""
 
-    paths, state, _ = _services()
+    paths, state, objects = _services()
     parsed_cursor = _parse_local_datetime(cursor)
     profile_path = fee_rules or paths.root / "configs" / "fee_rules.yaml"
     schedule = load_fee_schedule(profile_path)
     store = CanonicalMarketStore(paths.parquet, paths.manifests)
-    service = PaperReplayService(LedgerService(state), store)
+    service = PaperReplayService(
+        LedgerService(state, objects),
+        store,
+        MarketReferencePaperVerifier(_market_reference_service(paths, state, objects)),
+    )
     try:
         report = service.replay(
             account_id=account_id,

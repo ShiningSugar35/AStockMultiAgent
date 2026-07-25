@@ -38,6 +38,16 @@ def test_buy_t1_sell_and_restart_recovery(state: StateStore) -> None:
         ).order_id
         == order.order_id
     )
+    with pytest.raises(PolicyError, match="identity collision"):
+        ledger.place_order(
+            account_id="paper",
+            client_request_id="buy-1",
+            symbol="600519",
+            side=OrderSide.BUY,
+            qty=200,
+            limit_price_fen=10_000,
+            fee_reserve_fen=500,
+        )
 
     trade_time = datetime(2026, 7, 10, 7, 0, tzinfo=UTC)
     fill = ledger.record_fill(
@@ -59,6 +69,15 @@ def test_buy_t1_sell_and_restart_recovery(state: StateStore) -> None:
         ).fill_id
         == fill.fill_id
     )
+    with pytest.raises(PolicyError, match="identity collision"):
+        ledger.record_fill(
+            fill_id="fill-buy-1",
+            order_id=order.order_id,
+            qty=100,
+            price_fen=9_999,
+            commission_fen=500,
+            occurred_at=trade_time,
+        )
     after_buy = ledger.status("paper")
     assert after_buy["positions"][0]["qty_total"] == 100
     assert after_buy["positions"][0]["qty_available"] == 0
@@ -147,3 +166,45 @@ def test_simulated_crash_rolls_back_half_journal(state: StateStore) -> None:
             raise RuntimeError("crash")
     with state.connect() as connection:
         assert connection.execute("SELECT 1 FROM journal WHERE event_id='half'").fetchone() is None
+
+
+def test_t1_uses_next_verified_open_session_not_calendar_day(state: StateStore) -> None:
+    ledger = LedgerService(state)
+    ledger.initialize_account("paper", 2_000_000)
+    order = ledger.place_order(
+        account_id="paper",
+        client_request_id="friday-buy",
+        symbol="600519",
+        side=OrderSide.BUY,
+        qty=100,
+        limit_price_fen=10_000,
+        fee_reserve_fen=500,
+    )
+    friday = datetime(2026, 7, 17, 7, 0, tzinfo=UTC)
+    ledger.record_fill(
+        fill_id="friday-fill",
+        order_id=order.order_id,
+        qty=100,
+        price_fen=10_000,
+        commission_fen=500,
+        occurred_at=friday,
+    )
+    monday = (friday + timedelta(days=3)).date()
+    assert (
+        ledger.settle_buys_with_calendar(
+            "paper",
+            as_of=friday + timedelta(days=2),
+            open_session_dates=[monday],
+            calendar_release_id="calendar-v1",
+        )
+        == 0
+    )
+    assert (
+        ledger.settle_buys_with_calendar(
+            "paper",
+            as_of=friday + timedelta(days=3),
+            open_session_dates=[monday],
+            calendar_release_id="calendar-v1",
+        )
+        == 100
+    )

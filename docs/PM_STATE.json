@@ -8,7 +8,7 @@
     "95008969c20b4f70ed68dfc162b06e6a0e2bc68d",
     "7495673f9d8c8f9de5f3dce5a0a0eb3f2c1b6e6c7"
   ],
-  "pm_status_commit": "c2136d099d9234f45d914f6cd3917287a150480d",
+  "pm_status_commit": "e8cc13bf43d734ab34842b9693c77d3670233d73",
   "open_prs": [],
   "test_summary": {
     "pytest": "run (targeted): tests/unit/test_evidence_pack_schema.py tests/unit/test_evidence_pack_service.py tests/integration/test_cli.py -k \"research_evidence_pack or evidence_pack\"",

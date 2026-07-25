@@ -1,19 +1,19 @@
 ﻿{
   "branch": "codex/phase5-stabilization",
   "head_sha": "110f7a7f0d09edb5efb3646f65a912215780a6d0",
-  "parent_sha": "a2efed324c27b580178a247265254c5523f49f09",
+  "parent_sha": "e1639a8691166564d227b9b83cef0c1d4b56cc1e",
   "worker_commits": [
     "c706d1c7b34a02d1c0ede32017d3151b418a8604",
     "110f7a7f0d09edb5efb3646f65a912215780a6d0"
   ],
-  "pm_status_commit": "a2efed324c27b580178a247265254c5523f49f09",
+  "pm_status_commit": "e1639a8691166564d227b9b83cef0c1d4b56cc1e",
   "open_prs": [],
   "test_summary": {
-    "pytest": "not_run",
+    "pytest": "run (targeted): tests/unit/test_evidence_collection_run_schema.py tests/unit/test_evidence_collection_run_service.py tests/integration/test_cli.py -k \"research_evidence_run or evidence_collection_run\"",
     "ruff": "not_run",
     "pyright": "not_run",
     "live_acceptance": "see_current_acceptance_report",
-    "notes": "MVP-R-001 目标测试已执行（5/5）。MVP-R-002 测试用例已新增（unit+integration）但本次PM验收未再次跑测试。"
+    "notes": "MVP-R-003 按任务要求执行新增测试：5 通过。未改动 Serenity / 财务审计 / paper ledger / 数据库核心 schema。"
   },
   "business_capabilities": {
     "market_data_5m": {
@@ -56,7 +56,7 @@
     },
     "R": {
       "status": "PARTIAL",
-      "notes": "ResearchRequest 已标准化并可复用为 EvidenceCollectionTask；仍停留在入口桥接层，未产出最终投资结论。"
+      "notes": "ResearchRequest -> EvidenceCollectionTask -> EvidenceCollectionRun 已形成最小闭环；未接入真实抓取。"
     },
     "H": {
       "status": "PARTIAL",
@@ -133,7 +133,7 @@
   ],
   "disputes": [],
   "draft_next_steps": [
-    "Validate downstream evidence collection runtime（idempotent）对 EvidenceCollectionTask 的消费。",
+    "Validate downstream evidence collection runtime（idempotent）对 EvidenceCollectionRun 的消费。",
     "Set explicit Serenity production rollout and rollback policy.",
     "Complete knowledge gap and restricted-source closure criteria."
   ],

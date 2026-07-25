@@ -559,6 +559,120 @@ def test_research_evidence_run_cli_build_is_idempotent_and_validates_inputs(
     }
 
 
+def test_research_evidence_pack_cli_build_is_idempotent_and_validates_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "research-evidence-pack-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    synced = runner.invoke(app, ["sync-instruments"])
+    assert synced.exit_code == 0, synced.output
+
+    request_result = runner.invoke(app, ["research-request", "300750"])
+    assert request_result.exit_code == 0, request_result.output
+    task_result = runner.invoke(
+        app,
+        ["research-evidence-task", json.loads(request_result.output)["artifact_id"]],
+    )
+    assert task_result.exit_code == 0, task_result.output
+    run_result = runner.invoke(
+        app,
+        ["research-evidence-run", json.loads(task_result.output)["artifact_id"]],
+    )
+    assert run_result.exit_code == 0, run_result.output
+    run_artifact_id = json.loads(run_result.output)["artifact_id"]
+
+    first = runner.invoke(app, ["research-evidence-pack", run_artifact_id])
+    assert first.exit_code == 0, first.output
+    payload = json.loads(first.output)
+    assert payload["status"] == "CREATED"
+    assert payload["pack"]["run_artifact_id"] == run_artifact_id
+    assert payload["pack"]["company"] == "宁德时代"
+    assert payload["pack"]["ticker"] == "300750"
+    assert payload["pack"]["evidence_items"] == []
+    assert payload["pack"]["missing_items"] == ["evidence", "financial", "research"]
+    assert not payload["reused_existing"]
+
+    repeated = runner.invoke(app, ["research-evidence-pack", run_artifact_id])
+    assert repeated.exit_code == 0, repeated.output
+    repeated_payload = json.loads(repeated.output)
+    assert repeated_payload["reused_existing"]
+    assert repeated_payload["artifact_hash"] == payload["artifact_hash"]
+
+    illegal = runner.invoke(app, ["research-evidence-pack", "EvidenceCollectionRun:missing"])
+    assert illegal.exit_code == 2, illegal.output
+    assert json.loads(illegal.output) == {
+        "status": "REJECTED",
+        "error_code": "INVALID_RESEARCH_PACK_REQUEST",
+    }
+
+
+def test_research_evidence_pack_cli_rejects_wrong_artifact_type(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "research-evidence-pack-wrong-type-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    synced = runner.invoke(app, ["sync-instruments"])
+    assert synced.exit_code == 0, synced.output
+
+    request_result = runner.invoke(app, ["research-request", "300750"])
+    assert request_result.exit_code == 0, request_result.output
+    request = json.loads(request_result.output)
+
+    illegal = runner.invoke(app, ["research-evidence-pack", request["artifact_id"]])
+    assert illegal.exit_code == 2, illegal.output
+    assert json.loads(illegal.output) == {
+        "status": "REJECTED",
+        "error_code": "INVALID_RESEARCH_PACK_REQUEST",
+    }
+
+
+def test_research_evidence_pack_cli_rejects_missing_artifact_object(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "research-evidence-pack-missing-object-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    synced = runner.invoke(app, ["sync-instruments"])
+    assert synced.exit_code == 0, synced.output
+
+    request_result = runner.invoke(app, ["research-request", "300750"])
+    assert request_result.exit_code == 0, request_result.output
+    request_payload = json.loads(request_result.output)
+
+    task_result = runner.invoke(
+        app,
+        ["research-evidence-task", request_payload["artifact_id"]],
+    )
+    assert task_result.exit_code == 0, task_result.output
+    task_payload = json.loads(task_result.output)
+
+    run_result = runner.invoke(app, ["research-evidence-run", task_payload["artifact_id"]])
+    assert run_result.exit_code == 0, run_result.output
+    run_payload = json.loads(run_result.output)
+
+    state = StateStore(runtime / "state.sqlite")
+    with state.connect() as connection:
+        connection.execute(
+            "UPDATE artifact_registry SET object_hash=? WHERE artifact_id=?",
+            ("0" * 64, run_payload["artifact_id"]),
+        )
+
+    illegal = runner.invoke(app, ["research-evidence-pack", run_payload["artifact_id"]])
+    assert illegal.exit_code == 2, illegal.output
+    assert json.loads(illegal.output) == {
+        "status": "REJECTED",
+        "error_code": "INVALID_RESEARCH_PACK_REQUEST",
+    }
+
+
 def test_position_lifecycle_cli_schema_and_invalid_requests_are_safe(
     tmp_path: Path,
     monkeypatch,

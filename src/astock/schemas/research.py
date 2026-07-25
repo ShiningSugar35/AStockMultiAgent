@@ -109,6 +109,27 @@ class EvidenceCollectionRun(AStockModel):
         return self
 
 
+class EvidencePack(AStockModel):
+    """Lightweight analysis input artifact for downstream research modules.
+
+    EvidencePack is intended for analysis consumption and is distinct from
+    FrozenEvidencePack, which remains the audit-oriented evidence freeze output.
+    """
+
+    run_artifact_id: str = Field(min_length=1)
+    company: str = Field(min_length=1)
+    ticker: str = Field(pattern=r"^\d{6}$")
+    evidence_items: list[str] = Field(default_factory=list)
+    missing_items: list[str] = Field(default_factory=list)
+    generated_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def normalize_items(self) -> "EvidencePack":
+        object.__setattr__(self, "evidence_items", sorted(set(self.evidence_items)))
+        object.__setattr__(self, "missing_items", sorted(set(self.missing_items)))
+        return self
+
+
 class BaseCaseSection(StrEnum):
     BUSINESS_MODEL = "BUSINESS_MODEL"
     REVENUE_DRIVERS = "REVENUE_DRIVERS"
@@ -692,6 +713,7 @@ __all__ = [
     "EvidenceCollectionTask",
     "EvidenceCollectionRunStatus",
     "EvidenceCollectionRun",
+    "EvidencePack",
     "ResearchRequestModule",
     "BaseCaseBuildRequest",
     "BaseCaseDraft",

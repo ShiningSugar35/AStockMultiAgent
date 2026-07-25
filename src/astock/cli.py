@@ -114,6 +114,7 @@ from astock.research import (
     PositionLifecycleService,
     EvidenceCollectionRunService,
     EvidenceCollectionTaskService,
+    EvidencePackService,
     ResearchCoreService,
     ResearchDiagnosticsService,
     ResearchRequestService,
@@ -1791,6 +1792,32 @@ def research_evidence_run(
             "artifact_id": execution.artifact_id,
             "artifact_hash": execution.object_sha256,
             "run": execution.run,
+            "reused_existing": execution.reused_existing,
+        }
+    )
+
+
+@app.command("research-evidence-pack")
+def research_evidence_pack(
+    run_artifact_id: Annotated[
+        str,
+        typer.Argument(help="EvidenceCollectionRun artifact id."),
+    ],
+) -> None:
+    """Build one deterministic lightweight evidence pack for downstream analysis."""
+
+    paths, state, objects = _services()
+    try:
+        execution = EvidencePackService(state, objects).create_pack(run_artifact_id)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_RESEARCH_PACK_REQUEST"})
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": "CREATED",
+            "artifact_id": execution.artifact_id,
+            "artifact_hash": execution.object_sha256,
+            "pack": execution.pack,
             "reused_existing": execution.reused_existing,
         }
     )

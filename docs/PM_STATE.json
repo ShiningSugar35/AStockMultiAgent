@@ -1,20 +1,21 @@
 ﻿{
   "branch": "codex/phase5-stabilization",
-  "head_sha": "95008969c20b4f70ed68dfc162b06e6a0e2bc68d",
-  "parent_sha": "680dff6c62541d51a0e677059733ff910bef86cb",
+  "head_sha": "7495673f9d8c8f9de5f3dce5a0a0eb3f2c1b6e6c7",
+  "parent_sha": "e8cc13bf43d734ab34842b9693c77d3670233d73",
   "worker_commits": [
     "c706d1c7b34a02d1c0ede32017d3151b418a8604",
     "110f7a7f0d09edb5efb3646f65a912215780a6d0",
-    "95008969c20b4f70ed68dfc162b06e6a0e2bc68d"
+    "95008969c20b4f70ed68dfc162b06e6a0e2bc68d",
+    "7495673f9d8c8f9de5f3dce5a0a0eb3f2c1b6e6c7"
   ],
-  "pm_status_commit": "680dff6c62541d51a0e677059733ff910bef86cb",
+  "pm_status_commit": "c2136d099d9234f45d914f6cd3917287a150480d",
   "open_prs": [],
   "test_summary": {
-    "pytest": "run (targeted): tests/unit/test_evidence_collection_run_schema.py tests/unit/test_evidence_collection_run_service.py tests/integration/test_cli.py -k \"research_evidence_run or evidence_collection_run\"",
+    "pytest": "run (targeted): tests/unit/test_evidence_pack_schema.py tests/unit/test_evidence_pack_service.py tests/integration/test_cli.py -k \"research_evidence_pack or evidence_pack\"",
     "ruff": "not_run",
     "pyright": "not_run",
     "live_acceptance": "see_current_acceptance_report",
-    "notes": "MVP-R-003 按任务要求执行新增测试：5 通过。未改动 Serenity / 财务审计 / paper ledger / 数据库核心 schema。"
+    "notes": "MVP-R-004 按任务要求执行新增测试：9 通过。新增 EvidencePack 入口与 EvidenceCollectionRun 的最小消费闭环。未改动 Serenity / 财务审计 / paper ledger / 数据库核心 schema。"
   },
   "business_capabilities": {
     "market_data_5m": {
@@ -57,7 +58,7 @@
     },
     "R": {
       "status": "PARTIAL",
-      "notes": "ResearchRequest -> EvidenceCollectionTask -> EvidenceCollectionRun 已形成最小闭环；未接入真实抓取。"
+      "notes": "ResearchRequest -> EvidenceCollectionTask -> EvidenceCollectionRun -> EvidencePack 已形成最小消费闭环；未接入真实抓取。"
     },
     "H": {
       "status": "PARTIAL",

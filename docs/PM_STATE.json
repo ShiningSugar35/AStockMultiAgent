@@ -5,7 +5,7 @@
   "worker_commits": [
     "c706d1c7b34a02d1c0ede32017d3151b418a8604"
   ],
-  "pm_status_commit": "",
+  "pm_status_commit": "b4cc29f44c92ac3c58a15001ac76f3d216088df9",
   "open_prs": [],
   "test_summary": {
     "pytest": "run (targeted): tests/unit/test_research_request_schema.py tests/integration/test_cli.py -k \"research_request\"",

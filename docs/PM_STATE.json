@@ -1,12 +1,13 @@
 ﻿{
   "branch": "codex/phase5-stabilization",
-  "head_sha": "110f7a7f0d09edb5efb3646f65a912215780a6d0",
-  "parent_sha": "e1639a8691166564d227b9b83cef0c1d4b56cc1e",
+  "head_sha": "95008969c20b4f70ed68dfc162b06e6a0e2bc68d",
+  "parent_sha": "680dff6c62541d51a0e677059733ff910bef86cb",
   "worker_commits": [
     "c706d1c7b34a02d1c0ede32017d3151b418a8604",
-    "110f7a7f0d09edb5efb3646f65a912215780a6d0"
+    "110f7a7f0d09edb5efb3646f65a912215780a6d0",
+    "95008969c20b4f70ed68dfc162b06e6a0e2bc68d"
   ],
-  "pm_status_commit": "e1639a8691166564d227b9b83cef0c1d4b56cc1e",
+  "pm_status_commit": "680dff6c62541d51a0e677059733ff910bef86cb",
   "open_prs": [],
   "test_summary": {
     "pytest": "run (targeted): tests/unit/test_evidence_collection_run_schema.py tests/unit/test_evidence_collection_run_service.py tests/integration/test_cli.py -k \"research_evidence_run or evidence_collection_run\"",

@@ -1,16 +1,18 @@
 ﻿{
   "branch": "codex/phase5-stabilization",
-  "head_sha": "adaee07f70d5a524baaa9736359bf26eec71e67e",
+  "head_sha": "c706d1c7b34a02d1c0ede32017d3151b418a8604",
   "parent_sha": "1e7155780dac0d3f71c6e912bdb0a3221fe8e2d8",
-  "worker_commits": [],
+  "worker_commits": [
+    "c706d1c7b34a02d1c0ede32017d3151b418a8604"
+  ],
   "pm_status_commit": "",
   "open_prs": [],
   "test_summary": {
-    "pytest": "not_run",
+    "pytest": "run (targeted): tests/unit/test_research_request_schema.py tests/integration/test_cli.py -k \"research_request\"",
     "ruff": "not_run",
     "pyright": "not_run",
     "live_acceptance": "see_current_acceptance_report",
-    "notes": "Baseline run only updates project state artifacts; no regression suite executed."
+    "notes": "MVP-R-001 targeted tests executed: ResearchRequest schema + research-request CLI happy path/invalid input."
   },
   "business_capabilities": {
     "market_data_5m": {
@@ -53,7 +55,7 @@
     },
     "R": {
       "status": "PARTIAL",
-      "notes": "Research methods and diagnostics can run, but no full auto-decision chain is marked complete."
+      "notes": "Research request intake contract is now standardized (company/name -> ResearchRequest) and emitted via CLI; decision/report chain remains out of scope for this task."
     },
     "H": {
       "status": "PARTIAL",
@@ -130,9 +132,9 @@
   ],
   "disputes": [],
   "draft_next_steps": [
-    "Confirm external architect scope and create first Worker task in inbox.",
+    "Define downstream consumer contract for ResearchRequest artifacts.",
     "Set explicit Serenity production rollout and rollback policy.",
-    "Add evidence/snapshot review routine for current collection gap."
+    "Complete knowledge gap and restricted-source closure criteria."
   ],
   "files_for_external_review": [
     "docs/当前开发进展.md",
@@ -142,3 +144,4 @@
     "docs/PM_STATE.json"
   ]
 }
+

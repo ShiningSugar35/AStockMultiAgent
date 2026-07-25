@@ -25,6 +25,10 @@ from astock.research.open_source_audit import (
 from astock.research.phase4 import Phase4ChainService
 from astock.research.repository import ResearchRepository
 from astock.research.request import ResearchRequestExecution, ResearchRequestService
+from astock.research.evidence_task import (
+    EvidenceCollectionTaskExecution,
+    EvidenceCollectionTaskService,
+)
 from astock.research.service import (
     BaseCaseExecution,
     EvidenceFreezeExecution,
@@ -41,6 +45,8 @@ __all__ = [
     "BaseCaseExecution",
     "EvidenceFreezeExecution",
     "DiagnosticExecution",
+    "EvidenceCollectionTaskExecution",
+    "EvidenceCollectionTaskService",
     "ResearchCoreService",
     "ResearchDiagnosticsService",
     "ResearchMemoExecution",

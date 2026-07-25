@@ -397,6 +397,7 @@ from astock.schemas.reference_data import (
 from astock.schemas.research import (
     BASE_CASE_SECTIONS,
     AdjustmentDirection,
+    EvidenceCollectionTask,
     BaseCaseBuildRequest,
     BaseCaseDraft,
     BaseCasePack,
@@ -798,6 +799,7 @@ __all__ = [
     "ResearchFindingType",
     "ResearchRequest",
     "ResearchRequestModule",
+    "EvidenceCollectionTask",
     "ResearchGap",
     "ResearchGapInput",
     "ResearchGapSeverity",

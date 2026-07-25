@@ -72,6 +72,21 @@ class ResearchRequest(AStockModel):
         return self
 
 
+class EvidenceCollectionTask(AStockModel):
+    request_artifact_id: str = Field(min_length=1)
+    company: str = Field(min_length=1)
+    ticker: str = Field(pattern=r"^\d{6}$")
+    required_sources: list[str] = Field(min_length=1)
+    created_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_task(self) -> "EvidenceCollectionTask":
+        if not self.required_sources:
+            raise ValueError("evidence collection task requires at least one source")
+        object.__setattr__(self, "required_sources", sorted(set(self.required_sources)))
+        return self
+
+
 class BaseCaseSection(StrEnum):
     BUSINESS_MODEL = "BUSINESS_MODEL"
     REVENUE_DRIVERS = "REVENUE_DRIVERS"
@@ -652,6 +667,7 @@ class SpecialistDelta(AStockModel):
 __all__ = [
     "BASE_CASE_SECTIONS",
     "ResearchRequest",
+    "EvidenceCollectionTask",
     "ResearchRequestModule",
     "BaseCaseBuildRequest",
     "BaseCaseDraft",

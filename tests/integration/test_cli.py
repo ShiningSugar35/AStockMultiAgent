@@ -472,6 +472,49 @@ def test_research_request_cli_build_is_idempotent_and_validates_inputs(
     }
 
 
+def test_research_evidence_task_cli_build_is_idempotent_and_validates_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "research-evidence-task-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    synced = runner.invoke(app, ["sync-instruments"])
+    assert synced.exit_code == 0, synced.output
+
+    request_result = runner.invoke(app, ["research-request", "300750"])
+    assert request_result.exit_code == 0, request_result.output
+    request_artifact_id = json.loads(request_result.output)["artifact_id"]
+
+    first = runner.invoke(app, ["research-evidence-task", request_artifact_id])
+    assert first.exit_code == 0, first.output
+    payload = json.loads(first.output)
+    assert payload["status"] == "CREATED"
+    assert payload["task"]["request_artifact_id"] == request_artifact_id
+    assert payload["task"]["company"] == "宁德时代"
+    assert payload["task"]["ticker"] == "300750"
+    assert payload["task"]["required_sources"] == [
+        "evidence",
+        "financial",
+        "research",
+    ]
+    assert not payload["reused_existing"]
+
+    repeated = runner.invoke(app, ["research-evidence-task", request_artifact_id])
+    assert repeated.exit_code == 0, repeated.output
+    repeated_payload = json.loads(repeated.output)
+    assert repeated_payload["reused_existing"]
+    assert repeated_payload["artifact_hash"] == payload["artifact_hash"]
+
+    illegal = runner.invoke(app, ["research-evidence-task", "ResearchRequest:missing"])
+    assert illegal.exit_code == 2, illegal.output
+    assert json.loads(illegal.output) == {
+        "status": "REJECTED",
+        "error_code": "INVALID_RESEARCH_TASK_REQUEST",
+    }
+
+
 def test_position_lifecycle_cli_schema_and_invalid_requests_are_safe(
     tmp_path: Path,
     monkeypatch,

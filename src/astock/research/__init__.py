@@ -29,6 +29,10 @@ from astock.research.evidence_task import (
     EvidenceCollectionTaskExecution,
     EvidenceCollectionTaskService,
 )
+from astock.research.evidence_run import (
+    EvidenceCollectionRunExecution,
+    EvidenceCollectionRunService,
+)
 from astock.research.service import (
     BaseCaseExecution,
     EvidenceFreezeExecution,
@@ -47,6 +51,8 @@ __all__ = [
     "DiagnosticExecution",
     "EvidenceCollectionTaskExecution",
     "EvidenceCollectionTaskService",
+    "EvidenceCollectionRunExecution",
+    "EvidenceCollectionRunService",
     "ResearchCoreService",
     "ResearchDiagnosticsService",
     "ResearchMemoExecution",

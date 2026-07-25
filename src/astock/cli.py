@@ -112,6 +112,7 @@ from astock.providers import (
 from astock.research import (
     Phase4ChainService,
     PositionLifecycleService,
+    EvidenceCollectionRunService,
     EvidenceCollectionTaskService,
     ResearchCoreService,
     ResearchDiagnosticsService,
@@ -1764,6 +1765,32 @@ def research_evidence_task(
             "artifact_id": execution.artifact_id,
             "artifact_hash": execution.object_sha256,
             "task": execution.task,
+            "reused_existing": execution.reused_existing,
+        }
+    )
+
+
+@app.command("research-evidence-run")
+def research_evidence_run(
+    task_artifact_id: Annotated[
+        str,
+        typer.Argument(help="EvidenceCollectionTask artifact id."),
+    ],
+) -> None:
+    """Build one deterministic evidence-collection run from an existing task."""
+
+    paths, state, objects = _services()
+    try:
+        execution = EvidenceCollectionRunService(state, objects).create_run(task_artifact_id)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_RESEARCH_RUN_REQUEST"})
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": "CREATED",
+            "artifact_id": execution.artifact_id,
+            "artifact_hash": execution.object_sha256,
+            "run": execution.run,
             "reused_existing": execution.reused_existing,
         }
     )

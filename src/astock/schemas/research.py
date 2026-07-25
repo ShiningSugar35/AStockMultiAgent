@@ -87,6 +87,28 @@ class EvidenceCollectionTask(AStockModel):
         return self
 
 
+class EvidenceCollectionRunStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class EvidenceCollectionRun(AStockModel):
+    task_artifact_id: str = Field(min_length=1)
+    status: EvidenceCollectionRunStatus
+    started_at: AwareDatetime
+    completed_at: AwareDatetime
+    collected_items: list[str] = Field(default_factory=list)
+    missing_items: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_run_window(self) -> "EvidenceCollectionRun":
+        if self.completed_at < self.started_at:
+            raise ValueError("evidence collection run completed_at must be after started_at")
+        return self
+
+
 class BaseCaseSection(StrEnum):
     BUSINESS_MODEL = "BUSINESS_MODEL"
     REVENUE_DRIVERS = "REVENUE_DRIVERS"
@@ -668,6 +690,8 @@ __all__ = [
     "BASE_CASE_SECTIONS",
     "ResearchRequest",
     "EvidenceCollectionTask",
+    "EvidenceCollectionRunStatus",
+    "EvidenceCollectionRun",
     "ResearchRequestModule",
     "BaseCaseBuildRequest",
     "BaseCaseDraft",

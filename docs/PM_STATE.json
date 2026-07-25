@@ -1,18 +1,19 @@
 ﻿{
   "branch": "codex/phase5-stabilization",
-  "head_sha": "c706d1c7b34a02d1c0ede32017d3151b418a8604",
-  "parent_sha": "1e7155780dac0d3f71c6e912bdb0a3221fe8e2d8",
+  "head_sha": "110f7a7f0d09edb5efb3646f65a912215780a6d0",
+  "parent_sha": "a2efed324c27b580178a247265254c5523f49f09",
   "worker_commits": [
-    "c706d1c7b34a02d1c0ede32017d3151b418a8604"
+    "c706d1c7b34a02d1c0ede32017d3151b418a8604",
+    "110f7a7f0d09edb5efb3646f65a912215780a6d0"
   ],
-  "pm_status_commit": "b4cc29f44c92ac3c58a15001ac76f3d216088df9",
+  "pm_status_commit": "a2efed324c27b580178a247265254c5523f49f09",
   "open_prs": [],
   "test_summary": {
-    "pytest": "run (targeted): tests/unit/test_research_request_schema.py tests/integration/test_cli.py -k \"research_request\"",
+    "pytest": "not_run",
     "ruff": "not_run",
     "pyright": "not_run",
     "live_acceptance": "see_current_acceptance_report",
-    "notes": "MVP-R-001 targeted tests executed: ResearchRequest schema + research-request CLI happy path/invalid input."
+    "notes": "MVP-R-001 目标测试已执行（5/5）。MVP-R-002 测试用例已新增（unit+integration）但本次PM验收未再次跑测试。"
   },
   "business_capabilities": {
     "market_data_5m": {
@@ -55,7 +56,7 @@
     },
     "R": {
       "status": "PARTIAL",
-      "notes": "Research request intake contract is now standardized (company/name -> ResearchRequest) and emitted via CLI; decision/report chain remains out of scope for this task."
+      "notes": "ResearchRequest 已标准化并可复用为 EvidenceCollectionTask；仍停留在入口桥接层，未产出最终投资结论。"
     },
     "H": {
       "status": "PARTIAL",
@@ -132,7 +133,7 @@
   ],
   "disputes": [],
   "draft_next_steps": [
-    "Define downstream consumer contract for ResearchRequest artifacts.",
+    "Validate downstream evidence collection runtime（idempotent）对 EvidenceCollectionTask 的消费。",
     "Set explicit Serenity production rollout and rollback policy.",
     "Complete knowledge gap and restricted-source closure criteria."
   ],

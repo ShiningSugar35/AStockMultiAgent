@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import platform
 import sys
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
@@ -114,6 +114,7 @@ from astock.research import (
     PositionLifecycleService,
     ResearchCoreService,
     ResearchDiagnosticsService,
+    ResearchRequestService,
     ResearchRepository,
     ResearchSkillService,
     load_position_lifecycle_config,
@@ -1702,6 +1703,41 @@ def context_plan(
     else:
         report = build_context_budget(skills=skills or [], artifact_paths=artifacts or [])
     _emit(report)
+
+
+@app.command("research-request")
+def research_request(
+    company_or_name: Annotated[
+        str,
+        typer.Argument(help="Stock code (6 digits) or company name."),
+    ],
+    requested_modules: Annotated[
+        list[str] | None,
+        typer.Option("--module", help="Requested research module(s): financial|evidence|research"),
+    ] = None,
+) -> None:
+    """Build one deterministic research intake request artifact."""
+
+    paths, state, objects = _services()
+    try:
+        execution = ResearchRequestService(
+            state,
+            objects,
+            paths.parquet,
+        ).create_request(company_or_name, requested_modules=requested_modules)
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit({"status": "REJECTED", "error_code": "INVALID_RESEARCH_REQUEST"})
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": "CREATED",
+            "artifact_id": execution.artifact_id,
+            "artifact_hash": execution.object_sha256,
+            "request": execution.request,
+            "reused_existing": execution.reused_existing,
+            "created_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+    )
 
 
 @app.command("research-evidence-freeze")

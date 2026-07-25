@@ -409,6 +409,69 @@ def test_research_diagnostic_cli_schema_and_invalid_requests_are_safe(
         assert str(request) not in invoked.output
 
 
+def test_research_request_cli_build_is_idempotent_and_validates_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "research-request-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    synced = runner.invoke(app, ["sync-instruments"])
+    assert synced.exit_code == 0, synced.output
+
+    first = runner.invoke(app, ["research-request", "300750"])
+    assert first.exit_code == 0, first.output
+    payload = json.loads(first.output)
+    assert payload["status"] == "CREATED"
+    assert payload["request"]["ticker"] == "300750"
+    assert payload["request"]["market"] == "CN"
+    assert len(payload["artifact_hash"]) == 64
+    assert not payload["reused_existing"]
+
+    repeated = runner.invoke(app, ["research-request", "300750"])
+    assert repeated.exit_code == 0, repeated.output
+    repeated_payload = json.loads(repeated.output)
+    assert repeated_payload["reused_existing"]
+    assert repeated_payload["artifact_hash"] == payload["artifact_hash"]
+
+    by_name = runner.invoke(
+        app,
+        [
+            "research-request",
+            "宁德时代",
+            "--module",
+            "research",
+            "--module",
+            "financial",
+            "--module",
+            "financial",
+        ],
+    )
+    assert by_name.exit_code == 0, by_name.output
+    by_name_payload = json.loads(by_name.output)
+    assert by_name_payload["request"]["company"] == "宁德时代"
+    assert by_name_payload["request"]["ticker"] == "300750"
+    assert by_name_payload["request"]["requested_modules"] == [
+        "financial",
+        "research",
+    ]
+
+    empty = runner.invoke(app, ["research-request", "   "])
+    assert empty.exit_code == 2, empty.output
+    assert json.loads(empty.output) == {
+        "status": "REJECTED",
+        "error_code": "INVALID_RESEARCH_REQUEST",
+    }
+
+    illegal = runner.invoke(app, ["research-request", "123456"])
+    assert illegal.exit_code == 2, illegal.output
+    assert json.loads(illegal.output) == {
+        "status": "REJECTED",
+        "error_code": "INVALID_RESEARCH_REQUEST",
+    }
+
+
 def test_position_lifecycle_cli_schema_and_invalid_requests_are_safe(
     tmp_path: Path,
     monkeypatch,

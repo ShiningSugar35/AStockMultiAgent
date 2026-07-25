@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from enum import StrEnum
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -38,6 +39,37 @@ class ResearchGapSeverity(StrEnum):
     INFORMATIONAL = "INFORMATIONAL"
     MATERIAL = "MATERIAL"
     BLOCKING = "BLOCKING"
+
+
+class ResearchRequestModule(StrEnum):
+    FINANCIAL = "financial"
+    EVIDENCE = "evidence"
+    RESEARCH = "research"
+
+
+class ResearchRequest(AStockModel):
+    company: str = Field(min_length=1)
+    ticker: str = Field(pattern=r"^\d{6}$")
+    market: Literal["CN"] = "CN"
+    requested_modules: list[ResearchRequestModule] = Field(
+        default_factory=lambda: [
+            ResearchRequestModule.FINANCIAL,
+            ResearchRequestModule.EVIDENCE,
+            ResearchRequestModule.RESEARCH,
+        ]
+    )
+
+    @model_validator(mode="after")
+    def validate_modules(self) -> "ResearchRequest":
+        if not self.requested_modules:
+            raise ValueError("requested_modules must not be empty")
+        requested = set(self.requested_modules)
+        object.__setattr__(
+            self,
+            "requested_modules",
+            [module for module in ResearchRequestModule if module in requested],
+        )
+        return self
 
 
 class BaseCaseSection(StrEnum):
@@ -619,6 +651,8 @@ class SpecialistDelta(AStockModel):
 
 __all__ = [
     "BASE_CASE_SECTIONS",
+    "ResearchRequest",
+    "ResearchRequestModule",
     "BaseCaseBuildRequest",
     "BaseCaseDraft",
     "BaseCasePack",

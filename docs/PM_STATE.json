@@ -1,0 +1,144 @@
+﻿{
+  "branch": "codex/phase5-stabilization",
+  "head_sha": "adaee07f70d5a524baaa9736359bf26eec71e67e",
+  "parent_sha": "1e7155780dac0d3f71c6e912bdb0a3221fe8e2d8",
+  "worker_commits": [],
+  "pm_status_commit": "",
+  "open_prs": [],
+  "test_summary": {
+    "pytest": "not_run",
+    "ruff": "not_run",
+    "pyright": "not_run",
+    "live_acceptance": "see_current_acceptance_report",
+    "notes": "Baseline run only updates project state artifacts; no regression suite executed."
+  },
+  "business_capabilities": {
+    "market_data_5m": {
+      "status": "partial",
+      "description": "Provider and runtime path exists; scope is partial and bound by market/provider policy."
+    },
+    "financial_sync": {
+      "status": "partial",
+      "description": "Financial foundation and source loaders exist; secondary structured sources still need external validation in parts."
+    },
+    "knowledge_collection": {
+      "status": "partial",
+      "description": "Knowledge collection evidence exists; collection gap remains and requires review."
+    },
+    "semantic_pipeline": {
+      "status": "partial",
+      "description": "ParagraphUnit/ArgumentUnit pipeline is present by schema and migration history."
+    },
+    "serenity_integration": {
+      "status": "partial",
+      "description": "v2 methods present and audited; production routing not fully confirmed."
+    },
+    "paper_trading": {
+      "status": "partial",
+      "description": "Paper framework exists; execution policy remains constrained by ledger gate settings."
+    }
+  },
+  "workstreams": {
+    "K": {
+      "status": "PARTIAL",
+      "notes": "Knowledge collection/distillation are available in historical state only."
+    },
+    "S": {
+      "status": "PARTIAL",
+      "notes": "Serenity integrations are present, productionization boundary remains unresolved."
+    },
+    "F": {
+      "status": "PARTIAL",
+      "notes": "Financial audit capability exists, but validation still depends on provider provenance quality."
+    },
+    "R": {
+      "status": "PARTIAL",
+      "notes": "Research methods and diagnostics can run, but no full auto-decision chain is marked complete."
+    },
+    "H": {
+      "status": "PARTIAL",
+      "notes": "Position lifecycle schema exists; monitoring strategy needs explicit acceptance."
+    },
+    "P": {
+      "status": "PARTIAL",
+      "notes": "Paper and ledger modules exist, execution writes remain constrained."
+    },
+    "C": {
+      "status": "PARTIAL",
+      "notes": "Committee and committee rules are present, but decision policies are not fully active."
+    },
+    "E": {
+      "status": "PARTIAL",
+      "notes": "Evaluation workflow exists, but not used as mandatory default pipeline."
+    },
+    "I": {
+      "status": "PARTIAL",
+      "notes": "Infrastructure and artifact state tracking are available and updated in this run."
+    }
+  },
+  "knowledge_collection": {
+    "mr_dang": {
+      "discovered": 3789,
+      "success": 3788,
+      "failed": null,
+      "restricted": null,
+      "missing": null,
+      "terminal_condition": null,
+      "last_cursor": null
+    },
+    "huang_yan_zhen": {
+      "discovered": 831,
+      "success": 8,
+      "failed": 1,
+      "restricted": null,
+      "missing": null,
+      "terminal_condition": null,
+      "last_cursor": null
+    },
+    "xiao_peng": {
+      "discovered": 895,
+      "success": 24,
+      "failed": 1896,
+      "restricted": null,
+      "missing": null,
+      "terminal_condition": null,
+      "last_cursor": null
+    },
+    "summary": {
+      "discovered": 3789,
+      "success": 3788,
+      "gap": 9,
+      "parquet_mismatch": 0
+    }
+  },
+  "blockers": [
+    {
+      "id": "SERENITY_PROD_SCOPE",
+      "title": "Serenity production scope and rollout policy",
+      "status": "BLOCKED_EXTERNAL_REVISION"
+    },
+    {
+      "id": "PAPER_WRITE_GATE",
+      "title": "Paper ledger write and execution gate policy",
+      "status": "BLOCKED_EXTERNAL_REVISION"
+    },
+    {
+      "id": "KNOWLEDGE_GAP_CLOSE",
+      "title": "Knowledge coverage gap definition and acceptance criteria",
+      "status": "REQUIRES_EXTERNAL_REVIEW"
+    }
+  ],
+  "disputes": [],
+  "draft_next_steps": [
+    "Confirm external architect scope and create first Worker task in inbox.",
+    "Set explicit Serenity production rollout and rollback policy.",
+    "Add evidence/snapshot review routine for current collection gap."
+  ],
+  "files_for_external_review": [
+    "docs/当前开发进展.md",
+    "docs/业务能力矩阵.md",
+    "docs/外部架构师交接.md",
+    "docs/争议与待5.6复核.md",
+    "docs/PM_STATE.json"
+  ]
+}

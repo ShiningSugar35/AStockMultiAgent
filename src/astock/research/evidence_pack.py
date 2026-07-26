@@ -1,4 +1,9 @@
-"""Transform EvidenceCollectionRun artifacts into lightweight analysis packs."""
+"""Transform EvidenceCollectionRun artifacts into lightweight analysis packs.
+
+EvidencePack is the analysis-consumption artifact used by downstream research
+modules. It intentionally does not replace FrozenEvidencePack, which remains the
+audit-focused immutable evidence freeze output.
+"""
 
 from __future__ import annotations
 

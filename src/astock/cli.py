@@ -110,15 +110,17 @@ from astock.providers import (
     load_provider_registry,
 )
 from astock.research import (
-    Phase4ChainService,
-    PositionLifecycleService,
     EvidenceCollectionRunService,
     EvidenceCollectionTaskService,
     EvidencePackService,
+    FormalResearchPreparationService,
+    Phase4ChainService,
+    PositionLifecycleService,
     ResearchCoreService,
     ResearchDiagnosticsService,
-    ResearchRequestService,
+    ResearchPreparationRejectedError,
     ResearchRepository,
+    ResearchRequestService,
     ResearchSkillService,
     load_position_lifecycle_config,
     load_research_core_config,
@@ -162,6 +164,8 @@ from astock.schemas import (
     ResearchDiagnosticConfig,
     ResearchMemoComposeRequest,
     ResearchMemoComposeRequestV2,
+    ResearchPreparationRequest,
+    ResearchPreparationStatus,
     ResearchSkillRegistry,
     SemanticFunnelRun,
     ShadowDecisionAssignmentRequest,
@@ -1804,7 +1808,12 @@ def research_evidence_pack(
         typer.Argument(help="EvidenceCollectionRun artifact id."),
     ],
 ) -> None:
-    """Build one deterministic lightweight evidence pack for downstream analysis."""
+    """Build one deterministic lightweight analysis pack from a completed run.
+
+    The output is an analysis-oriented EvidencePack artifact. It does not
+    replace FrozenEvidencePack, which is the separate audit-oriented freeze
+    output.
+    """
 
     paths, state, objects = _services()
     try:
@@ -1821,6 +1830,59 @@ def research_evidence_pack(
             "reused_existing": execution.reused_existing,
         }
     )
+
+
+@app.command("research-formal-prepare")
+def research_formal_prepare(
+    request_file: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+) -> None:
+    """Validate formal research readiness and stop at FrozenEvidencePack."""
+
+    paths, state, objects = _services()
+    try:
+        request = ResearchPreparationRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        execution = FormalResearchPreparationService(
+            state,
+            objects,
+            _research_core(paths),
+        ).prepare(request)
+    except (
+        AStockError,
+        OSError,
+        UnicodeError,
+        ValidationError,
+        ResearchPreparationRejectedError,
+        ValueError,
+    ) as exc:
+        _emit(
+            {
+                "status": "REJECTED",
+                "error_code": "INVALID_RESEARCH_PREPARATION_REQUEST",
+            }
+        )
+        raise typer.Exit(code=2) from exc
+
+    manifest = execution.manifest
+    payload = {
+        "status": manifest.status,
+        "manifest_artifact_id": execution.manifest_artifact_id,
+        "manifest_object_sha256": execution.manifest_object_sha256,
+        "blocking_codes": manifest.blocking_codes,
+        "required_action_codes": manifest.required_action_codes,
+        "frozen_evidence_pack_id": manifest.frozen_evidence_pack_id,
+        "frozen_evidence_pack_artifact_id": (
+            manifest.frozen_evidence_pack_artifact_id
+        ),
+        "reused_existing": execution.reused_existing,
+    }
+    _emit(payload)
+    if manifest.status is ResearchPreparationStatus.NEEDS_INFO:
+        raise typer.Exit(code=3)
 
 
 @app.command("research-evidence-freeze")

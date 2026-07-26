@@ -31,13 +31,15 @@ class EvidenceCollectionRunService:
     def create_run(self, task_artifact_id: str) -> EvidenceCollectionRunExecution:
         task, task_object_hash = self._load_task(task_artifact_id)
         now = datetime.now(UTC)
+        collected_items: list[str] = []
+        missing_items = task.required_sources
         run = EvidenceCollectionRun(
             task_artifact_id=task_artifact_id,
-            status=EvidenceCollectionRunStatus.COMPLETED,
+            status=self._status(collected_items, missing_items),
             started_at=now,
             completed_at=now,
-            collected_items=[],
-            missing_items=task.required_sources,
+            collected_items=collected_items,
+            missing_items=missing_items,
         )
         artifact_id = (
             f"EvidenceCollectionRun:{content_hash({'task_artifact_id': task_artifact_id})}"
@@ -67,6 +69,17 @@ class EvidenceCollectionRunService:
             object_sha256=object_ref.sha256,
             reused_existing=False,
         )
+
+    @staticmethod
+    def _status(
+        collected_items: list[str],
+        missing_items: list[str],
+    ) -> EvidenceCollectionRunStatus:
+        if missing_items:
+            return EvidenceCollectionRunStatus.NEEDS_INFO
+        if collected_items:
+            return EvidenceCollectionRunStatus.COMPLETED
+        return EvidenceCollectionRunStatus.NEEDS_INFO
 
     def _load_task(self, task_artifact_id: str) -> tuple[EvidenceCollectionTask, str]:
         with self.state.connect() as connection:

@@ -91,6 +91,7 @@ class EvidenceCollectionRunStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
+    NEEDS_INFO = "NEEDS_INFO"
     FAILED = "FAILED"
 
 
@@ -127,6 +128,79 @@ class EvidencePack(AStockModel):
     def normalize_items(self) -> "EvidencePack":
         object.__setattr__(self, "evidence_items", sorted(set(self.evidence_items)))
         object.__setattr__(self, "missing_items", sorted(set(self.missing_items)))
+        return self
+
+
+class ResearchPreparationStatus(StrEnum):
+    READY_FOR_BASE_CASE = "READY_FOR_BASE_CASE"
+    NEEDS_INFO = "NEEDS_INFO"
+
+
+class ResearchPreparationRequest(AStockModel):
+    research_request_artifact_id: str = Field(min_length=1)
+    evidence_pack_artifact_id: str = Field(min_length=1)
+    financial_audit_run_id: str = Field(min_length=1)
+    claim_ids: list[str] = Field(min_length=1)
+    as_of: AwareDatetime
+    formal_historical: bool = True
+    allow_approximated: bool = False
+
+    @model_validator(mode="after")
+    def normalize_request(self) -> ResearchPreparationRequest:
+        normalized_claim_ids = sorted(set(self.claim_ids))
+        if not normalized_claim_ids:
+            raise ValueError("research preparation requires at least one claim")
+        object.__setattr__(self, "claim_ids", normalized_claim_ids)
+        if self.allow_approximated and not self.formal_historical:
+            raise ValueError("allow_approximated only applies to formal historical mode")
+        return self
+
+
+class ResearchPreparationManifest(AStockModel):
+    research_request_artifact_id: str = Field(min_length=1)
+    evidence_pack_artifact_id: str = Field(min_length=1)
+    financial_audit_run_id: str = Field(min_length=1)
+    company_id: str = Field(min_length=1)
+    ticker: str = Field(pattern=r"^\d{6}$")
+    as_of: AwareDatetime
+    status: ResearchPreparationStatus
+    claim_ids: list[str] = Field(min_length=1)
+    blocking_codes: list[str] = Field(default_factory=list)
+    required_action_codes: list[str] = Field(default_factory=list)
+    financial_manual_task_ids: list[str] = Field(default_factory=list)
+    frozen_evidence_pack_id: str | None = None
+    frozen_evidence_pack_artifact_id: str | None = None
+    input_object_hashes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_manifest(self) -> ResearchPreparationManifest:
+        for field_name in (
+            "claim_ids",
+            "blocking_codes",
+            "required_action_codes",
+            "financial_manual_task_ids",
+            "input_object_hashes",
+        ):
+            values = getattr(self, field_name)
+            object.__setattr__(self, field_name, sorted(set(values)))
+        invalid_hashes = [
+            item
+            for item in self.input_object_hashes
+            if len(item) != 64 or any(char not in "0123456789abcdef" for char in item)
+        ]
+        if invalid_hashes:
+            raise ValueError("research preparation input object hashes must be SHA-256")
+        frozen_ids = (
+            self.frozen_evidence_pack_id,
+            self.frozen_evidence_pack_artifact_id,
+        )
+        if self.status is ResearchPreparationStatus.READY_FOR_BASE_CASE:
+            if any(item is None for item in frozen_ids):
+                raise ValueError("ready research preparation requires a frozen evidence pack")
+            if self.blocking_codes or self.required_action_codes:
+                raise ValueError("ready research preparation cannot contain blocking actions")
+        elif any(item is not None for item in frozen_ids):
+            raise ValueError("NEEDS_INFO research preparation cannot reference a frozen pack")
         return self
 
 
@@ -714,6 +788,9 @@ __all__ = [
     "EvidenceCollectionRunStatus",
     "EvidenceCollectionRun",
     "EvidencePack",
+    "ResearchPreparationManifest",
+    "ResearchPreparationRequest",
+    "ResearchPreparationStatus",
     "ResearchRequestModule",
     "BaseCaseBuildRequest",
     "BaseCaseDraft",

@@ -43,7 +43,7 @@ def test_evidence_collection_run_service_generates_run_and_is_idempotent(
         f"EvidenceCollectionRun:{content_hash({'task_artifact_id': task_artifact_id})}"
     )
     assert first.run.task_artifact_id == task_artifact_id
-    assert first.run.status == EvidenceCollectionRunStatus.COMPLETED
+    assert first.run.status == EvidenceCollectionRunStatus.NEEDS_INFO
     assert first.run.collected_items == []
     assert first.run.missing_items == ["evidence", "financial"]
     assert not first.reused_existing
@@ -52,6 +52,18 @@ def test_evidence_collection_run_service_generates_run_and_is_idempotent(
     assert second.reused_existing
     assert second.object_sha256 == first.object_sha256
     assert second.run == first.run
+
+
+def test_evidence_collection_run_status_requires_collected_items_without_gaps() -> None:
+    assert EvidenceCollectionRunService._status(
+        ["ClaimEvidenceBundle:claim:recorded"],
+        [],
+    ) is EvidenceCollectionRunStatus.COMPLETED
+    assert EvidenceCollectionRunService._status(
+        [],
+        ["financial"],
+    ) is EvidenceCollectionRunStatus.NEEDS_INFO
+    assert EvidenceCollectionRunService._status([], []) is EvidenceCollectionRunStatus.NEEDS_INFO
 
 
 def test_evidence_collection_run_service_rejects_missing_task_artifact(

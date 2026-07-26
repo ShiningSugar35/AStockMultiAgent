@@ -10,15 +10,26 @@ import pymupdf
 from typer.testing import CliRunner
 
 from astock.cli import app
+from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents import DocumentPageRepository, DocumentRepository
+from astock.evidence import ClaimEvidenceService, EvidenceRepository
 from astock.schemas import (
+    ClaimStatus,
+    ClaimType,
+    EvidenceAttachment,
+    EvidenceCollectionRun,
+    EvidenceCollectionRunStatus,
+    EvidenceRelation,
+    FinancialAuditRequest,
+    FinancialIndustryProfile,
     ZhihuBrowserResponseEnvelope,
     ZhihuContentType,
     ZhihuResponseKind,
     ZhihuTransport,
 )
-from tests.helpers import make_financial_request
+from tests.helpers import make_financial_facts, make_financial_request
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 runner = CliRunner()
@@ -540,7 +551,7 @@ def test_research_evidence_run_cli_build_is_idempotent_and_validates_inputs(
     payload = json.loads(first.output)
     assert payload["status"] == "CREATED"
     assert payload["run"]["task_artifact_id"] == task_artifact_id
-    assert payload["run"]["status"] == "COMPLETED"
+    assert payload["run"]["status"] == "NEEDS_INFO"
     assert payload["run"]["collected_items"] == []
     assert payload["run"]["missing_items"] == ["evidence", "financial", "research"]
     assert not payload["reused_existing"]
@@ -670,6 +681,211 @@ def test_research_evidence_pack_cli_rejects_missing_artifact_object(
     assert json.loads(illegal.output) == {
         "status": "REJECTED",
         "error_code": "INVALID_RESEARCH_PACK_REQUEST",
+    }
+
+
+def test_research_formal_prepare_cli_recorded_vertical_slice_is_idempotent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "research-formal-prepare-recorded-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    synced = runner.invoke(app, ["sync-instruments"])
+    assert synced.exit_code == 0, synced.output
+    request_result = runner.invoke(app, ["research-request", "300750"])
+    assert request_result.exit_code == 0, request_result.output
+    request_payload = json.loads(request_result.output)
+    task_result = runner.invoke(
+        app,
+        ["research-evidence-task", request_payload["artifact_id"]],
+    )
+    assert task_result.exit_code == 0, task_result.output
+    task_payload = json.loads(task_result.output)
+
+    state = StateStore(runtime / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(runtime / "objects" / "sha256")
+    facts = make_financial_facts(
+        state,
+        objects,
+        source_suffix="formal-cli-recorded",
+        company_id="300750",
+    )
+    financial_request = FinancialAuditRequest(
+        company_id="300750",
+        as_of=datetime(2026, 3, 21, tzinfo=UTC),
+        industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+        facts=facts,
+    )
+    financial_path = tmp_path / "formal-financial-request.json"
+    financial_path.write_text(
+        json.dumps(financial_request.model_dump(mode="json"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    financial_result = runner.invoke(app, ["financial-audit", str(financial_path)])
+    assert financial_result.exit_code == 0, financial_result.output
+    financial_payload = json.loads(financial_result.output)
+    assert financial_payload["status"] == "SUCCEEDED"
+
+    evidence_id = facts[0].evidence_ids[0]
+    claim = ClaimEvidenceService(
+        objects,
+        state,
+        DocumentPageRepository(state),
+        DocumentRepository(state),
+        EvidenceRepository(state),
+    ).create_claim(
+        subject_id="300750",
+        predicate="formal_cli_recorded_claim",
+        object_json={"fixture": "industrial_annual_2025"},
+        as_of=datetime(2026, 3, 20, 1, tzinfo=UTC),
+        claim_type=ClaimType.FACT,
+        confidence=0.9,
+        status=ClaimStatus.VALIDATED,
+        attachments=[
+            EvidenceAttachment(
+                evidence_id=evidence_id,
+                relation=EvidenceRelation.SUPPORT,
+            )
+        ],
+    )
+    run = EvidenceCollectionRun(
+        task_artifact_id=task_payload["artifact_id"],
+        status=EvidenceCollectionRunStatus.COMPLETED,
+        started_at=datetime(2026, 3, 21, 1, tzinfo=UTC),
+        completed_at=datetime(2026, 3, 21, 1, tzinfo=UTC),
+        collected_items=[f"ClaimEvidenceBundle:{claim.claim.claim_id}"],
+        missing_items=[],
+    )
+    run_ref = objects.put_json(run.model_dump(mode="json"))
+    run_artifact_id = (
+        "EvidenceCollectionRun:"
+        + content_hash({"task_artifact_id": task_payload["artifact_id"]})
+    )
+    state.register_artifact(
+        artifact_id=run_artifact_id,
+        artifact_type="EvidenceCollectionRun",
+        schema_version=run.schema_version,
+        object_hash=run_ref.sha256,
+        input_hashes=[task_payload["artifact_hash"]],
+    )
+    pack_result = runner.invoke(app, ["research-evidence-pack", run_artifact_id])
+    assert pack_result.exit_code == 0, pack_result.output
+    pack_payload = json.loads(pack_result.output)
+
+    preparation_path = tmp_path / "research-preparation-request.json"
+    preparation_path.write_text(
+        json.dumps(
+            {
+                "research_request_artifact_id": request_payload["artifact_id"],
+                "evidence_pack_artifact_id": pack_payload["artifact_id"],
+                "financial_audit_run_id": financial_payload["pack"]["audit_run_id"],
+                "claim_ids": [claim.claim.claim_id],
+                "as_of": "2026-06-30T15:00:00+08:00",
+                "formal_historical": True,
+                "allow_approximated": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    first = runner.invoke(app, ["research-formal-prepare", str(preparation_path)])
+    assert first.exit_code == 0, first.output
+    payload = json.loads(first.output)
+    assert payload["status"] == "READY_FOR_BASE_CASE"
+    assert payload["manifest_artifact_id"].startswith("ResearchPreparationManifest:")
+    assert len(payload["manifest_object_sha256"]) == 64
+    assert payload["frozen_evidence_pack_id"].startswith("frozen-evidence:")
+    assert payload["frozen_evidence_pack_artifact_id"] == (
+        f"FrozenEvidencePack:{payload['frozen_evidence_pack_id']}"
+    )
+    assert not payload["reused_existing"]
+
+    repeated = runner.invoke(app, ["research-formal-prepare", str(preparation_path)])
+    assert repeated.exit_code == 0, repeated.output
+    repeated_payload = json.loads(repeated.output)
+    assert repeated_payload["reused_existing"]
+    assert repeated_payload["manifest_artifact_id"] == payload["manifest_artifact_id"]
+    assert repeated_payload["frozen_evidence_pack_id"] == (
+        payload["frozen_evidence_pack_id"]
+    )
+
+
+def test_research_formal_prepare_cli_needs_info_uses_exit_code_three(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "research-formal-prepare-needs-info-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+
+    assert runner.invoke(app, ["sync-instruments"]).exit_code == 0
+    research_request = runner.invoke(app, ["research-request", "300750"])
+    request_artifact_id = json.loads(research_request.output)["artifact_id"]
+    task = runner.invoke(app, ["research-evidence-task", request_artifact_id])
+    run = runner.invoke(
+        app,
+        ["research-evidence-run", json.loads(task.output)["artifact_id"]],
+    )
+    pack = runner.invoke(
+        app,
+        ["research-evidence-pack", json.loads(run.output)["artifact_id"]],
+    )
+    request_path = tmp_path / "research-preparation-needs-info.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "research_request_artifact_id": request_artifact_id,
+                "evidence_pack_artifact_id": json.loads(pack.output)["artifact_id"],
+                "financial_audit_run_id": "financial-audit:not-found",
+                "claim_ids": ["claim:not-found"],
+                "as_of": "2026-06-30T15:00:00+08:00",
+                "formal_historical": True,
+                "allow_approximated": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["research-formal-prepare", str(request_path)])
+    assert result.exit_code == 3, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "NEEDS_INFO"
+    assert payload["frozen_evidence_pack_id"] is None
+    assert set(payload["required_action_codes"]) == {
+        "CLAIM_SCOPE_EMPTY",
+        "EVIDENCE_COLLECTION_INCOMPLETE",
+        "FINANCIAL_AUDIT_NOT_FOUND",
+        "FORMAL_EVIDENCE_MISSING",
+    }
+
+
+def test_research_formal_prepare_cli_rejects_invalid_request(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = tmp_path / "research-formal-prepare-rejected-runtime"
+    monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
+    monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
+    request_path = tmp_path / "invalid-research-preparation.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "research_request_artifact_id": "ResearchRequest:missing",
+                "evidence_pack_artifact_id": "EvidencePack:missing",
+                "financial_audit_run_id": "financial-audit:missing",
+                "claim_ids": [],
+                "as_of": "2026-06-30T15:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["research-formal-prepare", str(request_path)])
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.output) == {
+        "status": "REJECTED",
+        "error_code": "INVALID_RESEARCH_PREPARATION_REQUEST",
     }
 
 

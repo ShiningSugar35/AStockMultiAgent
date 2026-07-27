@@ -32,10 +32,10 @@ def test_research_request_dedupes_and_orders_modules() -> None:
         company="Ningde Times",
         ticker="300750",
         requested_modules=[
-            "research",
-            "financial",
-            "financial",
-            "evidence",
+            ResearchRequestModule.RESEARCH,
+            ResearchRequestModule.FINANCIAL,
+            ResearchRequestModule.FINANCIAL,
+            ResearchRequestModule.EVIDENCE,
         ],
     )
     assert request.requested_modules == [

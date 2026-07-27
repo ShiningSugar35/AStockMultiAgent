@@ -11,6 +11,23 @@ from astock.research.diagnostics import (
     ResearchDiagnosticsService,
     ResearchMemoExecution,
 )
+from astock.research.evidence_pack import (
+    EvidencePackExecution,
+    EvidencePackService,
+)
+from astock.research.evidence_run import (
+    EvidenceCollectionRunExecution,
+    EvidenceCollectionRunService,
+)
+from astock.research.evidence_task import (
+    EvidenceCollectionTaskExecution,
+    EvidenceCollectionTaskService,
+)
+from astock.research.formal_preparation import (
+    FormalResearchPreparationService,
+    ResearchPreparationExecution,
+    ResearchPreparationRejectedError,
+)
 from astock.research.lifecycle import (
     HoldingReviewExecution,
     PositionLifecycleService,
@@ -25,23 +42,6 @@ from astock.research.open_source_audit import (
 from astock.research.phase4 import Phase4ChainService
 from astock.research.repository import ResearchRepository
 from astock.research.request import ResearchRequestExecution, ResearchRequestService
-from astock.research.evidence_task import (
-    EvidenceCollectionTaskExecution,
-    EvidenceCollectionTaskService,
-)
-from astock.research.evidence_run import (
-    EvidenceCollectionRunExecution,
-    EvidenceCollectionRunService,
-)
-from astock.research.evidence_pack import (
-    EvidencePackExecution,
-    EvidencePackService,
-)
-from astock.research.formal_preparation import (
-    FormalResearchPreparationService,
-    ResearchPreparationExecution,
-    ResearchPreparationRejectedError,
-)
 from astock.research.service import (
     BaseCaseExecution,
     EvidenceFreezeExecution,

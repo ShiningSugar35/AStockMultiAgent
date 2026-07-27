@@ -24,8 +24,10 @@
 - 投资结论必须引用 evidence_id/source_snapshot_id，或明确标记为推断/缺口。
 - 社区内容只能作线索；关键事实必须回到公告、交易所、财报等更强来源。
 - 委员会只读冻结工件，禁止重新联网、抓取或启动新研究；缺证据返回 `NEEDS_INFO`。
-- Phase 5 当前目标仅为白名单作者的回答、想法、文章和专栏正文；持久范围政策禁止把社区互动区数据调度到采集、覆盖或蒸馏。B1a 已完成该政策在业务代码中的落实与回归，B1c 已完成统一覆盖审计冻结截点及并发回归。专栏按容器关系建模，B1b0 合同门已验收，B1b1 在取得真实无凭据枚举快照前为 `BLOCKED_EXTERNAL_OBSERVATION`，不得猜接口或声称可用。
-- Phase 5 蒸馏粒度固定为 `SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate`；Paragraph 只是存储和定位单元，Embedding、DeepSeek 和 Skill 候选必须以完整 ArgumentUnit 为最小单位。
+- Phase 5 当前目标仅为白名单作者的回答、想法、文章和专栏正文。统一覆盖审计冻结截点及并发回归已完成；专栏按容器关系建模，B1b0 合同门已验收，B1b1 在取得真实无凭据枚举快照前为 `BLOCKED_EXTERNAL_OBSERVATION`，不得猜接口或声称可用。
+- Phase 5 蒸馏粒度固定为 `SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate`；Paragraph 是存储、定位及本地语义辅助视图单位，只有完整 ArgumentUnit 可产生最终语义分数、DeepSeek 输入和 Skill 候选。
+- 图片证据必须经过不可变图片快照、PDF bbox 或 DOM 定位、逐图 OCR、类型和前后 Paragraph 回填；图片 Paragraph 永远不能独立蒸馏，夹在论点与结论之间时必须 `MERGE_WITH_BOTH`。OCR 或上下文不完整时 AU 保持 `NEEDS_REVIEW`。
+- 《价值投资功法》当前视觉覆盖证据为 249 页、57 个含图页、74/74 placements；71 个非装饰图映射到 55 个 AU，11 个 READY、44 个 REVIEW。三位作者已有纯文本 v3 包仍为 `PROVISIONAL_TEXT_VIEW`，知乎图片证据冻结前不得作为最终蒸馏输入。
 
 ## 行情与模拟盘
 

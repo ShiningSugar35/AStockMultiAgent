@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import AwareDatetime, Field, model_validator
 
@@ -60,7 +61,7 @@ class ResearchRequest(AStockModel):
     )
 
     @model_validator(mode="after")
-    def validate_modules(self) -> "ResearchRequest":
+    def validate_modules(self) -> ResearchRequest:
         if not self.requested_modules:
             raise ValueError("requested_modules must not be empty")
         requested = set(self.requested_modules)
@@ -76,13 +77,13 @@ class EvidenceCollectionTask(AStockModel):
     request_artifact_id: str = Field(min_length=1)
     company: str = Field(min_length=1)
     ticker: str = Field(pattern=r"^\d{6}$")
-    required_sources: list[str] = Field(min_length=1)
-    created_at: AwareDatetime
+    required_sources: list[str] = Field(default_factory=list)
+    created_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")
-    def validate_task(self) -> "EvidenceCollectionTask":
+    def validate_task(self) -> EvidenceCollectionTask:
         if not self.required_sources:
-            raise ValueError("evidence collection task requires at least one source")
+            raise ValueError("at least one source")
         object.__setattr__(self, "required_sources", sorted(set(self.required_sources)))
         return self
 
@@ -104,7 +105,7 @@ class EvidenceCollectionRun(AStockModel):
     missing_items: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_run_window(self) -> "EvidenceCollectionRun":
+    def validate_run_window(self) -> EvidenceCollectionRun:
         if self.completed_at < self.started_at:
             raise ValueError("evidence collection run completed_at must be after started_at")
         return self
@@ -125,7 +126,7 @@ class EvidencePack(AStockModel):
     generated_at: AwareDatetime
 
     @model_validator(mode="after")
-    def normalize_items(self) -> "EvidencePack":
+    def normalize_items(self) -> EvidencePack:
         object.__setattr__(self, "evidence_items", sorted(set(self.evidence_items)))
         object.__setattr__(self, "missing_items", sorted(set(self.missing_items)))
         return self

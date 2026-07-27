@@ -1,10 +1,11 @@
-schema_version: "1.0"
-pipeline_version: knowledge-semantic-funnel-v1
+schema_version: "3.0"
+pipeline_version: knowledge-semantic-funnel-three-view-v3
 paragraphizer_version: zhihu-visible-paragraph-v1
-role_rule_version: investment-rhetorical-role-v3
+role_rule_version: investment-rhetorical-role-v8
 relation_rule_version: investment-argument-relation-v2
-argument_builder_version: contiguous-argument-builder-v3
-keyword_rule_version: knowledge-keyword-recall-v1
+argument_builder_version: contiguous-argument-builder-v4
+keyword_rule_version: knowledge-keyword-recall-v2
+embedding_contract_version: PARAGRAPH_AUX_ARGUMENT_FINAL_V3
 
 question_terms: [为什么, 怎么看, 担心什么, 意味着什么, 问题在哪, 如何理解]
 answer_terms: [因为, 原因是, 本质上, 首先, 其次, 一方面, 另一方面, 这说明, 所以, 因此]
@@ -12,7 +13,7 @@ example_terms: [例如, 比如, 举例, 以此为例, 案例]
 counter_terms: [但是, 然而, 反过来, 反方, 反证, 例外]
 conclusion_terms: [所以, 因此, 这说明, 综上, 总之, 结论是]
 transition_terms: [首先, 其次, 再次, 另外, 一方面, 另一方面, 接下来]
-marketing_terms: [付费, 课程, 扫码, 公众号, 打赏, 广告]
+marketing_terms: [关注公众号, 点击链接, 扫码购买, 购买课程, 领取课程, 订阅付费内容, 加入社群, 私信领取, 打赏支持, 扫码关注公众号]
 casual_terms: [哈哈, 晚安, 早安, 周末愉快, 闲聊]
 
 local_context:
@@ -21,7 +22,7 @@ local_context:
 
 argument_builder:
   prefer_merge_on_uncertainty: true
-  maximum_embedding_window_chars: 1800
+  maximum_argument_unit_chars: 1800
   standalone_methodological_threshold: 0.70
   review_boundary_threshold: 0.55
 

@@ -17,6 +17,7 @@ from astock.knowledge.semantic_repository import SemanticFunnelRepository
 from astock.schemas import (
     DistillationClassRuleSet,
     KeywordScreenDecision,
+    SemanticEmbeddingContract,
     SemanticFunnelConfig,
     SemanticFunnelRun,
     SemanticRunStage,
@@ -50,6 +51,10 @@ class SemanticFunnelService:
         self.semantic_repository = semantic_repository
         self.object_store = object_store
         self.config = config
+        if config.embedding_contract_version is not (
+            SemanticEmbeddingContract.PARAGRAPH_AUX_ARGUMENT_FINAL_V3
+        ):
+            raise ValueError("legacy semantic funnel contracts are read-only")
         self.keyword_rules = keyword_rules
         self.keyword_terms = method_keyword_terms(keyword_rules)
         self.rule_config_sha256 = content_hash(
@@ -75,8 +80,8 @@ class SemanticFunnelService:
                 ZhihuContentType.ARTICLES.value,
                 ZhihuContentType.THOUGHTS.value,
             ],
-            "comments_included": False,
             "pipeline_version": self.config.pipeline_version,
+            "embedding_contract_version": self.config.embedding_contract_version,
             "input_manifest_sha256": content_hash(manifest),
         }
 
@@ -97,6 +102,7 @@ class SemanticFunnelService:
             "relation_rule_version": self.config.relation_rule_version,
             "argument_builder_version": self.config.argument_builder_version,
             "keyword_rule_version": self.config.keyword_rule_version,
+            "embedding_contract_version": self.config.embedding_contract_version,
         }
         run_id = f"knowledge-semantic-run:{content_hash(run_identity)}"
         existing = self.semantic_repository.get_run(run_id)
@@ -139,6 +145,7 @@ class SemanticFunnelService:
             relation_rule_version=self.config.relation_rule_version,
             argument_builder_version=self.config.argument_builder_version,
             keyword_rule_version=self.config.keyword_rule_version,
+            embedding_contract_version=self.config.embedding_contract_version,
             rule_config_sha256=self.rule_config_sha256,
             stage=SemanticRunStage.INPUT_FROZEN,
             content_item_count=0,
@@ -209,9 +216,10 @@ class SemanticFunnelService:
         records: list[ZhihuContentRecord],
     ) -> dict[str, object]:
         return {
-            "schema_version": "knowledge-semantic-input-v1",
+            "schema_version": "knowledge-semantic-input-v3",
             "author_source_id": author_source_id,
-            "content_policy": "DETAIL_VERIFIED_ANSWERS_ARTICLES_THOUGHTS_NO_COMMENTS",
+            "content_policy": "DETAIL_VERIFIED_ANSWERS_ARTICLES_THOUGHTS_ONLY",
+            "embedding_contract_version": self.config.embedding_contract_version,
             "rule_config_sha256": self.rule_config_sha256,
             "records": [
                 {

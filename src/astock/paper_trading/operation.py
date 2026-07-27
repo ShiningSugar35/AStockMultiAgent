@@ -720,8 +720,14 @@ class PaperOperationService:
             key=lambda item: item.session_date,
             default=None,
         )
-        if prior is None or previous_open_date is None or prior.session_date != previous_open_date:
-            raise _needs_info("Previous unadjusted close for the latest open session is unavailable")
+        if (
+            prior is None
+            or previous_open_date is None
+            or prior.session_date != previous_open_date
+        ):
+            raise _needs_info(
+                "Previous unadjusted close for the latest open session is unavailable"
+            )
         previous_close_fen = _yuan_to_fen(prior.close)
         is_st = instrument.is_st
         limit_bps = self.trading_rules.price_limit_bps(

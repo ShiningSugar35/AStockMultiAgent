@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from hashlib import sha256
+from typing import Any
 
 from pydantic import AwareDatetime, Field, model_validator
 
@@ -53,6 +55,11 @@ class ParagraphMergeAction(StrEnum):
     NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
+class ParagraphUnitKind(StrEnum):
+    TEXT = "TEXT"
+    VISUAL_EVIDENCE = "VISUAL_EVIDENCE"
+
+
 class KeywordScreenDecision(StrEnum):
     CANDIDATE = "CANDIDATE"
     EXCLUDED_DERIVED = "EXCLUDED_DERIVED"
@@ -90,6 +97,17 @@ class SemanticEmbeddingView(StrEnum):
     CALIBRATION_EXAMPLE = "CALIBRATION_EXAMPLE"
 
 
+class SemanticEmbeddingContract(StrEnum):
+    LEGACY_PARAGRAPH_CONTEXT_ARGUMENT_V1 = "LEGACY_PARAGRAPH_CONTEXT_ARGUMENT_V1"
+    ARGUMENT_UNIT_ONLY_V2 = "ARGUMENT_UNIT_ONLY_V2"
+    PARAGRAPH_AUX_ARGUMENT_FINAL_V3 = "PARAGRAPH_AUX_ARGUMENT_FINAL_V3"
+
+
+class SemanticPacketContract(StrEnum):
+    LEGACY_ARGUMENT_PARAGRAPHS_V1 = "LEGACY_ARGUMENT_PARAGRAPHS_V1"
+    COMPLETE_ARGUMENT_UNIT_V2 = "COMPLETE_ARGUMENT_UNIT_V2"
+
+
 class SemanticScreenDecision(StrEnum):
     KEEP = "KEEP"
     EXCLUDE_DERIVED = "EXCLUDE_DERIVED"
@@ -117,6 +135,9 @@ class SemanticFunnelConfig(AStockModel):
     relation_rule_version: str = Field(min_length=1)
     argument_builder_version: str = Field(min_length=1)
     keyword_rule_version: str = Field(min_length=1)
+    embedding_contract_version: SemanticEmbeddingContract = (
+        SemanticEmbeddingContract.LEGACY_PARAGRAPH_CONTEXT_ARGUMENT_V1
+    )
     question_terms: list[str] = Field(min_length=1)
     answer_terms: list[str] = Field(min_length=1)
     example_terms: list[str] = Field(min_length=1)
@@ -125,7 +146,7 @@ class SemanticFunnelConfig(AStockModel):
     transition_terms: list[str] = Field(min_length=1)
     marketing_terms: list[str] = Field(min_length=1)
     casual_terms: list[str] = Field(min_length=1)
-    local_context: dict[str, int]
+    local_context: dict[str, int] = Field(default_factory=dict)
     argument_builder: dict[str, float | bool | int]
     semantic_screen: dict[str, float | bool]
     method_anchors: dict[BookMethodCategory, list[str]]
@@ -134,8 +155,6 @@ class SemanticFunnelConfig(AStockModel):
     def validate_config(self) -> SemanticFunnelConfig:
         if set(self.method_anchors) != set(BookMethodCategory):
             raise ValueError("semantic funnel anchors must cover all method categories")
-        if self.local_context != {"previous_paragraphs": 1, "following_paragraphs": 2}:
-            raise ValueError("local context embedding must use previous 1 and following 2")
         for values in (
             self.question_terms,
             self.answer_terms,
@@ -149,9 +168,23 @@ class SemanticFunnelConfig(AStockModel):
             normalized = [value.casefold() for value in values]
             if any(not value for value in normalized) or len(normalized) != len(set(normalized)):
                 raise ValueError("semantic funnel term lists must be nonempty and unique")
+        if self.embedding_contract_version is not (
+            SemanticEmbeddingContract.PARAGRAPH_AUX_ARGUMENT_FINAL_V3
+        ):
+            return self
+        if self.schema_version != "3.0":
+            raise ValueError("active semantic funnel config schema_version must be 3.0")
+        if self.pipeline_version != "knowledge-semantic-funnel-three-view-v3":
+            raise ValueError("active semantic funnel pipeline version is not exact")
+        if self.local_context != {
+            "previous_paragraphs": 1,
+            "following_paragraphs": 2,
+        }:
+            raise ValueError("active local context must use previous 1 and following 2")
+        maximum_chars_key = "maximum_argument_unit_chars"
         required_builder = {
             "prefer_merge_on_uncertainty",
-            "maximum_embedding_window_chars",
+            maximum_chars_key,
             "standalone_methodological_threshold",
             "review_boundary_threshold",
         }
@@ -159,13 +192,34 @@ class SemanticFunnelConfig(AStockModel):
             raise ValueError("semantic argument builder config keys are incomplete")
         if not isinstance(self.argument_builder["prefer_merge_on_uncertainty"], bool):
             raise ValueError("prefer_merge_on_uncertainty must be boolean")
-        if int(self.argument_builder["maximum_embedding_window_chars"]) < 256:
-            raise ValueError("maximum embedding window must be at least 256 characters")
+        if int(self.argument_builder[maximum_chars_key]) != 1800:
+            raise ValueError("active maximum ArgumentUnit size must be exactly 1800")
         for key in ("standalone_methodological_threshold", "review_boundary_threshold"):
             value = float(self.argument_builder[key])
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{key} must be normalized")
+        required_screen = {
+            "exploratory_keep_threshold",
+            "exploratory_review_threshold",
+            "automatic_exclusion_requires_calibration",
+        }
+        if set(self.semantic_screen) != required_screen:
+            raise ValueError("semantic screen config keys are incomplete")
+        keep_threshold = float(self.semantic_screen["exploratory_keep_threshold"])
+        review_threshold = float(self.semantic_screen["exploratory_review_threshold"])
+        if not 0.0 <= review_threshold <= keep_threshold <= 1.0:
+            raise ValueError("semantic screen thresholds are invalid")
+        if self.semantic_screen["automatic_exclusion_requires_calibration"] is not True:
+            raise ValueError("uncalibrated semantic screening cannot enable exclusion")
         return self
+
+    @property
+    def maximum_argument_unit_chars(self) -> int:
+        if self.embedding_contract_version is not (
+            SemanticEmbeddingContract.PARAGRAPH_AUX_ARGUMENT_FINAL_V3
+        ):
+            raise ValueError("unsupported semantic embedding contract version")
+        return int(self.argument_builder["maximum_argument_unit_chars"])
 
 
 class ParagraphLocator(AStockModel):
@@ -174,6 +228,7 @@ class ParagraphLocator(AStockModel):
     source_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     content_id: str = Field(min_length=1)
     page_number: int | None = Field(default=None, ge=1)
+    bbox: tuple[float, float, float, float] | None = None
     dom_path: str | None = None
     char_start: int = Field(ge=0)
     char_end: int = Field(gt=0)
@@ -184,6 +239,10 @@ class ParagraphLocator(AStockModel):
             raise ValueError("paragraph locator range must be positive")
         if self.page_number is None and not self.dom_path:
             raise ValueError("paragraph locator requires a page number or DOM path")
+        if self.bbox is not None:
+            x0, y0, x1, y1 = self.bbox
+            if self.page_number is None or x1 <= x0 or y1 <= y0:
+                raise ValueError("paragraph bbox requires a PDF page and positive area")
         return self
 
 
@@ -211,6 +270,11 @@ class ParagraphUnit(AStockModel):
     matched_keyword_terms: list[str]
     reason_codes: list[str] = Field(min_length=1)
     role_rule_version: str = Field(min_length=1)
+    paragraph_kind: ParagraphUnitKind = ParagraphUnitKind.TEXT
+    visual_evidence_ids: list[str] = Field(default_factory=list)
+    visual_chart_unit_ids: list[str] = Field(default_factory=list)
+    visual_quality_status: str | None = None
+    visual_reason_codes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_role_and_merge_contract(self) -> ParagraphUnit:
@@ -234,6 +298,26 @@ class ParagraphUnit(AStockModel):
             and self.merge_action is ParagraphMergeAction.KEEP_AS_ARGUMENT
         ):
             raise ValueError("context-dependent paragraphs require a merge or review action")
+        if len(self.visual_evidence_ids) != len(set(self.visual_evidence_ids)):
+            raise ValueError("visual evidence references must be unique")
+        if len(self.visual_chart_unit_ids) != len(set(self.visual_chart_unit_ids)):
+            raise ValueError("visual chart references must be unique")
+        if len(self.visual_reason_codes) != len(set(self.visual_reason_codes)):
+            raise ValueError("visual reason codes must be unique")
+        if self.paragraph_kind is ParagraphUnitKind.VISUAL_EVIDENCE:
+            if (
+                not self.visual_evidence_ids
+                or not self.visual_chart_unit_ids
+                or self.visual_quality_status is None
+                or self.standalone_distillable
+                or self.merge_action is not ParagraphMergeAction.MERGE_WITH_BOTH
+                or not self.depends_on_previous
+                or not self.depends_on_next
+                or RhetoricalRole.EVIDENCE not in self.rhetorical_roles
+            ):
+                raise ValueError(
+                    "visual paragraphs require evidence lineage and both-side context"
+                )
         return self
 
 
@@ -271,14 +355,29 @@ class KeywordScreenResult(AStockModel):
     matched_paragraph_ids: list[str]
     keyword_rule_version: str = Field(min_length=1)
     result_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_reason_codes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_screen(self) -> KeywordScreenResult:
         has_hits = any(self.matched_terms_by_category.values())
-        if self.decision is KeywordScreenDecision.CANDIDATE and not has_hits:
-            raise ValueError("keyword candidates require at least one matched term")
+        book_visual_lineage = self.candidate_reason_codes == [
+            "BOOK_VISUAL_ARGUMENT_LINEAGE"
+        ]
+        if (
+            self.decision is KeywordScreenDecision.CANDIDATE
+            and not has_hits
+            and not book_visual_lineage
+        ):
+            raise ValueError(
+                "keyword candidates require a matched term or explicit book visual lineage"
+            )
         if self.decision is KeywordScreenDecision.EXCLUDED_DERIVED and has_hits:
             raise ValueError("keyword-excluded items cannot carry method hits")
+        if self.candidate_reason_codes and (
+            self.decision is not KeywordScreenDecision.CANDIDATE
+            or not book_visual_lineage
+        ):
+            raise ValueError("candidate reason codes are reserved for book visual lineage")
         if len(self.matched_paragraph_ids) != len(set(self.matched_paragraph_ids)):
             raise ValueError("keyword screen paragraph refs must be unique")
         return self
@@ -359,6 +458,9 @@ class SemanticFunnelRun(AStockModel):
     )
     argument_builder_version: str = Field(min_length=1)
     keyword_rule_version: str = Field(min_length=1)
+    embedding_contract_version: SemanticEmbeddingContract = (
+        SemanticEmbeddingContract.LEGACY_PARAGRAPH_CONTEXT_ARGUMENT_V1
+    )
     rule_config_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     stage: SemanticRunStage
     content_item_count: int = Field(ge=0)
@@ -385,7 +487,13 @@ class EmbeddingModelManifest(AStockModel):
     dimension: int = Field(ge=1)
     normalized: bool = True
     local_only: bool = True
-    embedding_views: list[SemanticEmbeddingView] = Field(min_length=3)
+    embedding_contract_version: SemanticEmbeddingContract = (
+        SemanticEmbeddingContract.LEGACY_PARAGRAPH_CONTEXT_ARGUMENT_V1
+    )
+    embedding_views: list[SemanticEmbeddingView] = Field(default_factory=list)
+    auxiliary_views: list[SemanticEmbeddingView] = Field(default_factory=list)
+    decision_view: SemanticEmbeddingView | None = None
+    method_prototype_count: int = Field(default=0, ge=0)
     anchor_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     threshold_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     calibration_manifest_sha256: str | None = Field(
@@ -393,17 +501,83 @@ class EmbeddingModelManifest(AStockModel):
         pattern=r"^[0-9a-f]{64}$",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def derive_legacy_view_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        contract = payload.get(
+            "embedding_contract_version",
+            SemanticEmbeddingContract.LEGACY_PARAGRAPH_CONTEXT_ARGUMENT_V1.value,
+        )
+        if isinstance(contract, SemanticEmbeddingContract):
+            contract = contract.value
+        if contract == SemanticEmbeddingContract.PARAGRAPH_AUX_ARGUMENT_FINAL_V3.value:
+            return payload
+        if "embedding_views" not in payload:
+            payload["embedding_views"] = (
+                [
+                    SemanticEmbeddingView.PARAGRAPH_CURRENT.value,
+                    SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT.value,
+                    SemanticEmbeddingView.ARGUMENT_UNIT.value,
+                ]
+                if contract
+                == SemanticEmbeddingContract.LEGACY_PARAGRAPH_CONTEXT_ARGUMENT_V1.value
+                else [
+                    SemanticEmbeddingView.ARGUMENT_UNIT.value,
+                    SemanticEmbeddingView.METHOD_PROTOTYPE.value,
+                ]
+            )
+        payload.setdefault(
+            "auxiliary_views",
+            [
+                view
+                for view in payload["embedding_views"]
+                if view
+                in {
+                    SemanticEmbeddingView.PARAGRAPH_CURRENT.value,
+                    SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT.value,
+                }
+            ],
+        )
+        payload.setdefault("decision_view", SemanticEmbeddingView.ARGUMENT_UNIT.value)
+        payload.setdefault(
+            "method_prototype_count",
+            (
+                14
+                if SemanticEmbeddingView.METHOD_PROTOTYPE.value
+                in payload["embedding_views"]
+                else 0
+            ),
+        )
+        return payload
+
     @model_validator(mode="after")
     def validate_required_views(self) -> EmbeddingModelManifest:
-        required = {
+        if not self.local_only or not self.normalized:
+            raise ValueError("semantic embeddings must be local and normalized")
+        if self.embedding_contract_version is not (
+            SemanticEmbeddingContract.PARAGRAPH_AUX_ARGUMENT_FINAL_V3
+        ):
+            return self
+        if self.schema_version != "3.0":
+            raise ValueError("V3 embedding manifest schema_version must be 3.0")
+        required_views = [
             SemanticEmbeddingView.PARAGRAPH_CURRENT,
             SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT,
             SemanticEmbeddingView.ARGUMENT_UNIT,
-        }
-        if not required.issubset(set(self.embedding_views)):
-            raise ValueError("embedding manifest lacks a required semantic view")
-        if not self.local_only or not self.normalized:
-            raise ValueError("semantic embeddings must be local and normalized")
+            SemanticEmbeddingView.METHOD_PROTOTYPE,
+        ]
+        required_auxiliary = required_views[:2]
+        if self.embedding_views != required_views:
+            raise ValueError("V3 manifest embedding views or order are not exact")
+        if self.auxiliary_views != required_auxiliary:
+            raise ValueError("V3 manifest auxiliary views or order are not exact")
+        if self.decision_view is not SemanticEmbeddingView.ARGUMENT_UNIT:
+            raise ValueError("V3 manifest requires ARGUMENT_UNIT decision view")
+        if self.method_prototype_count != 14:
+            raise ValueError("V3 manifest requires exactly 14 method prototypes")
         return self
 
 
@@ -443,8 +617,15 @@ class SemanticArgumentScore(AStockModel):
     def validate_scores(self) -> SemanticArgumentScore:
         if any(not 0.0 <= score <= 1.0 for score in self.category_scores.values()):
             raise ValueError("semantic category scores must be normalized")
+        if set(self.category_scores) != set(BookMethodCategory):
+            raise ValueError("semantic scores must cover all 14 method categories")
         if not set(self.selected_categories).issubset(self.category_scores):
             raise ValueError("selected categories require scores")
+        if self.selected_categories != sorted(
+            set(self.selected_categories),
+            key=lambda category: category.value,
+        ):
+            raise ValueError("selected categories must be unique and deterministically ordered")
         return self
 
 
@@ -492,15 +673,25 @@ class SemanticPacketParagraph(AStockModel):
     depends_on_previous: bool
     depends_on_next: bool
     merge_action: ParagraphMergeAction
+    locator: ParagraphLocator | None = None
+    paragraph_kind: ParagraphUnitKind = ParagraphUnitKind.TEXT
+    visual_evidence_ids: list[str] = Field(default_factory=list)
+    visual_chart_unit_ids: list[str] = Field(default_factory=list)
+    visual_quality_status: str | None = None
+    visual_reason_codes: list[str] = Field(default_factory=list)
 
 
 class SemanticArgumentPacket(AStockModel):
+    packet_contract_version: SemanticPacketContract = (
+        SemanticPacketContract.LEGACY_ARGUMENT_PARAGRAPHS_V1
+    )
     argument_unit_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     author_source_id: str = Field(min_length=1)
     content_type: str = Field(min_length=1)
     content_id: str = Field(min_length=1)
     source_snapshot_ids: list[str] = Field(min_length=1)
+    argument_text: str | None = None
     argument_text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     paragraphs: list[SemanticPacketParagraph] = Field(min_length=1)
     relations: list[ArgumentRelation]
@@ -523,6 +714,22 @@ class SemanticArgumentPacket(AStockModel):
             for relation in self.relations
         ):
             raise ValueError("argument packet relation must remain inside its argument")
+        if (
+            self.packet_contract_version
+            is SemanticPacketContract.COMPLETE_ARGUMENT_UNIT_V2
+        ):
+            reconstructed = "\n".join(
+                f"[{paragraph.ordinal}|{paragraph.primary_role.value}] {paragraph.text}"
+                for paragraph in self.paragraphs
+            )
+            if self.argument_text != reconstructed:
+                raise ValueError(
+                    "active semantic packet must carry one complete ArgumentUnit"
+                )
+            if sha256(reconstructed.encode("utf-8")).hexdigest() != (
+                self.argument_text_sha256
+            ):
+                raise ValueError("active semantic packet ArgumentUnit hash mismatch")
         return self
 
 
@@ -566,9 +773,16 @@ class SemanticLlmBatch(AStockModel):
     packet_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     response_object_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: SemanticLlmBatchStatus
+    local_only: bool = True
     exported_argument_count: int = Field(ge=1)
     imported_result_count: int = Field(ge=0)
     updated_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_local_only(self) -> SemanticLlmBatch:
+        if not self.local_only:
+            raise ValueError("semantic LLM batches must remain local-only")
+        return self
 
 
 __all__ = [
@@ -576,12 +790,14 @@ __all__ = [
     "ArgumentRelationType",
     "ArgumentUnit",
     "ArgumentUnitStatus",
+    "SemanticEmbeddingContract",
     "EmbeddingModelManifest",
     "KeywordScreenDecision",
     "KeywordScreenResult",
     "LocalEmbeddingAssetManifest",
     "ParagraphLocator",
     "ParagraphMergeAction",
+    "ParagraphUnitKind",
     "ParagraphUnit",
     "RhetoricalRole",
     "SemanticContentItem",
@@ -599,4 +815,5 @@ __all__ = [
     "SemanticLlmBatchStatus",
     "SemanticLlmDecision",
     "SemanticPacketParagraph",
+    "SemanticPacketContract",
 ]

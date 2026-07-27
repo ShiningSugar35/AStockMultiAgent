@@ -1,4 +1,4 @@
-"""Local-only semantic embeddings over paragraphs, local context, and arguments."""
+"""Local-only auxiliary Paragraph views and complete-ArgumentUnit decisions."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from astock.knowledge.semantic_funnel import local_context_paragraph_ids
 from astock.knowledge.semantic_repository import SemanticFunnelRepository
 from astock.knowledge.semantic_storage import (
     ParquetSemanticStore,
+    SemanticArgumentLineage,
     SemanticParquetWrite,
     SemanticVectorRecord,
 )
@@ -27,6 +28,7 @@ from astock.schemas import (
     LocalEmbeddingAssetManifest,
     ParagraphUnit,
     SemanticArgumentScore,
+    SemanticEmbeddingContract,
     SemanticEmbeddingView,
     SemanticFunnelConfig,
     SemanticRunStage,
@@ -218,6 +220,11 @@ class SemanticEmbeddingService:
             SemanticRunStage.EMBEDDING_SCREENED,
         }:
             raise ValueError("semantic run is not ready for embedding")
+        active_contract = self.config.embedding_contract_version
+        if run.embedding_contract_version is not active_contract:
+            raise ValueError("semantic embedding run and configuration contracts diverge")
+        if active_contract is not SemanticEmbeddingContract.PARAGRAPH_AUX_ARGUMENT_FINAL_V3:
+            raise ValueError("legacy semantic embedding contracts are read-only")
         anchor_payload = {
             category.value: values
             for category, values in self.config.method_anchors.items()
@@ -232,15 +239,24 @@ class SemanticEmbeddingService:
             "model_asset_sha256": self.asset_manifest.bundle_sha256,
             "anchor_config_sha256": anchor_object.sha256,
             "threshold_config_sha256": threshold_object.sha256,
-            "embedding_input_contract": "argument-role-ordinal-text-v2",
-            "views": [
+            "embedding_contract_version": (
+                active_contract.value
+            ),
+            "embedding_views": [
                 SemanticEmbeddingView.PARAGRAPH_CURRENT.value,
                 SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT.value,
                 SemanticEmbeddingView.ARGUMENT_UNIT.value,
                 SemanticEmbeddingView.METHOD_PROTOTYPE.value,
             ],
+            "auxiliary_views": [
+                SemanticEmbeddingView.PARAGRAPH_CURRENT.value,
+                SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT.value,
+            ],
+            "decision_view": SemanticEmbeddingView.ARGUMENT_UNIT.value,
+            "method_prototype_count": len(BookMethodCategory),
         }
         manifest = EmbeddingModelManifest(
+            schema_version="3.0",
             manifest_id=f"semantic-embedding:{content_hash(manifest_identity)}",
             model_id=self.asset_manifest.model_id,
             model_revision=self.asset_manifest.model_revision,
@@ -249,111 +265,111 @@ class SemanticEmbeddingService:
             dimension=self.asset_manifest.dimension,
             normalized=True,
             local_only=True,
+            embedding_contract_version=active_contract,
             embedding_views=[
                 SemanticEmbeddingView.PARAGRAPH_CURRENT,
                 SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT,
                 SemanticEmbeddingView.ARGUMENT_UNIT,
                 SemanticEmbeddingView.METHOD_PROTOTYPE,
             ],
+            auxiliary_views=[
+                SemanticEmbeddingView.PARAGRAPH_CURRENT,
+                SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT,
+            ],
+            decision_view=SemanticEmbeddingView.ARGUMENT_UNIT,
+            method_prototype_count=len(BookMethodCategory),
             anchor_config_sha256=anchor_object.sha256,
             threshold_config_sha256=threshold_object.sha256,
             calibration_manifest_sha256=None,
             created_at=run.started_at,
         )
+        candidate_paragraph_groups = self.repository.paragraph_groups(
+            run_id,
+            candidate_only=True,
+        )
+        arguments = [
+            argument
+            for argument in self.repository.argument_units(run_id)
+            if argument.status is not ArgumentUnitStatus.DERIVED_EXCLUDED
+        ]
+        paragraph_groups = _paragraph_groups_for_retained_arguments(
+            self.repository,
+            run_id,
+            candidate_paragraph_groups,
+            arguments,
+        )
+        argument_lineages = _argument_lineages(arguments, paragraph_groups)
         vectors: list[SemanticVectorRecord] = []
         prototype_vectors = self._prototype_vectors(run_id, manifest, vectors)
-        paragraph_groups = self.repository.paragraph_groups(run_id, candidate_only=True)
-        paragraph_item: dict[str, str] = {}
-        paragraph_entries = [
-            (item_id, paragraph)
+        paragraph_item = {
+            paragraph.paragraph_id: item_id
             for item_id, paragraphs in paragraph_groups.items()
             for paragraph in paragraphs
-        ]
-        current_texts = [
-            self._text(paragraph.text_object_sha256)
-            for _, paragraph in paragraph_entries
-        ]
-        current_vectors = self._encode_in_blocks(current_texts)
-        current_by_paragraph = {
-            paragraph.paragraph_id: encoded
-            for (_, paragraph), encoded in zip(
-                paragraph_entries,
-                current_vectors,
-                strict=True,
-            )
         }
-        context_entries: list[tuple[str, ParagraphUnit, str, str]] = []
-        for item_id, paragraphs in paragraph_groups.items():
-            by_id = {paragraph.paragraph_id: paragraph for paragraph in paragraphs}
+        argument_texts = [self._text(argument.text_object_sha256) for argument in arguments]
+        argument_vectors = self._encode_in_blocks(argument_texts)
+        scores: list[SemanticArgumentScore] = []
+        for paragraphs in paragraph_groups.values():
+            paragraph_lookup = {
+                paragraph.paragraph_id: paragraph for paragraph in paragraphs
+            }
             for paragraph in paragraphs:
-                context_ids = local_context_paragraph_ids(paragraphs, paragraph.ordinal)
-                context_text = "\n".join(
-                    f"[{by_id[paragraph_id].ordinal}] "
-                    f"{self._text(by_id[paragraph_id].text_object_sha256)}"
-                    for paragraph_id in context_ids
-                )
-                context_object = self.object_store.put_bytes(context_text.encode())
-                context_entries.append(
-                    (item_id, paragraph, context_text, context_object.sha256)
-                )
-        context_vectors = self._encode_in_blocks(
-            [context_text for _, _, context_text, _ in context_entries]
-        )
-        context_by_paragraph = {
-            paragraph.paragraph_id: (object_hash, encoded)
-            for (_, paragraph, _, object_hash), encoded in zip(
-                context_entries,
-                context_vectors,
-                strict=True,
-            )
-        }
-        for item_id, paragraphs in paragraph_groups.items():
-            for paragraph in paragraphs:
-                paragraph_item[paragraph.paragraph_id] = item_id
+                paragraph_text = self._text(paragraph.text_object_sha256)
                 vectors.append(
                     _vector_record(
                         run_id=run_id,
                         manifest_id=manifest.manifest_id,
                         view=SemanticEmbeddingView.PARAGRAPH_CURRENT,
                         entity_id=paragraph.paragraph_id,
-                        item_id=item_id,
+                        item_id=paragraph_item[paragraph.paragraph_id],
+                        content_id=paragraph.content_id,
                         source_snapshot_ids=(paragraph.locator.source_snapshot_id,),
+                        source_object_sha256s=(paragraph.locator.source_object_sha256,),
                         input_object_sha256=paragraph.text_object_sha256,
-                        encoded=current_by_paragraph[paragraph.paragraph_id],
+                        encoded=self._encode_in_blocks([paragraph_text])[0],
                     )
                 )
-            for paragraph in paragraphs:
-                object_hash, encoded = context_by_paragraph[paragraph.paragraph_id]
+                context_ids = local_context_paragraph_ids(
+                    paragraphs,
+                    paragraph.ordinal,
+                )
+                context_paragraphs = [
+                    paragraph_lookup[paragraph_id] for paragraph_id in context_ids
+                ]
+                context_text = "\n".join(
+                    f"[paragraph ordinal={context_paragraph.ordinal}] "
+                    f"{self._text(context_paragraph.text_object_sha256)}"
+                    for context_paragraph in context_paragraphs
+                )
+                context_object = self.object_store.put_bytes(
+                    context_text.encode("utf-8")
+                )
                 vectors.append(
                     _vector_record(
                         run_id=run_id,
                         manifest_id=manifest.manifest_id,
                         view=SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT,
                         entity_id=paragraph.paragraph_id,
-                        item_id=item_id,
+                        item_id=paragraph_item[paragraph.paragraph_id],
+                        content_id=paragraph.content_id,
                         source_snapshot_ids=(paragraph.locator.source_snapshot_id,),
-                        input_object_sha256=object_hash,
-                        encoded=encoded,
+                        source_object_sha256s=(paragraph.locator.source_object_sha256,),
+                        input_object_sha256=context_object.sha256,
+                        encoded=self._encode_in_blocks([context_text])[0],
                     )
                 )
-        arguments = [
-            argument
-            for argument in self.repository.argument_units(run_id)
-            if argument.status is not ArgumentUnitStatus.DERIVED_EXCLUDED
-        ]
-        argument_texts = [self._text(argument.text_object_sha256) for argument in arguments]
-        argument_vectors = self._encode_in_blocks(argument_texts)
-        scores: list[SemanticArgumentScore] = []
         for argument, encoded in zip(arguments, argument_vectors, strict=True):
-            item_id = paragraph_item[argument.paragraph_ids[0]]
+            lineage = argument_lineages[argument.argument_unit_id]
             vectors.append(
                 _vector_record(
                     run_id=run_id,
                     manifest_id=manifest.manifest_id,
                     view=SemanticEmbeddingView.ARGUMENT_UNIT,
                     entity_id=argument.argument_unit_id,
-                    item_id=item_id,
-                    source_snapshot_ids=tuple(argument.source_snapshot_ids),
+                    item_id=lineage.item_id,
+                    content_id=lineage.content_id,
+                    source_snapshot_ids=lineage.source_snapshot_ids,
+                    source_object_sha256s=lineage.source_object_sha256s,
                     input_object_sha256=argument.text_object_sha256,
                     encoded=encoded,
                 )
@@ -365,6 +381,12 @@ class SemanticEmbeddingService:
             embedding_manifest_id=manifest.manifest_id,
             vectors=vectors,
             scores=scores,
+            manifest=manifest,
+            candidate_paragraph_ids=set(paragraph_item),
+            argument_unit_ids={
+                argument.argument_unit_id for argument in arguments
+            },
+            argument_lineages=argument_lineages,
         )
         manifest_object = self.object_store.put_json(manifest.model_dump(mode="json"))
         self.repository.register_embedding(
@@ -423,7 +445,9 @@ class SemanticEmbeddingService:
                     view=SemanticEmbeddingView.METHOD_PROTOTYPE,
                     entity_id=f"method-prototype:{category.value}",
                     item_id=None,
+                    content_id=None,
                     source_snapshot_ids=(),
+                    source_object_sha256s=(),
                     input_object_sha256=anchor_object.sha256,
                     encoded=combined,
                 )
@@ -461,7 +485,7 @@ class SemanticEmbeddingService:
             [
                 category
                 for category, score in category_scores.items()
-                if score >= keep_threshold and score >= top - 0.04
+                if score >= keep_threshold
             ],
             key=lambda category: category.value,
         )
@@ -614,7 +638,9 @@ def _vector_record(
     view: SemanticEmbeddingView,
     entity_id: str,
     item_id: str | None,
+    content_id: str | None,
     source_snapshot_ids: tuple[str, ...],
+    source_object_sha256s: tuple[str, ...],
     input_object_sha256: str,
     encoded: EncodedText,
 ) -> SemanticVectorRecord:
@@ -632,12 +658,139 @@ def _vector_record(
         view=view,
         entity_id=entity_id,
         item_id=item_id,
+        content_id=content_id,
         source_snapshot_ids=source_snapshot_ids,
+        source_object_sha256s=source_object_sha256s,
         input_object_sha256=input_object_sha256,
         vector=encoded.vector,
         token_count=encoded.token_count,
         chunk_count=encoded.chunk_count,
     )
+
+
+def _argument_lineages(
+    arguments: list[ArgumentUnit],
+    paragraph_groups: dict[str, list[ParagraphUnit]],
+) -> dict[str, SemanticArgumentLineage]:
+    paragraph_index: dict[str, tuple[str, ParagraphUnit]] = {}
+    for item_id, paragraphs in paragraph_groups.items():
+        if not item_id.strip():
+            raise ValueError("argument lineage requires a non-empty SourceItem id")
+        for paragraph in paragraphs:
+            if paragraph.paragraph_id in paragraph_index:
+                raise ValueError("argument lineage paragraph ids must be globally unique")
+            paragraph_index[paragraph.paragraph_id] = (item_id, paragraph)
+    lineages: dict[str, SemanticArgumentLineage] = {}
+    for argument in arguments:
+        if argument.argument_unit_id in lineages:
+            raise ValueError("argument lineage argument ids must be unique")
+        missing = [
+            paragraph_id
+            for paragraph_id in argument.paragraph_ids
+            if paragraph_id not in paragraph_index
+        ]
+        if missing:
+            raise ValueError("argument lineage references a missing paragraph")
+        argument_paragraphs = [
+            paragraph_index[paragraph_id] for paragraph_id in argument.paragraph_ids
+        ]
+        item_ids = {item_id for item_id, _paragraph in argument_paragraphs}
+        if len(item_ids) != 1:
+            raise ValueError("argument lineage crosses SourceItem boundaries")
+        paragraphs = [paragraph for _item_id, paragraph in argument_paragraphs]
+        if any(paragraph.run_id != argument.run_id for paragraph in paragraphs):
+            raise ValueError("argument lineage crosses semantic run boundaries")
+        if any(
+            paragraph.content_id != argument.content_id
+            or paragraph.locator.content_id != argument.content_id
+            for paragraph in paragraphs
+        ):
+            raise ValueError("argument lineage crosses content boundaries")
+        source_snapshot_ids = tuple(
+            sorted({paragraph.locator.source_snapshot_id for paragraph in paragraphs})
+        )
+        if source_snapshot_ids != tuple(sorted(argument.source_snapshot_ids)):
+            raise ValueError("argument lineage snapshot set does not match the argument")
+        lineages[argument.argument_unit_id] = SemanticArgumentLineage(
+            item_id=next(iter(item_ids)),
+            content_id=argument.content_id,
+            source_snapshot_ids=source_snapshot_ids,
+            source_object_sha256s=tuple(
+                sorted(
+                    {
+                        paragraph.locator.source_object_sha256
+                        for paragraph in paragraphs
+                    }
+                )
+            ),
+        )
+    return lineages
+
+
+def _paragraph_groups_for_retained_arguments(
+    repository: SemanticFunnelRepository,
+    run_id: str,
+    candidate_paragraph_groups: dict[str, list[ParagraphUnit]],
+    arguments: list[ArgumentUnit],
+) -> dict[str, list[ParagraphUnit]]:
+    if any(argument.run_id != run_id for argument in arguments):
+        raise ValueError("retained argument belongs to another semantic run")
+    _validate_paragraph_group_run(run_id, candidate_paragraph_groups)
+    required_paragraph_ids = {
+        paragraph_id
+        for argument in arguments
+        for paragraph_id in argument.paragraph_ids
+    }
+    available_candidate_ids = {
+        paragraph.paragraph_id
+        for paragraphs in candidate_paragraph_groups.values()
+        for paragraph in paragraphs
+    }
+    missing_paragraph_ids = required_paragraph_ids - available_candidate_ids
+    if not missing_paragraph_ids:
+        return candidate_paragraph_groups
+
+    all_paragraph_groups = repository.paragraph_groups(run_id)
+    supplemental_item_ids = {
+        item_id
+        for item_id, paragraphs in all_paragraph_groups.items()
+        if missing_paragraph_ids
+        & {paragraph.paragraph_id for paragraph in paragraphs}
+    }
+    supplemental_paragraph_groups = {
+        item_id: all_paragraph_groups[item_id]
+        for item_id in supplemental_item_ids
+    }
+    _validate_paragraph_group_run(run_id, supplemental_paragraph_groups)
+    selected_item_ids = set(candidate_paragraph_groups) | supplemental_item_ids
+    paragraph_groups = {
+        item_id: (
+            all_paragraph_groups[item_id]
+            if item_id in supplemental_item_ids
+            else candidate_paragraph_groups[item_id]
+        )
+        for item_id in all_paragraph_groups
+        if item_id in selected_item_ids
+    }
+    paragraph_groups.update(
+        {
+            item_id: paragraphs
+            for item_id, paragraphs in candidate_paragraph_groups.items()
+            if item_id not in paragraph_groups
+        }
+    )
+    return paragraph_groups
+
+
+def _validate_paragraph_group_run(
+    run_id: str,
+    paragraph_groups: dict[str, list[ParagraphUnit]],
+) -> None:
+    for item_id, paragraphs in paragraph_groups.items():
+        if not item_id.strip():
+            raise ValueError("paragraph group requires a non-empty SourceItem id")
+        if any(paragraph.run_id != run_id for paragraph in paragraphs):
+            raise ValueError("paragraph group belongs to another semantic run")
 
 
 def _normalized(vector: tuple[float, ...]) -> tuple[float, ...]:

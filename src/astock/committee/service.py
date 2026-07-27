@@ -1366,6 +1366,10 @@ class CommitteeService:
             CommitteeVerdict.PAPER_HOLD,
             CommitteeVerdict.PAPER_EXIT,
         }
+        execution_enabled = decision.verdict in {
+            CommitteeVerdict.PAPER_ELIGIBLE,
+            CommitteeVerdict.PAPER_EXIT,
+        }
         blocking_codes = (
             []
             if active
@@ -1411,6 +1415,8 @@ class CommitteeService:
             evidence_snapshot_id=draft.evidence_snapshot_id,
             evidence_ids=draft.evidence_ids,
             effective_from=draft.earliest_executable_time,
+            broker_execution_allowed=execution_enabled,
+            ledger_write_allowed=execution_enabled,
             created_at=assessment.as_of,
         )
 

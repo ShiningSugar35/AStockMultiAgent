@@ -28,13 +28,14 @@ from astock.schemas import (
     ParagraphLocator,
     ParagraphMergeAction,
     ParagraphUnit,
+    ParagraphUnitKind,
     RhetoricalRole,
     SemanticContentItem,
     SemanticFunnelConfig,
     ZhihuContentRecord,
 )
 
-_PIPELINE_VERSION = "knowledge-semantic-funnel-v1"
+_PIPELINE_VERSION = "knowledge-semantic-funnel-three-view-v3"
 _BLOCK_TAGS = {
     "address",
     "article",
@@ -67,16 +68,47 @@ _EVIDENCE = re.compile(
     re.IGNORECASE,
 )
 _STORY_EXAMPLE = re.compile(r"(?:过去(?:一次|曾)|曾经|有一次|案例中)")
-_CLAIM = re.compile(r"(?:我认为|我们认为|判断|核心是|关键是|本质是|意味着|可以看出|值得注意)")
+_CLAIM = re.compile(
+    r"(?:我认为|我们认为|判断(?:是|为|：|:)|核心是|关键是|本质是|"
+    r"意味着|可以看出|值得注意)"
+)
 _OPERATIONAL = re.compile(
     r"(?:应当|应该|必须|不要|只有.+才|需要满足|可以加仓|可以买入|应卖出|应退出)"
 )
-_MARKET = re.compile(
-    r"(?:A股|市场|股价|指数|板块|上涨|下跌|涨停|跌停|牛市|熊市|估值)",
+_EXPLANATION = re.compile(r"(?:取决于|依赖|结合|在于|由.+决定|需要考察)")
+_MARKET_OBSERVATION = re.compile(
+    r"(?:(?:A股|市场|股价|指数|板块).{0,20}"
+    r"(?:上涨|下跌|涨停|跌停|波动|走强|走弱|牛市|熊市)|"
+    r"(?:上涨|下跌|涨停|跌停).{0,20}(?:A股|市场|股价|指数|板块))",
     re.IGNORECASE,
 )
 _RISK = re.compile(r"(?:风险|回撤|止损|永久损失|仓位控制|失效|证伪)")
 _CASUAL_ONLY = re.compile(r"^(?:哈哈+|谢谢|晚安|早安|周末愉快|收到|赞同)[!！。\s]*$")
+_PROMOTION_TERM_ACTION = re.compile(
+    r"^(?:(?:欢迎|请|记得|务必|必须)?"
+    r"(?:点击|扫码|关注|购买|领取|订阅|加入|私信|打赏))"
+)
+_STRONG_PROMOTION_TERM = re.compile(
+    r"^(?:点击|扫码|购买|领取|订阅|加入|私信|打赏)"
+)
+_EMBEDDED_CTA_PREFIX = re.compile(r"^(?:欢迎|请|记得|务必|必须)")
+_CTA_PREFIX_CONTEXT = re.compile(
+    r"(?:欢迎|请|记得|务必|必须|立即|马上|赶快|别忘了|扫码)"
+    r"(?:大家|各位|你|您|尽快|及时|直接|先)?(?:来|去|再|并|然后)?\s*$"
+)
+_PROMOTION_CONTINUATION = re.compile(
+    r"^[^。！？；;，、：:,\n]{0,16}"
+    r"(?:领取|购买|订阅|加入|私信|打赏|获取|查看|下载)"
+)
+_BUSINESS_PROMOTION_PREFIX = re.compile(
+    r"(?:公司|企业|平台|业务|功能|渠道|投资者|研究|分析|统计|测算|"
+    r"指标|数据|模型|系统)(?:的|通过|采用|使用|涉及|中|里|对)?\s*$"
+)
+_BUSINESS_PROMOTION_SUFFIX = re.compile(
+    r"^\s*(?:率|功能|业务|收入|用户|成本|渠道|流程|技术|模式|数据|"
+    r"指标|转化|环节|场景|类(?:公司|企业)|公司|企业|股票)"
+)
+_CLAUSE_BOUNDARY = re.compile(r"[。！？；;，、：:,\n]+")
 
 _METHOD_BY_CLASS = {
     BookContentClass.STOCK_SELECTION: BookMethodCategory.STOCK_SELECTION,
@@ -224,9 +256,14 @@ def paragraphize_zhihu_content(
         paragraph_ids=[paragraph.paragraph_id for paragraph in paragraphs],
         title_paragraph_id=(paragraphs[0].paragraph_id if title and paragraphs else None),
     )
-    matched = _aggregate_keyword_hits(paragraphs, keyword_terms)
+    method_eligible_paragraphs = [
+        paragraph for paragraph in paragraphs if not _derived_exclusion(paragraph)
+    ]
+    matched = _aggregate_keyword_hits(method_eligible_paragraphs, keyword_terms)
     matched_paragraph_ids = [
-        paragraph.paragraph_id for paragraph in paragraphs if paragraph.matched_keyword_terms
+        paragraph.paragraph_id
+        for paragraph in method_eligible_paragraphs
+        if paragraph.matched_keyword_terms
     ]
     decision = (
         KeywordScreenDecision.CANDIDATE
@@ -330,13 +367,23 @@ def build_argument_units(
             for paragraph in group
         )
         boundary_confidence = _boundary_confidence(group, dependencies_closed)
-        maximum_chars = int(config.argument_builder["maximum_embedding_window_chars"])
+        maximum_chars = config.maximum_argument_unit_chars
         oversize = len(group_text) > maximum_chars
+        visual_review_reasons = sorted(
+            {
+                reason
+                for paragraph in group
+                if paragraph.paragraph_kind is ParagraphUnitKind.VISUAL_EVIDENCE
+                for reason in paragraph.visual_reason_codes
+            }
+        )
+        visual_review_required = bool(visual_review_reasons)
         standalone = (
             not excluded
             and not context_only
             and dependencies_closed
             and not oversize
+            and not visual_review_required
             and completeness
             >= float(config.argument_builder["standalone_methodological_threshold"])
             and boundary_confidence
@@ -366,6 +413,8 @@ def build_argument_units(
             reasons.append("DERIVED_NON_METHOD_CONTENT")
         if oversize:
             reasons.append("AU_OVERSIZE_REVIEW_REQUIRED")
+        if visual_review_required:
+            reasons.extend(["VISUAL_REVIEW_REQUIRED", *visual_review_reasons])
         units.append(
             ArgumentUnit(
                 argument_unit_id=f"argument-unit:{content_hash(identity)}",
@@ -401,13 +450,34 @@ def local_context_paragraph_ids(
     paragraphs: list[ParagraphUnit],
     current_ordinal: int,
 ) -> list[str]:
-    """Return the mandatory previous-1/current/following-2 same-item window."""
+    """Return the exact previous-1/current/following-2 same-item window."""
 
-    if current_ordinal < 1 or current_ordinal > len(paragraphs):
-        raise ValueError("current paragraph ordinal is outside the item")
-    start = max(1, current_ordinal - 1)
-    end = min(len(paragraphs), current_ordinal + 2)
-    return [paragraphs[index - 1].paragraph_id for index in range(start, end + 1)]
+    if not paragraphs:
+        raise ValueError("local context requires at least one paragraph")
+    ordered = sorted(paragraphs, key=lambda paragraph: paragraph.ordinal)
+    item_keys = {
+        (
+            paragraph.run_id,
+            paragraph.author_source_id,
+            paragraph.content_type,
+            paragraph.content_id,
+            paragraph.content_version_id,
+            paragraph.locator.source_snapshot_id,
+        )
+        for paragraph in ordered
+    }
+    if len(item_keys) != 1:
+        raise ValueError("local context cannot cross SourceItem boundaries")
+    ordinals = [paragraph.ordinal for paragraph in ordered]
+    if len(ordinals) != len(set(ordinals)):
+        raise ValueError("local context paragraph ordinals must be unique")
+    try:
+        current_index = ordinals.index(current_ordinal)
+    except ValueError:
+        raise ValueError("current paragraph ordinal is outside the item") from None
+    start = max(0, current_index - 1)
+    end = min(len(ordered), current_index + 3)
+    return [paragraph.paragraph_id for paragraph in ordered[start:end]]
 
 
 def _paragraph_contract(
@@ -483,69 +553,134 @@ def _rhetorical_roles(
     dom_path: str,
     config: SemanticFunnelConfig,
 ) -> list[RhetoricalRole]:
-    roles: list[RhetoricalRole] = []
     folded = text.casefold()
-    if dom_path.startswith("metadata/") or re.search(r"/h[1-6](?:$|\[)", dom_path):
-        roles.append(RhetoricalRole.TITLE)
+    is_title = dom_path.startswith("metadata/") or bool(
+        re.search(r"/h[1-6](?:$|\[)", dom_path)
+    )
     is_question = any(term.casefold() in folded for term in config.question_terms) or bool(
         _QUESTION_END.search(text)
     )
-    if is_question:
-        roles.append(RhetoricalRole.QUESTION)
-    casual_hit = bool(_CASUAL_ONLY.match(text)) or folded.strip() in {
-        term.casefold() for term in config.casual_terms
-    }
-    marketing_hit = len(text) <= 80 and any(
-        term.casefold() in folded for term in config.marketing_terms
+    is_rhetorical_question = bool(_RHETORICAL_QUESTION.search(text))
+    folded_casual_terms = {term.casefold() for term in config.casual_terms}
+    casual_hit = (
+        bool(_CASUAL_ONLY.match(text))
+        or folded.strip() in folded_casual_terms
+        or (
+            len(text) <= 80
+            and any(folded.strip().startswith(term) for term in folded_casual_terms)
+        )
     )
-    if _OPERATIONAL.search(text):
-        roles.append(RhetoricalRole.OPERATIONAL_RULE)
-    if _CLAIM.search(text) or _RHETORICAL_QUESTION.search(text):
-        roles.append(RhetoricalRole.CLAIM)
-    if any(term.casefold() in folded for term in config.answer_terms):
-        roles.append(RhetoricalRole.CAUSAL_REASON)
-        roles.append(RhetoricalRole.EXPLANATION)
-    if _EVIDENCE.search(text):
-        roles.append(RhetoricalRole.EVIDENCE)
-    if any(term.casefold() in folded for term in config.example_terms) or _STORY_EXAMPLE.search(
-        text
-    ):
-        roles.append(RhetoricalRole.EXAMPLE)
-    if any(term.casefold() in folded for term in config.counter_terms):
-        roles.append(RhetoricalRole.COUNTERARGUMENT)
-    if any(term.casefold() in folded for term in config.conclusion_terms):
-        roles.append(RhetoricalRole.CONCLUSION)
-    if _RISK.search(text):
-        roles.append(RhetoricalRole.RISK)
-    if any(text.startswith(term) for term in config.transition_terms) and len(text) <= 40:
-        roles.append(RhetoricalRole.TRANSITION)
-    if _MARKET.search(text):
-        roles.append(RhetoricalRole.MARKET_OBSERVATION)
+    marketing_hit = _promotion_intent(
+        text,
+        config.marketing_terms,
+    )
+    operational_hit = bool(_OPERATIONAL.search(text))
+    claim_hit = bool(_CLAIM.search(text))
+    answer_hit = any(term.casefold() in folded for term in config.answer_terms)
+    explanation_hit = bool(_EXPLANATION.search(text))
+    evidence_hit = bool(_EVIDENCE.search(text))
+    story_example_hit = bool(_STORY_EXAMPLE.search(text))
+    example_hit = story_example_hit or any(
+        term.casefold() in folded for term in config.example_terms
+    )
+    counter_hit = any(term.casefold() in folded for term in config.counter_terms)
+    conclusion_hit = any(
+        term.casefold() in folded for term in config.conclusion_terms
+    )
+    risk_hit = bool(_RISK.search(text))
+    transition_hit = (
+        any(text.startswith(term) for term in config.transition_terms)
+        and len(text) <= 40
+    )
+
     if marketing_hit:
-        roles.append(RhetoricalRole.MARKETING)
+        return [RhetoricalRole.MARKETING]
     if casual_hit:
-        roles.append(RhetoricalRole.CASUAL_CHAT)
-    if not roles or (len(roles) == 1 and roles[0] is RhetoricalRole.MARKET_OBSERVATION):
-        roles.append(RhetoricalRole.BACKGROUND)
-    priority = {
-        RhetoricalRole.TITLE: 0,
-        RhetoricalRole.QUESTION: 1,
-        RhetoricalRole.OPERATIONAL_RULE: 2,
-        RhetoricalRole.CONCLUSION: 3,
-        RhetoricalRole.COUNTERARGUMENT: 4,
-        RhetoricalRole.CLAIM: 5,
-        RhetoricalRole.CAUSAL_REASON: 6,
-        RhetoricalRole.EXPLANATION: 7,
-        RhetoricalRole.EVIDENCE: 8,
-        RhetoricalRole.EXAMPLE: 9,
-        RhetoricalRole.RISK: 10,
-        RhetoricalRole.TRANSITION: 11,
-        RhetoricalRole.MARKET_OBSERVATION: 12,
-        RhetoricalRole.BACKGROUND: 13,
-        RhetoricalRole.MARKETING: 14,
-        RhetoricalRole.CASUAL_CHAT: 15,
-    }
-    return sorted(set(roles), key=lambda role: priority[role])
+        return [RhetoricalRole.CASUAL_CHAT]
+    if is_title:
+        return (
+            [RhetoricalRole.TITLE, RhetoricalRole.QUESTION]
+            if is_question
+            else [RhetoricalRole.TITLE]
+        )
+    if transition_hit:
+        return [RhetoricalRole.TRANSITION]
+    if is_question:
+        return (
+            [RhetoricalRole.QUESTION, RhetoricalRole.CLAIM]
+            if is_rhetorical_question
+            else [RhetoricalRole.QUESTION]
+        )
+    if conclusion_hit:
+        if operational_hit:
+            return [RhetoricalRole.OPERATIONAL_RULE, RhetoricalRole.CONCLUSION]
+        return (
+            [RhetoricalRole.CONCLUSION, RhetoricalRole.RISK]
+            if risk_hit
+            else [RhetoricalRole.CONCLUSION]
+        )
+    if claim_hit:
+        return [RhetoricalRole.CLAIM]
+    if answer_hit:
+        return (
+            [RhetoricalRole.CAUSAL_REASON, RhetoricalRole.EXPLANATION]
+            if operational_hit or explanation_hit
+            else [RhetoricalRole.CAUSAL_REASON]
+        )
+    if example_hit:
+        return (
+            [RhetoricalRole.EXAMPLE, RhetoricalRole.RISK]
+            if story_example_hit and risk_hit
+            else [RhetoricalRole.EXAMPLE]
+        )
+    if operational_hit:
+        return [RhetoricalRole.OPERATIONAL_RULE]
+    if counter_hit:
+        return [RhetoricalRole.COUNTERARGUMENT]
+    if evidence_hit:
+        return (
+            [RhetoricalRole.EVIDENCE, RhetoricalRole.RISK]
+            if risk_hit
+            else [RhetoricalRole.EVIDENCE]
+        )
+    if risk_hit:
+        return [RhetoricalRole.RISK]
+    if _MARKET_OBSERVATION.search(text):
+        return [RhetoricalRole.MARKET_OBSERVATION]
+    return [RhetoricalRole.BACKGROUND]
+
+
+def _promotion_intent(text: str, marketing_terms: list[str]) -> bool:
+    for clause in _CLAUSE_BOUNDARY.split(text):
+        if not clause.strip():
+            continue
+        folded_clause = clause.casefold()
+        for configured_term in marketing_terms:
+            term = configured_term.strip().casefold()
+            if not term or _PROMOTION_TERM_ACTION.search(term) is None:
+                continue
+            start = 0
+            while (index := folded_clause.find(term, start)) >= 0:
+                end = index + len(term)
+                before = clause[:index]
+                after = clause[end:]
+                prefixed = bool(
+                    _EMBEDDED_CTA_PREFIX.search(term)
+                    or _CTA_PREFIX_CONTEXT.search(before[-20:])
+                )
+                continued = bool(_PROMOTION_CONTINUATION.search(after))
+                strong_term = bool(_STRONG_PROMOTION_TERM.search(term))
+                business_usage = bool(
+                    _BUSINESS_PROMOTION_PREFIX.search(before[-24:])
+                    or _BUSINESS_PROMOTION_SUFFIX.search(after)
+                )
+                if (
+                    (prefixed or continued or strong_term)
+                    and (prefixed or not business_usage)
+                ):
+                    return True
+                start = index + 1
+    return False
 
 
 def _dependency_contract(
@@ -770,6 +905,11 @@ def _starts_new_argument(
     texts: dict[str, str],
     config: SemanticFunnelConfig,
 ) -> bool:
+    if (
+        paragraph.paragraph_kind is ParagraphUnitKind.VISUAL_EVIDENCE
+        or current[-1].paragraph_kind is ParagraphUnitKind.VISUAL_EVIDENCE
+    ):
+        return False
     if paragraph.primary_role is RhetoricalRole.TITLE:
         return True
     current_roles = {role for item in current for role in item.rhetorical_roles}
@@ -810,7 +950,7 @@ def _starts_new_argument(
     )
     new_claim = bool(paragraph_roles & {RhetoricalRole.CLAIM, RhetoricalRole.QUESTION})
     prior_chars = sum(len(texts[item.paragraph_id]) for item in current)
-    maximum_chars = int(config.argument_builder["maximum_embedding_window_chars"])
+    maximum_chars = config.maximum_argument_unit_chars
     supported = bool(
         current_roles & {RhetoricalRole.CLAIM, RhetoricalRole.OPERATIONAL_RULE}
     ) and bool(
@@ -834,23 +974,50 @@ def _argument_completeness(
 ) -> float:
     roles = {role for paragraph in group for role in paragraph.rhetorical_roles}
     score = 0.0
-    has_claim = bool(
-        roles & {RhetoricalRole.CLAIM, RhetoricalRole.OPERATIONAL_RULE}
-    ) or any(
+    has_question_answer = any(
         relation.relation_type is ArgumentRelationType.QUESTION_ANSWER
         for relation in relations
     )
-    if has_claim:
-        score += 0.35
+    evidence_count = sum(
+        RhetoricalRole.EVIDENCE in paragraph.rhetorical_roles
+        for paragraph in group
+    )
+    has_method_statement = bool(
+        roles
+        & {
+            RhetoricalRole.CLAIM,
+            RhetoricalRole.OPERATIONAL_RULE,
+            RhetoricalRole.CAUSAL_REASON,
+            RhetoricalRole.EXPLANATION,
+        }
+    )
+    has_bounded_support_chain = (
+        evidence_count >= 2
+        or (
+            len(group) > 1
+            and bool(roles & {RhetoricalRole.EXAMPLE})
+        )
+    )
+    has_assertion = (
+        has_method_statement
+        or has_question_answer
+        or has_bounded_support_chain
+    )
+    if has_assertion:
+        score += 0.55
     if roles & {RhetoricalRole.EXPLANATION, RhetoricalRole.CAUSAL_REASON}:
         score += 0.20
     if roles & {RhetoricalRole.EVIDENCE, RhetoricalRole.EXAMPLE}:
         score += 0.20
-    if roles & {RhetoricalRole.CONCLUSION, RhetoricalRole.RISK, RhetoricalRole.COUNTERARGUMENT}:
+    if roles & {
+        RhetoricalRole.CONCLUSION,
+        RhetoricalRole.RISK,
+        RhetoricalRole.COUNTERARGUMENT,
+    }:
         score += 0.15
     if _dependencies_closed(group, relations):
         score += 0.15
-    if not has_claim:
+    if not has_assertion:
         score = min(score, 0.35)
     if roles.issubset(
         {
@@ -897,7 +1064,25 @@ def _dependencies_closed(
             > paragraph.ordinal
             for relation in relations
         )
-        if paragraph.depends_on_previous and not previous_closed:
+        forward_support_closed = (
+            paragraph.ordinal == group[0].ordinal
+            and RhetoricalRole.EVIDENCE in paragraph.rhetorical_roles
+            and any(
+                other.ordinal > paragraph.ordinal
+                and set(other.rhetorical_roles)
+                & {
+                    RhetoricalRole.CLAIM,
+                    RhetoricalRole.OPERATIONAL_RULE,
+                    RhetoricalRole.EVIDENCE,
+                }
+                for other in group
+            )
+        )
+        if (
+            paragraph.depends_on_previous
+            and not previous_closed
+            and not forward_support_closed
+        ):
             return False
         if paragraph.depends_on_next and not next_closed:
             return False

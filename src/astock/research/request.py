@@ -22,7 +22,6 @@ from astock.schemas import (
     ResearchRequestModule,
 )
 
-
 _REQUEST_SCOPE_KEYS = tuple(
     market.value for market in Market if market is not Market.INDEX
 ) + ("ALL",)
@@ -103,19 +102,20 @@ class ResearchRequestService:
         requested_modules: list[ResearchRequestModule | str] | None,
     ) -> ResearchRequest:
         resolved = self._resolve_company(company_or_name, as_of)
-        kwargs = {
-            "company": resolved["company"],
-            "ticker": resolved["ticker"],
-        }
         if requested_modules is None:
-            return ResearchRequest(**kwargs)
-        modules = []
-        for module in requested_modules:
-            modules.append(
-                module if isinstance(module, ResearchRequestModule) else ResearchRequestModule(module)
+            return ResearchRequest(
+                company=resolved["company"],
+                ticker=resolved["ticker"],
             )
-        kwargs["requested_modules"] = modules
-        return ResearchRequest(**kwargs)
+        modules: list[ResearchRequestModule] = [
+            module if isinstance(module, ResearchRequestModule) else ResearchRequestModule(module)
+            for module in requested_modules
+        ]
+        return ResearchRequest(
+            company=resolved["company"],
+            ticker=resolved["ticker"],
+            requested_modules=modules,
+        )
 
     def _resolve_company(self, company_or_name: str, as_of: datetime) -> dict[str, str]:
         if company_or_name.isdigit() and len(company_or_name) == 6:

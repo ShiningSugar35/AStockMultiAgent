@@ -1,6 +1,6 @@
 ---
 name: knowledge-ingest
-description: Ingest an approved local document or allowlisted author's accessible history with immutable snapshots and resumable coverage. Use for the local investment book, approved PDFs, Zhihu answers, thoughts, articles, author-participating comment chains, collection coverage, retries, or incremental knowledge updates.
+description: Ingest an approved local document or allowlisted author's accessible history with immutable snapshots and resumable coverage. Use for the local investment book, approved PDFs, Zhihu answers, thoughts, articles, columns, collection coverage, retries, or incremental knowledge updates.
 ---
 
 # 知识采集
@@ -11,7 +11,11 @@ description: Ingest an approved local document or allowlisted author's accessibl
 4. Enumerate each content type from its first page to an explicit terminal condition.
 5. Record failures and gaps separately from confirmed empty results.
 6. Pause on 403, 429, login loss, security verification, or unexpected structure.
-7. Keep full raw comments, then derive only the branches required to understand the target author's participation.
+7. For PDF or web images, freeze the image bytes and locator before OCR. Store OCR text
+   separately, then attach the image Paragraph to its previous and following argument context.
+8. Never distill an image Paragraph alone. A chart between a claim and conclusion must use
+   `MERGE_WITH_BOTH`; failed, low-confidence, no-text, unknown, or incomplete context stays
+   `NEEDS_REVIEW`.
 
 ## Output
 

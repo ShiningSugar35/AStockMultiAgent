@@ -140,6 +140,7 @@ from astock.schemas import (
     CodexRunInputManifest,
     CommitteeAccessPolicy,
     CommitteeDecisionRequest,
+    CommitteeProtocolStatus,
     ContextBudgetReport,
     DisclosureCategory,
     DisclosureExchange,
@@ -156,6 +157,7 @@ from astock.schemas import (
     KnowledgeSourceRegistry,
     Market,
     MarketRegimeFeatures,
+    PaperExecutionRequest,
     PositionLifecycleConfig,
     PositionPlanCreateRequest,
     ReferenceCoverageStatus,
@@ -175,6 +177,7 @@ from astock.schemas import (
     SpecialistDiagnosticRequest,
     SpecialistDiagnosticRequestV2,
     SpecialistRouteRequest,
+    TradeProtocol,
     ZhihuContentType,
     ZhihuEndpointTemplateRegistry,
     ZhihuResponseKind,
@@ -1550,6 +1553,156 @@ def _run_confirmed_paper_operation(
         )
         raise typer.Exit(code=3) from exc
     _emit({"status": "COMPLETE", "report": report})
+
+
+def _load_trade_protocol(
+    committee: CommitteeService,
+    trade_protocol_id: str,
+) -> str:
+    protocol_id = trade_protocol_id.removeprefix("TradeProtocol:")
+    protocol = committee.repository.get_protocol(protocol_id)
+    if protocol is None:
+        raise ValueError("trade protocol is not available")
+    return protocol.protocol_id
+
+
+def _validate_committee_execution(
+    *,
+    protocol: TradeProtocol,
+    execution_request: PaperExecutionRequest,
+    operation_request,
+    confirmation,
+) -> None:
+    if protocol.protocol_status is not CommitteeProtocolStatus.ACTIVE:
+        raise ValueError("trade protocol is not active")
+    if not protocol.broker_execution_allowed:
+        raise ValueError("trade protocol broker execution gate is closed")
+    if not protocol.ledger_write_allowed:
+        raise ValueError("trade protocol ledger write gate is closed")
+    if operation_request.operation_id != execution_request.paper_operation_request_id:
+        raise ValueError("operation id does not match execution request")
+    if execution_request.account_id != operation_request.account_id:
+        raise ValueError("account mismatch between execution and operation request")
+    if execution_request.symbol != operation_request.payload.symbol:
+        raise ValueError("operation symbol does not match execution request")
+    if execution_request.qty != operation_request.payload.qty:
+        raise ValueError("operation quantity does not match execution request")
+    if execution_request.limit_price_fen != operation_request.payload.limit_price_fen:
+        raise ValueError("operation price does not match execution request")
+    if (
+        confirmation is None
+        or confirmation.confirmation_id != execution_request.user_confirmation_id
+    ):
+        raise ValueError("confirmation identity does not match execution request")
+    if execution_request.account_id != confirmation.account_id:
+        raise ValueError("confirmation account mismatch")
+    if operation_request.payload.operation_type != "PLACE_ORDER":
+        raise ValueError("only PLACE_ORDER payloads are supported in committee execution")
+    if protocol.company_id != execution_request.symbol:
+        raise ValueError("protocol company does not match order symbol")
+    if execution_request.created_at.tzinfo is None:
+        raise ValueError("execution created_at must include timezone")
+
+
+@app.command("paper-committee-execute")
+def paper_committee_execute(
+    execution_request: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+    request: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+    ],
+    confirmation: Annotated[
+        Path | None,
+        typer.Option(help="Independent MANUAL_CLI confirmation JSON."),
+    ] = None,
+    fee_rules: Annotated[Path | None, typer.Option(help="Fee schedule override.")] = None,
+) -> None:
+    """Execute one committee-approved place-order request after policy gates."""
+
+    paths, state, objects = _services()
+    try:
+        execution = PaperExecutionRequest.model_validate_json(
+            execution_request.read_text(encoding="utf-8")
+        )
+        op_request = load_paper_operation(request)
+        user_confirmation = load_paper_confirmation(confirmation) if confirmation else None
+        committee = _committee_service(paths, state, objects)
+        protocol_id = _load_trade_protocol(committee, execution.trade_protocol_id)
+        protocol = committee.repository.get_protocol(protocol_id)
+        assert protocol is not None
+        _validate_committee_execution(
+            protocol=protocol,
+            execution_request=execution,
+            operation_request=op_request,
+            confirmation=user_confirmation,
+        )
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        if not isinstance(exc, ValidationError) and not isinstance(exc, ValueError):
+            _emit(
+                {
+                    "status": "REJECTED",
+                    "error_code": (
+                        exc.failure_class.value
+                        if isinstance(exc, AStockError)
+                        else "INVALID_PAPER_EXECUTION_REQUEST"
+                    ),
+                    "message": str(exc),
+                }
+            )
+            raise typer.Exit(code=3) from exc
+        if isinstance(exc, AStockError):
+            emitted_status = (
+                "NEEDS_INFO"
+                if exc.failure_class is FailureClass.DATA_QUALITY
+                else "REJECTED"
+            )
+            _emit(
+                {
+                    "status": emitted_status,
+                    "failure_code": (
+                        exc.failure_class.value if isinstance(exc, AStockError) else "INVALID_INPUT"
+                    ),
+                    "message": str(exc),
+                }
+            )
+            raise typer.Exit(code=3) from exc
+        _emit({"status": "REJECTED", "error_code": "INVALID_PAPER_EXECUTION_REQUEST"})
+        raise typer.Exit(code=2) from exc
+
+    try:
+        report = _paper_operation_service(
+            paths, state, objects, fee_rules
+        ).execute(
+            op_request,
+            user_confirmation,
+            expected_operation_type="PLACE_ORDER",
+        )
+    except AStockError as exc:
+        emitted_status = (
+            "NEEDS_INFO"
+            if exc.failure_class is FailureClass.DATA_QUALITY
+            else "REJECTED"
+        )
+        _emit(
+            {
+                "status": emitted_status,
+                "failure_class": exc.failure_class.value,
+                "message": str(exc),
+                "trade_protocol_id": execution.trade_protocol_id,
+            }
+        )
+        raise typer.Exit(code=3) from exc
+
+    _emit(
+        {
+            "status": "COMPLETE",
+            "trade_protocol_id": execution.trade_protocol_id,
+            "report": report,
+        }
+    )
 
 
 @app.command("paper-order-place")

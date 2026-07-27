@@ -38,8 +38,11 @@ class EvidenceCollectionTaskService:
         )
         existing_object_hash = self._artifact_object_hash(artifact_id)
         if existing_object_hash is not None:
+            existing_task = EvidenceCollectionTask.model_validate_json(
+                self.objects.get_bytes(existing_object_hash)
+            )
             return EvidenceCollectionTaskExecution(
-                task=task,
+                task=existing_task,
                 artifact_id=artifact_id,
                 object_sha256=existing_object_hash,
                 reused_existing=True,

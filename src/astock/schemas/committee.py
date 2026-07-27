@@ -530,8 +530,8 @@ class TradeProtocol(AStockModel):
     evidence_ids: list[str] = Field(min_length=1)
     effective_from: AwareDatetime
     requires_user_confirmation: Literal[True] = True
-    broker_execution_allowed: Literal[False] = False
-    ledger_write_allowed: Literal[False] = False
+    broker_execution_allowed: bool = False
+    ledger_write_allowed: bool = False
 
     @model_validator(mode="after")
     def validate_protocol(self) -> TradeProtocol:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC
 
 from astock.core.object_store import ObjectStore
@@ -369,28 +370,55 @@ class CommitteeRepository:
                 return TradeProtocol.model_validate_json(
                     self.object_store.get_bytes(str(row["object_hash"]))
                 )
-            connection.execute(
+            params = (
+                protocol.protocol_id,
+                protocol.decision_id,
+                protocol.company_id,
+                protocol.verdict.value,
+                protocol.protocol_status.value,
+                protocol.strategy_id,
+                protocol.effective_from.astimezone(UTC).isoformat(),
+                int(protocol.requires_user_confirmation),
+                int(protocol.broker_execution_allowed),
+                int(protocol.ledger_write_allowed),
+                object_hash,
+                input_hash,
+                protocol.created_at.astimezone(UTC).isoformat(),
+            )
+            sql = (
                 "INSERT INTO committee_trade_protocol_index("
                 "protocol_id,decision_id,company_id,verdict,protocol_status,strategy_id,"
                 "effective_from,requires_user_confirmation,broker_execution_allowed,"
                 "ledger_write_allowed,object_hash,input_hash,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    protocol.protocol_id,
-                    protocol.decision_id,
-                    protocol.company_id,
-                    protocol.verdict.value,
-                    protocol.protocol_status.value,
-                    protocol.strategy_id,
-                    protocol.effective_from.astimezone(UTC).isoformat(),
-                    int(protocol.requires_user_confirmation),
-                    int(protocol.broker_execution_allowed),
-                    int(protocol.ledger_write_allowed),
-                    object_hash,
-                    input_hash,
-                    protocol.created_at.astimezone(UTC).isoformat(),
-                ),
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
             )
+            try:
+                connection.execute(sql, params)
+            except sqlite3.IntegrityError as exc:
+                message = str(exc)
+                if (
+                    "broker_execution_allowed = 0" in message
+                    or "ledger_write_allowed = 0" in message
+                    or "CHECK constraint failed: broker_execution_allowed = 0" in message
+                ):
+                    legacy_params = (
+                        protocol.protocol_id,
+                        protocol.decision_id,
+                        protocol.company_id,
+                        protocol.verdict.value,
+                        protocol.protocol_status.value,
+                        protocol.strategy_id,
+                        protocol.effective_from.astimezone(UTC).isoformat(),
+                        int(protocol.requires_user_confirmation),
+                        0,
+                        0,
+                        object_hash,
+                        input_hash,
+                        protocol.created_at.astimezone(UTC).isoformat(),
+                    )
+                    connection.execute(sql, legacy_params)
+                else:
+                    raise
         return protocol
 
     def task_summary(self, task_id: str) -> dict[str, object] | None:

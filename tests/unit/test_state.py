@@ -63,6 +63,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0040",
         "0041",
         "0042",
+        "0043",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -81,6 +82,43 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='shadow_study_index'"
+        ).fetchone()
+        for table in (
+            "book_visual_run",
+            "book_image_evidence",
+            "book_image_evidence_attempt",
+            "book_image_ocr",
+            "book_layout_atom",
+            "book_chart_unit",
+            "book_visual_semantic_ref",
+            "book_visual_coverage_report",
+        ):
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+
+
+def test_book_visual_semantics_migration_upgrades_cleanly_from_0042(
+    tmp_path: Path,
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 43):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    assert state.migrate()[-1] == "0042"
+
+    migration = PROJECT_ROOT / "migrations" / "0043_book_visual_semantics.sql"
+    shutil.copy(migration, migrations / migration.name)
+    assert state.migrate() == ["0043"]
+    assert state.migrate() == []
+    assert state.integrity_check() == "ok"
+    with state.connect() as connection:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='book_visual_semantic_ref'"
         ).fetchone()
 
 

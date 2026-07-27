@@ -95,7 +95,6 @@ Serenity 等开源方法只通过固定 commit、许可证、逐文件哈希和�
 ### 7.1 生产范围
 
 白名单知乎作者只采集可访问的回答、文章、专栏归属和想法，并保留完整正文、题目与来源快照。
-生产范围永久排除评论和子回复；评论链只允许作为 synthetic golden case 验证跨段论证机制。
 验证码、登录、访问限制和关闭内容是人工边界，不得通过代理、绕过或伪造完整覆盖。
 
 ### 7.2 粒度合同
@@ -106,6 +105,12 @@ Serenity 等开源方法只通过固定 commit、许可证、逐文件哈希和�
 
 `ParagraphUnit` 是原文存储和定位单位，保留稳定 ordinal、DOM/页码/字符范围、文本对象哈希、
 修辞角色、依赖和合并动作。它不是最终蒸馏单位。
+
+图片和位图式图表同样先成为带证据定位的 ParagraphUnit：本地 PDF 记录页码、bbox、placement、
+图片对象和 OCR 对象；网页记录来源快照、图片快照、URL hash、DOM locator、OCR 尝试和前后
+Paragraph。图片 Paragraph 永远 `standalone_distillable=false`；位于论点和结论之间时固定
+`MERGE_WITH_BOTH`。OCR 失败、低置信、疑似有信息但无文字、类型未知或上下文不闭合时，所在 AU
+必须保留为 REVIEW，不能从孤图推导 Skill。
 
 修辞角色为：`TITLE`、`BACKGROUND`、`MARKET_OBSERVATION`、`QUESTION`、`CLAIM`、
 `EXPLANATION`、`CAUSAL_REASON`、`EVIDENCE`、`EXAMPLE`、`COUNTERARGUMENT`、
@@ -122,11 +127,16 @@ Serenity 等开源方法只通过固定 commit、许可证、逐文件哈希和�
 
 1. 以完整回答、文章或想法为单位执行高召回关键词筛选；完全不命中才派生排除，原始对象保留。
 2. 零成本规则标注段落角色、依赖、合并动作和 ArgumentUnit 边界。
-3. 本地 Embedding 在同一模型空间生成三种必需视图：当前段、前 1＋当前＋后 2、完整 AU。
-4. 完整 AU 与 14 类方法原型计算多标签相似度。
+3. 本地 Embedding 为候选内容的当前 Paragraph、同一 SourceItem 内前 1＋当前＋后 2 的局部上下文、
+   完整 ArgumentUnit 以及 14 类方法原型生成确定性视图。
+4. Paragraph 两种视图只用于辅助检索与诊断；最终相关度、方法完整度、包选择和候选只由完整 AU
+   决定。每个 AU 与全部 14 类方法原型计算多标签相似度，所有达到探索保留阈值的类别按稳定顺序保留。
 5. `topic_relevance` 与 `methodological_completeness` 分开保存；前者不能代替论证完整性。
 6. 未经真实域校准的阈值只排序和进入审核带，不得静默永久删除。
 7. DeepSeek/OpenCode 只接收完整 AU 包及内部段落角色/关系，输出经严格导入校验后才能形成候选。
+   新候选默认保持 `PENDING/NOT_RUN`，不得自评、自批或直接进入交易路径。
+8. 视觉增强包额外携带图片证据 ID、图片快照 hash、PDF/DOM locator、OCR input/text hash 和
+   Chart→Paragraph→Argument lineage；`[图片]` 占位符不构成证据。
 
 14 类方法为：选股、商业模式、行业、估值、财务质量、首次建仓、持有验证、加仓、减仓、退出、
 风险、失败案例、反证与失效、复盘。类别没有每类条数上限，也不强制 top-1。

@@ -9,24 +9,108 @@
   "license_path": "LICENSE",
   "license_sha256": "387581ae2cfd9734fac334d60593873ab957c02340d7a07096449f5274e81df6",
   "reviewed_files": [
-    {"path": "LICENSE", "sha256": "387581ae2cfd9734fac334d60593873ab957c02340d7a07096449f5274e81df6", "purpose": "license"},
-    {"path": "skills/serenity-alpha/SKILL.md", "sha256": "f5d7d9b53fee469eaa2a35b73934d21bce7169c29ca9dff09dc170f2641901ab", "purpose": "event to alpha workflow"},
-    {"path": "skills/serenity-alpha/references/original-framework.md", "sha256": "e36dd2bc11b44e9dde49d740e58b4f8806e8364a2eb95337fe491cf2425f9061", "purpose": "event framework source"},
-    {"path": "skills/bayesian-intrinsic-growth-valuation/SKILL.md", "sha256": "d7cfb963ff6bdeee8614241aa493fa61b18e7a98d426ac22c468b27f21c65f26", "purpose": "Bayesian growth workflow"},
-    {"path": "skills/bayesian-intrinsic-growth-valuation/references/original-framework.md", "sha256": "863602bb3d821f72dcffc1fe56bc9325822d22adf18a37de6bf01069ecb9acdc", "purpose": "Bayesian framework source"},
-    {"path": "skills/tam-adj-peg/SKILL.md", "sha256": "c9190d962c14e5193e47455cf688b59c643ceb8b12b4de573757e91bc0b864c5", "purpose": "TAM-adjusted PEG workflow"},
-    {"path": "skills/tam-adj-peg/references/original-framework.md", "sha256": "372194436580abcf60ab4d6947984fd6341e2ad2473e383d4631ffdc00ee4e87", "purpose": "valuation framework source"},
-    {"path": "skills/gf-dma-health-index/SKILL.md", "sha256": "b3c2d4779d602b4f89d383fb8550edd66a17090ad0611e4cc0d928c1ef66fad3", "purpose": "growth-fundamental DMA health workflow"},
-    {"path": "skills/gf-dma-health-index/references/original-framework.md", "sha256": "85d44247f006e330f630ab083efc30da09b690b1ae7d6155c9bff3eaeacc3d63", "purpose": "GF-DMA framework source"},
-    {"path": "skills/buy-side-equity-research-memo/SKILL.md", "sha256": "c4db122827a888e7e3b29a1fa1afcbf82c505ac0d960d3ccb6d867f8c625cdaf", "purpose": "buy-side memo workflow"},
-    {"path": "skills/buy-side-equity-research-memo/references/original-framework.md", "sha256": "7b5e8a8952f2b3d8db25797f29ebcb8424c97ac9c6ac9bfdd449450ec83628ec", "purpose": "memo framework source"}
+    {
+      "path": "LICENSE",
+      "sha256": "387581ae2cfd9734fac334d60593873ab957c02340d7a07096449f5274e81df6",
+      "purpose": "license"
+    },
+    {
+      "path": "skills/serenity-alpha/SKILL.md",
+      "sha256": "f5d7d9b53fee469eaa2a35b73934d21bce7169c29ca9dff09dc170f2641901ab",
+      "purpose": "event to alpha workflow"
+    },
+    {
+      "path": "skills/serenity-alpha/references/original-framework.md",
+      "sha256": "e36dd2bc11b44e9dde49d740e58b4f8806e8364a2eb95337fe491cf2425f9061",
+      "purpose": "event framework source"
+    },
+    {
+      "path": "skills/bayesian-intrinsic-growth-valuation/SKILL.md",
+      "sha256": "d7cfb963ff6bdeee8614241aa493fa61b18e7a98d426ac22c468b27f21c65f26",
+      "purpose": "Bayesian growth workflow"
+    },
+    {
+      "path": "skills/bayesian-intrinsic-growth-valuation/references/original-framework.md",
+      "sha256": "863602bb3d821f72dcffc1fe56bc9325822d22adf18a37de6bf01069ecb9acdc",
+      "purpose": "Bayesian framework source"
+    },
+    {
+      "path": "skills/tam-adj-peg/SKILL.md",
+      "sha256": "c9190d962c14e5193e47455cf688b59c643ceb8b12b4de573757e91bc0b864c5",
+      "purpose": "TAM-adjusted PEG workflow"
+    },
+    {
+      "path": "skills/tam-adj-peg/references/original-framework.md",
+      "sha256": "372194436580abcf60ab4d6947984fd6341e2ad2473e383d4631ffdc00ee4e87",
+      "purpose": "valuation framework source"
+    },
+    {
+      "path": "skills/gf-dma-health-index/SKILL.md",
+      "sha256": "b3c2d4779d602b4f89d383fb8550edd66a17090ad0611e4cc0d928c1ef66fad3",
+      "purpose": "growth-fundamental DMA health workflow"
+    },
+    {
+      "path": "skills/gf-dma-health-index/references/original-framework.md",
+      "sha256": "85d44247f006e330f630ab083efc30da09b690b1ae7d6155c9bff3eaeacc3d63",
+      "purpose": "GF-DMA framework source"
+    },
+    {
+      "path": "skills/buy-side-equity-research-memo/SKILL.md",
+      "sha256": "c4db122827a888e7e3b29a1fa1afcbf82c505ac0d960d3ccb6d867f8c625cdaf",
+      "purpose": "buy-side memo workflow"
+    },
+    {
+      "path": "skills/buy-side-equity-research-memo/references/original-framework.md",
+      "sha256": "7b5e8a8952f2b3d8db25797f29ebcb8424c97ac9c6ac9bfdd449450ec83628ec",
+      "purpose": "memo framework source"
+    }
   ],
   "local_mappings": [
-    {"local_contract_id": "EventToAlphaSkill", "local_contract_version": "event-to-alpha-v2", "upstream_files": ["skills/serenity-alpha/SKILL.md", "skills/serenity-alpha/references/original-framework.md"], "adaptation_decision": "Use PIT-safe event, business-purity, transmission, elasticity, checkpoint and falsifier contracts; never infer a position or order."},
-    {"local_contract_id": "GrowthProbabilitySkill", "local_contract_version": "growth-probability-v2", "upstream_files": ["skills/bayesian-intrinsic-growth-valuation/SKILL.md", "skills/bayesian-intrinsic-growth-valuation/references/original-framework.md"], "adaptation_decision": "Require H0-H5, exact priors, ordered independent likelihood groups and deterministic posterior trajectories; caller-supplied posteriors are forbidden."},
-    {"local_contract_id": "GrowthValuationLens", "local_contract_version": "growth-valuation-v2", "upstream_files": ["skills/tam-adj-peg/SKILL.md", "skills/tam-adj-peg/references/original-framework.md"], "adaptation_decision": "Represent TAM, uncalibrated quality factors and PEG with explicit units as report-only observations; target prices and automatic adjustments remain forbidden."},
-    {"local_contract_id": "DailyTrendHealthSkill", "local_contract_version": "daily-trend-health-v2", "upstream_files": ["skills/gf-dma-health-index/SKILL.md", "skills/gf-dma-health-index/references/original-framework.md"], "adaptation_decision": "Bind 20/50/100/200DMA, fundamentals and estimate revisions to a registered daily DataQualityReport; output is context, never a buy or sell signal."},
-    {"local_contract_id": "ResearchMemoComposer", "local_contract_version": "research-memo-composer-v2", "upstream_files": ["skills/buy-side-equity-research-memo/SKILL.md", "skills/buy-side-equity-research-memo/references/original-framework.md"], "adaptation_decision": "Compose controversies, Bull/Base/Bear, catalysts, invalidations and monitoring only from frozen BaseCase and delta references, without new research facts."}
+    {
+      "local_contract_id": "EventToAlphaSkill",
+      "local_contract_version": "event-to-alpha-v2",
+      "upstream_files": [
+        "skills/serenity-alpha/SKILL.md",
+        "skills/serenity-alpha/references/original-framework.md"
+      ],
+      "adaptation_decision": "Use PIT-safe event, business-purity, transmission, elasticity, checkpoint and falsifier contracts; never infer a position or order."
+    },
+    {
+      "local_contract_id": "GrowthProbabilitySkill",
+      "local_contract_version": "growth-probability-v2",
+      "upstream_files": [
+        "skills/bayesian-intrinsic-growth-valuation/SKILL.md",
+        "skills/bayesian-intrinsic-growth-valuation/references/original-framework.md"
+      ],
+      "adaptation_decision": "Require H0-H5, exact priors, ordered independent likelihood groups and deterministic posterior trajectories; caller-supplied posteriors are forbidden."
+    },
+    {
+      "local_contract_id": "GrowthValuationLens",
+      "local_contract_version": "growth-valuation-v2",
+      "upstream_files": [
+        "skills/tam-adj-peg/SKILL.md",
+        "skills/tam-adj-peg/references/original-framework.md"
+      ],
+      "adaptation_decision": "Represent TAM, uncalibrated quality factors and PEG with explicit units as report-only observations; target prices and automatic adjustments remain forbidden."
+    },
+    {
+      "local_contract_id": "DailyTrendHealthSkill",
+      "local_contract_version": "daily-trend-health-v2",
+      "upstream_files": [
+        "skills/gf-dma-health-index/SKILL.md",
+        "skills/gf-dma-health-index/references/original-framework.md"
+      ],
+      "adaptation_decision": "Bind 20/50/100/200DMA, fundamentals and estimate revisions to a registered daily DataQualityReport; output is context, never a buy or sell signal."
+    },
+    {
+      "local_contract_id": "ResearchMemoComposer",
+      "local_contract_version": "research-memo-composer-v2",
+      "upstream_files": [
+        "skills/buy-side-equity-research-memo/SKILL.md",
+        "skills/buy-side-equity-research-memo/references/original-framework.md"
+      ],
+      "adaptation_decision": "Compose controversies, Bull/Base/Bear, catalysts, invalidations and monitoring only from frozen BaseCase and delta references, without new research facts."
+    }
   ],
   "local_patch_set": [
     "SEC_TO_A_SHARE_OFFICIAL_EVIDENCE",
@@ -39,27 +123,103 @@
   ],
   "local_patch_sha256": "bf334ced56a4a7b3d831e732d8226cbd4cf2494da0aac433259478e9b033fb92",
   "local_adaptation_files": [
-    {"path": "configs/research_skills.yaml", "sha256": "9ffd6a408ecb0e96b664d9045b5de21d7ee249788431f803c702500a0342606f", "purpose": "active v2 Skill registry and audited source mapping"},
-    {"path": "configs/research_diagnostics.yaml", "sha256": "ae45f1272e194982af9c23594b763bd004a3d7989b851a951f1f9b42e79cbba4", "purpose": "versioned diagnostic thresholds"},
-    {"path": "src/astock/cli.py", "sha256": "6a333a303449f8fe401da5af2003aea2c7a1f32256dd71e4bc8d28fea18582a2", "purpose": "v1 and v2 request discrimination"},
-    {"path": "src/astock/schemas/__init__.py", "sha256": "d65a24627a5371536fd2448a6cd629156f785be807f81c1e180d89d980c1fc88", "purpose": "public v2 schema exports"},
-    {"path": "src/astock/schemas/research.py", "sha256": "3743bdc2ae06d5d435e3c33106d3530f6d65a43be0856049e2e37ae5e431e028", "purpose": "v1/v2 SpecialistDelta conservation"},
-    {"path": "src/astock/schemas/diagnostics.py", "sha256": "45923c4985b1c5389e4598a24aa7bdb0ef64c6eeab36e7e2f9ee8ca50b404635", "purpose": "diagnostic report and memo lineage"},
-    {"path": "src/astock/schemas/serenity_v2.py", "sha256": "4fd9f1902522f1cff0e90ee494433f0ae99da57ff6bf46fd32ea786a9b820413", "purpose": "strict Serenity v2 method contracts"},
-    {"path": "src/astock/schemas/open_source.py", "sha256": "6e36129ad2e608a9e0dfc46d03aaa70f76b9a88c47d80d4b3a926c7ca8b8f869", "purpose": "open-source audit schema"},
-    {"path": "src/astock/research/config.py", "sha256": "2d810566a75cc60225116034147d59c07fedb5a23f00c6d35461241e366a8a5a", "purpose": "fail-closed registry loader"},
-    {"path": "src/astock/research/skills.py", "sha256": "6cbfd6e8bef8d501ff68e69db279004f0e3c135e1b23d82e2d7554a9b0d71b5e", "purpose": "method-contract evidence conservation"},
-    {"path": "src/astock/research/diagnostics.py", "sha256": "3f5517260cc298c10c41f3723eec562b67672a7360559730663fafd7ee992bd1", "purpose": "report-only v2 diagnostics and memo composition"},
-    {"path": "src/astock/research/lifecycle.py", "sha256": "d7b6676240cd90920533c53c899354c43f638ab3677314f504c15a2b16767a7c", "purpose": "memo composer lineage propagation"},
-    {"path": "src/astock/research/open_source_audit.py", "sha256": "669043b241541545c86272d68b90e1040e8f44aff04058034cebd551f891eedf", "purpose": "offline source and local implementation verifier"},
-    {"path": "src/astock/committee/service.py", "sha256": "ee306086bfd496a9bd73158e51c4017c723c203724a6f2e18105e2b9cfb106a2", "purpose": "frozen memo lineage validation"},
-    {"path": "tests/unit/test_open_source_audits.py", "sha256": "c414579ceb62e77f7f47389cba26a9b98e8226b7a57bdae585a6019e3137f678", "purpose": "audit manifest drift regression"},
-    {"path": "tests/unit/test_research_diagnostics_schemas.py", "sha256": "765f8e4e2a38b7a5f440113aa602aeb3038c1927a60bcee8e8a85bb18ef5b335", "purpose": "v1 compatibility and frequency contract regression"},
-    {"path": "tests/integration/test_research_core.py", "sha256": "4d97f1ef2fee1996e02b05d02e29e0634705ba39afe360c7c4b07c556b676ebf", "purpose": "routing and frozen evidence regression"},
-    {"path": "tests/integration/test_research_diagnostics.py", "sha256": "d8885883edf58ff62c95782485cd3a0ff20ae5055f38f41c833ba2348d13b97e", "purpose": "v2 diagnostics, PIT and false-precision regression"},
-    {"path": "tests/integration/test_position_lifecycle.py", "sha256": "bfa031503449205d810262441372a04af5f4e90a7b763f0774b66798d5cde77f", "purpose": "v2 memo lifecycle regression"}
+    {
+      "path": "configs/research_skills.yaml",
+      "sha256": "9ffd6a408ecb0e96b664d9045b5de21d7ee249788431f803c702500a0342606f",
+      "purpose": "active v2 Skill registry and audited source mapping"
+    },
+    {
+      "path": "configs/research_diagnostics.yaml",
+      "sha256": "ae45f1272e194982af9c23594b763bd004a3d7989b851a951f1f9b42e79cbba4",
+      "purpose": "versioned diagnostic thresholds"
+    },
+    {
+      "path": "src/astock/cli.py",
+      "sha256": "b89af1fc473c572940f755ca8d1df8ad4135025efb6460055adb81b30e385638",
+      "purpose": "v1 and v2 request discrimination"
+    },
+    {
+      "path": "src/astock/schemas/__init__.py",
+      "sha256": "318bb5787beaafbff94c8c8737d70bd5e4f30a680db554784d3313468be6e5f2",
+      "purpose": "public v2 schema exports"
+    },
+    {
+      "path": "src/astock/schemas/research.py",
+      "sha256": "1c6e6134096bd1c0518eeec94cf383114a70dfd9f301aa2dcc812bc046f241d5",
+      "purpose": "v1/v2 SpecialistDelta conservation"
+    },
+    {
+      "path": "src/astock/schemas/diagnostics.py",
+      "sha256": "45923c4985b1c5389e4598a24aa7bdb0ef64c6eeab36e7e2f9ee8ca50b404635",
+      "purpose": "diagnostic report and memo lineage"
+    },
+    {
+      "path": "src/astock/schemas/serenity_v2.py",
+      "sha256": "4fd9f1902522f1cff0e90ee494433f0ae99da57ff6bf46fd32ea786a9b820413",
+      "purpose": "strict Serenity v2 method contracts"
+    },
+    {
+      "path": "src/astock/schemas/open_source.py",
+      "sha256": "6e36129ad2e608a9e0dfc46d03aaa70f76b9a88c47d80d4b3a926c7ca8b8f869",
+      "purpose": "open-source audit schema"
+    },
+    {
+      "path": "src/astock/research/config.py",
+      "sha256": "2d810566a75cc60225116034147d59c07fedb5a23f00c6d35461241e366a8a5a",
+      "purpose": "fail-closed registry loader"
+    },
+    {
+      "path": "src/astock/research/skills.py",
+      "sha256": "6cbfd6e8bef8d501ff68e69db279004f0e3c135e1b23d82e2d7554a9b0d71b5e",
+      "purpose": "method-contract evidence conservation"
+    },
+    {
+      "path": "src/astock/research/diagnostics.py",
+      "sha256": "3f5517260cc298c10c41f3723eec562b67672a7360559730663fafd7ee992bd1",
+      "purpose": "report-only v2 diagnostics and memo composition"
+    },
+    {
+      "path": "src/astock/research/lifecycle.py",
+      "sha256": "d7b6676240cd90920533c53c899354c43f638ab3677314f504c15a2b16767a7c",
+      "purpose": "memo composer lineage propagation"
+    },
+    {
+      "path": "src/astock/research/open_source_audit.py",
+      "sha256": "669043b241541545c86272d68b90e1040e8f44aff04058034cebd551f891eedf",
+      "purpose": "offline source and local implementation verifier"
+    },
+    {
+      "path": "src/astock/committee/service.py",
+      "sha256": "737ef7878a8446070696fc2217112798e3e0af5ea8f421752fdc476bdba513fd",
+      "purpose": "frozen memo lineage validation"
+    },
+    {
+      "path": "tests/unit/test_open_source_audits.py",
+      "sha256": "c414579ceb62e77f7f47389cba26a9b98e8226b7a57bdae585a6019e3137f678",
+      "purpose": "audit manifest drift regression"
+    },
+    {
+      "path": "tests/unit/test_research_diagnostics_schemas.py",
+      "sha256": "765f8e4e2a38b7a5f440113aa602aeb3038c1927a60bcee8e8a85bb18ef5b335",
+      "purpose": "v1 compatibility and frequency contract regression"
+    },
+    {
+      "path": "tests/integration/test_research_core.py",
+      "sha256": "4d97f1ef2fee1996e02b05d02e29e0634705ba39afe360c7c4b07c556b676ebf",
+      "purpose": "routing and frozen evidence regression"
+    },
+    {
+      "path": "tests/integration/test_research_diagnostics.py",
+      "sha256": "d8885883edf58ff62c95782485cd3a0ff20ae5055f38f41c833ba2348d13b97e",
+      "purpose": "v2 diagnostics, PIT and false-precision regression"
+    },
+    {
+      "path": "tests/integration/test_position_lifecycle.py",
+      "sha256": "bfa031503449205d810262441372a04af5f4e90a7b763f0774b66798d5cde77f",
+      "purpose": "v2 memo lifecycle regression"
+    }
   ],
-  "local_adaptation_sha256": "07f7715cb3d492b24702730e50966fd2b864805dd48a71026d0303b479f11cdd",
+  "local_adaptation_sha256": "7bfe7f0c7d9990428978e99ad69966133dc2a0c6a593a51818eb9c51287aa013",
   "normal_runtime_network_required": false,
   "source_vendored": false,
   "upgrade_policy": "A new upstream commit or local contract version requires a new audit_id and manifest; v1 manifests and artifacts remain immutable."

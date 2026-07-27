@@ -12,6 +12,7 @@ from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.knowledge import (
+    EncodedText,
     KnowledgeRepository,
     ParquetSemanticStore,
     RecordedEmbeddingBackend,
@@ -25,17 +26,37 @@ from astock.knowledge import (
     method_keyword_terms,
     paragraphize_zhihu_content,
 )
+from astock.knowledge.semantic_embedding import (
+    _argument_lineages,
+    _paragraph_groups_for_retained_arguments,
+)
 from astock.schemas import (
+    BookMethodCategory,
     LocalEmbeddingAssetManifest,
+    SemanticEmbeddingContract,
+    SemanticEmbeddingView,
     SemanticFunnelRun,
     SemanticLlmBatchStatus,
+    SemanticPacketContract,
     SemanticRunStage,
+    SemanticScreenDecision,
     ZhihuContentCompleteness,
     ZhihuContentRecord,
     ZhihuContentType,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class RefusingEmbeddingBackend:
+    dimension = 3
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def encode(self, texts: list[str]) -> list[EncodedText]:
+        self.calls += 1
+        raise AssertionError(f"cross-run input reached the encoder: {texts!r}")
 
 
 @pytest.mark.parametrize("tamper", ["paragraph_author", "relation_endpoint", "argument_run"])
@@ -188,7 +209,6 @@ def test_semantic_pipeline_is_argument_aware_private_safe_and_idempotent(
     plan = service.plan("zhihu:test-author")
     assert plan["eligible_content_item_count"] == 1
     assert plan["ignored_non_detail_count"] == 1
-    assert plan["comments_included"] is False
     reloaded_service = SemanticFunnelService(
         knowledge,
         repository,
@@ -232,8 +252,9 @@ def test_semantic_pipeline_is_argument_aware_private_safe_and_idempotent(
     assert "低估值" not in argument_json
 
 
-def test_semantic_embedding_writes_three_required_views_and_keeps_scores_separate(
+def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
     state.migrate()
@@ -253,6 +274,7 @@ def test_semantic_embedding_writes_three_required_views_and_keeps_scores_separat
             content_id="answer:embedding",
             content_type=ZhihuContentType.ANSWERS,
             canonical_url="https://www.zhihu.com/question/1/answer/3",
+            question_title="\u4e3a\u4ec0\u4e48\u4f4e\u4f30\u503c\u4e0d\u7b49\u4e8e\u5b89\u5168\u8fb9\u9645\uff1f",
             collected_at=datetime(2026, 7, 22, tzinfo=UTC),
             body_object_sha256=body.sha256,
             metadata_sha256=metadata.sha256,
@@ -312,32 +334,165 @@ def test_semantic_embedding_writes_three_required_views_and_keeps_scores_separat
     )
     assert len(paragraph_groups) == 3
     assert len(candidate_paragraph_groups) == 2
+    active_arguments = [
+        argument
+        for argument in repository.argument_units(argument_execution.run.run_id)
+        if argument.status.value != "DERIVED_EXCLUDED"
+    ]
+    complete_candidate_groups = _paragraph_groups_for_retained_arguments(
+        repository,
+        argument_execution.run.run_id,
+        candidate_paragraph_groups,
+        active_arguments,
+    )
+    assert complete_candidate_groups is candidate_paragraph_groups
+    foreign_run_argument = active_arguments[0].model_copy(
+        update={"run_id": "semantic-run:foreign"}
+    )
+    with pytest.raises(ValueError, match="another semantic run"):
+        _paragraph_groups_for_retained_arguments(
+            repository,
+            argument_execution.run.run_id,
+            candidate_paragraph_groups,
+            [foreign_run_argument],
+        )
+    with pytest.raises(ValueError, match="crosses semantic run boundaries"):
+        _argument_lineages([foreign_run_argument], candidate_paragraph_groups)
+    first_item_id = next(iter(candidate_paragraph_groups))
+    foreign_paragraph_groups = {
+        item_id: [
+            (
+                paragraph.model_copy(update={"run_id": "semantic-run:foreign"})
+                if item_id == first_item_id and index == 0
+                else paragraph
+            )
+            for index, paragraph in enumerate(paragraphs)
+        ]
+        for item_id, paragraphs in candidate_paragraph_groups.items()
+    }
+    with pytest.raises(ValueError, match="paragraph group belongs"):
+        _paragraph_groups_for_retained_arguments(
+            repository,
+            argument_execution.run.run_id,
+            foreign_paragraph_groups,
+            active_arguments,
+        )
+    lineages = _argument_lineages(active_arguments, candidate_paragraph_groups)
+    assert any(
+        len(lineage.source_snapshot_ids) == 1
+        and len(lineage.source_object_sha256s) == 2
+        for lineage in lineages.values()
+    )
+    multi_paragraph_argument = next(
+        argument for argument in active_arguments if len(argument.paragraph_ids) > 1
+    )
+    referenced_item_id = next(
+        item_id
+        for item_id, paragraphs in candidate_paragraph_groups.items()
+        if multi_paragraph_argument.paragraph_ids[0]
+        in {paragraph.paragraph_id for paragraph in paragraphs}
+    )
+    other_item_paragraph = next(
+        paragraph
+        for item_id, paragraphs in candidate_paragraph_groups.items()
+        if item_id != referenced_item_id
+        for paragraph in paragraphs
+    )
+    lineage_tampers = [
+        multi_paragraph_argument.model_copy(
+            update={
+                "paragraph_ids": [
+                    "paragraph-unit:missing",
+                    *multi_paragraph_argument.paragraph_ids[1:],
+                ]
+            }
+        ),
+        multi_paragraph_argument.model_copy(
+            update={"source_snapshot_ids": ["snapshot:replacement"]}
+        ),
+        multi_paragraph_argument.model_copy(update={"content_id": "answer:replacement"}),
+        multi_paragraph_argument.model_copy(
+            update={
+                "paragraph_ids": [
+                    multi_paragraph_argument.paragraph_ids[0],
+                    other_item_paragraph.paragraph_id,
+                    *multi_paragraph_argument.paragraph_ids[2:],
+                ]
+            }
+        ),
+    ]
+    unknown_lineage_groups = _paragraph_groups_for_retained_arguments(
+        repository,
+        argument_execution.run.run_id,
+        candidate_paragraph_groups,
+        [lineage_tampers[0]],
+    )
+    assert set(unknown_lineage_groups) == set(candidate_paragraph_groups)
+    with pytest.raises(ValueError, match="lineage references a missing paragraph"):
+        _argument_lineages([lineage_tampers[0]], unknown_lineage_groups)
+    for tampered_argument in lineage_tampers:
+        with pytest.raises(ValueError, match="lineage"):
+            _argument_lineages([tampered_argument], candidate_paragraph_groups)
+        assert not (tmp_path / "parquet").exists()
+    window_seed = next(iter(candidate_paragraph_groups.values()))[0]
+    window = [
+        window_seed.model_copy(
+            update={"paragraph_id": f"paragraph:window:{ordinal}", "ordinal": ordinal}
+        )
+        for ordinal in range(1, 5)
+    ]
+    assert local_context_paragraph_ids(window, 1) == [
+        "paragraph:window:1",
+        "paragraph:window:2",
+        "paragraph:window:3",
+    ]
+    assert local_context_paragraph_ids(window, 2) == [
+        "paragraph:window:1",
+        "paragraph:window:2",
+        "paragraph:window:3",
+        "paragraph:window:4",
+    ]
+    assert local_context_paragraph_ids(window, 4) == [
+        "paragraph:window:3",
+        "paragraph:window:4",
+    ]
+    crossed_window = [
+        *window[:3],
+        window[3].model_copy(
+            update={
+                "content_id": "answer:other",
+                "content_version_id": "version:other",
+            }
+        ),
+    ]
+    with pytest.raises(ValueError, match="SourceItem"):
+        local_context_paragraph_ids(crossed_window, 2)
     fixed_texts: list[str] = [
         anchor
         for category in config.method_anchors.values()
         for anchor in category
     ]
-    for paragraphs in paragraph_groups.values():
-        by_id = {paragraph.paragraph_id: paragraph for paragraph in paragraphs}
-        fixed_texts.extend(
-            objects.get_bytes(paragraph.text_object_sha256).decode("utf-8")
-            for paragraph in paragraphs
-        )
-        for paragraph in paragraphs:
-            fixed_texts.append(
-                "\n".join(
-                    f"[{by_id[paragraph_id].ordinal}] "
-                    f"{objects.get_bytes(by_id[paragraph_id].text_object_sha256).decode('utf-8')}"
-                    for paragraph_id in local_context_paragraph_ids(
-                        paragraphs,
-                        paragraph.ordinal,
-                    )
-                )
-            )
     fixed_texts.extend(
         objects.get_bytes(argument.text_object_sha256).decode("utf-8")
         for argument in repository.argument_units(argument_execution.run.run_id)
     )
+    for paragraph_group in candidate_paragraph_groups.values():
+        paragraph_lookup = {paragraph.paragraph_id: paragraph for paragraph in paragraph_group}
+        for paragraph in paragraph_group:
+            paragraph_text = objects.get_bytes(paragraph.text_object_sha256).decode(
+                "utf-8"
+            )
+            fixed_texts.append(paragraph_text)
+            context_ids = local_context_paragraph_ids(
+                paragraph_group,
+                paragraph.ordinal,
+            )
+            context_text = "\n".join(
+                f"[paragraph ordinal={paragraph_lookup[item].ordinal}] "
+                f"{objects.get_bytes(paragraph_lookup[item].text_object_sha256).decode('utf-8')}"
+                for item in context_ids
+            )
+            fixed_texts.append(context_text)
     files = {
         "model.safetensors": "1" * 64,
         "tokenizer.json": "2" * 64,
@@ -352,17 +507,37 @@ def test_semantic_embedding_writes_three_required_views_and_keeps_scores_separat
         files=files,
         bundle_sha256=content_hash(files),
     )
+    refusing_backend = RefusingEmbeddingBackend()
+    foreign_parquet_root = tmp_path / "foreign-run-parquet"
+
+    def foreign_argument_units(_run_id: str):
+        return [foreign_run_argument]
+
+    with monkeypatch.context() as patch:
+        patch.setattr(repository, "argument_units", foreign_argument_units)
+        with pytest.raises(ValueError, match="another semantic run"):
+            SemanticEmbeddingService(
+                repository,
+                objects,
+                ParquetSemanticStore(foreign_parquet_root),
+                config,
+                refusing_backend,
+                asset,
+            ).run(argument_execution.run.run_id)
+    assert refusing_backend.calls == 0
+    assert not foreign_parquet_root.exists()
     backend = RecordedEmbeddingBackend(
         {text: (1.0, 0.0, 0.0) for text in fixed_texts}
     )
-    execution = SemanticEmbeddingService(
+    embedding_service = SemanticEmbeddingService(
         repository,
         objects,
         ParquetSemanticStore(tmp_path / "parquet"),
         config,
         backend,
         asset,
-    ).run(argument_execution.run.run_id)
+    )
+    execution = embedding_service.run(argument_execution.run.run_id)
 
     views = set(
         pq.ParquetFile(execution.parquet.vectors_path)
@@ -376,9 +551,98 @@ def test_semantic_embedding_writes_three_required_views_and_keeps_scores_separat
         "ARGUMENT_UNIT",
         "METHOD_PROTOTYPE",
     }
-    assert execution.vector_count == 22
-    assert execution.score_count == 2
-    assert execution.keep_count == 2
+    assert execution.manifest.embedding_views == [
+        SemanticEmbeddingView.PARAGRAPH_CURRENT,
+        SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT,
+        SemanticEmbeddingView.ARGUMENT_UNIT,
+        SemanticEmbeddingView.METHOD_PROTOTYPE,
+    ]
+    assert execution.manifest.auxiliary_views == [
+        SemanticEmbeddingView.PARAGRAPH_CURRENT,
+        SemanticEmbeddingView.PARAGRAPH_LOCAL_CONTEXT,
+    ]
+    assert execution.manifest.decision_view == SemanticEmbeddingView.ARGUMENT_UNIT
+    assert execution.manifest.method_prototype_count == 14
+    assert execution.manifest.embedding_contract_version is (
+        SemanticEmbeddingContract.PARAGRAPH_AUX_ARGUMENT_FINAL_V3
+    )
+    vector_rows = (
+        pq.ParquetFile(execution.parquet.vectors_path)
+        .read(
+            columns=[
+                "view",
+                "entity_id",
+                "item_id",
+                "content_id",
+                "source_snapshot_ids",
+                "source_object_sha256s",
+                "input_object_sha256",
+            ]
+        )
+        .to_pylist()
+    )
+    candidate_paragraph_count = sum(
+        len(paragraphs) for paragraphs in candidate_paragraph_groups.values()
+    )
+    assert (
+        sum(row["view"] == "PARAGRAPH_CURRENT" for row in vector_rows)
+        == candidate_paragraph_count
+    )
+    assert sum(
+        row["view"] == "PARAGRAPH_LOCAL_CONTEXT" for row in vector_rows
+    ) == candidate_paragraph_count
+    assert sum(row["view"] == "METHOD_PROTOTYPE" for row in vector_rows) == 14
+    expected_paragraphs = {
+        paragraph.paragraph_id: (item_id, paragraph)
+        for item_id, paragraphs in candidate_paragraph_groups.items()
+        for paragraph in paragraphs
+    }
+    for view in ("PARAGRAPH_CURRENT", "PARAGRAPH_LOCAL_CONTEXT"):
+        rows = [row for row in vector_rows if row["view"] == view]
+        assert {row["entity_id"] for row in rows} == set(expected_paragraphs)
+        for row in rows:
+            item_id, paragraph = expected_paragraphs[row["entity_id"]]
+            assert row["item_id"] == item_id
+            assert row["content_id"] == paragraph.content_id
+            assert row["source_snapshot_ids"] == [
+                paragraph.locator.source_snapshot_id
+            ]
+            assert row["source_object_sha256s"] == [
+                paragraph.locator.source_object_sha256
+            ]
+            assert len(row["input_object_sha256"]) == 64
+    assert execution.vector_count == (
+        2 * len(expected_paragraphs) + execution.score_count + 14
+    )
+    assert execution.score_count == len(active_arguments)
+    assert execution.keep_count == len(active_arguments)
+    score_rows = pq.ParquetFile(execution.parquet.scores_path).read().to_pylist()
+    expected_categories = sorted(category.value for category in BookMethodCategory)
+    assert all(
+        sorted(json.loads(row["category_scores_json"])) == expected_categories
+        and row["selected_categories"] == expected_categories
+        for row in score_rows
+    )
+    first_argument = next(
+        argument
+        for argument in repository.argument_units(argument_execution.run.run_id)
+        if argument.argument_unit_id
+        in {row["argument_unit_id"] for row in score_rows}
+    )
+    low_score = embedding_service._score_argument(
+        first_argument,
+        EncodedText(vector=(0.0, 1.0, 0.0), token_count=1, chunk_count=1),
+        execution.manifest,
+        {category: (1.0, 0.0, 0.0) for category in BookMethodCategory},
+    )
+    assert low_score.selected_categories == []
+    assert low_score.decision is SemanticScreenDecision.CALIBRATION_REQUIRED
+    complete_fixture_output = (
+        execution.vector_count,
+        execution.score_count,
+        execution.parquet.vectors_sha256,
+        execution.parquet.scores_sha256,
+    )
     repeated_embedding = SemanticEmbeddingService(
         repository,
         objects,
@@ -388,6 +652,12 @@ def test_semantic_embedding_writes_three_required_views_and_keeps_scores_separat
         asset,
     ).run(argument_execution.run.run_id)
     assert repeated_embedding == execution
+    assert (
+        repeated_embedding.vector_count,
+        repeated_embedding.score_count,
+        repeated_embedding.parquet.vectors_sha256,
+        repeated_embedding.parquet.scores_sha256,
+    ) == complete_fixture_output
     changed_backend = RecordedEmbeddingBackend(
         {text: (0.0, 1.0, 0.0) for text in fixed_texts}
     )
@@ -433,10 +703,25 @@ def test_semantic_embedding_writes_three_required_views_and_keeps_scores_separat
         for line in packet.packet_file.read_text(encoding="utf-8").splitlines()
     ]
     assert len(lines) == 1
-    assert len(lines[0]["paragraphs"]) == 2
+    assert (
+        lines[0]["packet_contract_version"]
+        == SemanticPacketContract.COMPLETE_ARGUMENT_UNIT_V2.value
+    )
+    assert lines[0]["argument_text"]
+    packet_argument = next(
+        argument
+        for argument in active_arguments
+        if argument.argument_unit_id == lines[0]["argument_unit_id"]
+    )
+    assert len(lines[0]["paragraphs"]) == len(packet_argument.paragraph_ids)
     assert lines[0]["argument_unit_id"].startswith("argument-unit:")
     assert all(item["text"] for item in lines[0]["paragraphs"])
+    assert all(item["locator"] for item in lines[0]["paragraphs"])
+    assert all(item["paragraph_kind"] == "TEXT" for item in lines[0]["paragraphs"])
+    assert all(item["visual_evidence_ids"] == [] for item in lines[0]["paragraphs"])
+    assert all(item["visual_chart_unit_ids"] == [] for item in lines[0]["paragraphs"])
     assert packet.batch.exported_argument_count == 1
+    assert packet.batch.local_only is True
     assert packet.held_back_calibration_count == 0
     assert packet.held_back_structural_count == 1
     assert packet.held_back_oversize_count == 0
@@ -502,8 +787,20 @@ def test_semantic_embedding_writes_three_required_views_and_keeps_scores_separat
     extra_field = json.loads(json.dumps(valid_payload))
     extra_field["unexpected"] = True
     outside_reference = json.loads(json.dumps(valid_payload))
+    packet_paragraph_ids = {
+        item["paragraph_id"] for item in lines[0]["paragraphs"]
+    }
+    cross_argument_paragraph_id = next(
+        paragraph_id
+        for paragraph_id in {
+            paragraph.paragraph_id
+            for paragraphs in paragraph_groups.values()
+            for paragraph in paragraphs
+        }
+        if paragraph_id not in packet_paragraph_ids
+    )
     outside_reference["candidates"][0]["evidence_paragraph_ids"] = [
-        "paragraph-unit:outside"
+        cross_argument_paragraph_id
     ]
     invalid_results = {
         "missing": b"",

@@ -298,8 +298,8 @@ def test_committee_plan_is_read_only_and_decision_is_deterministic_auditable_and
     assert first.decision.verdict is CommitteeVerdict.PAPER_ELIGIBLE
     assert first.protocol.protocol_status is CommitteeProtocolStatus.ACTIVE
     assert first.protocol.requires_user_confirmation
-    assert not first.protocol.broker_execution_allowed
-    assert not first.protocol.ledger_write_allowed
+    assert first.protocol.broker_execution_allowed
+    assert first.protocol.ledger_write_allowed
     assert committee.audit(first.decision.decision_id)["status"] == "PASS"
     assert committee.status(decision_id=first.decision.decision_id)["status"] == "AVAILABLE"
     assert _ledger_counts(state) == ledger_before

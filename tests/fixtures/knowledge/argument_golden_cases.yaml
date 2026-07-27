@@ -1,117 +1,254 @@
 schema_version: "1.0"
 cases:
   - id: question_answer_reason
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["为什么低估值不等于安全边际？", "因为估值必须结合现金流质量和增长持续性。"]
     expected_roles: [[QUESTION], [CAUSAL_REASON, EXPLANATION]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: [[1, 2]]
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "解释估值判断必须同时检验现金流质量与增长持续性。"
     expected_relations: [QUESTION_ANSWER]
   - id: multiple_questions_one_answer
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["行业增长来自哪里？", "竞争优势能维持多久？", "核心是供需改善且客户粘性足够强。"]
     expected_roles: [[QUESTION], [QUESTION], [CLAIM]]
+    expected_argument_ranges: [[1, 3]]
+    expected_question_answer_links: [[1, 3], [2, 3]]
+    valuable_argument_ranges: [[1, 3]]
+    valuable_annotation: "用供需改善与客户粘性共同回答行业增长和竞争持续性。"
     expected_relations: [QUESTION_ANSWER]
   - id: story_then_rule
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["过去一次追涨让我承受了很大回撤。", "所以买入前必须先写清风险和失效条件。"]
     expected_roles: [[EXAMPLE, RISK], [OPERATIONAL_RULE, CONCLUSION]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "从追涨损失提炼买入前书面化风险与失效条件的规则。"
     expected_relations: [CONTINUATION]
     expected_statuses: [READY]
     expected_standalone: [true]
   - id: claim_then_example
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["我认为好公司也需要合理估值。", "例如市盈率过高时，小幅下修就可能带来较大回撤。"]
     expected_roles: [[CLAIM], [EXAMPLE]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "用高估值下修案例解释好公司仍需合理估值。"
     expected_relations: [EXAMPLE_OF]
     expected_statuses: [READY]
     expected_standalone: [true]
   - id: claim_then_evidence
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["关键是检验财务利润是否真实。", "根据财报，经营现金流连续三年低于净利润。"]
     expected_roles: [[CLAIM], [EVIDENCE]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "以经营现金流和净利润背离检验利润真实性。"
     expected_relations: [CLAIM_EVIDENCE]
     expected_statuses: [READY]
     expected_standalone: [true]
   - id: claim_counter_conclusion
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["我认为行业集中度提升有利于龙头。", "然而需求下滑可能抵消竞争格局改善。", "因此结论是仍要跟踪供需和库存。"]
     expected_roles: [[CLAIM], [COUNTERARGUMENT], [CONCLUSION]]
+    expected_argument_ranges: [[1, 3]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 3]]
+    valuable_annotation: "同时保留集中度改善主张、需求反证和持续跟踪结论。"
     expected_relations: [COUNTER_TO, CONCLUSION_OF]
   - id: rhetorical_question_claim
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["难道股价下跌就一定更安全吗？", "本质是估值下跌是否伴随基本面失效。"]
     expected_roles: [[QUESTION, CLAIM], [CLAIM]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: [[1, 2]]
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "区分价格下跌与基本面失效，构成完整的安全性判断。"
     expected_relations: [QUESTION_ANSWER]
   - id: title_background_explanation
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     title: "如何理解安全边际"
     paragraphs: ["市场波动只是观察起点。", "因为安全边际来自价格与保守价值之间的差额。"]
-    expected_roles: [[TITLE], [MARKET_OBSERVATION], [CAUSAL_REASON]]
+    expected_roles: [[TITLE, QUESTION], [MARKET_OBSERVATION], [CAUSAL_REASON]]
+    expected_argument_ranges: [[1, 3]]
+    expected_question_answer_links: [[1, 3]]
+    valuable_argument_ranges: [[1, 3]]
+    valuable_annotation: "说明安全边际来自价格与保守价值差额而非市场波动。"
     expected_relations: [CONTINUATION]
   - id: transition_keeps_context
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["我认为先确认商业模式。", "其次，再检查现金流和负债。", "因此才能形成完整的财务判断。"]
     expected_roles: [[CLAIM], [TRANSITION], [CONCLUSION]]
+    expected_argument_ranges: [[1, 3]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 3]]
+    valuable_annotation: "给出商业模式、现金流和负债的顺序化财务判断流程。"
     expected_relations: [CONTINUATION, CONCLUSION_OF]
   - id: anaphora_previous_context
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["存货周转持续变慢是一个财务风险。", "这意味着需求或产品竞争力可能下降。"]
     expected_roles: [[EVIDENCE, RISK], [CLAIM]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "从存货周转变慢推断需求或竞争力下降风险。"
     expected_relations: [CONTINUATION]
   - id: risk_to_operational_rule
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["永久损失风险来自逻辑失效而非日常波动。", "只有反证被排除后才可以加仓。"]
     expected_roles: [[RISK], [OPERATIONAL_RULE]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "把永久损失风险与反证排除后的加仓条件连接成规则。"
     expected_relations: [CONTINUATION]
   - id: valuation_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["估值不能只看静态市盈率。", "因为现金流折现还依赖增长、资本开支和折现率。"]
     expected_roles: [[BACKGROUND], [CAUSAL_REASON, EXPLANATION]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "明确估值不能只看静态市盈率并列出现金流折现变量。"
     expected_relations: [CONTINUATION]
   - id: financial_quality_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["财务质量先看利润与现金流是否匹配。", "数据显示应收增速明显高于收入增速。"]
     expected_roles: [[EVIDENCE], [EVIDENCE]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "用利润现金匹配和应收收入增速差检查财务质量。"
     expected_relations: [CONTINUATION]
   - id: industry_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["行业研究要先拆产业链。", "例如供需缺口只有落到稀缺环节才可能形成价值捕获。"]
     expected_roles: [[BACKGROUND], [EXAMPLE]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "给出产业链拆解及稀缺环节价值捕获的行业研究方法。"
     expected_relations: [EXAMPLE_OF]
   - id: business_model_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["商业模式回答公司如何赚钱。", "关键是竞争优势能否转化成持续现金流。"]
     expected_roles: [[BACKGROUND], [CLAIM]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "将赚钱方式和竞争优势转化为持续现金流作为商业模式判断。"
     expected_relations: [CONTINUATION]
   - id: holding_validation_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["持仓不是买入后的静止状态。", "应该持续跟踪基本面变化并验证原假设。"]
     expected_roles: [[BACKGROUND], [OPERATIONAL_RULE]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "要求持仓期持续跟踪基本面并验证原始假设。"
     expected_relations: [CONTINUATION]
   - id: add_requires_new_evidence
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["下跌本身不是加仓理由。", "只有新增证据强化原判断才可以增加仓位。"]
     expected_roles: [[BACKGROUND], [OPERATIONAL_RULE]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "规定加仓必须由新增证据强化原判断，而非仅因下跌。"
     expected_relations: [CONTINUATION]
   - id: trim_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["估值进入极端区间会放大组合风险。", "因此应当减仓而不是继续外推乐观假设。"]
     expected_roles: [[RISK], [OPERATIONAL_RULE, CONCLUSION]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "把极端估值风险转化为减仓规则。"
     expected_relations: [CONCLUSION_OF]
   - id: exit_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["反证确认商业模式已经失效。", "所以必须卖出并退出，而不是等待回本。"]
     expected_roles: [[COUNTERARGUMENT], [OPERATIONAL_RULE, CONCLUSION]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "把商业模式失效反证转化为退出规则。"
     expected_relations: [CONCLUSION_OF]
   - id: failure_review_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["这次失败源于忽略了负债和现金流。", "复盘时应该把错误假设写入检查清单。"]
     expected_roles: [[EVIDENCE], [OPERATIONAL_RULE]]
+    expected_argument_ranges: [[1, 2]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 2]]
+    valuable_annotation: "从失败原因提炼将错误假设写入检查清单的复盘方法。"
     expected_relations: [CONTINUATION]
   - id: two_argument_boundaries
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["我认为估值必须保守。", "因此要预留安全边际。", "行业供需为什么突然变化？", "因为新增产能集中投放。"]
     expected_roles: [[CLAIM], [CONCLUSION], [QUESTION], [CAUSAL_REASON]]
     expected_argument_ranges: [[1, 2], [3, 4]]
+    expected_question_answer_links: [[3, 4]]
+    valuable_argument_ranges: [[1, 2], [3, 4]]
+    valuable_annotation: "分别覆盖保守估值规则与产能投放导致供需变化的因果解释。"
     expected_relations: [QUESTION_ANSWER]
   - id: image_between_claim_and_evidence
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     html: "<p>我认为财务趋势需要连续验证。</p><p><img alt='现金流表'></p><p>根据财报，经营现金流同比下降20%。</p>"
     expected_roles: [[CLAIM], [EVIDENCE], [EVIDENCE]]
+    expected_argument_ranges: [[1, 3]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 3]]
+    valuable_annotation: "以图表证据连续验证财务趋势。"
     expected_relations: [CLAIM_EVIDENCE]
-  - id: synthetic_comment_followup_only
-    scope: SYNTHETIC_GOLDEN_COMMENT_ONLY
-    paragraphs: ["你说风险下降，原因是什么？", "因为负债率下降且现金流改善。"]
-    expected_roles: [[QUESTION, RISK], [CAUSAL_REASON, EXPLANATION]]
-    expected_relations: [QUESTION_ANSWER]
   - id: html_heading_keeps_title_role
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     html: "<h2>估值研究框架</h2><p>我认为安全边际必须来自保守假设。</p><p>根据财报，现金流是验证依据。</p>"
     expected_roles: [[TITLE], [CLAIM], [EVIDENCE]]
+    expected_argument_ranges: [[1, 3]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 3]]
+    valuable_annotation: "把保守假设主张与现金流验证证据组成估值框架。"
     expected_relations: [CLAIM_EVIDENCE]
   - id: separated_evidence_chain
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
     paragraphs: ["我认为需要警惕利润质量。", "中间先说明公司的商业模式。", "根据财报，应收账款占比持续上升。", "因此风险尚未解除。"]
     expected_roles: [[CLAIM], [BACKGROUND], [EVIDENCE], [CONCLUSION, RISK]]
+    expected_argument_ranges: [[1, 4]]
+    expected_question_answer_links: []
+    valuable_argument_ranges: [[1, 4]]
+    valuable_annotation: "围绕利润质量主张整合商业背景、应收证据和风险结论。"
     expected_relations: [CLAIM_EVIDENCE, CONCLUSION_OF]
+  - id: four_complete_argument_ranges
+    scope: STOCK_MARKET_CROSS_PARAGRAPH
+    paragraphs: ["我认为估值必须保守。", "因此要预留安全边际。", "行业供需为什么突然变化？", "因为新增产能集中投放。", "估值为什么不能只看市盈率？", "因为现金流和增长持续性同样重要。", "仓位为什么要保留余地？", "因为反证出现时需要有调整空间。"]
+    expected_roles: [[CLAIM], [CONCLUSION], [QUESTION], [CAUSAL_REASON], [QUESTION], [CAUSAL_REASON], [QUESTION], [CAUSAL_REASON]]
+    expected_argument_ranges: [[1, 2], [3, 4], [5, 6], [7, 8]]
+    expected_question_answer_links: [[3, 4], [5, 6], [7, 8]]
+    valuable_argument_ranges: [[1, 2], [3, 4], [5, 6], [7, 8]]
+    valuable_annotation: "四段分别给出估值、供需、现金流和仓位调整的完整方法论证。"
+    expected_relations: [QUESTION_ANSWER]
   - id: marketing_negative
+    scope: DERIVED_NEGATIVE
     paragraphs: ["欢迎关注公众号。", "扫码购买付费课程。"]
+    expected_roles: [[MARKETING], [MARKETING]]
+    expected_argument_ranges: []
+    expected_question_answer_links: []
+    valuable_argument_ranges: []
+    valuable_annotation: "营销导流内容不包含研究方法。"
+    expected_relations: []
     expected_screen: EXCLUDED_DERIVED
   - id: casual_negative
+    scope: DERIVED_NEGATIVE
     paragraphs: ["哈哈。", "周末愉快！"]
+    expected_roles: [[CASUAL_CHAT], [CASUAL_CHAT]]
+    expected_argument_ranges: []
+    expected_question_answer_links: []
+    valuable_argument_ranges: []
+    valuable_annotation: "寒暄内容不包含研究方法。"
+    expected_relations: []
     expected_screen: EXCLUDED_DERIVED

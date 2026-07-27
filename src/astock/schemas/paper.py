@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
@@ -227,6 +227,17 @@ class PaperPlaceOrderPayload(AStockModel):
     instrument_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     daily_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     fee_rule_version: str = Field(min_length=1)
+
+
+class PaperExecutionRequest(AStockModel):
+    trade_protocol_id: str = Field(min_length=1)
+    user_confirmation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    account_id: str = Field(min_length=1)
+    created_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+    paper_operation_request_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    symbol: str = Field(pattern=r"^[0-9]{6}$")
+    qty: int = Field(gt=0)
+    limit_price_fen: int = Field(gt=0)
 
 
 class PaperCancelOrderPayload(AStockModel):

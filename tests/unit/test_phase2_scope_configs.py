@@ -11,6 +11,21 @@ def load_yaml(name: str) -> dict:
     return yaml.safe_load((PROJECT_ROOT / "configs" / name).read_text(encoding="utf-8"))
 
 
+def test_active_semantic_funnel_config_is_exact_three_view_v3() -> None:
+    config = load_yaml("knowledge_semantic_funnel.yaml")
+    assert config["schema_version"] == "3.0"
+    assert config["pipeline_version"] == "knowledge-semantic-funnel-three-view-v3"
+    assert (
+        config["embedding_contract_version"]
+        == "PARAGRAPH_AUX_ARGUMENT_FINAL_V3"
+    )
+    assert config["local_context"] == {
+        "previous_paragraphs": 1,
+        "following_paragraphs": 2,
+    }
+    assert config["argument_builder"]["maximum_argument_unit_chars"] == 1800
+
+
 def test_knowledge_allowlist_is_exact_and_online_identities_are_confirmed() -> None:
     sources = load_yaml("knowledge_sources.yaml")["sources"]
     by_name = {source["display_name"]: source for source in sources}
@@ -116,7 +131,7 @@ def test_root_documents_name_current_sources_and_knowledge_boundaries() -> None:
         assert text in acceptance
     for text in (
         "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate",
-        "生产范围永久排除评论和子回复",
+        "`ParagraphUnit` 是原文存储和定位单位",
         "PENDING/NOT_RUN",
     ):
         assert text in design + plan

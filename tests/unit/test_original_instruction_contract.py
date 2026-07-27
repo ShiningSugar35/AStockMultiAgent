@@ -42,27 +42,38 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
         assert required in design
     for required in (
         "开发计划只写未完成项",
-        "K5-E",
-        "SER-3",
-        "P5X-5",
+        "维护契约",
+        "K5-D4-R",
+        "K5-D5",
+        "K5-D6",
+        "知乎图片证据链",
+        "OpenCode/DeepSeek",
     ):
         assert required in plan
     for required in (
-        "验收报告只记录当前已经实现",
-        "当前能力矩阵",
-        "P5X-1：Provider Registry",
-        "P5X-2：免费 reference foundation",
-        "P5X-3：财务事实源到现有审计链",
-        "P5X-4：候选生成与注册表",
+        "本报告只记录已实现",
+        "当前能力",
+        "Phase 5 采集覆盖",
+        "论证级语义链",
+        "《价值投资功法》视觉证据链",
+        "OpenCode 边界",
         "research-skills-v2",
     ):
         assert required in acceptance
+    assert "Spark 首次实现" not in acceptance
+    assert "Sol takeover" not in acceptance
     assert "SER-1" not in plan
     assert "SER-2" not in plan
+    assert "SER-3" not in plan
     assert "P5X-1：" not in plan
     assert "P5X-2：" not in plan
     assert "P5X-3：" not in plan
     assert "P5X-4：" not in plan
+    assert "P5X-5" not in plan
+    assert "DeepSeek 执行" not in plan
+    assert "人工审核" not in plan
+    assert "K5-D3：" not in plan
+    assert "2P + A + 14" not in plan
     assert "旧段落级链" not in design
 
 

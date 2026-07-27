@@ -58,7 +58,7 @@
     },
     "R": {
       "status": "PARTIAL",
-      "notes": "ResearchRequest -> EvidenceCollectionTask -> EvidenceCollectionRun -> EvidencePack 已形成最小消费闭环；未接入真实抓取。"
+      "notes": "ResearchRequest -> EvidenceCollectionTask -> EvidenceCollectionRun -> EvidencePack 已形成最小消费闭环；已接入 FormalResearchPreparation 闭环门禁并形成 recorded 垂直切片；未接入真实抓取与全量自动执行。"
     },
     "H": {
       "status": "PARTIAL",
@@ -137,7 +137,8 @@
   "draft_next_steps": [
     "Validate downstream evidence collection runtime（idempotent）对 EvidenceCollectionRun 的消费。",
     "Set explicit Serenity production rollout and rollback policy.",
-    "Complete knowledge gap and restricted-source closure criteria."
+    "Complete knowledge gap and restricted-source closure criteria.",
+    "Complete formal research pre-entry and recorded vertical slice hardening for full Phase4 automation prerequisites."
   ],
   "files_for_external_review": [
     "docs/当前开发进展.md",
@@ -147,4 +148,3 @@
     "docs/PM_STATE.json"
   ]
 }
-

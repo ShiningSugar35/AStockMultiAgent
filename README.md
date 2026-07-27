@@ -11,7 +11,7 @@
 | 阶段 | 当前状态 | 边界 |
 |---|---|---|
 | Phase 0～4 | PROGRAM COMPLETE | 原生入口、可恢复状态、行情/账本、证据/PIT、财务可信度和通用投资内核已实现 |
-| Phase 5 | PARTIAL / PROVISIONAL | 3,788 篇正文已进入 Paragraph→Argument 新链；三位作者本地 Embedding 和 1,305 个完整 AU 离线包已完成，DeepSeek 执行/导入和人工 Skill 审核尚未闭合 |
+| Phase 5 | PARTIAL / PROVISIONAL | 三位作者纯文本 v3 包已生成但等待知乎图片证据；《价值投资功法》74/74 图片已 OCR、定位并进入视觉 AU，11 个 READY AU 已冻结为本地包，44 个保留 REVIEW |
 | Phase 6 | PROGRAM COMPLETE | 冻结工件委员会与选择性反方已实现 |
 | Phase 7 | PROGRAM COMPLETE / EVIDENCE NOT_RUN | 程序层完成，真实 study、决定和 observation 仍为 0 |
 | Phase 8 | P8.0 ONLY | 默认禁用状态壳已实现；P8.1～P8.4 未进入 |
@@ -25,7 +25,6 @@ Phase 5 后续底座矩阵：
 | Reference foundation | ACCEPTED | 主数据、日历、未复权日线和公司行动线索；不写模拟账本 |
 | 财务事实源 | ACCEPTED | 东财/Sina 辅助定位；只有精确官方 PDF 证据可认证，当前真实 release 为 0 |
 | 候选注册表 | ACCEPTED | typed/PIT/覆盖证明和审计闭合；候选仅表示值得研究，不含交易指令 |
-| 模拟操作层 | PLANNED | 模拟执行必须另行获得用户确认；委员会不能写账本 |
 
 Phase 5 正文类型矩阵：
 
@@ -36,7 +35,7 @@ Phase 5 正文类型矩阵：
 | 文章 | AVAILABLE | PARTIAL |
 | 专栏 | CONTRACT_GATE | B1b0 已验收；B1b1 等待真实枚举快照，`BLOCKED_EXTERNAL_OBSERVATION` |
 
-持久范围政策要求社区互动区数据不得进入后续采集、完成度和蒸馏；既有底层审计对象继续保留。B1a 已完成任务派生、覆盖审计、结构画像和蒸馏输入的范围退场。B1c 已统一线上审计冻结截点，默认保留 30 秒静默窗口；仅在调用方确认停写时使用 `--quiescence-lag-seconds 0`。
+线上覆盖审计统一使用冻结截点，默认保留 30 秒静默窗口；仅在调用方确认停写时使用 `--quiescence-lag-seconds 0`。
 
 ```powershell
 uv sync --all-groups

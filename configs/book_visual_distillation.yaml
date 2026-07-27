@@ -1,0 +1,44 @@
+schema_version: "1.0"
+pipeline_version: "book-visual-semantic-v1"
+layout_version: "pymupdf-placement-layout-v1"
+classification_version: "book-visual-classification-v1"
+clip_fallback_dpi: 300
+low_confidence_threshold: 0.72
+minimum_visible_ocr_chars: 4
+caption_margin_points: 28.0
+cover_minimum_area_ratio: 0.40
+decorative_maximum_area_ratio: 0.01
+chart_terms:
+  - chart
+  - figure
+  - graph
+  - plot
+  - trend
+  - axis
+  - 图
+  - 趋势
+  - 曲线
+table_terms:
+  - table
+  - 表
+  - 合计
+  - 同比
+  - 环比
+diagram_terms:
+  - diagram
+  - flow
+  - process
+  - framework
+  - 流程
+  - 框架
+method_signal_terms:
+  - valuation
+  - revenue
+  - profit
+  - risk
+  - method
+  - 估值
+  - 收入
+  - 利润
+  - 风险
+  - 方法

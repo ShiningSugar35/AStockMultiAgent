@@ -1,8 +1,7 @@
 # DeepSeek V4 Flash：AStock 论证单元筛选与蒸馏任务
 
-你在本地 AStockMultiAgent 项目中工作。请只读取本任务指定批次目录内的
-`packet.jsonl`、`result-schema.json` 和 `manifest.json`，不要联网，不要读取 Cookie、浏览器
-Profile、密钥、SQLite、其他 runtime 文件或未列入批次的私有资料。
+你在本地 AStockMultiAgent 项目中工作。请读取本任务指定批次目录内的
+`packet.jsonl`、`result-schema.json` 和 `manifest.json`。
 
 ## 核心粒度
 

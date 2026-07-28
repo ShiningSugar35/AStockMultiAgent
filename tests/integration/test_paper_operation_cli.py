@@ -33,8 +33,6 @@ def _protocol(
     *,
     symbol: str = "300750",
     status: CommitteeProtocolStatus = CommitteeProtocolStatus.ACTIVE,
-    broker_execution_allowed: bool = False,
-    ledger_write_allowed: bool = False,
     verdict: CommitteeVerdict = CommitteeVerdict.PAPER_ELIGIBLE,
 ) -> TradeProtocol:
     now = datetime.now(UTC)
@@ -71,8 +69,11 @@ def _protocol(
         evidence_ids=["evidence:fixture"],
         effective_from=now + timedelta(hours=1),
         requires_user_confirmation=True,
-        broker_execution_allowed=broker_execution_allowed,
-        ledger_write_allowed=ledger_write_allowed,
+        broker_execution_allowed=False,
+        paper_simulation_allowed=verdict
+        in {CommitteeVerdict.PAPER_ELIGIBLE, CommitteeVerdict.PAPER_EXIT},
+        ledger_write_allowed=verdict
+        in {CommitteeVerdict.PAPER_ELIGIBLE, CommitteeVerdict.PAPER_EXIT},
         created_at=now,
     )
 
@@ -187,8 +188,6 @@ def test_paper_committee_execute_refuses_without_confirmation(
     service = _FakePaperExecutionService()
     protocol = _protocol(
         status=CommitteeProtocolStatus.ACTIVE,
-        broker_execution_allowed=True,
-        ledger_write_allowed=True,
     )
     monkeypatch.setattr(
         "astock.cli._committee_service",
@@ -231,15 +230,11 @@ def test_paper_committee_execute_rejects_non_exec_verdicts(
     rejected_protocols = {
         "committee_reject": _protocol(
             verdict=CommitteeVerdict.PAPER_HOLD,
-            status=CommitteeProtocolStatus.ACTIVE,
-            broker_execution_allowed=False,
-            ledger_write_allowed=False,
+            status=CommitteeProtocolStatus.BLOCKED,
         ),
         "needs_info": _protocol(
             verdict=CommitteeVerdict.NEEDS_INFO,
             status=CommitteeProtocolStatus.BLOCKED,
-            broker_execution_allowed=False,
-            ledger_write_allowed=False,
         ),
     }
     for case, protocol in rejected_protocols.items():
@@ -291,10 +286,8 @@ def test_paper_committee_execute_rejects_when_ledger_gate_closed(
 ) -> None:
     _fake_cli_paths(tmp_path, monkeypatch)
     service = _FakePaperExecutionService()
-    protocol = _protocol(
-        status=CommitteeProtocolStatus.ACTIVE,
-        broker_execution_allowed=True,
-        ledger_write_allowed=False,
+    protocol = _protocol(status=CommitteeProtocolStatus.ACTIVE).model_copy(
+        update={"ledger_write_allowed": False}
     )
     confirmation_id = content_hash({"commit": "ledger-close"})
     request_path, confirmation_path, operation, _ = _write_request_files(
@@ -345,8 +338,6 @@ def test_paper_committee_execute_success_and_idempotent(tmp_path: Path, monkeypa
     service = _FakePaperExecutionService()
     protocol = _protocol(
         status=CommitteeProtocolStatus.ACTIVE,
-        broker_execution_allowed=True,
-        ledger_write_allowed=True,
     )
     confirmation_id = content_hash({"commit": "success"})
     request_path, confirmation_path, operation, _ = _write_request_files(

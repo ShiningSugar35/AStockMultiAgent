@@ -129,6 +129,7 @@ class CanonicalMarketStore:
         report: DataQualityReport,
         *,
         source_batch_ids: list[str],
+        source_snapshot_ids: list[str] | None = None,
     ) -> dict[str, object]:
         if (
             report.quality_status == QualityStatus.FAIL
@@ -163,6 +164,25 @@ class CanonicalMarketStore:
                 ]
             )
         )
+        previous_source_snapshot_ids: list[str] = []
+        if previous_manifest is not None:
+            raw_snapshot_ids = previous_manifest.get("source_snapshot_ids", [])
+            if not isinstance(raw_snapshot_ids, list) or not all(
+                isinstance(value, str) for value in raw_snapshot_ids
+            ):
+                raise DataQualityError(
+                    "Canonical manifest source_snapshot_ids are invalid",
+                    failure_class=FailureClass.DATA_QUALITY,
+                )
+            previous_source_snapshot_ids = raw_snapshot_ids
+        all_source_snapshot_ids = list(
+            dict.fromkeys(
+                [
+                    *previous_source_snapshot_ids,
+                    *(source_snapshot_ids or [selected.raw_snapshot_id]),
+                ]
+            )
+        )
         canonical_batch_id = content_hash(
             {
                 "selected_provider": selected.provider_id,
@@ -185,7 +205,7 @@ class CanonicalMarketStore:
         files = self.writer.write_batch(canonical_batch)
         relative_files = [str(path.relative_to(self.data_root)) for path in files]
         manifest: dict[str, object] = {
-            "schema_version": "1.2",
+            "schema_version": "1.3",
             "market": selected.request.market.value,
             "instrument_type": selected.request.instrument_type.value,
             "symbol": selected.request.symbol,
@@ -193,6 +213,7 @@ class CanonicalMarketStore:
             "adjustment_mode": selected.request.adjustment_mode.value,
             "canonical_batch_id": canonical_batch_id,
             "source_batch_ids": all_source_batch_ids,
+            "source_snapshot_ids": all_source_snapshot_ids,
             "selected_provider": selected.provider_id,
             "quality_report_id": report.report_id,
             "replay_quality": report.replay_quality.value,

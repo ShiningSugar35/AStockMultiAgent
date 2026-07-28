@@ -1,0 +1,89 @@
+registry_version: phase6-recorded-skills-v1
+open_source_audit_manifest_files: []
+max_specialists: 3
+coverage_confidence_caps:
+  SUFFICIENT: 0.90
+  PARTIAL: 0.70
+  INSUFFICIENT: 0.45
+skills:
+  - skill_id: SerenityRecordedSkill
+    skill_version: serenity-recorded-v1
+    kind: INDUSTRY_BOTTLENECK
+    source_references:
+      - local:recorded-acceptance-adaptation-of-audited-serenity-v2
+      - recorded:phase6-300750-software-acceptance-only
+    trigger_tags: [phase6_recorded, serenity]
+    industry_tags: []
+    event_tags: []
+    horizons: [long]
+    required_inputs: [recorded_official_evidence]
+    optional_input_degradation_codes: {}
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL]
+    reasoning_steps:
+      - Apply the audited Serenity contract to the frozen recorded fixture only.
+      - Preserve citations and explicit failure modes.
+    positive_signals: [recorded_lineage_complete]
+    negative_signals: [recorded_lineage_incomplete]
+    invalidation_conditions: [fixture_lineage_changed]
+    known_failure_modes: [acceptance_fixture_misrepresented_as_live_research]
+    output_schema: SpecialistDelta
+    cost_class: LOW
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: ZhihuExpertRecordedSkill
+    skill_version: zhihu-expert-recorded-v1
+    kind: EVENT_TO_ALPHA
+    source_references:
+      - recorded:phase6-300750-zhihu-expert-software-acceptance-only
+    trigger_tags: [phase6_recorded, zhihu_expert]
+    industry_tags: []
+    event_tags: []
+    horizons: [long]
+    required_inputs: [recorded_official_evidence]
+    optional_input_degradation_codes: {}
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL]
+    reasoning_steps:
+      - Apply the frozen recorded expert lens without adding factual claims.
+      - Keep every inference bound to official fixture evidence.
+    positive_signals: [recorded_expert_lineage_complete]
+    negative_signals: [recorded_expert_lineage_incomplete]
+    invalidation_conditions: [fixture_lineage_changed]
+    known_failure_modes: [provisional_zhihu_material_treated_as_production_skill]
+    output_schema: SpecialistDelta
+    cost_class: LOW
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: ResearchMemoComposer
+    skill_version: research-memo-composer-v1
+    kind: RESEARCH_MEMO
+    source_references:
+      - local:citation-preserving-memo-v1
+    trigger_tags: []
+    industry_tags: []
+    event_tags: []
+    horizons: [long]
+    required_inputs: [base_case]
+    optional_input_degradation_codes: {}
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL]
+    reasoning_steps:
+      - Compose only the frozen BaseCase and selected recorded deltas.
+      - Preserve all evidence identifiers.
+    positive_signals: [citation_union_preserved]
+    negative_signals: [new_uncited_fact]
+    invalidation_conditions: [frozen_input_changed]
+    known_failure_modes: [acceptance_fixture_misrepresented_as_live_research]
+    output_schema: ResearchMemoArtifact
+    cost_class: LOW
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: false
+    status: ENABLED_CONTRACT

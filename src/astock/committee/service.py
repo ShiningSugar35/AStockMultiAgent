@@ -23,6 +23,7 @@ from astock.schemas import (
     CommitteeInputBundle,
     CommitteeInputRole,
     CommitteeInvestigationTask,
+    CommitteeMemberRole,
     CommitteeNarrativeMode,
     CommitteePlanReport,
     CommitteeProtocolStatus,
@@ -88,6 +89,17 @@ _GENERATED_ARTIFACT_TYPES = {
     "CommitteeRuleConfig",
     "CounterCasePack",
 }
+
+_SERENITY_SKILL_IDS = {
+    "DailyTrendHealthSkill",
+    "EventToAlphaSkill",
+    "GrowthProbabilitySkill",
+    "GrowthValuationLens",
+    "IndustryBottleneckSkill",
+    "SerenityRecordedSkill",
+}
+_ZHIHU_EXPERT_SKILL_IDS = {"ZhihuExpertRecordedSkill", "ZhihuExpertSkill"}
+_TRADE_PROTOCOL_CONTRACT_VERSION = "paper-only-confirmed-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,12 +191,8 @@ class CommitteeService:
             verdict=prepared.decision.verdict,
             hard_blocks=prepared.decision.hard_blocks,
             counter_case_trigger_codes=prepared.triggers,
-            missing_counter_case=(
-                bool(prepared.triggers) and prepared.counter_case is None
-            ),
-            investigation_reason_codes=sorted(
-                task.reason_code for task in prepared.tasks
-            ),
+            missing_counter_case=(bool(prepared.triggers) and prepared.counter_case is None),
+            investigation_reason_codes=sorted(task.reason_code for task in prepared.tasks),
             context_budget=prepared.decision.context_budget,
             created_at=request.assessment.as_of,
         )
@@ -210,6 +218,13 @@ class CommitteeService:
                 ),
             },
         )
+
+    def decide_investment(self, request: CommitteeDecisionRequest) -> CommitteeExecution:
+        """Run the Phase 6 committee only when every mandatory member is frozen."""
+
+        if not request.member_bindings:
+            raise ValueError("investment committee member bindings are required")
+        return self.decide(request)
 
     def recover(self, request: CommitteeDecisionRequest) -> dict[str, object]:
         execution = self.decide(request)
@@ -312,9 +327,7 @@ class CommitteeService:
             findings.add("ASSESSMENT_REFERENCE_MISSING")
             assessment = None
         else:
-            assessment_id = assessment_ref.artifact_id.removeprefix(
-                "CommitteeAssessmentSnapshot:"
-            )
+            assessment_id = assessment_ref.artifact_id.removeprefix("CommitteeAssessmentSnapshot:")
             assessment = self.repository.get_assessment(assessment_id)
             if assessment is None:
                 findings.add("ASSESSMENT_MISSING")
@@ -428,14 +441,10 @@ class CommitteeService:
                 ) != canonical_json_bytes(protocol.model_dump(mode="json")):
                     findings.add("TRADE_PROTOCOL_RECOMPUTE_MISMATCH")
                 expected_tasks = {
-                    task.task_id: sha256_bytes(
-                        canonical_json_bytes(task.model_dump(mode="json"))
-                    )
+                    task.task_id: sha256_bytes(canonical_json_bytes(task.model_dump(mode="json")))
                     for task in prepared.tasks
                 }
-                actual_tasks = {
-                    str(row["task_id"]): str(row["object_hash"]) for row in task_rows
-                }
+                actual_tasks = {str(row["task_id"]): str(row["object_hash"]) for row in task_rows}
                 if expected_tasks != actual_tasks:
                     findings.add("INVESTIGATION_TASK_RECOMPUTE_MISMATCH")
             except (ValueError, TypeError):
@@ -459,9 +468,7 @@ class CommitteeService:
         rules = rules_override or self.configured_rules
         self.policy_engine.check_committee_access(
             request.access_policy,
-            expected_hashes=[
-                item.object_sha256 for item in request.artifact_references
-            ],
+            expected_hashes=[item.object_sha256 for item in request.artifact_references],
         )
         if rules.effective_from > request.assessment.as_of:
             raise ValueError("committee rules are not effective at the requested as_of")
@@ -566,6 +573,10 @@ class CommitteeService:
             item.model_copy(update={"created_at": assessment.as_of})
             for item in request.artifact_references
         ]
+        normalized_member_bindings = [
+            item.model_copy(update={"created_at": assessment.as_of})
+            for item in request.member_bindings
+        ]
         bundle_references = sorted(
             [*normalized_initial_references, *generated_references],
             key=lambda item: item.artifact_id,
@@ -583,6 +594,10 @@ class CommitteeService:
                 )
                 for item in bundle_references
             ],
+            "member_bindings": [
+                (item.role.value, item.artifact_id, item.object_sha256)
+                for item in normalized_member_bindings
+            ],
             "rules_version": rules.rules_version,
             "engine_version": rules.engine_version,
         }
@@ -593,10 +608,9 @@ class CommitteeService:
             scope=assessment.scope,
             as_of=assessment.as_of,
             artifact_references=bundle_references,
+            member_bindings=normalized_member_bindings,
             access_policy=CommitteeAccessPolicy(
-                frozen_artifact_hashes=sorted(
-                    item.object_sha256 for item in bundle_references
-                ),
+                frozen_artifact_hashes=sorted(item.object_sha256 for item in bundle_references),
                 created_at=assessment.as_of,
             ),
             rules_version=rules.rules_version,
@@ -622,9 +636,7 @@ class CommitteeService:
                 artifact_type="CommitteeInputBundle",
                 schema_version=bundle.schema_version,
                 object_hash=bundle_object_hash,
-                input_hashes=sorted(
-                    item.object_sha256 for item in bundle.artifact_references
-                ),
+                input_hashes=sorted(item.object_sha256 for item in bundle.artifact_references),
             )
 
         generated_sizes = {
@@ -657,9 +669,7 @@ class CommitteeService:
             "verdict": verdict.value,
             "hard_blocks": hard_blocks,
             "reason_codes": reason_codes,
-            "counter_case_id": (
-                counter_case.counter_case_id if counter_case is not None else None
-            ),
+            "counter_case_id": (counter_case.counter_case_id if counter_case is not None else None),
             "max_position": str(self._max_position(verdict, assessment, rules)),
             "review_at": assessment.review_at,
         }
@@ -684,9 +694,7 @@ class CommitteeService:
             | set(assessment.coverage.evidence_ids)
             | set(assessment.portfolio_risk.evidence_ids)
             | set(assessment.protocol.evidence_ids)
-            | (
-                set(counter_case.evidence_ids) if counter_case is not None else set()
-            )
+            | (set(counter_case.evidence_ids) if counter_case is not None else set())
         )
         rationale_codes = sorted(
             {
@@ -703,9 +711,7 @@ class CommitteeService:
             as_of=assessment.as_of,
             rules_version=rules.rules_version,
             engine_version=rules.engine_version,
-            frozen_input_hashes=sorted(
-                item.object_sha256 for item in bundle.artifact_references
-            ),
+            frozen_input_hashes=sorted(item.object_sha256 for item in bundle.artifact_references),
             verdict=verdict,
             expected_return_range=assessment.expected_return_range,
             downside_range=assessment.downside_range,
@@ -713,9 +719,7 @@ class CommitteeService:
             hard_blocks=hard_blocks,
             needs_info_task_ids=task_ids,
             counter_case_trigger_codes=triggers,
-            counter_case_id=(
-                counter_case.counter_case_id if counter_case is not None else None
-            ),
+            counter_case_id=(counter_case.counter_case_id if counter_case is not None else None),
             current_position=assessment.current_position,
             max_position=self._max_position(verdict, assessment, rules),
             review_at=assessment.review_at,
@@ -746,6 +750,7 @@ class CommitteeService:
                 "decision_sha256": decision.decision_sha256,
                 "protocol_draft": assessment.protocol,
                 "rules_version": rules.rules_version,
+                "execution_contract": _TRADE_PROTOCOL_CONTRACT_VERSION,
             }
         )
         task_object_hashes: dict[str, str] = {}
@@ -856,9 +861,7 @@ class CommitteeService:
                     f"unsupported frozen committee input type: {reference.artifact_type}"
                 )
             if reference.role is not _EXPECTED_ROLES[reference.artifact_type]:
-                raise ValueError(
-                    f"committee artifact role mismatch: {reference.artifact_id}"
-                )
+                raise ValueError(f"committee artifact role mismatch: {reference.artifact_id}")
             if not self._reference_matches_registry(reference):
                 raise ValueError(
                     f"registered frozen committee input mismatch: {reference.artifact_id}"
@@ -911,9 +914,7 @@ class CommitteeService:
         actual_delta_ids = sorted(item.delta_id for item in deltas)
         if expected_delta_ids != actual_delta_ids:
             raise ValueError("committee must freeze every SpecialistDelta referenced by the memo")
-        route_skill_versions = {
-            item.skill_id: item.skill_version for item in route.selected
-        }
+        route_skill_versions = {item.skill_id: item.skill_version for item in route.selected}
         for delta in deltas:
             if (
                 delta.base_case_id != base.base_case_id
@@ -922,6 +923,8 @@ class CommitteeService:
                 or route_skill_versions.get(delta.skill_id) != delta.skill_version
             ):
                 raise ValueError("committee SpecialistDelta lineage mismatch")
+        if request.member_bindings:
+            self._validate_investment_members(request, by_type, deltas)
         delta_by_id = {item.delta_id: item for item in deltas}
         for diagnostic_model in by_type.get("SpecialistDiagnosticReport", []):
             diagnostic = cast(SpecialistDiagnosticReport, diagnostic_model)
@@ -982,9 +985,7 @@ class CommitteeService:
                 evidence_ids.update(_collect_evidence_ids(model.model_dump(mode="python")))
         assessment_evidence = _assessment_evidence_ids(request.assessment)
         if not assessment_evidence.issubset(evidence_ids):
-            raise ValueError(
-                "committee assessment cites evidence outside the frozen artifact set"
-            )
+            raise ValueError("committee assessment cites evidence outside the frozen artifact set")
         if request.assessment.protocol.evidence_snapshot_id != evidence_pack.pack_id:
             raise ValueError("trade protocol must reference the frozen EvidencePack")
 
@@ -1042,8 +1043,7 @@ class CommitteeService:
         ):
             triggers.add(CounterCaseTriggerCode.LOW_COVERAGE_DOMAIN)
         if (
-            assessment.expected_return_range.lower
-            >= rules.high_potential_return_lower
+            assessment.expected_return_range.lower >= rules.high_potential_return_lower
             and coverage.evidence_coverage
             < min(Decimal("1"), rules.min_evidence_coverage + rules.low_coverage_margin)
         ):
@@ -1215,9 +1215,7 @@ class CommitteeService:
             return CommitteeVerdict.NEEDS_INFO, sorted(needs_info), sorted(reasons)
 
         proposals = loaded.by_type.get("PositionActionProposal", [])
-        proposal_action = (
-            cast(PositionActionProposal, proposals[0]).action if proposals else None
-        )
+        proposal_action = cast(PositionActionProposal, proposals[0]).action if proposals else None
         if assessment.scope is not CommitteeDecisionScope.NEW_CANDIDATE:
             if assessment.thesis_invalidated or proposal_action is PositionAction.EXIT:
                 reasons.add("HOLDING_EXIT_TRIGGER")
@@ -1264,10 +1262,7 @@ class CommitteeService:
         elif assessment.estimated_provider_cost_cny > 0 and not rules.provider_enabled:
             mode = CommitteeNarrativeMode.DETERMINISTIC_ONLY
             degradation.add("OPTIONAL_PROVIDER_DISABLED")
-        elif (
-            assessment.estimated_provider_cost_cny
-            > rules.provider_cost_ceiling_cny
-        ):
+        elif assessment.estimated_provider_cost_cny > rules.provider_cost_ceiling_cny:
             mode = CommitteeNarrativeMode.PROVIDER_COST_EXCEEDED
             degradation.add("OPTIONAL_PROVIDER_COST_CEILING_EXCEEDED")
         else:
@@ -1363,7 +1358,6 @@ class CommitteeService:
         draft = assessment.protocol
         active = decision.verdict in {
             CommitteeVerdict.PAPER_ELIGIBLE,
-            CommitteeVerdict.PAPER_HOLD,
             CommitteeVerdict.PAPER_EXIT,
         }
         execution_enabled = decision.verdict in {
@@ -1371,13 +1365,12 @@ class CommitteeService:
             CommitteeVerdict.PAPER_EXIT,
         }
         blocking_codes = (
-            []
-            if active
-            else sorted(decision.hard_blocks or [f"VERDICT_{decision.verdict.value}"])
+            [] if active else sorted(decision.hard_blocks or [f"VERDICT_{decision.verdict.value}"])
         )
         identity = {
             "decision_sha256": decision.decision_sha256,
             "protocol_draft": draft,
+            "execution_contract": _TRADE_PROTOCOL_CONTRACT_VERSION,
             "status": "ACTIVE" if active else "BLOCKED",
             "blocking_codes": blocking_codes,
         }
@@ -1389,9 +1382,7 @@ class CommitteeService:
             company_id=decision.company_id,
             verdict=decision.verdict,
             protocol_status=(
-                CommitteeProtocolStatus.ACTIVE
-                if active
-                else CommitteeProtocolStatus.BLOCKED
+                CommitteeProtocolStatus.ACTIVE if active else CommitteeProtocolStatus.BLOCKED
             ),
             blocking_codes=blocking_codes,
             strategy_id=draft.strategy_id,
@@ -1415,7 +1406,8 @@ class CommitteeService:
             evidence_snapshot_id=draft.evidence_snapshot_id,
             evidence_ids=draft.evidence_ids,
             effective_from=draft.earliest_executable_time,
-            broker_execution_allowed=execution_enabled,
+            broker_execution_allowed=False,
+            paper_simulation_allowed=execution_enabled,
             ledger_write_allowed=execution_enabled,
             created_at=assessment.as_of,
         )
@@ -1476,16 +1468,49 @@ class CommitteeService:
         )
         return CommitteeDecisionRequest(
             artifact_references=initial_references,
+            member_bindings=bundle.member_bindings,
             assessment=reconstructed_assessment,
             counter_case=counter_case_draft,
             access_policy=CommitteeAccessPolicy(
-                frozen_artifact_hashes=sorted(
-                    item.object_sha256 for item in initial_references
-                ),
+                frozen_artifact_hashes=sorted(item.object_sha256 for item in initial_references),
                 created_at=assessment.as_of,
             ),
             created_at=assessment.as_of,
         )
+
+    @staticmethod
+    def _validate_investment_members(
+        request: CommitteeDecisionRequest,
+        by_type: dict[str, list[AStockModel]],
+        deltas: list[SpecialistDelta],
+    ) -> None:
+        binding_by_role = {item.role: item for item in request.member_bindings}
+        reference_by_id = {item.artifact_id: item for item in request.artifact_references}
+        expected_type_by_role = {
+            CommitteeMemberRole.BASE_CASE: "BaseCasePack",
+            CommitteeMemberRole.SERENITY_DELTA: "SpecialistDelta",
+            CommitteeMemberRole.ZHIHU_EXPERT_DELTA: "SpecialistDelta",
+            CommitteeMemberRole.FINANCIAL_INTEGRITY: "FinancialIntegrityEvidencePack",
+        }
+        for role, expected_type in expected_type_by_role.items():
+            binding = binding_by_role[role]
+            reference = reference_by_id[binding.artifact_id]
+            if reference.artifact_type != expected_type:
+                raise ValueError(f"committee member {role.value} has the wrong artifact type")
+
+        delta_by_artifact_id = {f"SpecialistDelta:{item.delta_id}": item for item in deltas}
+        serenity = delta_by_artifact_id.get(
+            binding_by_role[CommitteeMemberRole.SERENITY_DELTA].artifact_id
+        )
+        zhihu = delta_by_artifact_id.get(
+            binding_by_role[CommitteeMemberRole.ZHIHU_EXPERT_DELTA].artifact_id
+        )
+        if serenity is None or serenity.skill_id not in _SERENITY_SKILL_IDS:
+            raise ValueError("SERENITY_DELTA is not produced by an approved Serenity Skill")
+        if zhihu is None or zhihu.skill_id not in _ZHIHU_EXPERT_SKILL_IDS:
+            raise ValueError("ZHIHU_EXPERT_DELTA is not produced by an approved Zhihu Skill")
+        if not by_type.get("FinancialIntegrityEvidencePack"):
+            raise ValueError("investment committee requires Financial Integrity")
 
     def _reference_matches_registry(self, reference: CommitteeArtifactReference) -> bool:
         row = self._registry_row(reference.artifact_id)
@@ -1552,11 +1577,7 @@ def _assessment_evidence_ids(assessment: CommitteeAssessment) -> set[str]:
 def _replace_created_at(value: object, created_at: object) -> object:
     if isinstance(value, dict):
         return {
-            key: (
-                created_at
-                if key == "created_at"
-                else _replace_created_at(child, created_at)
-            )
+            key: (created_at if key == "created_at" else _replace_created_at(child, created_at))
             for key, child in value.items()
         }
     if isinstance(value, list):

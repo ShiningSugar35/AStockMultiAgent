@@ -81,7 +81,8 @@ class ShadowRepository:
             "SELECT study_id,study_name,study_mode,effective_from,observation_end,"
             "candidate_policy_id,candidate_policy_version,candidate_set_id,policy_version,"
             "engine_version,evidence_status,arm_count,object_hash,request_hash,study_hash,"
-            "created_at FROM shadow_study_index WHERE study_id=?",
+            "created_at,registered_at,prospective_eligible "
+            "FROM shadow_study_index WHERE study_id=?",
             (study_id,),
         )
 
@@ -90,8 +91,8 @@ class ShadowRepository:
             "SELECT study_id,study_name,study_mode,effective_from,observation_end,"
             "candidate_policy_id,candidate_policy_version,candidate_set_id,policy_version,"
             "engine_version,evidence_status,arm_count,object_hash,request_hash,study_hash,"
-            "created_at FROM shadow_study_index "
-            "ORDER BY created_at DESC,study_id DESC LIMIT 1",
+            "created_at,registered_at,prospective_eligible FROM shadow_study_index "
+            "ORDER BY COALESCE(registered_at,created_at) DESC,study_id DESC LIMIT 1",
             (),
         )
 
@@ -141,6 +142,8 @@ class ShadowRepository:
         *,
         manifest_object_hash: str,
         arm_object_hashes: dict[str, str],
+        registered_at: datetime,
+        prospective_eligible: bool,
     ) -> ShadowStudyManifest:
         with self.state.transaction() as connection:
             row = connection.execute(
@@ -163,7 +166,8 @@ class ShadowRepository:
                 "study_id,study_name,study_mode,effective_from,observation_end,"
                 "candidate_policy_id,candidate_policy_version,candidate_set_id,policy_version,"
                 "engine_version,evidence_status,arm_count,object_hash,request_hash,study_hash,"
-                "created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "created_at,registered_at,prospective_eligible) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     manifest.study_id,
                     manifest.study_name,
@@ -185,6 +189,8 @@ class ShadowRepository:
                     manifest.request_sha256,
                     manifest.study_sha256,
                     manifest.created_at.astimezone(UTC).isoformat(),
+                    registered_at.astimezone(UTC).isoformat(),
+                    int(prospective_eligible),
                 ),
             )
             for arm in arms:
@@ -212,10 +218,27 @@ class ShadowRepository:
     def assignment_summary(self, assignment_id: str) -> dict[str, object] | None:
         return self._one(
             "SELECT assignment_id,study_id,candidate_set_id,company_id,symbol,market,"
-            "signal_time,independence_key,thesis_version,event_id,trade_protocol_id,"
-            "arm_signal_count,object_hash,assignment_hash,created_at "
+            "signal_time,independence_key,thesis_version,event_id,research_memo_id,"
+            "decision_id,trade_protocol_id,arm_signal_count,object_hash,assignment_hash,"
+            "created_at,registered_at,prospective_eligible "
             "FROM shadow_assignment_index WHERE assignment_id=?",
             (assignment_id,),
+        )
+
+    def assignment_research_identity_conflict(
+        self,
+        study_id: str,
+        *,
+        research_memo_id: str,
+        decision_id: str,
+    ) -> dict[str, object] | None:
+        return self._one(
+            "SELECT assignment_id,research_memo_id,decision_id "
+            "FROM shadow_assignment_index "
+            "WHERE study_id=? AND prospective_eligible=1 "
+            "AND (research_memo_id=? OR decision_id=?) "
+            "ORDER BY assignment_id LIMIT 1",
+            (study_id, research_memo_id, decision_id),
         )
 
     def assignment_inputs(self, assignment_id: str) -> list[dict[str, object]]:
@@ -253,6 +276,8 @@ class ShadowRepository:
         assignment: ShadowDecisionAssignment,
         *,
         object_hash: str,
+        registered_at: datetime,
+        prospective_eligible: bool,
     ) -> ShadowDecisionAssignment:
         with self.state.transaction() as connection:
             row = connection.execute(
@@ -270,9 +295,10 @@ class ShadowRepository:
                 connection.execute(
                     "INSERT INTO shadow_assignment_index("
                     "assignment_id,study_id,candidate_set_id,company_id,symbol,market,"
-                    "signal_time,independence_key,thesis_version,event_id,trade_protocol_id,"
-                    "arm_signal_count,object_hash,assignment_hash,created_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "signal_time,independence_key,thesis_version,event_id,research_memo_id,"
+                    "decision_id,trade_protocol_id,arm_signal_count,object_hash,assignment_hash,"
+                    "created_at,registered_at,prospective_eligible) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         assignment.assignment_id,
                         assignment.study_id,
@@ -284,11 +310,15 @@ class ShadowRepository:
                         assignment.independence_key,
                         assignment.thesis_version,
                         assignment.event_id,
+                        assignment.research_memo_id,
+                        assignment.decision_id,
                         assignment.trade_protocol_id,
                         len(assignment.arm_signals),
                         object_hash,
                         assignment.assignment_sha256,
                         assignment.created_at.astimezone(UTC).isoformat(),
+                        registered_at.astimezone(UTC).isoformat(),
+                        int(prospective_eligible),
                     ),
                 )
             for reference in assignment.artifact_references:
@@ -392,7 +422,8 @@ class ShadowRepository:
             "SELECT observation_id,observation_version,supersedes_observation_id,study_id,"
             "assignment_id,arm_id,regime_id,independence_key,"
             "horizon_days,observation_status,formal_eligible,signal_time,valuation_time,"
-            "replay_quality,net_pnl_fen,object_hash,observation_hash,created_at "
+            "replay_quality,net_pnl_fen,outcome_data_source,data_available_at,thesis_status,"
+            "object_hash,observation_hash,created_at,registered_at,forward_data_eligible "
             "FROM shadow_observation_index WHERE observation_id=?",
             (observation_id,),
         )
@@ -402,7 +433,8 @@ class ShadowRepository:
             "SELECT observation_id,observation_version,supersedes_observation_id,study_id,"
             "assignment_id,arm_id,regime_id,independence_key,horizon_days,"
             "observation_status,formal_eligible,signal_time,valuation_time,replay_quality,"
-            "net_pnl_fen,object_hash,observation_hash,created_at "
+            "net_pnl_fen,outcome_data_source,data_available_at,thesis_status,object_hash,"
+            "observation_hash,created_at,registered_at,forward_data_eligible "
             "FROM shadow_observation_index WHERE study_id=? "
             "ORDER BY assignment_id,arm_id,horizon_days,created_at,observation_id",
             (study_id,),
@@ -419,7 +451,8 @@ class ShadowRepository:
             "SELECT observation_id,observation_version,supersedes_observation_id,study_id,"
             "assignment_id,arm_id,regime_id,independence_key,horizon_days,observation_status,"
             "formal_eligible,signal_time,valuation_time,replay_quality,net_pnl_fen,object_hash,"
-            "observation_hash,created_at FROM shadow_observation_index "
+            "observation_hash,created_at,registered_at,forward_data_eligible "
+            "FROM shadow_observation_index "
             "WHERE assignment_id=? AND arm_id=? AND horizon_days=? "
             "ORDER BY created_at DESC,observation_id DESC LIMIT 1",
             (assignment_id, arm_id, horizon_days),
@@ -490,6 +523,8 @@ class ShadowRepository:
         observation: ShadowExecutionObservation,
         *,
         object_hash: str,
+        registered_at: datetime,
+        forward_data_eligible: bool,
     ) -> ShadowExecutionObservation:
         with self.state.transaction() as connection:
             row = connection.execute(
@@ -511,8 +546,9 @@ class ShadowRepository:
                 "observation_id,observation_version,supersedes_observation_id,study_id,"
                 "assignment_id,arm_id,regime_id,independence_key,"
                 "horizon_days,observation_status,formal_eligible,signal_time,valuation_time,"
-                "replay_quality,net_pnl_fen,object_hash,observation_hash,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "replay_quality,net_pnl_fen,outcome_data_source,data_available_at,thesis_status,"
+                "object_hash,observation_hash,created_at,registered_at,forward_data_eligible) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     observation.observation_id,
                     observation.observation_version,
@@ -533,12 +569,68 @@ class ShadowRepository:
                     ),
                     observation.replay_quality.value,
                     observation.net_pnl_fen,
+                    observation.outcome_data_source.value,
+                    (
+                        observation.data_available_at.astimezone(UTC).isoformat()
+                        if observation.data_available_at
+                        else None
+                    ),
+                    observation.thesis_status.value,
                     object_hash,
                     observation.observation_sha256,
                     observation.created_at.astimezone(UTC).isoformat(),
+                    registered_at.astimezone(UTC).isoformat(),
+                    int(forward_data_eligible),
                 ),
             )
         return observation
+
+    def prospective_assignment_ids(self, study_id: str) -> set[str]:
+        rows = self._many(
+            "SELECT assignment_id FROM shadow_assignment_index "
+            "WHERE study_id=? AND prospective_eligible=1 ORDER BY assignment_id",
+            (study_id,),
+        )
+        return {str(row["assignment_id"]) for row in rows}
+
+    def forward_counts(
+        self,
+        study_id: str,
+        *,
+        final_horizon_days: int,
+    ) -> dict[str, int]:
+        with closing(self.state.connect()) as connection:
+            prospective_events = int(
+                connection.execute(
+                    "SELECT COUNT(DISTINCT independence_key) "
+                    "FROM shadow_assignment_index "
+                    "WHERE study_id=? AND prospective_eligible=1",
+                    (study_id,),
+                ).fetchone()[0]
+            )
+            mature_events = int(
+                connection.execute(
+                    "SELECT COUNT(DISTINCT latest.assignment_id) FROM ("
+                    "SELECT assignment_id,arm_id,observation_status,formal_eligible,"
+                    "forward_data_eligible,"
+                    "ROW_NUMBER() OVER (PARTITION BY assignment_id,arm_id,horizon_days "
+                    "ORDER BY created_at DESC,observation_id DESC) AS version_rank "
+                    "FROM shadow_observation_index "
+                    "WHERE study_id=? AND horizon_days=?"
+                    ") AS latest JOIN shadow_arm_index AS arm "
+                    "ON arm.arm_id=latest.arm_id "
+                    "WHERE latest.version_rank=1 "
+                    "AND latest.observation_status='MATURE' "
+                    "AND latest.formal_eligible=1 "
+                    "AND latest.forward_data_eligible=1 "
+                    "AND arm.arm_type='FULL_COMMITTEE'",
+                    (study_id, final_horizon_days),
+                ).fetchone()[0]
+            )
+        return {
+            "formal_forward_event_count": prospective_events,
+            "formal_mature_future_event_count": mature_events,
+        }
 
     def latest_report_summary(self, study_id: str) -> dict[str, object] | None:
         return self._one(

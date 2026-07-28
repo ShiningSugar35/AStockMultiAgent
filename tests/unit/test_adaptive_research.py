@@ -211,7 +211,7 @@ def test_no_study_status_is_stable_fail_closed_and_has_no_database_writes(
     )
     assert first.phase7_audit_status == "NOT_RUN"
     assert first.reason_codes == ["PHASE7_STUDY_NOT_RUN"]
-    assert first.shadow_policy_version == "shadow-evaluation-policy-v1"
+    assert first.shadow_policy_version == "shadow-evaluation-policy-v2"
     assert first.observation_month_gap == Decimal("12")
     assert first.independent_decision_gap == 100
     assert first.qualifying_walk_forward_fold_gap == 5

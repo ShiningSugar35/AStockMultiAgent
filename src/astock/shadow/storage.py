@@ -10,7 +10,15 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from astock.schemas import ShadowExecutionObservation
+from astock.schemas import ShadowExecutionObservation, ShadowOutcomeDataSource
+
+_PHASE7_FORWARD_COLUMNS = {
+    "outcome_data_source",
+    "data_available_at",
+    "market_snapshot_ids",
+    "thesis_status",
+    "invalidation_reason_codes",
+}
 
 _OBSERVATION_SCHEMA = pa.schema(
     [
@@ -69,7 +77,12 @@ _OBSERVATION_SCHEMA = pa.schema(
         ("candidate_set_snapshot_sha256", pa.string()),
         ("corporate_action_snapshot_sha256", pa.string()),
         ("delisting_snapshot_sha256", pa.string()),
+        ("outcome_data_source", pa.string()),
+        ("data_available_at", pa.timestamp("us", tz="UTC")),
+        ("market_snapshot_ids", pa.list_(pa.string())),
         ("market_observation_ids", pa.list_(pa.string())),
+        ("thesis_status", pa.string()),
+        ("invalidation_reason_codes", pa.list_(pa.string())),
         ("pit_statuses", pa.list_(pa.string())),
         ("candidate_membership_pit_safe", pa.bool_()),
         ("corporate_action_coverage_complete", pa.bool_()),
@@ -143,7 +156,20 @@ class ParquetShadowStore:
             rows = pq.ParquetFile(path).read().to_pylist()
         except (OSError, pa.ArrowException):
             return False
-        return rows == [self._row(observation, object_sha256=object_sha256)]
+        if len(rows) != 1:
+            return False
+        expected = self._row(observation, object_sha256=object_sha256)
+        actual = rows[0]
+        if actual == expected:
+            return True
+        missing = set(expected) - set(actual)
+        return bool(
+            observation.outcome_data_source
+            is ShadowOutcomeDataSource.LEGACY_UNVERIFIED
+            and missing == _PHASE7_FORWARD_COLUMNS
+            and not (set(actual) - set(expected))
+            and actual == {key: expected[key] for key in actual}
+        )
 
     @staticmethod
     def _row(
@@ -213,7 +239,12 @@ class ParquetShadowStore:
                 observation.corporate_action_snapshot_sha256
             ),
             "delisting_snapshot_sha256": observation.delisting_snapshot_sha256,
+            "outcome_data_source": observation.outcome_data_source.value,
+            "data_available_at": observation.data_available_at,
+            "market_snapshot_ids": observation.market_snapshot_ids,
             "market_observation_ids": observation.market_observation_ids,
+            "thesis_status": observation.thesis_status.value,
+            "invalidation_reason_codes": observation.invalidation_reason_codes,
             "pit_statuses": [item.value for item in observation.pit_statuses],
             "candidate_membership_pit_safe": (
                 observation.candidate_membership_pit_safe

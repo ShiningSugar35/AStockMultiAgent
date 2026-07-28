@@ -66,6 +66,25 @@ class ShadowObservationStatus(StrEnum):
     EXCLUDED = "EXCLUDED"
 
 
+class ShadowOutcomeDataSource(StrEnum):
+    LIVE_FORWARD_MARKET = "LIVE_FORWARD_MARKET"
+    RETROSPECTIVE_REPLAY = "RETROSPECTIVE_REPLAY"
+    LEGACY_UNVERIFIED = "LEGACY_UNVERIFIED"
+
+
+class ShadowThesisStatus(StrEnum):
+    NOT_EVALUATED = "NOT_EVALUATED"
+    STILL_VALID = "STILL_VALID"
+    INVALIDATED = "INVALIDATED"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+class ShadowPerformanceStatus(StrEnum):
+    COLLECTING = "COLLECTING"
+    EVALUATED = "EVALUATED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
 class MarketRegime(StrEnum):
     PANIC = "PANIC"
     HIGH_VOL_BULL = "HIGH_VOL_BULL"
@@ -122,6 +141,11 @@ class ShadowEvaluationPolicy(AStockModel):
     )
     maximum_regime_profit_contribution: Decimal = Field(
         gt=0, le=1, allow_inf_nan=False
+    )
+    maximum_signal_registration_lag_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=3600,
     )
     formal_pit_statuses: list[PointInTimeStatus] = Field(min_length=1)
     panic_drawdown_threshold: Decimal = Field(ge=Decimal("-1"), le=0)
@@ -307,6 +331,7 @@ class ShadowStudyManifest(AStockModel):
     arm_ids: list[str] = Field(min_length=1)
     evidence_status: ShadowEvidenceStatus = ShadowEvidenceStatus.COLLECTING
     study_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    registered_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_manifest(self) -> ShadowStudyManifest:
@@ -368,6 +393,8 @@ class ShadowDecisionAssignmentRequest(AStockModel):
     independence_key: str = Field(min_length=1)
     thesis_version: str = Field(min_length=1)
     event_id: str = Field(min_length=1)
+    research_memo_id: str | None = None
+    decision_id: str | None = None
     trade_protocol_id: str = Field(min_length=1)
     artifact_references: list[ShadowArtifactReference] = Field(min_length=1)
     arm_signals: list[ShadowArmSignal] = Field(min_length=1)
@@ -397,6 +424,7 @@ class ShadowDecisionAssignmentRequest(AStockModel):
 class ShadowDecisionAssignment(ShadowDecisionAssignmentRequest):
     assignment_id: str = Field(min_length=1)
     assignment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    registered_at: AwareDatetime | None = None
 
 
 class MarketRegimeFeatures(AStockModel):
@@ -491,7 +519,14 @@ class ShadowExecutionObservationDraft(AStockModel):
     candidate_set_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     corporate_action_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     delisting_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outcome_data_source: ShadowOutcomeDataSource = (
+        ShadowOutcomeDataSource.LEGACY_UNVERIFIED
+    )
+    data_available_at: AwareDatetime | None = None
+    market_snapshot_ids: list[str] = Field(default_factory=list)
     market_observation_ids: list[str] = Field(min_length=1)
+    thesis_status: ShadowThesisStatus = ShadowThesisStatus.NOT_EVALUATED
+    invalidation_reason_codes: list[str] = Field(default_factory=list)
     pit_statuses: list[PointInTimeStatus] = Field(min_length=1)
     candidate_membership_pit_safe: bool
     corporate_action_coverage_complete: bool
@@ -509,8 +544,50 @@ class ShadowExecutionObservationDraft(AStockModel):
         if self.horizon_days not in {5, 20, 60}:
             raise ValueError("shadow observations only support 5/20/60 trading-day horizons")
         _require_sorted_unique(self.market_observation_ids, "shadow market observation ids")
+        _require_sorted_unique(self.market_snapshot_ids, "shadow market snapshot ids")
+        _require_sorted_unique(
+            self.invalidation_reason_codes,
+            "shadow thesis invalidation reason codes",
+        )
         _require_sorted_unique(self.pit_statuses, "shadow observation PIT statuses")
         _require_sorted_unique(self.exclusion_codes, "shadow exclusion codes")
+        if self.outcome_data_source is ShadowOutcomeDataSource.LIVE_FORWARD_MARKET:
+            if not self.market_snapshot_ids or self.data_available_at is None:
+                raise ValueError(
+                    "live forward observations require market snapshots and availability"
+                )
+            if self.data_available_at <= self.signal_time:
+                raise ValueError(
+                    "live forward market data must become available after the signal"
+                )
+            if self.data_available_at > self.created_at:
+                raise ValueError(
+                    "future market data cannot be recorded before it is available"
+                )
+            if (
+                self.valuation_time is not None
+                and self.data_available_at < self.valuation_time
+            ):
+                raise ValueError(
+                    "market data cannot be available before the observation valuation"
+                )
+        elif (
+            self.outcome_data_source is ShadowOutcomeDataSource.RETROSPECTIVE_REPLAY
+            and self.data_available_at is None
+        ):
+            raise ValueError("retrospective observations require a data availability time")
+        if self.thesis_status is ShadowThesisStatus.INVALIDATED:
+            if not self.invalidation_reason_codes:
+                raise ValueError("invalidated theses require explicit reason codes")
+        elif self.invalidation_reason_codes:
+            raise ValueError("only invalidated theses may carry invalidation reasons")
+        if (
+            self.trading_days_elapsed >= self.horizon_days
+            and self.thesis_status is ShadowThesisStatus.NOT_EVALUATED
+            and self.outcome_data_source
+            is not ShadowOutcomeDataSource.LEGACY_UNVERIFIED
+        ):
+            raise ValueError("mature future observations require a thesis assessment")
         no_action = self.action is ShadowAction.NO_ACTION
         unfilled = self.fill_status is ShadowFillStatus.UNFILLED
         executed = self.fill_status in {
@@ -705,6 +782,7 @@ class ShadowExecutionObservation(ShadowExecutionObservationDraft):
     status: ShadowObservationStatus
     formal_eligible: bool
     observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    registered_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_observation_status(self) -> ShadowExecutionObservation:
@@ -845,6 +923,94 @@ class ShadowComparisonResult(AStockModel):
         return self
 
 
+class ShadowSkillPerformance(AStockModel):
+    skill_id: str = Field(min_length=1)
+    skill_version: str = Field(min_length=1)
+    arm_id: str = Field(min_length=1)
+    status: ShadowPerformanceStatus
+    independent_event_count: int = Field(ge=0)
+    paired_event_count: int = Field(ge=0)
+    paired_net_return_delta: ShadowMetricInterval
+    finding_codes: list[str]
+
+    @model_validator(mode="after")
+    def validate_skill_performance(self) -> ShadowSkillPerformance:
+        _require_sorted_unique(
+            self.finding_codes,
+            "shadow Skill performance finding codes",
+        )
+        if (
+            self.status is ShadowPerformanceStatus.EVALUATED
+            and self.paired_event_count == 0
+        ):
+            raise ValueError("evaluated Skill performance requires paired events")
+        return self
+
+
+class ShadowCommitteePerformance(AStockModel):
+    arm_id: str = Field(min_length=1)
+    status: ShadowPerformanceStatus
+    independent_event_count: int = Field(ge=0)
+    mature_observation_count: int = Field(ge=0)
+    mean_net_return: ShadowMetricInterval
+    win_rate: ShadowMetricInterval
+    maximum_drawdown: Decimal = Field(ge=0, le=1)
+    versus_base_case: ShadowMetricInterval
+    finding_codes: list[str]
+
+    @model_validator(mode="after")
+    def validate_committee_performance(self) -> ShadowCommitteePerformance:
+        _require_sorted_unique(
+            self.finding_codes,
+            "shadow Committee performance finding codes",
+        )
+        if (
+            self.status is ShadowPerformanceStatus.EVALUATED
+            and self.independent_event_count == 0
+        ):
+            raise ValueError("evaluated Committee performance requires events")
+        return self
+
+
+class ShadowResearchQuality(AStockModel):
+    status: ShadowPerformanceStatus
+    independent_event_count: int = Field(ge=0)
+    research_memo_count: int = Field(ge=0)
+    shadow_decision_count: int = Field(ge=0)
+    complete_chain_count: int = Field(ge=0)
+    mature_future_event_count: int = Field(ge=0)
+    formal_forward_event_count: int = Field(ge=0)
+    thesis_status_counts: dict[ShadowThesisStatus, int]
+    invalidation_reason_counts: dict[str, int]
+    memo_coverage_counts: dict[str, int]
+    memo_open_gap_event_count: int = Field(ge=0)
+    memo_degradation_event_count: int = Field(ge=0)
+    mean_memo_confidence_cap: Decimal | None = Field(default=None, ge=0, le=1)
+    finding_codes: list[str]
+
+    @model_validator(mode="after")
+    def validate_research_quality(self) -> ShadowResearchQuality:
+        _require_sorted_unique(
+            list(self.invalidation_reason_counts),
+            "shadow invalidation reason count keys",
+        )
+        _require_sorted_unique(
+            list(self.memo_coverage_counts),
+            "shadow memo coverage count keys",
+        )
+        _require_sorted_unique(
+            self.finding_codes,
+            "shadow research quality finding codes",
+        )
+        if self.complete_chain_count > self.independent_event_count:
+            raise ValueError("complete research chains cannot exceed independent events")
+        if self.mature_future_event_count > self.formal_forward_event_count:
+            raise ValueError(
+                "mature future events cannot exceed formal forward research events"
+            )
+        return self
+
+
 class ShadowEvaluationReport(AStockModel):
     report_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
@@ -876,6 +1042,9 @@ class ShadowEvaluationReport(AStockModel):
     comparisons: list[ShadowComparisonResult]
     finding_codes: list[str]
     report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    skill_performance: list[ShadowSkillPerformance] = Field(default_factory=list)
+    committee_performance: ShadowCommitteePerformance | None = None
+    research_quality: ShadowResearchQuality | None = None
 
     @model_validator(mode="after")
     def validate_report(self) -> ShadowEvaluationReport:
@@ -924,6 +1093,30 @@ class ShadowEvaluationReport(AStockModel):
                 raise ValueError("evidence-ready reports require complete walk-forward folds")
             if not self.phase6_contract_integrity:
                 raise ValueError("evidence-ready reports require Phase 6 contract integrity")
+        if self.independent_decision_count < self.required_independent_decisions:
+            if any(
+                item.status is not ShadowPerformanceStatus.COLLECTING
+                for item in self.skill_performance
+            ):
+                raise ValueError(
+                    "Skill performance must remain COLLECTING below the event minimum"
+                )
+            if (
+                self.committee_performance is not None
+                and self.committee_performance.status
+                is not ShadowPerformanceStatus.COLLECTING
+            ):
+                raise ValueError(
+                    "Committee performance must remain COLLECTING below the event minimum"
+                )
+            if (
+                self.research_quality is not None
+                and self.research_quality.status
+                is not ShadowPerformanceStatus.COLLECTING
+            ):
+                raise ValueError(
+                    "research quality must remain COLLECTING below the event minimum"
+                )
         return self
 
 
@@ -939,6 +1132,8 @@ class Phase8AdmissionReport(AStockModel):
     reason_codes: list[str] = Field(min_length=1)
     only_rule_state_machine_research_allowed: Literal[True] = True
     online_weight_changes_allowed: Literal[False] = False
+    reinforcement_learning_allowed: Literal[False] = False
+    automatic_skill_modification_allowed: Literal[False] = False
     broker_execution_allowed: Literal[False] = False
     admission_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -975,6 +1170,23 @@ class ShadowStatusReport(AStockModel):
     independent_decision_count: int = Field(ge=0)
     report_id: str | None = None
     admission_status: Phase8AdmissionStatus | None = None
+    required_independent_decision_count: int = Field(default=100, ge=1)
+    remaining_independent_decision_count: int = Field(default=100, ge=0)
+    formal_forward_event_count: int = Field(default=0, ge=0)
+    formal_mature_future_event_count: int = Field(default=0, ge=0)
+    skill_performance_status: ShadowPerformanceStatus = (
+        ShadowPerformanceStatus.COLLECTING
+    )
+    committee_performance_status: ShadowPerformanceStatus = (
+        ShadowPerformanceStatus.COLLECTING
+    )
+    research_quality_status: ShadowPerformanceStatus = (
+        ShadowPerformanceStatus.COLLECTING
+    )
+    reinforcement_learning_allowed: Literal[False] = False
+    dynamic_weight_changes_allowed: Literal[False] = False
+    automatic_skill_modification_allowed: Literal[False] = False
+    broker_execution_allowed: Literal[False] = False
 
 
 def _require_sorted_unique(values: Sequence[object], label: str) -> None:
@@ -1010,8 +1222,14 @@ __all__ = [
     "ShadowFoldResult",
     "ShadowMetricInterval",
     "ShadowObservationStatus",
+    "ShadowOutcomeDataSource",
+    "ShadowPerformanceStatus",
+    "ShadowResearchQuality",
     "ShadowRegimeResult",
+    "ShadowCommitteePerformance",
+    "ShadowSkillPerformance",
     "ShadowStatusReport",
+    "ShadowThesisStatus",
     "ShadowStudyCreateRequest",
     "ShadowStudyManifest",
     "ShadowStudyMode",

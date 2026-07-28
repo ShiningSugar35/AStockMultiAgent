@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import platform
 import sys
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -16,6 +17,7 @@ import typer
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from astock import __version__
+from astock.acceptance import Phase6RecordedService
 from astock.adaptive import AdaptiveResearchStatusService
 from astock.books import PrivateDocxIngestService, PrivatePdfIngestService
 from astock.candidates import (
@@ -36,6 +38,7 @@ from astock.core.codex_runs import (
     registered_strict_artifact_types,
 )
 from astock.core.errors import AStockError, FailureClass
+from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import (
@@ -95,8 +98,10 @@ from astock.market_data.sync import MarketSyncService
 from astock.paper_trading import (
     LedgerService,
     MarketReferencePaperVerifier,
+    PaperExecutionService,
     PaperOperationService,
     PaperReplayService,
+    RecordedPaperReferenceVerifier,
     load_fee_schedule,
     load_paper_authorization_keys,
     load_paper_confirmation,
@@ -157,6 +162,7 @@ from astock.schemas import (
     KnowledgeSourceRegistry,
     Market,
     MarketRegimeFeatures,
+    OrderSide,
     PaperExecutionRequest,
     PositionLifecycleConfig,
     PositionPlanCreateRequest,
@@ -178,6 +184,7 @@ from astock.schemas import (
     SpecialistDiagnosticRequestV2,
     SpecialistRouteRequest,
     TradeProtocol,
+    TradeProtocolOutcome,
     ZhihuContentType,
     ZhihuEndpointTemplateRegistry,
     ZhihuResponseKind,
@@ -187,6 +194,7 @@ from astock.shadow import (
     ParquetShadowStore,
     ShadowEvaluationService,
     load_shadow_evaluation_policy,
+    write_phase7_status,
 )
 
 app = typer.Typer(
@@ -226,9 +234,7 @@ def _semantic_funnel_service(
         KnowledgeRepository(state),
         SemanticFunnelRepository(state),
         objects,
-        load_semantic_funnel_config(
-            paths.root / "configs" / "knowledge_semantic_funnel.yaml"
-        ),
+        load_semantic_funnel_config(paths.root / "configs" / "knowledge_semantic_funnel.yaml"),
         _distillation_rules(paths),
     )
 
@@ -271,7 +277,15 @@ def _shadow_service(
         objects,
         load_shadow_evaluation_policy(paths.root / "configs" / "shadow_evaluation.yaml"),
         ParquetShadowStore(paths.parquet),
+        CanonicalMarketStore(paths.parquet, paths.manifests),
     )
+
+
+def _refresh_phase7_status(
+    paths: ProjectPaths,
+    service: ShadowEvaluationService,
+) -> Path:
+    return write_phase7_status(service, paths.root / "phase7_status.md")
 
 
 def _phase4_chain(
@@ -563,19 +577,23 @@ def _paper_operation_service(
     state: StateStore,
     objects: ObjectStore,
     fee_rules: Path | None = None,
+    *,
+    paper_rules: Path | None = None,
+    references: Any = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> PaperOperationService:
     schedule = load_fee_schedule(fee_rules or paths.root / "configs" / "fee_rules.yaml")
-    paper_rules_path = paths.root / "configs" / "paper_trading_rules.yaml"
+    paper_rules_path = paper_rules or paths.root / "configs" / "paper_trading_rules.yaml"
     return PaperOperationService(
         state,
         objects,
         LedgerService(state, objects),
-        MarketReferencePaperVerifier(_market_reference_service(paths, state, objects)),
+        references
+        or MarketReferencePaperVerifier(_market_reference_service(paths, state, objects)),
         schedule,
+        clock=clock,
         trusted_confirmation_keys=load_paper_authorization_keys(paper_rules_path),
-        trading_rules=load_paper_trading_rules(
-            paper_rules_path
-        ),
+        trading_rules=load_paper_trading_rules(paper_rules_path),
     )
 
 
@@ -953,9 +971,7 @@ def financial_source_audit(
         str | None,
         typer.Argument(help="Optional company code; omit to audit all release chains."),
     ] = None,
-    period_end: Annotated[
-        str | None, typer.Option(help="Financial period end YYYY-MM-DD.")
-    ] = None,
+    period_end: Annotated[str | None, typer.Option(help="Financial period end YYYY-MM-DD.")] = None,
     period_type: Annotated[
         FinancialPeriodType, typer.Option(case_sensitive=False)
     ] = FinancialPeriodType.ANNUAL,
@@ -1004,9 +1020,7 @@ def candidate_scan(
 
     paths, state, objects = _services()
     try:
-        request = CandidateScanRequest.model_validate_json(
-            request_file.read_text(encoding="utf-8")
-        )
+        request = CandidateScanRequest.model_validate_json(request_file.read_text(encoding="utf-8"))
         report = _candidate_scan_service(paths, state, objects).scan(request)
     except (OSError, RuntimeError, ValidationError, ValueError) as exc:
         _emit({"status": "FAILED", "failure_code": "CANDIDATE_SCAN_FAILED"})
@@ -1516,6 +1530,272 @@ def paper_status(
     _emit(status)
 
 
+@app.command("analyze")
+def analyze(
+    company_id: Annotated[
+        str,
+        typer.Argument(help="Six-digit A-share code; recorded acceptance currently covers 300750."),
+    ],
+) -> None:
+    """Run the explicit recorded Phase 6 research-to-TradeProtocol acceptance chain."""
+
+    paths, state, objects = _services()
+    try:
+        execution = Phase6RecordedService(
+            paths.root,
+            state,
+            objects,
+            paths.parquet,
+        ).run(company_id)
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit(
+            {
+                "status": "REJECTED",
+                "data_mode": "RECORDED_ACCEPTANCE",
+                "error_code": "PHASE6_RECORDED_CHAIN_FAILED",
+                "message": str(exc),
+            }
+        )
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": execution.report.status,
+            "data_mode": execution.report.data_mode,
+            "disclaimer": execution.report.disclaimer,
+            "ResearchMemo": execution.research_memo,
+            "CommitteeDecision": execution.committee_decision,
+            "TradeProtocol": {
+                "outcome": execution.trade_protocol.outcome,
+                "artifact": execution.trade_protocol,
+            },
+            "closure_report": execution.report,
+            "paper_reference_pack": {
+                "artifact_id": execution.report.paper_reference_pack_artifact_id,
+                "pack_id": execution.paper_reference_pack.pack_id,
+            },
+            "reused_existing": execution.reused_existing,
+            "next_step": (
+                "Create a separate PaperExecutionRequest with paper-execution-prepare; "
+                "no order exists until an independently signed user confirmation is supplied."
+            ),
+        }
+    )
+
+
+@app.command("phase6-status")
+def phase6_status(
+    company_id: Annotated[str, typer.Argument()] = "300750",
+) -> None:
+    """Read the latest recorded Phase 6 closure metadata without rerunning it."""
+
+    paths, state, objects = _services()
+    _emit(Phase6RecordedService(paths.root, state, objects, paths.parquet).status(company_id))
+
+
+@app.command("phase6-audit")
+def phase6_audit(
+    run_id: Annotated[str, typer.Argument(help="Phase 6 closure run id.")],
+) -> None:
+    """Audit every frozen Phase 6 link without network, browser, MCP, or broker access."""
+
+    paths, state, objects = _services()
+    result = Phase6RecordedService(
+        paths.root,
+        state,
+        objects,
+        paths.parquet,
+    ).audit(run_id)
+    _emit(result)
+    if result["status"] != "PASS":
+        raise typer.Exit(code=3)
+
+
+@app.command("paper-execution-prepare")
+def paper_execution_prepare(
+    trade_protocol_id: Annotated[str, typer.Argument(help="Frozen TradeProtocol id.")],
+    reference_pack_artifact_id: Annotated[
+        str,
+        typer.Argument(help="Frozen PaperReferencePack artifact id."),
+    ],
+    requested_at: Annotated[
+        str,
+        typer.Option(help="Aware ISO timestamp inside a verified paper session."),
+    ],
+    idempotency_key: Annotated[str, typer.Option(help="Caller-stable paper request key.")],
+    account_id: Annotated[str, typer.Option()],
+    side: Annotated[OrderSide, typer.Option(case_sensitive=False)],
+    qty: Annotated[int, typer.Option(min=1)],
+    limit_price_fen: Annotated[int, typer.Option(min=1)],
+    expires_at: Annotated[
+        str | None,
+        typer.Option(help="Optional aware ISO confirmation expiry."),
+    ] = None,
+) -> None:
+    """Prepare, but never execute, a paper request from an approved TradeProtocol."""
+
+    _, state, objects = _services()
+    try:
+        parsed_requested_at = datetime.fromisoformat(requested_at)
+        parsed_expires_at = datetime.fromisoformat(expires_at) if expires_at else None
+        prepared = PaperExecutionService(state, objects).prepare(
+            trade_protocol_id=trade_protocol_id,
+            reference_pack_artifact_id=reference_pack_artifact_id,
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+            side=side,
+            qty=qty,
+            limit_price_fen=limit_price_fen,
+            requested_at=parsed_requested_at,
+            expires_at=parsed_expires_at,
+        )
+    except (OSError, ValidationError, ValueError) as exc:
+        _emit(
+            {
+                "status": "REJECTED",
+                "error_code": "PAPER_EXECUTION_PREPARATION_REJECTED",
+                "message": str(exc),
+                "ledger_write_allowed": False,
+            }
+        )
+        raise typer.Exit(code=2) from exc
+    _emit(
+        {
+            "status": "WAITING_USER_CONFIRMATION",
+            "execution_request_id": prepared.execution_request_id,
+            "execution_artifact_id": prepared.execution_artifact_id,
+            "operation_artifact_id": prepared.operation_artifact_id,
+            "execution_request": prepared.execution_request,
+            "operation_request": prepared.operation_request,
+            "reused_existing": prepared.reused_existing,
+            "ledger_write_performed": False,
+        }
+    )
+
+
+@app.command("paper-execution-confirm")
+def paper_execution_confirm(
+    execution_request_id: Annotated[
+        str,
+        typer.Argument(help="Prepared PaperExecutionRequest id."),
+    ],
+    confirmation: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Independently signed user confirmation JSON.",
+        ),
+    ],
+    paper_rules: Annotated[
+        Path | None,
+        typer.Option(help="Trusted paper rules containing confirmation public keys."),
+    ] = None,
+    fee_rules: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Consume one independent confirmation and create at most one paper order."""
+
+    paths, state, objects = _services()
+    execution_service = PaperExecutionService(state, objects)
+    try:
+        prepared = execution_service.load(execution_request_id)
+        user_confirmation = load_paper_confirmation(confirmation)
+        protocol_id = prepared.execution_request.trade_protocol_id.removeprefix("TradeProtocol:")
+        protocol = _committee_service(paths, state, objects).repository.get_protocol(protocol_id)
+        if protocol is None:
+            raise ValueError("trade protocol is unavailable")
+        _validate_committee_execution(
+            protocol=protocol,
+            execution_request=prepared.execution_request,
+            operation_request=prepared.operation_request,
+            confirmation=user_confirmation,
+        )
+        verifier = execution_service.reference_verifier(
+            str(prepared.execution_request.paper_reference_pack_artifact_id)
+        )
+        report = _paper_operation_service(
+            paths,
+            state,
+            objects,
+            fee_rules,
+            paper_rules=paper_rules,
+            references=verifier,
+            clock=(
+                (lambda: user_confirmation.confirmed_at)
+                if isinstance(verifier, RecordedPaperReferenceVerifier)
+                else None
+            ),
+        ).execute(
+            prepared.operation_request,
+            user_confirmation,
+            expected_operation_type="PLACE_ORDER",
+        )
+        execution_service.mark_status(prepared.execution_request_id, "COMPLETE")
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        status = (
+            "NEEDS_INFO"
+            if isinstance(exc, AStockError) and exc.failure_class is FailureClass.DATA_QUALITY
+            else "REJECTED"
+        )
+        try:
+            execution_service.mark_status(execution_request_id, status)
+        except ValueError:
+            pass
+        _emit(
+            {
+                "status": status,
+                "error_code": "PAPER_EXECUTION_CONFIRMATION_REJECTED",
+                "message": str(exc),
+            }
+        )
+        raise typer.Exit(code=3) from exc
+    _emit(
+        {
+            "status": "COMPLETE",
+            "execution_request_id": prepared.execution_request_id,
+            "trade_protocol_id": prepared.execution_request.trade_protocol_id,
+            "report": report,
+        }
+    )
+
+
+@app.command("paper-execution-status")
+def paper_execution_status(
+    execution_request_id: Annotated[str, typer.Argument()],
+) -> None:
+    """Read a prepared or completed Phase 6 paper request."""
+
+    _, state, objects = _services()
+    _emit(PaperExecutionService(state, objects).status(execution_request_id))
+
+
+@app.command("paper-execution-audit")
+def paper_execution_audit(
+    execution_request_id: Annotated[str, typer.Argument()],
+) -> None:
+    """Audit protocol, reference, confirmation, operation, and order bindings."""
+
+    _, state, objects = _services()
+    result = PaperExecutionService(state, objects).audit(execution_request_id)
+    _emit(result)
+    if result["status"] != "PASS":
+        raise typer.Exit(code=3)
+
+
+@app.command("paper-execution-recover")
+def paper_execution_recover(
+    execution_request_id: Annotated[str, typer.Argument()],
+) -> None:
+    """Recover and audit deterministic preparation state; repeat confirm to finish a commit."""
+
+    _, state, objects = _services()
+    result = PaperExecutionService(state, objects).recover(execution_request_id)
+    _emit(result)
+    if result["status"] == "NEEDS_INFO":
+        raise typer.Exit(code=3)
+
+
 def _run_confirmed_paper_operation(
     *,
     request_path: Path,
@@ -1526,9 +1806,7 @@ def _run_confirmed_paper_operation(
     paths, state, objects = _services()
     try:
         request = load_paper_operation(request_path)
-        confirmation = (
-            load_paper_confirmation(confirmation_path) if confirmation_path else None
-        )
+        confirmation = load_paper_confirmation(confirmation_path) if confirmation_path else None
         report = _paper_operation_service(paths, state, objects, fee_rules).execute(
             request,
             confirmation,
@@ -1537,8 +1815,7 @@ def _run_confirmed_paper_operation(
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         emitted_status = (
             "NEEDS_INFO"
-            if isinstance(exc, AStockError)
-            and exc.failure_class is FailureClass.DATA_QUALITY
+            if isinstance(exc, AStockError) and exc.failure_class is FailureClass.DATA_QUALITY
             else "REJECTED"
         )
         _emit(
@@ -1575,8 +1852,12 @@ def _validate_committee_execution(
 ) -> None:
     if protocol.protocol_status is not CommitteeProtocolStatus.ACTIVE:
         raise ValueError("trade protocol is not active")
-    if not protocol.broker_execution_allowed:
-        raise ValueError("trade protocol broker execution gate is closed")
+    if protocol.outcome is not TradeProtocolOutcome.APPROVE_SIMULATION:
+        raise ValueError("trade protocol does not approve simulation")
+    if protocol.broker_execution_allowed:
+        raise ValueError("broker execution must remain disabled")
+    if not protocol.paper_simulation_allowed:
+        raise ValueError("trade protocol paper simulation gate is closed")
     if not protocol.ledger_write_allowed:
         raise ValueError("trade protocol ledger write gate is closed")
     if operation_request.operation_id != execution_request.paper_operation_request_id:
@@ -1589,9 +1870,11 @@ def _validate_committee_execution(
         raise ValueError("operation quantity does not match execution request")
     if execution_request.limit_price_fen != operation_request.payload.limit_price_fen:
         raise ValueError("operation price does not match execution request")
+    if confirmation is None:
+        raise ValueError("an independent user confirmation is required")
     if (
-        confirmation is None
-        or confirmation.confirmation_id != execution_request.user_confirmation_id
+        execution_request.user_confirmation_id is not None
+        and confirmation.confirmation_id != execution_request.user_confirmation_id
     ):
         raise ValueError("confirmation identity does not match execution request")
     if execution_request.account_id != confirmation.account_id:
@@ -1600,6 +1883,22 @@ def _validate_committee_execution(
         raise ValueError("only PLACE_ORDER payloads are supported in committee execution")
     if protocol.company_id != execution_request.symbol:
         raise ValueError("protocol company does not match order symbol")
+    if (
+        execution_request.trade_protocol_object_sha256 is not None
+        and execution_request.trade_protocol_object_sha256
+        != sha256_bytes(canonical_json_bytes(protocol.model_dump(mode="json")))
+    ):
+        raise ValueError("protocol object hash does not match execution request")
+    if (
+        execution_request.market is not None
+        and execution_request.market is not operation_request.payload.market
+    ):
+        raise ValueError("operation market does not match execution request")
+    if (
+        execution_request.side is not None
+        and execution_request.side is not operation_request.payload.side
+    ):
+        raise ValueError("operation side does not match execution request")
     if execution_request.created_at.tzinfo is None:
         raise ValueError("execution created_at must include timezone")
 
@@ -1619,10 +1918,16 @@ def paper_committee_execute(
         typer.Option(help="Independent MANUAL_CLI confirmation JSON."),
     ] = None,
     fee_rules: Annotated[Path | None, typer.Option(help="Fee schedule override.")] = None,
+    paper_rules: Annotated[
+        Path | None,
+        typer.Option(help="Trusted paper rules and confirmation public keys; defaults to configs."),
+    ] = None,
 ) -> None:
     """Execute one committee-approved place-order request after policy gates."""
 
     paths, state, objects = _services()
+    paper_execution = PaperExecutionService(state, objects)
+    reference_verifier = None
     try:
         execution = PaperExecutionRequest.model_validate_json(
             execution_request.read_text(encoding="utf-8")
@@ -1639,6 +1944,15 @@ def paper_committee_execute(
             operation_request=op_request,
             confirmation=user_confirmation,
         )
+        if execution.paper_reference_pack_artifact_id is not None:
+            reference_verifier = paper_execution.reference_verifier(
+                execution.paper_reference_pack_artifact_id
+            )
+            reference_hash = sha256_bytes(
+                canonical_json_bytes(reference_verifier.pack.model_dump(mode="json"))
+            )
+            if reference_hash != execution.paper_reference_pack_object_sha256:
+                raise ValueError("paper reference pack hash does not match execution request")
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         if not isinstance(exc, ValidationError) and not isinstance(exc, ValueError):
             _emit(
@@ -1655,9 +1969,7 @@ def paper_committee_execute(
             raise typer.Exit(code=3) from exc
         if isinstance(exc, AStockError):
             emitted_status = (
-                "NEEDS_INFO"
-                if exc.failure_class is FailureClass.DATA_QUALITY
-                else "REJECTED"
+                "NEEDS_INFO" if exc.failure_class is FailureClass.DATA_QUALITY else "REJECTED"
             )
             _emit(
                 {
@@ -1674,7 +1986,12 @@ def paper_committee_execute(
 
     try:
         report = _paper_operation_service(
-            paths, state, objects, fee_rules
+            paths,
+            state,
+            objects,
+            fee_rules,
+            paper_rules=paper_rules,
+            references=reference_verifier,
         ).execute(
             op_request,
             user_confirmation,
@@ -1682,9 +1999,7 @@ def paper_committee_execute(
         )
     except AStockError as exc:
         emitted_status = (
-            "NEEDS_INFO"
-            if exc.failure_class is FailureClass.DATA_QUALITY
-            else "REJECTED"
+            "NEEDS_INFO" if exc.failure_class is FailureClass.DATA_QUALITY else "REJECTED"
         )
         _emit(
             {
@@ -1694,8 +2009,13 @@ def paper_committee_execute(
                 "trade_protocol_id": execution.trade_protocol_id,
             }
         )
+        paper_execution.mark_operation_status(
+            op_request.operation_id,
+            emitted_status,
+        )
         raise typer.Exit(code=3) from exc
 
+    paper_execution.mark_operation_status(op_request.operation_id, "COMPLETE")
     _emit(
         {
             "status": "COMPLETE",
@@ -1911,9 +2231,7 @@ def research_evidence_task(
 
     paths, state, objects = _services()
     try:
-        execution = EvidenceCollectionTaskService(state, objects).create_task(
-            request_artifact_id
-        )
+        execution = EvidenceCollectionTaskService(state, objects).create_task(request_artifact_id)
     except (OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "INVALID_RESEARCH_TASK_REQUEST"})
         raise typer.Exit(code=2) from exc
@@ -2028,9 +2346,7 @@ def research_formal_prepare(
         "blocking_codes": manifest.blocking_codes,
         "required_action_codes": manifest.required_action_codes,
         "frozen_evidence_pack_id": manifest.frozen_evidence_pack_id,
-        "frozen_evidence_pack_artifact_id": (
-            manifest.frozen_evidence_pack_artifact_id
-        ),
+        "frozen_evidence_pack_artifact_id": (manifest.frozen_evidence_pack_artifact_id),
         "reused_existing": execution.reused_existing,
     }
     _emit(payload)
@@ -2158,12 +2474,8 @@ def open_source_audit_status() -> None:
                     ],
                     "local_patch_sha256": manifest.local_patch_sha256,
                     "local_adaptation_sha256": manifest.local_adaptation_sha256,
-                    "local_adaptation_file_count": len(
-                        manifest.local_adaptation_files
-                    ),
-                    "normal_runtime_network_required": (
-                        manifest.normal_runtime_network_required
-                    ),
+                    "local_adaptation_file_count": len(manifest.local_adaptation_files),
+                    "normal_runtime_network_required": (manifest.normal_runtime_network_required),
                     "source_vendored": manifest.source_vendored,
                 }
                 for manifest in manifests
@@ -2374,26 +2686,20 @@ def research_diagnostic_schema() -> None:
                     "skill_version": item.skill_version,
                     "input_schema": (
                         {
-                            "IndustryBottleneckSkill": (
-                                "IndustryBottleneckDiagnosticRequestV2"
-                            ),
+                            "IndustryBottleneckSkill": ("IndustryBottleneckDiagnosticRequestV2"),
                             "EventToAlphaSkill": "EventToAlphaDiagnosticRequestV2",
-                            "GrowthProbabilitySkill": (
-                                "GrowthProbabilityDiagnosticRequestV2"
-                            ),
-                            "GrowthValuationLens": (
-                                "GrowthValuationDiagnosticRequestV2"
-                            ),
+                            "GrowthProbabilitySkill": ("GrowthProbabilityDiagnosticRequestV2"),
+                            "GrowthValuationLens": ("GrowthValuationDiagnosticRequestV2"),
                             "DailyTrendHealthSkill": "DailyTrendDiagnosticRequestV2",
                         }[item.skill_id]
                         if item.skill_version.endswith("-v2")
                         else {
-                        "IndustryBottleneckSkill": "IndustryBottleneckDiagnosticRequest",
-                        "EventToAlphaSkill": "EventToAlphaDiagnosticRequest",
-                        "GrowthProbabilitySkill": "GrowthProbabilityDiagnosticRequest",
-                        "GrowthValuationLens": "GrowthValuationDiagnosticRequest",
-                        "DailyTrendHealthSkill": "DailyTrendDiagnosticRequest",
-                        "HourlySwingSkill": "HourlySwingDiagnosticRequest",
+                            "IndustryBottleneckSkill": "IndustryBottleneckDiagnosticRequest",
+                            "EventToAlphaSkill": "EventToAlphaDiagnosticRequest",
+                            "GrowthProbabilitySkill": "GrowthProbabilityDiagnosticRequest",
+                            "GrowthValuationLens": "GrowthValuationDiagnosticRequest",
+                            "DailyTrendHealthSkill": "DailyTrendDiagnosticRequest",
+                            "HourlySwingSkill": "HourlySwingDiagnosticRequest",
                         }[item.skill_id]
                     ),
                 }
@@ -2937,7 +3243,14 @@ def shadow_schema() -> None:
                 "weights_frozen": True,
                 "future_inputs_allowed": False,
                 "not_pit_safe_formal_samples_allowed": False,
+                "historical_replay_can_count_as_forward": False,
+                "research_memo_decision_lineage_required": True,
+                "live_forward_snapshot_lineage_required": True,
+                "frozen_5m_ohlcv_reconciliation_required": True,
+                "memo_or_decision_reuse_can_count_as_new_event": False,
+                "reinforcement_learning_allowed": False,
                 "online_weight_changes_allowed": False,
+                "automatic_skill_modification_allowed": False,
                 "broker_execution_allowed": False,
                 "main_paper_ledger_write_allowed": False,
                 "independence_key_is_deterministic": True,
@@ -3010,7 +3323,9 @@ def shadow_study_create(
         request = ShadowStudyCreateRequest.model_validate_json(
             request_file.read_text(encoding="utf-8")
         )
-        execution = _shadow_service(paths, state, objects).create_study(request)
+        service = _shadow_service(paths, state, objects)
+        execution = service.create_study(request)
+        status_document = _refresh_phase7_status(paths, service)
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "SHADOW_STUDY_CREATE_REJECTED"})
         raise typer.Exit(code=2) from exc
@@ -3020,6 +3335,7 @@ def shadow_study_create(
             "study": execution.manifest,
             "arms": execution.arms,
             "object_sha256_by_id": execution.object_sha256_by_id,
+            "phase7_status_document": status_document,
         }
     )
 
@@ -3038,11 +3354,19 @@ def shadow_assign(
         request = ShadowDecisionAssignmentRequest.model_validate_json(
             request_file.read_text(encoding="utf-8")
         )
-        assignment = _shadow_service(paths, state, objects).assign(request)
+        service = _shadow_service(paths, state, objects)
+        assignment = service.assign(request)
+        status_document = _refresh_phase7_status(paths, service)
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "SHADOW_ASSIGNMENT_REJECTED"})
         raise typer.Exit(code=2) from exc
-    _emit({"status": "ASSIGNED", "assignment": assignment})
+    _emit(
+        {
+            "status": "ASSIGNED",
+            "assignment": assignment,
+            "phase7_status_document": status_document,
+        }
+    )
 
 
 @app.command("market-regime-classify")
@@ -3070,6 +3394,45 @@ def market_regime_classify(
     _emit({"status": snapshot.regime, "snapshot": snapshot})
 
 
+@app.command("shadow-forward-market-freeze")
+def shadow_forward_market_freeze(
+    assignment_id: Annotated[
+        str,
+        typer.Argument(help="Prospectively registered shadow assignment id."),
+    ],
+    symbol: Annotated[str, typer.Option(help="Stock or frozen benchmark symbol.")],
+    market: Annotated[Market, typer.Option(case_sensitive=False)],
+    valuation_time: Annotated[
+        str,
+        typer.Option(help="Timezone-aware ISO upper bound for available 5m bars."),
+    ],
+) -> None:
+    """Freeze real post-signal canonical 5m data for a future observation."""
+
+    paths, state, objects = _services()
+    try:
+        parsed_valuation_time = datetime.fromisoformat(valuation_time)
+        evidence = _shadow_service(
+            paths,
+            state,
+            objects,
+        ).freeze_forward_market_evidence(
+            assignment_id,
+            symbol=symbol,
+            market=market,
+            valuation_time=parsed_valuation_time,
+        )
+    except (AStockError, OSError, ValidationError, ValueError) as exc:
+        _emit(
+            {
+                "status": "REJECTED",
+                "error_code": "SHADOW_FORWARD_MARKET_FREEZE_REJECTED",
+            }
+        )
+        raise typer.Exit(code=2) from exc
+    _emit({"status": "FROZEN", **evidence})
+
+
 @app.command("shadow-observation-record")
 def shadow_observation_record(
     observation_file: Annotated[
@@ -3084,11 +3447,19 @@ def shadow_observation_record(
         draft = ShadowExecutionObservationDraft.model_validate_json(
             observation_file.read_text(encoding="utf-8")
         )
-        observation = _shadow_service(paths, state, objects).record_observation(draft)
+        service = _shadow_service(paths, state, objects)
+        observation = service.record_observation(draft)
+        status_document = _refresh_phase7_status(paths, service)
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "SHADOW_OBSERVATION_REJECTED"})
         raise typer.Exit(code=2) from exc
-    _emit({"status": observation.status, "observation": observation})
+    _emit(
+        {
+            "status": observation.status,
+            "observation": observation,
+            "phase7_status_document": status_document,
+        }
+    )
 
 
 @app.command("shadow-evaluate")
@@ -3101,10 +3472,12 @@ def shadow_evaluate(
     paths, state, objects = _services()
     try:
         parsed_as_of = datetime.fromisoformat(as_of)
-        execution = _shadow_service(paths, state, objects).evaluate(
+        service = _shadow_service(paths, state, objects)
+        execution = service.evaluate(
             study_id,
             as_of=parsed_as_of,
         )
+        status_document = _refresh_phase7_status(paths, service)
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "SHADOW_EVALUATION_REJECTED"})
         raise typer.Exit(code=2) from exc
@@ -3115,6 +3488,7 @@ def shadow_evaluate(
             "phase8_admission": execution.admission,
             "report_object_sha256": execution.report_object_sha256,
             "admission_object_sha256": execution.admission_object_sha256,
+            "phase7_status_document": status_document,
         }
     )
 
@@ -3127,6 +3501,48 @@ def shadow_status(
 
     paths, state, objects = _services()
     _emit(_shadow_service(paths, state, objects).status(study_id))
+
+
+@app.command("phase7-status-update")
+def phase7_status_update(
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            help="Optional status-document path; defaults to project phase7_status.md.",
+        ),
+    ] = None,
+) -> None:
+    """Refresh phase7_status.md from current immutable/indexed runtime facts."""
+
+    migration_integrity_issue: str | None = None
+    try:
+        paths, state, objects = _services()
+    except RuntimeError as exc:
+        if not str(exc).startswith("Migration checksum changed:"):
+            raise
+        migration_integrity_issue = str(exc)
+        paths = ProjectPaths.discover()
+        paths.ensure_directories()
+        state = StateStore(paths.state_db, paths.root / "migrations")
+        objects = ObjectStore(paths.objects)
+    service = _shadow_service(paths, state, objects)
+    status_document = write_phase7_status(
+        service,
+        output if output is not None else paths.root / "phase7_status.md",
+        migration_integrity_issue=migration_integrity_issue,
+    )
+    _emit(
+        {
+            "status": service.status().status,
+            "phase7_status_document": status_document,
+            "migration_integrity_status": (
+                "BLOCKED_CHECKSUM_MISMATCH"
+                if migration_integrity_issue
+                else "PASS"
+            ),
+        }
+    )
 
 
 @app.command("shadow-audit")
@@ -3425,9 +3841,7 @@ def knowledge_semantic_embedding_run(
     paths, state, objects = _services()
     model_directory = default_model_directory(paths.runtime)
     asset = verify_local_model(model_directory)
-    config = load_semantic_funnel_config(
-        paths.root / "configs" / "knowledge_semantic_funnel.yaml"
-    )
+    config = load_semantic_funnel_config(paths.root / "configs" / "knowledge_semantic_funnel.yaml")
     execution = SemanticEmbeddingService(
         SemanticFunnelRepository(state),
         objects,
@@ -3587,10 +4001,11 @@ def knowledge_distill_status(
     report = repository.latest_author_report(source_id)
     rules = _distillation_rules(paths)
     run = repository.get_run(report.run_id) if report is not None else None
-    stale = bool(
-        run is None
-        or run.classification_rule_version != rules.rule_version
-    ) if report is not None else False
+    stale = (
+        bool(run is None or run.classification_rule_version != rules.rule_version)
+        if report is not None
+        else False
+    )
     _emit(
         {"status": "NOT_RUN", "report": None}
         if report is None
@@ -3598,9 +4013,7 @@ def knowledge_distill_status(
             "status": "STALE" if stale else report.coverage_status,
             "stale": stale,
             "current_rule_version": rules.rule_version,
-            "current_generation_rule_version": (
-                KnowledgeDraftService.generation_rule_version
-            ),
+            "current_generation_rule_version": (KnowledgeDraftService.generation_rule_version),
             "report": report,
         }
     )
@@ -3635,10 +4048,11 @@ def knowledge_review_queue(
     summary = repository.latest_review_queue_summary(source_id)
     run = repository.get_run(report.run_id) if report is not None else None
     rules = _distillation_rules(paths)
-    stale = bool(
-        run is None
-        or run.classification_rule_version != rules.rule_version
-    ) if report is not None else False
+    stale = (
+        bool(run is None or run.classification_rule_version != rules.rule_version)
+        if report is not None
+        else False
+    )
     _emit(
         {"status": "NOT_RUN", "queue": None}
         if summary is None
@@ -3683,15 +4097,12 @@ def knowledge_draft_status(
         required_classification_rule_version=rules.rule_version,
     ).current_report(source_id)
     distillation_repository = DistillationRepository(state)
-    run = (
-        distillation_repository.get_run(report.run_id)
+    run = distillation_repository.get_run(report.run_id) if report is not None else None
+    stale = (
+        bool(run is None or run.classification_rule_version != rules.rule_version)
         if report is not None
-        else None
+        else False
     )
-    stale = bool(
-        run is None
-        or run.classification_rule_version != rules.rule_version
-    ) if report is not None else False
     _emit(
         {"status": "NOT_RUN", "report": None}
         if report is None
@@ -3913,9 +4324,7 @@ def zhihu_full_capture_serve(
             "extension_directory": str(
                 build_coordinator_capture_extension(
                     runtime_root=paths.runtime,
-                    bridge_origin=loopback_installer_url(server).split(
-                        "/install/", maxsplit=1
-                    )[0],
+                    bridge_origin=loopback_installer_url(server).split("/install/", maxsplit=1)[0],
                     session_token=session.session_token,
                     interval_ms=round(request_interval_seconds * 1000),
                 ).relative_to(paths.root)

@@ -24,10 +24,22 @@ def test_observation_and_canonical_parquet_are_idempotent(tmp_path: Path) -> Non
 
     canonical = CanonicalMarketStore(tmp_path / "data", tmp_path / "manifests")
     report = cross_validate_batches(batch, other)
-    manifest = canonical.publish(batch, report, source_batch_ids=[batch.batch_id, other.batch_id])
+    manifest = canonical.publish(
+        batch,
+        report,
+        source_batch_ids=[batch.batch_id, other.batch_id],
+        source_snapshot_ids=[
+            batch.raw_snapshot_id,
+            other.raw_snapshot_id,
+        ],
+    )
     manifest_path = tmp_path / "manifests" / "canonical" / "XSHG" / "5m" / "600519.json"
     persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert persisted["replay_quality"] == ReplayQuality.DUAL_SOURCE_5M_VERIFIED.value
+    assert persisted["source_snapshot_ids"] == [
+        batch.raw_snapshot_id,
+        other.raw_snapshot_id,
+    ]
     assert persisted["content_hash"] == manifest["content_hash"]
     canonical_table = pq.read_table(tmp_path / "data" / Path(persisted["files"][0]))
     assert canonical_table.column("volume_unit")[0].as_py() == VolumeUnit.SHARE.value

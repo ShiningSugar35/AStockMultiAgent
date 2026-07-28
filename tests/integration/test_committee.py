@@ -74,12 +74,8 @@ def _service_and_request(
         memo.as_of + timedelta(days=1),
         effective_rules.effective_from + timedelta(days=1),
     )
-    skill_versions = {
-        item.skill_id: item.skill_version for item in route.selected
-    }
-    skill_versions["ResearchMemoComposer"] = (
-        memo.composer_version or "research-memo-composer-v1"
-    )
+    skill_versions = {item.skill_id: item.skill_version for item in route.selected}
+    skill_versions["ResearchMemoComposer"] = memo.composer_version or "research-memo-composer-v1"
     if scope is not CommitteeDecisionScope.NEW_CANDIDATE:
         plan = artifacts["PositionMonitoringPlan"]
         review = artifacts["HoldingReviewPack"]
@@ -95,26 +91,28 @@ def _service_and_request(
     financial_values = dict(FINANCIAL_GOLDEN_VALUES)
     if severe_financial:
         financial_values[FinancialFieldCode.TOTAL_ASSETS] = Decimal("1100")
-    financial = FinancialIntegrityService(
-        state,
-        lifecycle.object_store,
-        rule_config_path=PROJECT_ROOT / "configs" / "financial_rules.yaml",
-        industry_profile_path=(
-            PROJECT_ROOT / "configs" / "financial_industry_profiles.yaml"
-        ),
-    ).run(
-        FinancialAuditRequest(
-            company_id=memo.company_id,
-            as_of=as_of,
-            industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
-            facts=make_financial_facts(
-                state,
-                lifecycle.object_store,
-                company_id=memo.company_id,
-                values=financial_values,
-            ),
+    financial = (
+        FinancialIntegrityService(
+            state,
+            lifecycle.object_store,
+            rule_config_path=PROJECT_ROOT / "configs" / "financial_rules.yaml",
+            industry_profile_path=(PROJECT_ROOT / "configs" / "financial_industry_profiles.yaml"),
         )
-    ).pack
+        .run(
+            FinancialAuditRequest(
+                company_id=memo.company_id,
+                as_of=as_of,
+                industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+                facts=make_financial_facts(
+                    state,
+                    lifecycle.object_store,
+                    company_id=memo.company_id,
+                    values=financial_values,
+                ),
+            )
+        )
+        .pack
+    )
     artifacts["FinancialIntegrityEvidencePack"] = financial
     artifact_ids["FinancialIntegrityEvidencePack"] = (
         f"FinancialIntegrityEvidencePack:{financial.audit_run_id}"
@@ -171,15 +169,11 @@ def _service_and_request(
         ),
         "portfolio_risk": CommitteePortfolioRiskState(
             current_total_exposure=(
-                Decimal("0")
-                if scope is CommitteeDecisionScope.NEW_CANDIDATE
-                else Decimal("0.20")
+                Decimal("0") if scope is CommitteeDecisionScope.NEW_CANDIDATE else Decimal("0.20")
             ),
             post_decision_total_exposure=Decimal("0.24"),
             current_industry_exposure=(
-                Decimal("0")
-                if scope is CommitteeDecisionScope.NEW_CANDIDATE
-                else Decimal("0.10")
+                Decimal("0") if scope is CommitteeDecisionScope.NEW_CANDIDATE else Decimal("0.10")
             ),
             post_decision_industry_exposure=Decimal("0.14"),
             max_abs_correlation=Decimal("0.30"),
@@ -191,9 +185,7 @@ def _service_and_request(
         "tradable": True,
         "market_data_quality_pass": True,
         "current_position": (
-            Decimal("0")
-            if scope is CommitteeDecisionScope.NEW_CANDIDATE
-            else Decimal("0.03")
+            Decimal("0") if scope is CommitteeDecisionScope.NEW_CANDIDATE else Decimal("0.03")
         ),
         "requested_position": Decimal("0.04"),
         "holding_horizon_days": 180,
@@ -260,16 +252,15 @@ def test_committee_plan_is_read_only_and_decision_is_deterministic_auditable_and
 ) -> None:
     committee, request, _ = _service_and_request(tmp_path, state)
     with state.connect() as connection:
-        before = connection.execute(
-            "SELECT COUNT(*) FROM committee_decision_index"
-        ).fetchone()[0]
+        before = connection.execute("SELECT COUNT(*) FROM committee_decision_index").fetchone()[0]
     plan = committee.plan(request)
     assert plan.verdict is CommitteeVerdict.PAPER_ELIGIBLE
     assert not plan.persistent_writes
     with state.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM committee_decision_index"
-        ).fetchone()[0] == before
+        assert (
+            connection.execute("SELECT COUNT(*) FROM committee_decision_index").fetchone()[0]
+            == before
+        )
 
     ledger_before = _ledger_counts(state)
     first = committee.decide(request)
@@ -291,14 +282,13 @@ def test_committee_plan_is_read_only_and_decision_is_deterministic_auditable_and
             return [shift_created_at(child) for child in value]
         return value
 
-    timestamp_variant = CommitteeDecisionRequest.model_validate(
-        shift_created_at(clone_payload)
-    )
+    timestamp_variant = CommitteeDecisionRequest.model_validate(shift_created_at(clone_payload))
     assert committee.decide(timestamp_variant) == first
     assert first.decision.verdict is CommitteeVerdict.PAPER_ELIGIBLE
     assert first.protocol.protocol_status is CommitteeProtocolStatus.ACTIVE
     assert first.protocol.requires_user_confirmation
-    assert first.protocol.broker_execution_allowed
+    assert not first.protocol.broker_execution_allowed
+    assert first.protocol.paper_simulation_allowed
     assert first.protocol.ledger_write_allowed
     assert committee.audit(first.decision.decision_id)["status"] == "PASS"
     assert committee.status(decision_id=first.decision.decision_id)["status"] == "AVAILABLE"
@@ -423,11 +413,7 @@ def test_hard_blocks_and_budget_degradation_cannot_be_overridden_by_narrative(
         state,
         assessment_updates={
             "tradable": False,
-            "signal_evidence_ids": {
-                "tradable": [
-                    "evidence:placeholder"
-                ]
-            },
+            "signal_evidence_ids": {"tradable": ["evidence:placeholder"]},
             "optional_narrative_requested": True,
         },
     )
@@ -489,9 +475,7 @@ def test_financial_integrity_is_required_and_severe_identity_failure_rejects(
         artifact_references=without_financial_refs,
         assessment=request.assessment,
         access_policy=CommitteeAccessPolicy(
-            frozen_artifact_hashes=sorted(
-                item.object_sha256 for item in without_financial_refs
-            ),
+            frozen_artifact_hashes=sorted(item.object_sha256 for item in without_financial_refs),
             created_at=request.assessment.as_of,
         ),
         created_at=request.assessment.as_of,
@@ -519,10 +503,13 @@ def test_financial_integrity_is_required_and_severe_identity_failure_rejects(
         financial_reference.artifact_id,
     )
     assert resolved["status"] == "RESOLVED"
-    assert committee.resolve_task(
-        financial_task.task_id,
-        financial_reference.artifact_id,
-    ) == resolved
+    assert (
+        committee.resolve_task(
+            financial_task.task_id,
+            financial_reference.artifact_id,
+        )
+        == resolved
+    )
     assert committee.audit(missing.decision.decision_id)["status"] == "PASS"
 
     severe = committee.decide(request)

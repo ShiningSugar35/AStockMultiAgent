@@ -11,6 +11,11 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.market import Market, ReplayQuality
+from astock.schemas.reference_data import (
+    DailyBarObservation,
+    InstrumentRecord,
+    TradingSession,
+)
 
 
 class OrderSide(StrEnum):
@@ -229,15 +234,95 @@ class PaperPlaceOrderPayload(AStockModel):
     fee_rule_version: str = Field(min_length=1)
 
 
+class PaperTradingClassification(AStockModel):
+    instrument_id: str = Field(min_length=1)
+    board: Literal["MAIN", "STAR", "CHINEXT", "BSE"]
+    risk_status: Literal["NORMAL", "RISK_WARNING"]
+    fixed_price_limit_eligible: bool
+    suspension_status_verified: bool
+    suspended: bool
+    evidence_id: str = Field(min_length=1)
+
+
+class PaperReferencePack(AStockModel):
+    schema_version: str = "paper-reference-pack-v1"
+    pack_id: str = Field(min_length=1)
+    data_mode: Literal["RECORDED_ACCEPTANCE"]
+    market: Market
+    symbol: str = Field(pattern=r"^\d{6}$")
+    visible_at: AwareDatetime
+    calendar_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    instrument_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    daily_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sessions: list[TradingSession] = Field(min_length=1)
+    instrument: InstrumentRecord
+    daily_bars: list[DailyBarObservation] = Field(min_length=1)
+    classification: PaperTradingClassification
+    source_snapshot_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_recorded_reference_pack(self) -> PaperReferencePack:
+        instrument_id = f"{self.market.value}:{self.symbol}"
+        if (
+            self.instrument.instrument_id != instrument_id
+            or self.instrument.market is not self.market
+            or self.instrument.symbol != self.symbol
+            or self.classification.instrument_id != instrument_id
+        ):
+            raise ValueError("paper reference pack instrument identity mismatch")
+        if any(item.exchange is not self.market for item in self.sessions):
+            raise ValueError("paper reference pack calendar market mismatch")
+        if any(
+            item.instrument_id != instrument_id
+            or item.market is not self.market
+            or item.symbol != self.symbol
+            for item in self.daily_bars
+        ):
+            raise ValueError("paper reference pack daily identity mismatch")
+        if self.source_snapshot_ids != sorted(set(self.source_snapshot_ids)):
+            raise ValueError("paper reference pack snapshot ids must be sorted and unique")
+        if any(item.available_to_system_at > self.visible_at for item in self.sessions):
+            raise ValueError("paper calendar contains future-visible records")
+        if self.instrument.available_to_system_at > self.visible_at:
+            raise ValueError("paper instrument contains a future-visible record")
+        if any(item.available_to_system_at > self.visible_at for item in self.daily_bars):
+            raise ValueError("paper daily release contains future-visible records")
+        return self
+
+
 class PaperExecutionRequest(AStockModel):
+    schema_version: str = "paper-execution-request-v2"
     trade_protocol_id: str = Field(min_length=1)
-    user_confirmation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    trade_protocol_object_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    paper_reference_pack_artifact_id: str | None = None
+    paper_reference_pack_object_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    user_confirmation_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     account_id: str = Field(min_length=1)
+    idempotency_key: str = Field(default="legacy-paper-execution", min_length=1)
     created_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
     paper_operation_request_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    market: Market | None = None
     symbol: str = Field(pattern=r"^[0-9]{6}$")
+    side: OrderSide | None = None
     qty: int = Field(gt=0)
     limit_price_fen: int = Field(gt=0)
+    requires_user_confirmation: Literal[True] = True
+
+    @model_validator(mode="after")
+    def _validate_execution_bindings(self) -> PaperExecutionRequest:
+        reference_values = (
+            self.paper_reference_pack_artifact_id,
+            self.paper_reference_pack_object_sha256,
+        )
+        if (reference_values[0] is None) != (reference_values[1] is None):
+            raise ValueError("paper reference artifact id and hash must appear together")
+        return self
 
 
 class PaperCancelOrderPayload(AStockModel):

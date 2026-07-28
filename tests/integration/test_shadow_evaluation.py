@@ -8,10 +8,13 @@ from pathlib import Path
 import pytest
 
 from astock.core.codex_runs import CodexRunService
-from astock.core.hashing import canonical_json_bytes
+from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.market_data.storage import CanonicalMarketStore
 from astock.schemas import (
+    BASE_CASE_SECTIONS,
+    BarRequest,
     CodexRunInputManifest,
     CommitteeBudgetReport,
     CommitteeDecisionScope,
@@ -24,11 +27,14 @@ from astock.schemas import (
     DecisionPack,
     FrozenWeightProfile,
     Market,
+    MarketBar,
     MarketRegime,
     MarketRegimeFeatures,
     Phase8AdmissionStatus,
     PointInTimeStatus,
     ReplayQuality,
+    ResearchMemoArtifact,
+    ResearchMemoSectionReference,
     ResearchSkillStatus,
     ShadowAction,
     ShadowArmDraft,
@@ -41,8 +47,13 @@ from astock.schemas import (
     ShadowExecutionObservationDraft,
     ShadowFillStatus,
     ShadowObservationStatus,
+    ShadowOutcomeDataSource,
+    ShadowPerformanceStatus,
     ShadowStudyCreateRequest,
     ShadowStudyMode,
+    ShadowThesisStatus,
+    SourceSnapshot,
+    SpecialistCoverageStatus,
     TradeProtocol,
 )
 from astock.shadow import (
@@ -50,11 +61,36 @@ from astock.shadow import (
     ShadowStudyExecution,
     load_shadow_evaluation_policy,
 )
+from tests.helpers import make_batch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AS_OF = datetime(2026, 7, 17, tzinfo=UTC)
 SIGNAL = AS_OF + timedelta(days=1)
 TEST_NOW = SIGNAL + timedelta(days=500)
+
+
+class _MutableClock:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+class _ForwardCanonicalStore(CanonicalMarketStore):
+    def __init__(
+        self,
+        manifest: dict[str, object],
+        bars: list[MarketBar],
+    ) -> None:
+        self._manifest = manifest
+        self._bars = bars
+
+    def load_manifest(self, request: BarRequest) -> dict[str, object] | None:
+        return self._manifest
+
+    def read_bars(self, request: BarRequest) -> list[MarketBar]:
+        return list(self._bars)
 
 
 def _weight(name: str) -> FrozenWeightProfile:
@@ -136,19 +172,23 @@ def _study_request() -> ShadowStudyCreateRequest:
     )
 
 
-def _service(tmp_path: Path) -> tuple[ShadowEvaluationService, StateStore, ObjectStore]:
+def _service(
+    tmp_path: Path,
+) -> tuple[ShadowEvaluationService, StateStore, ObjectStore, _MutableClock]:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
     state.migrate()
     objects = ObjectStore(tmp_path / "objects")
+    clock = _MutableClock(AS_OF)
     service = ShadowEvaluationService(
         state,
         objects,
         load_shadow_evaluation_policy(
             PROJECT_ROOT / "configs" / "shadow_evaluation.yaml"
         ),
-        clock=lambda: TEST_NOW,
+        canonical_market_store=None,
+        clock=clock,
     )
-    return service, state, objects
+    return service, state, objects, clock
 
 
 def _register_input(
@@ -172,6 +212,39 @@ def _register_input(
         artifact_type=artifact_type,
         object_sha256=reference.sha256,
         available_at=SIGNAL,
+        created_at=SIGNAL,
+    )
+
+
+def _memo() -> ResearchMemoArtifact:
+    sections = [
+        ResearchMemoSectionReference(
+            section=section,
+            base_finding_ids=[f"finding:{section.value}"],
+            evidence_ids=[f"evidence:{section.value}"],
+            created_at=SIGNAL,
+        )
+        for section in BASE_CASE_SECTIONS
+    ]
+    return ResearchMemoArtifact(
+        memo_id="memo:1",
+        base_case_id="base:1",
+        route_plan_id="route:1",
+        company_id="company:1",
+        as_of=SIGNAL,
+        registry_version="research-skills-v1",
+        base_sections=sections,
+        delta_references=[],
+        missing_selected_skill_ids=[],
+        open_gap_codes=[],
+        coverage_status=SpecialistCoverageStatus.SUFFICIENT,
+        confidence_cap=0.8,
+        degradation_codes=[],
+        evidence_ids=sorted(
+            evidence_id
+            for section in sections
+            for evidence_id in section.evidence_ids
+        ),
         created_at=SIGNAL,
     )
 
@@ -206,11 +279,13 @@ def _protocol() -> TradeProtocol:
         evidence_snapshot_id="snapshot:1",
         evidence_ids=["evidence:1"],
         effective_from=SIGNAL + timedelta(minutes=5),
+        paper_simulation_allowed=True,
+        ledger_write_allowed=True,
         created_at=SIGNAL,
     )
 
 
-def _decision() -> DecisionPack:
+def _decision(memo_object_hash: str) -> DecisionPack:
     return DecisionPack(
         decision_id="decision:1",
         bundle_id="bundle:1",
@@ -219,7 +294,7 @@ def _decision() -> DecisionPack:
         as_of=SIGNAL,
         rules_version="committee-rules-v1",
         engine_version="committee-engine-v1",
-        frozen_input_hashes=["a" * 64, "b" * 64],
+        frozen_input_hashes=sorted(["a" * 64, memo_object_hash]),
         verdict=CommitteeVerdict.PAPER_ELIGIBLE,
         expected_return_range=CommitteeRatioRange(
             lower=Decimal("0.10"),
@@ -283,6 +358,13 @@ def _assignment_request(
 ) -> ShadowDecisionAssignmentRequest:
     manifest = execution.manifest
     arms = execution.arms
+    memo_reference = _register_input(
+        state,
+        objects,
+        artifact_id="ResearchMemoArtifact:memo:1",
+        artifact_type="ResearchMemoArtifact",
+        payload=_memo(),
+    )
     references = [
         _register_input(
             state,
@@ -296,7 +378,7 @@ def _assignment_request(
             objects,
             artifact_id="DecisionPack:decision:1",
             artifact_type="DecisionPack",
-            payload=_decision(),
+            payload=_decision(memo_reference.object_sha256),
         ),
         _register_input(
             state,
@@ -312,7 +394,9 @@ def _assignment_request(
             artifact_type="TradeProtocol",
             payload=_protocol(),
         ),
+        memo_reference,
     ]
+    references.sort(key=lambda item: item.artifact_id)
     type_inputs = {
         ShadowArmType.RULE_BASELINE: [],
         ShadowArmType.BASE_CASE_ONLY: ["BaseCasePack:base:1"],
@@ -322,6 +406,7 @@ def _assignment_request(
         ],
         ShadowArmType.FULL_COMMITTEE: [
             "DecisionPack:decision:1",
+            "ResearchMemoArtifact:memo:1",
             "TradeProtocol:protocol:1",
         ],
         ShadowArmType.CSI300_BENCHMARK: [],
@@ -355,6 +440,8 @@ def _assignment_request(
         ),
         thesis_version="thesis-v1",
         event_id="event:1",
+        research_memo_id="memo:1",
+        decision_id="decision:1",
         trade_protocol_id="protocol:1",
         artifact_references=references,
         arm_signals=signals,
@@ -362,14 +449,104 @@ def _assignment_request(
     )
 
 
+def _forward_market_evidence(
+    state: StateStore,
+    objects: ObjectStore,
+    *,
+    assignment_id: str,
+    symbol: str,
+    market: Market,
+) -> tuple[str, list[str], datetime]:
+    available_at = SIGNAL + timedelta(days=90)
+    snapshots: list[SourceSnapshot] = []
+    for provider_id in ("eastmoney-5m", "sina-5m"):
+        raw = objects.put_json(
+            {
+                "provider_id": provider_id,
+                "symbol": symbol,
+                "market": market.value,
+                "captured_after_signal": True,
+            }
+        )
+        snapshot = SourceSnapshot(
+            snapshot_id=f"{provider_id}:{symbol}:{raw.sha256}",
+            source_id=provider_id,
+            object_sha256=raw.sha256,
+            fetched_at=available_at,
+            available_to_system_at=available_at,
+            source_url=f"https://example.invalid/{provider_id}/{symbol}",
+            mime="application/json",
+            byte_size=raw.byte_size,
+            headers_hash="f" * 64,
+            created_at=available_at,
+        )
+        state.register_snapshot(snapshot)
+        snapshots.append(snapshot)
+    snapshot_ids = sorted(item.snapshot_id for item in snapshots)
+    manifest = {
+        "schema_version": "shadow-forward-market-evidence-v2",
+        "assignment_id": assignment_id,
+        "symbol": symbol,
+        "market": market.value,
+        "frequency": "5m",
+        "adjustment_mode": "NONE",
+        "actual_start": (SIGNAL + timedelta(minutes=5)).isoformat(),
+        "actual_end": available_at.isoformat(),
+        "canonical_manifest_content_hash": "f" * 64,
+        "source_snapshot_ids": snapshot_ids,
+        "market_observation_ids": ["bar:entry", "bar:valuation"],
+        "market_bars": [
+            {
+                "observation_id": "bar:entry",
+                "timestamp": (SIGNAL + timedelta(minutes=5)).isoformat(),
+                "open_fen": 1000,
+                "high_fen": 1000,
+                "low_fen": 1000,
+                "close_fen": 1000,
+                "volume_shares": 10_000,
+            },
+            {
+                "observation_id": "bar:valuation",
+                "timestamp": available_at.isoformat(),
+                "open_fen": 1050,
+                "high_fen": 1070,
+                "low_fen": 980,
+                "close_fen": 1050,
+                "volume_shares": 10_000,
+            },
+        ],
+        "replay_quality": ReplayQuality.DUAL_SOURCE_5M_VERIFIED.value,
+        "frozen_at": available_at.isoformat(),
+        "data_available_at": available_at.isoformat(),
+    }
+    manifest["content_hash"] = content_hash(manifest)
+    reference = objects.put_json(manifest)
+    state.register_artifact(
+        artifact_id=f"shadow-forward-market:{manifest['content_hash']}",
+        artifact_type="ShadowForwardMarketEvidence",
+        schema_version="2.0",
+        object_hash=reference.sha256,
+        input_hashes=sorted(
+            ["f" * 64, *(item.object_sha256 for item in snapshots)]
+        ),
+    )
+    return reference.sha256, snapshot_ids, available_at
+
+
 def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> None:
-    service, state, objects = _service(tmp_path)
-    assert service.status("study:not-run").status == "NOT_RUN"
+    service, state, objects, clock = _service(tmp_path)
+    assert service.status("study:not-run").status == "COLLECTING"
 
     request = _study_request()
     plan = service.plan_study(request)
     assert not plan.persistent_writes
     assert service.repository.integrity_counts()["shadow_policy_index"] == 0
+    clock.now = AS_OF + timedelta(minutes=1)
+    with pytest.raises(ValueError, match="registered before becoming effective"):
+        service.create_study(
+            request.model_copy(update={"study_name": "retrospective-disguise"})
+        )
+    clock.now = AS_OF
 
     first = service.create_study(request)
     second = service.create_study(request)
@@ -394,6 +571,7 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
     with pytest.raises(ValueError, match="future as_of"):
         service.evaluate(first.manifest.study_id, as_of=TEST_NOW + timedelta(seconds=1))
 
+    clock.now = SIGNAL
     feature_ref = objects.put_json({"market_features": "panic-v1"})
     features = MarketRegimeFeatures(
         feature_snapshot_id="features:1",
@@ -413,11 +591,13 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
         pit_statuses=[PointInTimeStatus.CERTIFIED],
         created_at=SIGNAL,
     )
+    clock.now = SIGNAL + timedelta(seconds=1)
     with pytest.raises(ValueError, match="frozen by their as-of time"):
         service.classify_regime(
             first.manifest.study_id,
             features.model_copy(update={"created_at": SIGNAL + timedelta(seconds=1)}),
         )
+    clock.now = SIGNAL
     regime = service.classify_regime(first.manifest.study_id, features)
     assert regime.regime is MarketRegime.PANIC
     assert (
@@ -482,8 +662,44 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
     )
     with pytest.raises(ValueError, match="not frozen by signal time"):
         service.assign(future_request)
+    clock.now = SIGNAL + timedelta(minutes=6)
+    late_event_id = "event:late"
+    with pytest.raises(ValueError, match="cannot be registered retrospectively"):
+        service.assign(
+            assignment_request.model_copy(
+                update={
+                    "event_id": late_event_id,
+                    "independence_key": service.build_independence_key(
+                        first.manifest.study_id,
+                        company_id=assignment_request.company_id,
+                        thesis_version=assignment_request.thesis_version,
+                        event_id=late_event_id,
+                    ),
+                }
+            )
+        )
+    clock.now = SIGNAL
     assignment = service.assign(assignment_request)
     assert service.assign(assignment_request).assignment_id == assignment.assignment_id
+    duplicate_event_id = "event:duplicate-decision"
+    with pytest.raises(ValueError, match="only one independent forward event"):
+        service.assign(
+            assignment_request.model_copy(
+                update={
+                    "event_id": duplicate_event_id,
+                    "independence_key": service.build_independence_key(
+                        first.manifest.study_id,
+                        company_id=assignment_request.company_id,
+                        thesis_version=assignment_request.thesis_version,
+                        event_id=duplicate_event_id,
+                    ),
+                }
+            )
+        )
+    clock.now = SIGNAL + timedelta(minutes=6)
+    assert service.assign(assignment_request) == assignment
+    assert service.classify_regime(first.manifest.study_id, features) == regime
+    clock.now = SIGNAL
     status = service.status(first.manifest.study_id)
     assert status.assignment_count == 1
     assert status.independent_decision_count == 1
@@ -530,7 +746,77 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
         )
 
     paper_counts_before = _paper_counts(state)
-    market_manifest = objects.put_json({"canonical": "dual-source-5m"})
+    forward_market_evidence = {
+        ("600000", Market.XSHG): _forward_market_evidence(
+            state,
+            objects,
+            assignment_id=assignment.assignment_id,
+            symbol="600000",
+            market=Market.XSHG,
+        ),
+        ("000300", Market.INDEX): _forward_market_evidence(
+            state,
+            objects,
+            assignment_id=assignment.assignment_id,
+            symbol="000300",
+            market=Market.INDEX,
+        ),
+    }
+    clock.now = SIGNAL + timedelta(days=90)
+    stock_snapshot_ids = forward_market_evidence[
+        ("600000", Market.XSHG)
+    ][1]
+    base_bar = make_batch("eastmoney-5m", symbol="600000").bars[0]
+    forward_bars = [
+        base_bar.model_copy(
+            update={
+                "observation_id": "bar:entry",
+                "timestamp": SIGNAL + timedelta(minutes=5),
+                "open": Decimal("10.00"),
+                "high": Decimal("10.00"),
+                "low": Decimal("10.00"),
+                "close": Decimal("10.00"),
+                "volume": Decimal("10000"),
+            }
+        ),
+        base_bar.model_copy(
+            update={
+                "observation_id": "bar:valuation",
+                "timestamp": SIGNAL + timedelta(days=90),
+                "open": Decimal("10.50"),
+                "high": Decimal("10.70"),
+                "low": Decimal("9.80"),
+                "close": Decimal("10.50"),
+                "volume": Decimal("10000"),
+            }
+        ),
+    ]
+    service.canonical_market_store = _ForwardCanonicalStore(
+        {
+            "content_hash": "f" * 64,
+            "source_snapshot_ids": stock_snapshot_ids,
+            "replay_quality": ReplayQuality.DUAL_SOURCE_5M_VERIFIED.value,
+        },
+        forward_bars,
+    )
+    frozen_forward = service.freeze_forward_market_evidence(
+        assignment.assignment_id,
+        symbol="600000",
+        market=Market.XSHG,
+        valuation_time=SIGNAL + timedelta(days=90),
+    )
+    frozen_manifest = frozen_forward["market_manifest_sha256"]
+    frozen_snapshots = frozen_forward["market_snapshot_ids"]
+    frozen_available_at = frozen_forward["data_available_at"]
+    assert isinstance(frozen_manifest, str)
+    assert isinstance(frozen_snapshots, list)
+    assert all(isinstance(item, str) for item in frozen_snapshots)
+    assert isinstance(frozen_available_at, datetime)
+    forward_market_evidence[("600000", Market.XSHG)] = (
+        frozen_manifest,
+        frozen_snapshots,
+        frozen_available_at,
+    )
     trading_calendar = objects.put_json({"trading_calendar": "xshg-v1"})
     candidate_snapshot = objects.put_json(
         {
@@ -542,15 +828,28 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
     corporate_actions = objects.put_json({"corporate_actions": "complete-v1"})
     delisting = objects.put_json({"delisting": "checked-v1"})
     return_by_type = {
-        ShadowArmType.RULE_BASELINE: Decimal("0.03"),
+        ShadowArmType.RULE_BASELINE: Decimal("0.05"),
         ShadowArmType.BASE_CASE_ONLY: Decimal("0.05"),
-        ShadowArmType.BASE_CASE_PLUS_SPECIALIST: Decimal("0.06"),
-        ShadowArmType.FULL_COMMITTEE: Decimal("0.055"),
-        ShadowArmType.CSI300_BENCHMARK: Decimal("0.04"),
-        ShadowArmType.EQUAL_WEIGHT_CANDIDATE: Decimal("0.045"),
+        ShadowArmType.BASE_CASE_PLUS_SPECIALIST: Decimal("0.05"),
+        ShadowArmType.FULL_COMMITTEE: Decimal("0.05"),
+        ShadowArmType.CSI300_BENCHMARK: Decimal("0.05"),
+        ShadowArmType.EQUAL_WEIGHT_CANDIDATE: Decimal("0.05"),
     }
     recorded = []
     for arm in first.arms:
+        observation_symbol = arm.benchmark_symbol or assignment.symbol
+        observation_market = (
+            Market.INDEX
+            if arm.arm_type
+            in {
+                ShadowArmType.CSI300_BENCHMARK,
+                ShadowArmType.CHINA_ALL_BENCHMARK,
+            }
+            else assignment.market
+        )
+        market_manifest_hash, market_snapshot_ids, data_available_at = (
+            forward_market_evidence[(observation_symbol, observation_market)]
+        )
         result = return_by_type[arm.arm_type]
         valuation_price = 1000 + int(result * Decimal("1000"))
         gross_pnl = (valuation_price - 1000) * 100
@@ -568,16 +867,8 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
             independence_key=assignment.independence_key,
             regime_id=regime.regime_id,
             company_id=assignment.company_id,
-            symbol=(arm.benchmark_symbol or assignment.symbol),
-            market=(
-                Market.INDEX
-                if arm.arm_type
-                in {
-                    ShadowArmType.CSI300_BENCHMARK,
-                    ShadowArmType.CHINA_ALL_BENCHMARK,
-                }
-                else assignment.market
-            ),
+            symbol=observation_symbol,
+            market=observation_market,
             horizon_days=60,
             trading_days_elapsed=60,
             action=ShadowAction.ENTER,
@@ -614,12 +905,16 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
             cost_model_version=arm.cost_model_version,
             fill_model_version=arm.fill_model_version,
             corporate_action_version=arm.corporate_action_version,
-            market_manifest_sha256=market_manifest.sha256,
+            market_manifest_sha256=market_manifest_hash,
             trading_calendar_snapshot_sha256=trading_calendar.sha256,
             candidate_set_snapshot_sha256=candidate_snapshot.sha256,
             corporate_action_snapshot_sha256=corporate_actions.sha256,
             delisting_snapshot_sha256=delisting.sha256,
+            outcome_data_source=ShadowOutcomeDataSource.LIVE_FORWARD_MARKET,
+            data_available_at=data_available_at,
+            market_snapshot_ids=market_snapshot_ids,
             market_observation_ids=["bar:entry", "bar:valuation"],
+            thesis_status=ShadowThesisStatus.STILL_VALID,
             pit_statuses=[PointInTimeStatus.CERTIFIED],
             candidate_membership_pit_safe=True,
             corporate_action_coverage_complete=True,
@@ -662,8 +957,12 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
                     "participation_rate": Decimal("0.2"),
                 }
             )
-            with pytest.raises(ValueError, match="participation limit"):
+            with pytest.raises(ValueError, match="entry volume"):
                 service.record_observation(excessive_participation)
+            with pytest.raises(ValueError, match="valuation price"):
+                service.record_observation(
+                    draft.model_copy(update={"valuation_price_fen": 2000})
+                )
             future_candidate = objects.put_json(
                 {
                     "candidate_set_id": "candidate-set:1",
@@ -724,6 +1023,22 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
     assert evaluation.report.independent_decision_count == 1
     assert evaluation.report.mature_observation_count == 6
     assert len(evaluation.report.comparisons) == 2
+    assert all(
+        item.status is ShadowPerformanceStatus.COLLECTING
+        for item in evaluation.report.skill_performance
+    )
+    assert evaluation.report.committee_performance is not None
+    assert (
+        evaluation.report.committee_performance.status
+        is ShadowPerformanceStatus.COLLECTING
+    )
+    assert evaluation.report.research_quality is not None
+    assert (
+        evaluation.report.research_quality.status
+        is ShadowPerformanceStatus.COLLECTING
+    )
+    assert evaluation.report.research_quality.complete_chain_count == 1
+    assert evaluation.report.research_quality.mature_future_event_count == 1
     assert all(
         item.unpaired_decision_count == 0
         and not item.pair_exclusion_counts
@@ -848,6 +1163,7 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
                 exclude={
                     "schema_version",
                     "created_at",
+                    "registered_at",
                     "observation_id",
                     "status",
                     "formal_eligible",
@@ -871,6 +1187,7 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
             "created_at": original.created_at + timedelta(days=1),
         }
     )
+    clock.now = corrected.created_at
     corrected_observation = service.record_observation(corrected)
     assert corrected_observation.supersedes_observation_id == original.observation_id
     corrected_parquet = service.parquet_store.path_for(corrected_observation)
@@ -912,6 +1229,7 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
                 exclude={
                     "schema_version",
                     "created_at",
+                    "registered_at",
                     "observation_id",
                     "status",
                     "formal_eligible",
@@ -924,6 +1242,7 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
             "created_at": corrected_observation.created_at + timedelta(days=1),
         }
     )
+    clock.now = excluded_draft.created_at
     excluded = service.record_observation(excluded_draft)
     assert excluded.status is ShadowObservationStatus.EXCLUDED
     assert not excluded.formal_eligible
@@ -952,6 +1271,7 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
                     exclude={
                         "schema_version",
                         "created_at",
+                        "registered_at",
                         "observation_id",
                         "status",
                         "formal_eligible",
@@ -999,6 +1319,7 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
                     exclude={
                         "schema_version",
                         "created_at",
+                        "registered_at",
                         "observation_id",
                         "status",
                         "formal_eligible",
@@ -1012,6 +1333,7 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
                 "created_at": benchmark.created_at + timedelta(days=offset),
             }
         )
+        clock.now = benchmark_draft.created_at
         benchmark = service.record_observation(benchmark_draft)
         assert benchmark.status is ShadowObservationStatus.EXCLUDED
         assert code in benchmark.exclusion_codes

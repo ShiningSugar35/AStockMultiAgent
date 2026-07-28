@@ -113,7 +113,7 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
             "observation_months": "12",
             "walk_forward_folds": 5,
         },
-        "shadow_policy_version": "shadow-evaluation-policy-v1",
+        "shadow_policy_version": "shadow-evaluation-policy-v2",
         "status": "NOT_ENTERED_BY_DESIGN",
     }
 
@@ -1057,6 +1057,28 @@ def test_committee_cli_schema_status_and_invalid_requests_fail_closed(
         assert secret not in invoked.output
         assert str(invalid_request) not in invoked.output
 
+    runtime_state = StateStore(
+        runtime / "state.sqlite",
+        PROJECT_ROOT / "migrations",
+    )
+    with runtime_state.transaction() as connection:
+        connection.execute(
+            "UPDATE schema_migration SET checksum=? WHERE version='0044'",
+            ("0" * 64,),
+        )
+    blocked_document = tmp_path / "phase7_status_blocked.md"
+    blocked = runner.invoke(
+        app,
+        ["phase7-status-update", "--output", str(blocked_document)],
+    )
+    assert blocked.exit_code == 0, blocked.output
+    assert json.loads(blocked.output)["migration_integrity_status"] == (
+        "BLOCKED_CHECKSUM_MISMATCH"
+    )
+    blocked_text = blocked_document.read_text(encoding="utf-8")
+    assert "Migration integrity: `BLOCKED_CHECKSUM_MISMATCH`" in blocked_text
+    assert "Status read mode: `READ_ONLY`" in blocked_text
+
 
 def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
     tmp_path: Path,
@@ -1069,20 +1091,39 @@ def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
     schema = runner.invoke(app, ["shadow-schema"])
     assert schema.exit_code == 0, schema.output
     schema_payload = json.loads(schema.output)
-    assert schema_payload["policy"]["policy_version"] == "shadow-evaluation-policy-v1"
+    assert schema_payload["policy"]["policy_version"] == "shadow-evaluation-policy-v2"
     assert schema_payload["hard_boundaries"] == {
+        "automatic_skill_modification_allowed": False,
         "broker_execution_allowed": False,
         "future_inputs_allowed": False,
+        "frozen_5m_ohlcv_reconciliation_required": True,
+        "historical_replay_can_count_as_forward": False,
         "independence_key_is_deterministic": True,
+        "live_forward_snapshot_lineage_required": True,
         "main_paper_ledger_write_allowed": False,
+        "memo_or_decision_reuse_can_count_as_new_event": False,
         "not_pit_safe_formal_samples_allowed": False,
         "online_weight_changes_allowed": False,
+        "reinforcement_learning_allowed": False,
+        "research_memo_decision_lineage_required": True,
         "weights_frozen": True,
     }
 
     status = runner.invoke(app, ["shadow-status", "--study-id", "study:not-run"])
     assert status.exit_code == 0, status.output
-    assert json.loads(status.output)["status"] == "NOT_RUN"
+    assert json.loads(status.output)["status"] == "COLLECTING"
+    status_document = tmp_path / "phase7_status.md"
+    refreshed = runner.invoke(
+        app,
+        ["phase7-status-update", "--output", str(status_document)],
+    )
+    assert refreshed.exit_code == 0, refreshed.output
+    refreshed_payload = json.loads(refreshed.output)
+    assert refreshed_payload["status"] == "COLLECTING"
+    assert refreshed_payload["migration_integrity_status"] == "PASS"
+    assert "Independent forward research events: `0 / 100`" in (
+        status_document.read_text(encoding="utf-8")
+    )
     audit = runner.invoke(app, ["shadow-audit", "study:not-run"])
     assert audit.exit_code == 0, audit.output
     assert json.loads(audit.output) == {

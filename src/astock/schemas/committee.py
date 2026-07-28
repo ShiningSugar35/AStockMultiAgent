@@ -37,9 +37,23 @@ class CommitteeInputRole(StrEnum):
     COUNTER_CASE = "COUNTER_CASE"
 
 
+class CommitteeMemberRole(StrEnum):
+    BASE_CASE = "BASE_CASE"
+    SERENITY_DELTA = "SERENITY_DELTA"
+    ZHIHU_EXPERT_DELTA = "ZHIHU_EXPERT_DELTA"
+    FINANCIAL_INTEGRITY = "FINANCIAL_INTEGRITY"
+
+
 class CommitteeProtocolStatus(StrEnum):
     ACTIVE = "ACTIVE"
     BLOCKED = "BLOCKED"
+
+
+class TradeProtocolOutcome(StrEnum):
+    WATCH = "WATCH"
+    REJECT = "REJECT"
+    NEEDS_INFO = "NEEDS_INFO"
+    APPROVE_SIMULATION = "APPROVE_SIMULATION"
 
 
 class CommitteeEntryOrderType(StrEnum):
@@ -79,6 +93,12 @@ class CommitteeArtifactReference(AStockModel):
     artifact_type: str = Field(min_length=1)
     object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     role: CommitteeInputRole
+
+
+class CommitteeMemberBinding(AStockModel):
+    role: CommitteeMemberRole
+    artifact_id: str = Field(min_length=1)
+    object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class CommitteeRatioRange(AStockModel):
@@ -247,9 +267,7 @@ class CommitteeAssessment(AStockModel):
             key for key, values in self.signal_evidence_ids.items() if values
         }
         if missing:
-            raise ValueError(
-                f"material committee signals require evidence ids: {sorted(missing)}"
-            )
+            raise ValueError(f"material committee signals require evidence ids: {sorted(missing)}")
         return self
 
 
@@ -345,6 +363,7 @@ class CommitteeRuleConfig(AStockModel):
 
 class CommitteeDecisionRequest(AStockModel):
     artifact_references: list[CommitteeArtifactReference] = Field(min_length=1)
+    member_bindings: list[CommitteeMemberBinding] = Field(default_factory=list)
     assessment: CommitteeAssessment
     counter_case: CounterCaseDraft | None = None
     access_policy: CommitteeAccessPolicy
@@ -359,6 +378,20 @@ class CommitteeDecisionRequest(AStockModel):
             raise ValueError("committee artifact object hashes must be unique")
         if self.access_policy.frozen_artifact_hashes != sorted(hashes):
             raise ValueError("committee access policy must exactly bind the frozen inputs")
+        if self.member_bindings:
+            roles = [item.role for item in self.member_bindings]
+            if roles != sorted(set(roles), key=lambda item: item.value):
+                raise ValueError("committee member bindings must be sorted and unique by role")
+            if set(roles) != set(CommitteeMemberRole):
+                raise ValueError("investment committee requires every mandatory member role")
+            reference_by_id = {
+                item.artifact_id: item.object_sha256 for item in self.artifact_references
+            }
+            if any(
+                reference_by_id.get(item.artifact_id) != item.object_sha256
+                for item in self.member_bindings
+            ):
+                raise ValueError("committee member bindings must reference exact frozen inputs")
         return self
 
 
@@ -368,6 +401,7 @@ class CommitteeInputBundle(AStockModel):
     scope: CommitteeDecisionScope
     as_of: AwareDatetime
     artifact_references: list[CommitteeArtifactReference] = Field(min_length=2)
+    member_bindings: list[CommitteeMemberBinding] = Field(default_factory=list)
     access_policy: CommitteeAccessPolicy
     rules_version: str = Field(min_length=1)
     engine_version: str = Field(min_length=1)
@@ -384,6 +418,18 @@ class CommitteeInputBundle(AStockModel):
             raise ValueError("committee bundle object hashes must be unique")
         if self.access_policy.frozen_artifact_hashes != sorted(hashes):
             raise ValueError("committee bundle policy must bind every frozen artifact")
+        if self.member_bindings:
+            roles = [item.role for item in self.member_bindings]
+            if roles != sorted(set(roles), key=lambda item: item.value):
+                raise ValueError("committee bundle member roles must be sorted and unique")
+            reference_by_id = {
+                item.artifact_id: item.object_sha256 for item in self.artifact_references
+            }
+            if any(
+                reference_by_id.get(item.artifact_id) != item.object_sha256
+                for item in self.member_bindings
+            ):
+                raise ValueError("committee bundle members must bind exact frozen inputs")
         return self
 
 
@@ -530,14 +576,27 @@ class TradeProtocol(AStockModel):
     evidence_ids: list[str] = Field(min_length=1)
     effective_from: AwareDatetime
     requires_user_confirmation: Literal[True] = True
-    broker_execution_allowed: bool = False
+    broker_execution_allowed: Literal[False] = False
+    paper_simulation_allowed: bool = False
     ledger_write_allowed: bool = False
+
+    @property
+    def outcome(self) -> TradeProtocolOutcome:
+        if self.verdict is CommitteeVerdict.REJECT:
+            return TradeProtocolOutcome.REJECT
+        if self.verdict is CommitteeVerdict.NEEDS_INFO:
+            return TradeProtocolOutcome.NEEDS_INFO
+        if self.verdict in {
+            CommitteeVerdict.PAPER_ELIGIBLE,
+            CommitteeVerdict.PAPER_EXIT,
+        }:
+            return TradeProtocolOutcome.APPROVE_SIMULATION
+        return TradeProtocolOutcome.WATCH
 
     @model_validator(mode="after")
     def validate_protocol(self) -> TradeProtocol:
         active_verdicts = {
             CommitteeVerdict.PAPER_ELIGIBLE,
-            CommitteeVerdict.PAPER_HOLD,
             CommitteeVerdict.PAPER_EXIT,
         }
         expected_status = (
@@ -549,6 +608,14 @@ class TradeProtocol(AStockModel):
             raise ValueError("trade protocol status does not match its committee verdict")
         if self.protocol_status is CommitteeProtocolStatus.BLOCKED and not self.blocking_codes:
             raise ValueError("blocked trade protocols require blocking codes")
+        execution_verdict = self.verdict in {
+            CommitteeVerdict.PAPER_ELIGIBLE,
+            CommitteeVerdict.PAPER_EXIT,
+        }
+        if self.paper_simulation_allowed != execution_verdict:
+            raise ValueError("paper simulation gate does not match the committee verdict")
+        if self.ledger_write_allowed != self.paper_simulation_allowed:
+            raise ValueError("paper ledger gate must equal the simulation gate")
         if self.earliest_executable_time < self.signal_time:
             raise ValueError("trade protocol cannot execute before its signal")
         _require_sorted_unique(self.blocking_codes, "trade protocol blocking codes")
@@ -598,6 +665,8 @@ __all__ = [
     "CommitteeEntryOrderType",
     "CommitteeInputBundle",
     "CommitteeInputRole",
+    "CommitteeMemberBinding",
+    "CommitteeMemberRole",
     "CommitteeInvestigationTask",
     "CommitteeNarrativeMode",
     "CommitteePlanReport",
@@ -613,4 +682,5 @@ __all__ = [
     "CounterCaseTriggerCode",
     "DecisionPack",
     "TradeProtocol",
+    "TradeProtocolOutcome",
 ]

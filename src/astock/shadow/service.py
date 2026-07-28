@@ -15,9 +15,13 @@ from astock.core.errors import AStockError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.market_data.storage import CanonicalMarketStore
 from astock.schemas import (
+    AdjustmentMode,
+    BarRequest,
     CommitteeVerdict,
     DecisionPack,
+    InstrumentType,
     Market,
     MarketRegime,
     MarketRegimeFeatures,
@@ -26,6 +30,7 @@ from astock.schemas import (
     Phase8AdmissionStatus,
     PointInTimeStatus,
     ReplayQuality,
+    ResearchMemoArtifact,
     ResearchSkillStatus,
     ShadowAction,
     ShadowArmDefinition,
@@ -33,6 +38,7 @@ from astock.schemas import (
     ShadowArmMetrics,
     ShadowArmResearchStatus,
     ShadowArmType,
+    ShadowCommitteePerformance,
     ShadowComparisonResult,
     ShadowDecisionAssignment,
     ShadowDecisionAssignmentRequest,
@@ -44,13 +50,19 @@ from astock.schemas import (
     ShadowFillStatus,
     ShadowFoldResult,
     ShadowObservationStatus,
+    ShadowOutcomeDataSource,
+    ShadowPerformanceStatus,
     ShadowRegimeResult,
+    ShadowResearchQuality,
+    ShadowSkillPerformance,
     ShadowStatusReport,
     ShadowStudyCreateRequest,
     ShadowStudyManifest,
     ShadowStudyMode,
     ShadowStudyPlan,
+    ShadowThesisStatus,
     TradeProtocol,
+    VolumeUnit,
 )
 from astock.shadow.repository import ShadowRepository
 from astock.shadow.statistics import (
@@ -90,6 +102,17 @@ class _PreparedStudy:
     arm_object_hashes: dict[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class _ForwardMarketBar:
+    observation_id: str
+    timestamp: datetime
+    open_fen: int
+    high_fen: int
+    low_fen: int
+    close_fen: int
+    volume_shares: int
+
+
 class ShadowEvaluationService:
     """No-network, no-broker shadow evaluation over immutable local inputs."""
 
@@ -99,6 +122,7 @@ class ShadowEvaluationService:
         object_store: ObjectStore,
         policy: ShadowEvaluationPolicy,
         parquet_store: ParquetShadowStore | None = None,
+        canonical_market_store: CanonicalMarketStore | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.state = state
@@ -108,6 +132,7 @@ class ShadowEvaluationService:
         self.parquet_store = parquet_store or ParquetShadowStore(
             state.path.parent / "data" / "parquet"
         )
+        self.canonical_market_store = canonical_market_store
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def register_policy(self) -> tuple[ShadowEvaluationPolicy, str]:
@@ -131,9 +156,44 @@ class ShadowEvaluationService:
         )
 
     def create_study(self, request: ShadowStudyCreateRequest) -> ShadowStudyExecution:
-        if request.created_at > self._now():
+        now = self._now()
+        if request.created_at > now:
             raise ValueError("shadow studies cannot be created in the future")
-        prepared = self._prepare_study(request, persist=True)
+        planned = self._prepare_study(request, persist=False)
+        existing = self.repository.study_summary(planned.manifest.study_id)
+        if existing is not None:
+            manifest = self.repository.get_study(planned.manifest.study_id)
+            if manifest is None:
+                raise ValueError("shadow study index points to a missing object")
+            arms = self.repository.get_arms(manifest.study_id)
+            return ShadowStudyExecution(
+                manifest=manifest,
+                arms=arms,
+                object_sha256_by_id={
+                    manifest.study_id: str(existing["object_hash"]),
+                    **{
+                        str(row["arm_id"]): str(row["object_hash"])
+                        for row in self.repository.arm_summaries(
+                            manifest.study_id
+                        )
+                    },
+                },
+            )
+        if (
+            request.mode is ShadowStudyMode.FORWARD_FORMAL
+            and request.effective_from < now
+        ):
+            raise ValueError(
+                "formal shadow studies must be registered before becoming effective"
+            )
+        prepared = self._prepare_study(
+            request,
+            persist=True,
+            registered_at=now,
+            prospective_eligible=(
+                request.mode is ShadowStudyMode.FORWARD_FORMAL
+            ),
+        )
         return ShadowStudyExecution(
             manifest=prepared.manifest,
             arms=prepared.arms,
@@ -190,32 +250,73 @@ class ShadowEvaluationService:
             else self.repository.latest_study_summary()
         )
         if summary is None:
+            required = self.configured_policy.minimum_independent_decisions
             return ShadowStatusReport(
                 study_id=study_id,
-                status="NOT_RUN",
+                status=ShadowEvidenceStatus.COLLECTING.value,
                 arm_count=0,
                 assignment_count=0,
                 observation_count=0,
                 mature_observation_count=0,
                 independent_decision_count=0,
+                required_independent_decision_count=required,
+                remaining_independent_decision_count=required,
             )
         resolved_id = str(summary["study_id"])
         counts = self.repository.counts(resolved_id)
+        policy = self._policy_for_study(self._require_study(resolved_id))
+        forward_counts = self.repository.forward_counts(
+            resolved_id,
+            final_horizon_days=policy.final_horizon_days,
+        )
         report = self.repository.latest_report_summary(resolved_id)
         admission = self.repository.latest_admission_summary(resolved_id)
+        report_artifact = (
+            self.repository.get_report(str(report["report_id"])) if report else None
+        )
+        formal_count = forward_counts["formal_forward_event_count"]
+        remaining = max(0, policy.minimum_independent_decisions - formal_count)
+        status = (
+            ShadowEvidenceStatus.COLLECTING.value
+            if formal_count < policy.minimum_independent_decisions
+            else str(summary["evidence_status"])
+        )
         return ShadowStatusReport(
             study_id=resolved_id,
-            status=str(summary["evidence_status"]),
+            status=status,
             arm_count=counts["arm_count"],
             assignment_count=counts["assignment_count"],
             observation_count=counts["observation_count"],
             mature_observation_count=counts["mature_observation_count"],
-            independent_decision_count=counts["independent_decision_count"],
+            independent_decision_count=formal_count,
             report_id=(str(report["report_id"]) if report else None),
             admission_status=(
                 Phase8AdmissionStatus(str(admission["admission_status"]))
                 if admission
                 else None
+            ),
+            required_independent_decision_count=policy.minimum_independent_decisions,
+            remaining_independent_decision_count=remaining,
+            formal_forward_event_count=formal_count,
+            formal_mature_future_event_count=forward_counts[
+                "formal_mature_future_event_count"
+            ],
+            skill_performance_status=(
+                _skill_status(report_artifact)
+                if report_artifact is not None
+                else ShadowPerformanceStatus.COLLECTING
+            ),
+            committee_performance_status=(
+                report_artifact.committee_performance.status
+                if report_artifact is not None
+                and report_artifact.committee_performance is not None
+                else ShadowPerformanceStatus.COLLECTING
+            ),
+            research_quality_status=(
+                report_artifact.research_quality.status
+                if report_artifact is not None
+                and report_artifact.research_quality is not None
+                else ShadowPerformanceStatus.COLLECTING
             ),
         )
 
@@ -235,6 +336,10 @@ class ShadowEvaluationService:
             raise ValueError("shadow market regimes cannot use future facts")
         if study.mode is ShadowStudyMode.FORWARD_FORMAL and features.as_of < study.effective_from:
             raise ValueError("formal market regimes cannot precede the shadow study")
+        if study.mode is ShadowStudyMode.FORWARD_FORMAL:
+            summary = self.repository.study_summary(study.study_id)
+            if summary is None or not bool(summary["prospective_eligible"]):
+                raise ValueError("formal market regimes require a prospective study receipt")
         if (
             study.mode is ShadowStudyMode.FORWARD_FORMAL
             and features.created_at > features.as_of
@@ -261,6 +366,18 @@ class ShadowEvaluationService:
             regime_sha256=regime_hash,
             created_at=features.as_of,
         )
+        if persist:
+            existing = self.repository.get_regime(snapshot.regime_id)
+            if existing is not None:
+                return existing
+        if (
+            study.mode is ShadowStudyMode.FORWARD_FORMAL
+            and (now - features.as_of).total_seconds()
+            > policy.maximum_signal_registration_lag_seconds
+        ):
+            raise ValueError(
+                "formal market regimes must be registered near their signal time"
+            )
         payload = canonical_json_bytes(snapshot.model_dump(mode="json"))
         object_hash = sha256_bytes(payload)
         if persist:
@@ -280,9 +397,23 @@ class ShadowEvaluationService:
         request: ShadowDecisionAssignmentRequest,
     ) -> ShadowDecisionAssignment:
         study = self._require_study(request.study_id)
+        policy = self._policy_for_study(study)
         now = self._now()
         if request.created_at > now or request.signal_time > now:
             raise ValueError("shadow assignments cannot be frozen in the future")
+        study_summary = self.repository.study_summary(study.study_id)
+        prospective_eligible = bool(
+            study.mode is ShadowStudyMode.FORWARD_FORMAL
+            and study_summary is not None
+            and study_summary["prospective_eligible"]
+        )
+        if study.mode is ShadowStudyMode.FORWARD_FORMAL:
+            if not prospective_eligible:
+                raise ValueError("formal shadow assignments require a prospective study")
+            if request.research_memo_id is None or request.decision_id is None:
+                raise ValueError(
+                    "formal shadow assignments require ResearchMemo and ShadowDecision ids"
+                )
         expected_independence_key = self.build_independence_key(
             study.study_id,
             company_id=request.company_id,
@@ -328,10 +459,41 @@ class ShadowEvaluationService:
             exclude={"schema_version", "created_at"},
         )
         assignment_hash = content_hash(normalized_assignment)
+        assignment_id = f"shadow-assignment:{assignment_hash}"
+        existing = self.repository.assignment_summary(assignment_id)
+        if existing is not None:
+            stored = self.repository.get_assignment(assignment_id)
+            if stored is None:
+                raise ValueError("shadow assignment index points to a missing object")
+            return stored
+        if (
+            study.mode is ShadowStudyMode.FORWARD_FORMAL
+            and request.research_memo_id is not None
+            and request.decision_id is not None
+            and self.repository.assignment_research_identity_conflict(
+                study.study_id,
+                research_memo_id=request.research_memo_id,
+                decision_id=request.decision_id,
+            )
+            is not None
+        ):
+            raise ValueError(
+                "one ResearchMemo or ShadowDecision can count as only one "
+                "independent forward event"
+            )
+        if (
+            study.mode is ShadowStudyMode.FORWARD_FORMAL
+            and (now - request.signal_time).total_seconds()
+            > policy.maximum_signal_registration_lag_seconds
+        ):
+            raise ValueError(
+                "formal shadow assignments cannot be registered retrospectively"
+            )
         assignment = ShadowDecisionAssignment(
             **normalized_assignment,
-            assignment_id=f"shadow-assignment:{assignment_hash}",
+            assignment_id=assignment_id,
             assignment_sha256=assignment_hash,
+            registered_at=now,
             schema_version=request.schema_version,
             created_at=request.signal_time,
         )
@@ -350,7 +512,12 @@ class ShadowEvaluationService:
                 ]
             ),
         )
-        self.repository.register_assignment(assignment, object_hash=object_hash)
+        self.repository.register_assignment(
+            assignment,
+            object_hash=object_hash,
+            registered_at=now,
+            prospective_eligible=prospective_eligible,
+        )
         return assignment
 
     def build_independence_key(
@@ -372,6 +539,152 @@ class ShadowEvaluationService:
         }
         return f"shadow-independence:{content_hash(identity)}"
 
+    def freeze_forward_market_evidence(
+        self,
+        assignment_id: str,
+        *,
+        symbol: str,
+        market: Market,
+        valuation_time: datetime,
+    ) -> dict[str, object]:
+        """Freeze post-signal canonical 5m bars and their real source snapshots."""
+
+        if valuation_time.tzinfo is None or valuation_time.utcoffset() is None:
+            raise ValueError("shadow valuation time must be timezone-aware")
+        now = self._now()
+        if valuation_time > now:
+            raise ValueError("cannot freeze future market evidence before valuation")
+        if self.canonical_market_store is None:
+            raise ValueError("canonical market storage is unavailable")
+        assignment = self.repository.get_assignment(assignment_id)
+        summary = self.repository.assignment_summary(assignment_id)
+        if (
+            assignment is None
+            or summary is None
+            or not bool(summary["prospective_eligible"])
+        ):
+            raise ValueError(
+                "forward market evidence requires a prospective shadow assignment"
+            )
+        study = self._require_study(assignment.study_id)
+        if study.mode is not ShadowStudyMode.FORWARD_FORMAL:
+            raise ValueError("only formal forward studies may freeze forward evidence")
+        allowed_scopes = {(assignment.symbol, assignment.market)}
+        allowed_scopes.update(
+            (arm.benchmark_symbol, Market.INDEX)
+            for arm in self.repository.get_arms(study.study_id)
+            if arm.benchmark_symbol is not None
+        )
+        if (symbol, market) not in allowed_scopes:
+            raise ValueError("market evidence scope is absent from the frozen study")
+        request = BarRequest(
+            symbol=symbol,
+            market=market,
+            instrument_type=(
+                InstrumentType.INDEX if market is Market.INDEX else InstrumentType.STOCK
+            ),
+            requested_start=assignment.signal_time,
+            requested_end=valuation_time,
+            adjustment_mode=AdjustmentMode.NONE,
+            created_at=now,
+        )
+        manifest = self.canonical_market_store.load_manifest(request)
+        if manifest is None:
+            raise ValueError("canonical 5m manifest is unavailable")
+        bars = [
+            item
+            for item in self.canonical_market_store.read_bars(request)
+            if assignment.signal_time < item.timestamp <= valuation_time
+        ]
+        bars.sort(key=lambda item: (item.timestamp, item.observation_id))
+        if not bars:
+            raise ValueError("canonical 5m data has no post-signal observations")
+        raw_snapshot_ids = manifest.get("source_snapshot_ids")
+        if not isinstance(raw_snapshot_ids, list) or not all(
+            isinstance(item, str) for item in raw_snapshot_ids
+        ):
+            raise ValueError("canonical 5m manifest lacks source snapshot lineage")
+        snapshots = []
+        for snapshot_id in raw_snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if (
+                snapshot is not None
+                and snapshot.fetch_status.value == "SUCCEEDED"
+                and snapshot.fetched_at > assignment.signal_time
+                and snapshot.available_to_system_at > assignment.signal_time
+                and snapshot.available_to_system_at <= now
+                and self.object_store.verify(snapshot.object_sha256)
+            ):
+                snapshots.append(snapshot)
+        if not snapshots:
+            raise ValueError("no real post-signal market snapshots are available")
+        replay_quality = ReplayQuality(str(manifest["replay_quality"]))
+        if (
+            replay_quality is ReplayQuality.DUAL_SOURCE_5M_VERIFIED
+            and len({item.source_id for item in snapshots}) < 2
+        ):
+            raise ValueError("dual-source canonical evidence lacks two live snapshots")
+        snapshot_ids = sorted(item.snapshot_id for item in snapshots)
+        observation_ids = sorted(item.observation_id for item in bars)
+        market_bars = [
+            {
+                "observation_id": item.observation_id,
+                "timestamp": item.timestamp,
+                "open_fen": _price_to_fen(item.open),
+                "high_fen": _price_to_fen(item.high),
+                "low_fen": _price_to_fen(item.low),
+                "close_fen": _price_to_fen(item.close),
+                "volume_shares": _volume_to_shares(
+                    item.volume,
+                    item.volume_unit,
+                ),
+            }
+            for item in bars
+        ]
+        envelope: dict[str, object] = {
+            "schema_version": "shadow-forward-market-evidence-v2",
+            "assignment_id": assignment.assignment_id,
+            "symbol": symbol,
+            "market": market.value,
+            "frequency": "5m",
+            "adjustment_mode": "NONE",
+            "actual_start": bars[0].timestamp,
+            "actual_end": bars[-1].timestamp,
+            "canonical_manifest_content_hash": str(manifest["content_hash"]),
+            "source_snapshot_ids": snapshot_ids,
+            "market_observation_ids": observation_ids,
+            "market_bars": market_bars,
+            "replay_quality": replay_quality.value,
+            "frozen_at": now,
+            "data_available_at": max(
+                item.available_to_system_at for item in snapshots
+            ),
+        }
+        envelope["content_hash"] = content_hash(envelope)
+        object_ref = self.object_store.put_json(envelope)
+        evidence_id = f"shadow-forward-market:{envelope['content_hash']}"
+        self.state.register_artifact(
+            artifact_id=evidence_id,
+            artifact_type="ShadowForwardMarketEvidence",
+            schema_version="2.0",
+            object_hash=object_ref.sha256,
+            input_hashes=sorted(
+                [
+                    str(manifest["content_hash"]),
+                    *(item.object_sha256 for item in snapshots),
+                ]
+            ),
+        )
+        return {
+            "evidence_id": evidence_id,
+            "market_manifest_sha256": object_ref.sha256,
+            "data_available_at": envelope["data_available_at"],
+            "valuation_time": envelope["actual_end"],
+            "market_snapshot_ids": snapshot_ids,
+            "market_observation_ids": observation_ids,
+            "replay_quality": replay_quality,
+        }
+
     def record_observation(
         self,
         draft: ShadowExecutionObservationDraft,
@@ -390,6 +703,25 @@ class ShadowEvaluationService:
         assignment = self.repository.get_assignment(draft.assignment_id)
         if assignment is None or assignment.study_id != study.study_id:
             raise ValueError("shadow observation assignment is unavailable")
+        assignment_summary = self.repository.assignment_summary(assignment.assignment_id)
+        assignment_is_prospective = bool(
+            assignment_summary is not None
+            and assignment_summary["prospective_eligible"]
+        )
+        if (
+            study.mode is ShadowStudyMode.FORWARD_FORMAL
+            and not assignment_is_prospective
+        ):
+            raise ValueError(
+                "formal shadow observations require a prospectively registered assignment"
+            )
+        market_snapshot_hashes, forward_data_eligible = (
+            self._validate_observation_market_provenance(
+                draft,
+                study=study,
+                now=now,
+            )
+        )
         arm = self.repository.get_arm(draft.arm_id)
         if arm is None or arm.study_id != study.study_id:
             raise ValueError("shadow observation arm is unavailable")
@@ -485,6 +817,10 @@ class ShadowEvaluationService:
                 peer.cost_model_version,
                 peer.fill_model_version,
                 peer.corporate_action_version,
+                peer.outcome_data_source,
+                peer.data_available_at,
+                peer.thesis_status,
+                tuple(peer.invalidation_reason_codes),
             )
             draft_contract = (
                 draft.signal_time,
@@ -499,6 +835,10 @@ class ShadowEvaluationService:
                 draft.cost_model_version,
                 draft.fill_model_version,
                 draft.corporate_action_version,
+                draft.outcome_data_source,
+                draft.data_available_at,
+                draft.thesis_status,
+                tuple(draft.invalidation_reason_codes),
             )
             if comparable_contract != draft_contract:
                 raise ValueError("shadow arms do not share one frozen observation contract")
@@ -506,6 +846,8 @@ class ShadowEvaluationService:
         exclusions = set(draft.exclusion_codes)
         if study.mode is ShadowStudyMode.EXPLORATORY_RETROSPECTIVE:
             exclusions.add("RETROSPECTIVE_EXPLORATORY_ONLY")
+        if not forward_data_eligible:
+            exclusions.add("NOT_LIVE_FORWARD_MARKET_DATA")
         if set(draft.pit_statuses) - set(policy.formal_pit_statuses):
             exclusions.add("FORMAL_PIT_STATUS_FAILED")
         if regime.regime is MarketRegime.UNCLASSIFIED:
@@ -541,6 +883,8 @@ class ShadowEvaluationService:
         formal_eligible = (
             status is ShadowObservationStatus.MATURE
             and study.mode is ShadowStudyMode.FORWARD_FORMAL
+            and assignment_is_prospective
+            and forward_data_eligible
         )
         normalized_draft = draft.model_copy(
             update={"exclusion_codes": sorted(exclusions)}
@@ -564,12 +908,18 @@ class ShadowEvaluationService:
             status=status,
             formal_eligible=formal_eligible,
             observation_sha256=observation_hash,
+            registered_at=now,
             schema_version=draft.schema_version,
-            created_at=draft.created_at,
+            created_at=now,
         )
         payload = canonical_json_bytes(observation.model_dump(mode="json"))
         object_hash = sha256_bytes(payload)
         existing = self.repository.observation_summary(observation.observation_id)
+        if existing is not None:
+            stored = self.repository.get_observation(observation.observation_id)
+            if stored is None:
+                raise ValueError("shadow observation index points to a missing object")
+            return stored
         if existing is None:
             latest = self.repository.latest_observation_summary(
                 assignment_id=assignment.assignment_id,
@@ -582,7 +932,7 @@ class ShadowEvaluationService:
                 if draft.supersedes_observation_id != str(latest["observation_id"]):
                     raise ValueError("new shadow observation must supersede the latest version")
                 latest_created_at = datetime.fromisoformat(str(latest["created_at"]))
-                if draft.created_at <= latest_created_at:
+                if now <= latest_created_at:
                     raise ValueError("shadow observation versions must advance in time")
         self.object_store.put_bytes(payload)
         self.parquet_store.write(observation, object_sha256=object_hash)
@@ -602,11 +952,17 @@ class ShadowEvaluationService:
                     assignment.assignment_sha256,
                     regime.regime_sha256,
                     *frozen_fact_hashes.values(),
+                    *market_snapshot_hashes,
                     *parent_hashes,
                 ]
             ),
         )
-        self.repository.register_observation(observation, object_hash=object_hash)
+        self.repository.register_observation(
+            observation,
+            object_hash=object_hash,
+            registered_at=now,
+            forward_data_eligible=forward_data_eligible,
+        )
         return observation
 
     def evaluate(
@@ -623,8 +979,16 @@ class ShadowEvaluationService:
         policy = self._policy_for_study(study)
         if as_of < study.effective_from:
             raise ValueError("shadow evaluation cannot precede study effectiveness")
-        assignments = [
+        all_assignments = [
             item for item in self.repository.assignments(study_id) if item.signal_time <= as_of
+        ]
+        prospective_assignment_ids = self.repository.prospective_assignment_ids(
+            study_id
+        )
+        assignments = [
+            item
+            for item in all_assignments
+            if item.assignment_id in prospective_assignment_ids
         ]
         observations = self.repository.observations(study_id, as_of=as_of)
         arms = self.repository.get_arms(study_id)
@@ -657,6 +1021,16 @@ class ShadowEvaluationService:
             policy,
         )
         comparisons = self._apply_holm(comparisons)
+        skill_performance, committee_performance, research_quality = (
+            self._dimension_performance(
+                assignments,
+                arms,
+                formal,
+                arm_metrics,
+                comparisons,
+                policy,
+            )
+        )
 
         unique_assignment_observation: dict[str, ShadowExecutionObservation] = {}
         for observation in sorted(formal, key=lambda item: (item.assignment_id, item.arm_id)):
@@ -689,7 +1063,7 @@ class ShadowEvaluationService:
             phase6_contract_integrity=phase6_contract_integrity,
         )
         assignment_hashes = sorted(
-            {item.assignment_sha256 for item in assignments}
+            {item.assignment_sha256 for item in all_assignments}
         )
         observation_hashes = sorted(
             {item.observation_sha256 for item in observations}
@@ -720,7 +1094,7 @@ class ShadowEvaluationService:
             "as_of": as_of,
             "evidence_status": evidence_status,
             "observation_months": observation_months,
-            "assignment_count": len(assignments),
+            "assignment_count": len(all_assignments),
             "mature_observation_count": len(formal),
             "independent_decision_count": len(
                 {item.independence_key for item in assignments}
@@ -745,6 +1119,9 @@ class ShadowEvaluationService:
             "arm_metrics": arm_metrics,
             "comparisons": comparisons,
             "finding_codes": findings,
+            "skill_performance": skill_performance,
+            "committee_performance": committee_performance,
+            "research_quality": research_quality,
         }
         report_hash = content_hash(_without_created_at(report_fields))
         report = ShadowEvaluationReport(
@@ -771,7 +1148,7 @@ class ShadowEvaluationService:
             input_hashes=sorted(
                 [
                     study.study_sha256,
-                    *(item.assignment_sha256 for item in assignments),
+                    *(item.assignment_sha256 for item in all_assignments),
                     *(item.observation_sha256 for item in observations),
                 ]
             ),
@@ -828,6 +1205,21 @@ class ShadowEvaluationService:
             }
         study = self.repository.get_study(study_id)
         assert study is not None
+        policy = self._policy_for_study(study)
+        if study.mode is ShadowStudyMode.FORWARD_FORMAL:
+            registered_text = study_summary.get("registered_at")
+            registered_at = (
+                datetime.fromisoformat(str(registered_text))
+                if registered_text is not None
+                else None
+            )
+            if (
+                not bool(study_summary.get("prospective_eligible"))
+                or registered_at is None
+                or registered_at > study.effective_from
+                or study.registered_at != registered_at
+            ):
+                findings.add("SHADOW_STUDY_NOT_PROSPECTIVELY_REGISTERED")
         policy_summary = self.repository.policy_summary(study.policy_version)
         if policy_summary is None or not self.object_store.verify(
             str(policy_summary["object_hash"])
@@ -881,12 +1273,27 @@ class ShadowEvaluationService:
                     exclude={
                         "schema_version",
                         "created_at",
+                        "registered_at",
                         "assignment_id",
                         "assignment_sha256",
                     },
                 )
             ) != assignment.assignment_sha256:
                 findings.add("SHADOW_ASSIGNMENT_HASH_MISMATCH")
+            if study.mode is ShadowStudyMode.FORWARD_FORMAL and row is not None:
+                registered_at = datetime.fromisoformat(str(row["registered_at"]))
+                if (
+                    not bool(row["prospective_eligible"])
+                    or assignment.registered_at != registered_at
+                    or registered_at < assignment.signal_time
+                    or (
+                        registered_at - assignment.signal_time
+                    ).total_seconds()
+                    > policy.maximum_signal_registration_lag_seconds
+                ):
+                    findings.add(
+                        "SHADOW_ASSIGNMENT_NOT_PROSPECTIVELY_REGISTERED"
+                    )
             expected_inputs = [
                 (
                     item.artifact_id,
@@ -947,7 +1354,6 @@ class ShadowEvaluationService:
                 input_hashes=[snapshot.features.feature_snapshot_sha256],
             ):
                 findings.add("MARKET_REGIME_REGISTRY_MISMATCH")
-        policy = self._policy_for_study(study)
         previous_by_series: dict[tuple[str, str, int], str] = {}
         for row in self.repository.observation_summaries(study_id):
             observation_id = str(row["observation_id"])
@@ -958,12 +1364,28 @@ class ShadowEvaluationService:
             if observation is None:
                 findings.add("SHADOW_OBSERVATION_OBJECT_INVALID")
                 continue
+            try:
+                _, forward_eligible = self._validate_observation_market_provenance(
+                    observation,
+                    study=study,
+                    now=self._now(),
+                )
+            except ValueError:
+                forward_eligible = False
+                findings.add("SHADOW_OBSERVATION_FORWARD_PROVENANCE_INVALID")
+            if (
+                bool(row["forward_data_eligible"]) != forward_eligible
+                or observation.registered_at
+                != datetime.fromisoformat(str(row["registered_at"]))
+            ):
+                findings.add("SHADOW_OBSERVATION_FORWARD_INDEX_MISMATCH")
             identity = {
                 "draft": observation.model_dump(
                     mode="python",
                     exclude={
                         "schema_version",
                         "created_at",
+                        "registered_at",
                         "observation_id",
                         "status",
                         "formal_eligible",
@@ -1008,6 +1430,15 @@ class ShadowEvaluationService:
                 observation.corporate_action_snapshot_sha256,
                 observation.delisting_snapshot_sha256,
             ]
+            market_snapshot_hashes = []
+            for snapshot_id in observation.market_snapshot_ids:
+                snapshot = self.state.get_snapshot(snapshot_id)
+                if snapshot is None or not self.object_store.verify(
+                    snapshot.object_sha256
+                ):
+                    findings.add("SHADOW_MARKET_SOURCE_SNAPSHOT_INVALID")
+                    continue
+                market_snapshot_hashes.append(snapshot.object_sha256)
             if any(not self.object_store.verify(item) for item in fact_hashes):
                 findings.add("SHADOW_OBSERVATION_FACT_SNAPSHOT_INVALID")
             expected_inputs = (
@@ -1016,6 +1447,7 @@ class ShadowEvaluationService:
                         assignment.assignment_sha256,
                         regime.regime_sha256,
                         *fact_hashes,
+                        *market_snapshot_hashes,
                         *parent_hashes,
                     ]
                 )
@@ -1098,8 +1530,14 @@ class ShadowEvaluationService:
                 {item.observation_sha256 for item in report_observations}
             ):
                 findings.add("SHADOW_REPORT_OBSERVATION_SET_MISMATCH")
+            prospective_ids = self.repository.prospective_assignment_ids(study_id)
+            prospective_report_assignments = [
+                item
+                for item in report_assignments
+                if item.assignment_id in prospective_ids
+            ]
             if report.phase6_contract_integrity != self._phase6_contract_integrity(
-                report_assignments,
+                prospective_report_assignments,
                 arms,
             ):
                 findings.add("SHADOW_REPORT_PHASE6_CONTRACT_MISMATCH")
@@ -1207,6 +1645,13 @@ class ShadowEvaluationService:
         observations: list[ShadowExecutionObservation],
         policy: ShadowEvaluationPolicy,
     ) -> bool:
+        all_assignments = assignments
+        prospective_ids = self.repository.prospective_assignment_ids(study.study_id)
+        assignments = [
+            item
+            for item in all_assignments
+            if item.assignment_id in prospective_ids
+        ]
         final_observations = [
             item
             for item in observations
@@ -1229,6 +1674,16 @@ class ShadowEvaluationService:
         arm_metrics.sort(key=lambda item: item.arm_id)
         comparisons = self._apply_holm(
             self._comparisons(assignments, arms, formal, arm_metrics, policy)
+        )
+        skill_performance, committee_performance, research_quality = (
+            self._dimension_performance(
+                assignments,
+                arms,
+                formal,
+                arm_metrics,
+                comparisons,
+                policy,
+            )
         )
 
         unique_assignment_observation: dict[str, ShadowExecutionObservation] = {}
@@ -1280,7 +1735,7 @@ class ShadowEvaluationService:
             "required_decisions_per_fold": policy.minimum_decisions_per_fold,
             "evidence_status": evidence_status,
             "observation_months": observation_months,
-            "assignment_count": len(assignments),
+            "assignment_count": len(all_assignments),
             "mature_observation_count": len(formal),
             "independent_decision_count": len(
                 {item.independence_key for item in assignments}
@@ -1308,6 +1763,22 @@ class ShadowEvaluationService:
                 report.as_of,
             ),
             "finding_codes": finding_codes,
+            "skill_performance": _replace_created_at(
+                [item.model_dump(mode="python") for item in skill_performance],
+                report.as_of,
+            ),
+            "committee_performance": (
+                _replace_created_at(
+                    committee_performance.model_dump(mode="python"),
+                    report.as_of,
+                )
+                if committee_performance is not None
+                else None
+            ),
+            "research_quality": _replace_created_at(
+                research_quality.model_dump(mode="python"),
+                report.as_of,
+            ),
         }
         actual = {
             key: (
@@ -1317,6 +1788,23 @@ class ShadowEvaluationService:
                     item.model_dump(mode="python") for item in report.comparisons
                 ]
                 if key == "comparisons"
+                else [
+                    item.model_dump(mode="python")
+                    for item in report.skill_performance
+                ]
+                if key == "skill_performance"
+                else (
+                    report.committee_performance.model_dump(mode="python")
+                    if report.committee_performance is not None
+                    else None
+                )
+                if key == "committee_performance"
+                else (
+                    report.research_quality.model_dump(mode="python")
+                    if report.research_quality is not None
+                    else None
+                )
+                if key == "research_quality"
                 else getattr(report, key)
             )
             for key in expected
@@ -1354,6 +1842,8 @@ class ShadowEvaluationService:
         return value.astimezone(UTC)
 
     def _recover_registered_children(self, study_id: str) -> dict[str, int]:
+        study = self._require_study(study_id)
+        policy = self._policy_for_study(study)
         supported_types = {
             "ShadowDecisionAssignment",
             "MarketRegimeSnapshot",
@@ -1424,7 +1914,24 @@ class ShadowEvaluationService:
             assignments,
             key=lambda value: (value[0].signal_time, value[0].assignment_id),
         ):
-            self.repository.register_assignment(item, object_hash=object_hash)
+            registered_at = item.registered_at or item.created_at
+            prospective = bool(
+                study.mode is ShadowStudyMode.FORWARD_FORMAL
+                and item.registered_at is not None
+                and item.research_memo_id is not None
+                and item.decision_id is not None
+                and registered_at >= item.signal_time
+                and (
+                    registered_at - item.signal_time
+                ).total_seconds()
+                <= policy.maximum_signal_registration_lag_seconds
+            )
+            self.repository.register_assignment(
+                item,
+                object_hash=object_hash,
+                registered_at=registered_at,
+                prospective_eligible=prospective,
+            )
             recovered["assignments"] += 1
         for item, object_hash in sorted(
             regimes,
@@ -1443,7 +1950,31 @@ class ShadowEvaluationService:
             ),
         ):
             self.parquet_store.write(item, object_sha256=object_hash)
-            self.repository.register_observation(item, object_hash=object_hash)
+            assignment_summary = self.repository.assignment_summary(
+                item.assignment_id
+            )
+            forward_data_eligible = False
+            if (
+                item.registered_at is not None
+                and assignment_summary is not None
+                and bool(assignment_summary["prospective_eligible"])
+            ):
+                try:
+                    _, forward_data_eligible = (
+                        self._validate_observation_market_provenance(
+                            item,
+                            study=study,
+                            now=self._now(),
+                        )
+                    )
+                except ValueError:
+                    forward_data_eligible = False
+            self.repository.register_observation(
+                item,
+                object_hash=object_hash,
+                registered_at=item.registered_at or item.created_at,
+                forward_data_eligible=forward_data_eligible,
+            )
             recovered["observations"] += 1
         for report_id, (report, report_hash) in sorted(
             reports.items(),
@@ -1813,6 +2344,259 @@ class ShadowEvaluationService:
             )
         return results
 
+    def _dimension_performance(
+        self,
+        assignments: list[ShadowDecisionAssignment],
+        arms: list[ShadowArmDefinition],
+        observations: list[ShadowExecutionObservation],
+        arm_metrics: list[ShadowArmMetrics],
+        comparisons: list[ShadowComparisonResult],
+        policy: ShadowEvaluationPolicy,
+    ) -> tuple[
+        list[ShadowSkillPerformance],
+        ShadowCommitteePerformance | None,
+        ShadowResearchQuality,
+    ]:
+        metrics_by_arm = {item.arm_id: item for item in arm_metrics}
+        comparisons_by_arm = {
+            item.experimental_arm_id: item for item in comparisons
+        }
+        skill_performance: list[ShadowSkillPerformance] = []
+        for arm in sorted(
+            (
+                item
+                for item in arms
+                if item.arm_type
+                in {
+                    ShadowArmType.BASE_CASE_PLUS_SPECIALIST,
+                    ShadowArmType.APPROVED_SKILL,
+                }
+                and item.specialist_skill_id is not None
+                and item.specialist_skill_version is not None
+            ),
+            key=lambda item: (item.specialist_skill_id or "", item.arm_id),
+        ):
+            comparison = comparisons_by_arm.get(arm.arm_id)
+            paired_count = comparison.paired_decision_count if comparison else 0
+            status = (
+                ShadowPerformanceStatus.EVALUATED
+                if paired_count >= policy.minimum_independent_decisions
+                else ShadowPerformanceStatus.COLLECTING
+            )
+            findings = (
+                []
+                if status is ShadowPerformanceStatus.EVALUATED
+                else ["INDEPENDENT_EVENTS_UNDER_MINIMUM"]
+            )
+            interval = (
+                comparison.paired_net_return_delta
+                if comparison is not None
+                else self._empty_metric_interval(
+                    arm.created_at,
+                    policy,
+                    seed=f"skill-empty:{arm.arm_id}",
+                )
+            )
+            assert arm.specialist_skill_id is not None
+            assert arm.specialist_skill_version is not None
+            skill_performance.append(
+                ShadowSkillPerformance(
+                    skill_id=arm.specialist_skill_id,
+                    skill_version=arm.specialist_skill_version,
+                    arm_id=arm.arm_id,
+                    status=status,
+                    independent_event_count=paired_count,
+                    paired_event_count=paired_count,
+                    paired_net_return_delta=interval,
+                    finding_codes=findings,
+                    created_at=interval.created_at,
+                )
+            )
+
+        committee_arm = next(
+            (
+                item
+                for item in arms
+                if item.arm_type is ShadowArmType.FULL_COMMITTEE
+            ),
+            None,
+        )
+        committee_performance: ShadowCommitteePerformance | None = None
+        if committee_arm is not None:
+            metric = metrics_by_arm[committee_arm.arm_id]
+            comparison = comparisons_by_arm.get(committee_arm.arm_id)
+            paired_count = comparison.paired_decision_count if comparison else 0
+            status = (
+                ShadowPerformanceStatus.EVALUATED
+                if paired_count >= policy.minimum_independent_decisions
+                else ShadowPerformanceStatus.COLLECTING
+            )
+            versus_base = (
+                comparison.paired_net_return_delta
+                if comparison is not None
+                else self._empty_metric_interval(
+                    committee_arm.created_at,
+                    policy,
+                    seed=f"committee-empty:{committee_arm.arm_id}",
+                )
+            )
+            committee_performance = ShadowCommitteePerformance(
+                arm_id=committee_arm.arm_id,
+                status=status,
+                independent_event_count=metric.independent_decision_count,
+                mature_observation_count=metric.mature_observation_count,
+                mean_net_return=metric.mean_net_return,
+                win_rate=metric.win_rate,
+                maximum_drawdown=metric.maximum_drawdown,
+                versus_base_case=versus_base,
+                finding_codes=(
+                    []
+                    if status is ShadowPerformanceStatus.EVALUATED
+                    else ["INDEPENDENT_EVENTS_UNDER_MINIMUM"]
+                ),
+                created_at=metric.created_at,
+            )
+
+        committee_arm_ids = {
+            item.arm_id
+            for item in arms
+            if item.arm_type is ShadowArmType.FULL_COMMITTEE
+        }
+        representative_observations: dict[str, ShadowExecutionObservation] = {}
+        for observation in sorted(
+            (
+                item
+                for item in observations
+                if item.arm_id in committee_arm_ids
+            ),
+            key=lambda item: (item.assignment_id, item.arm_id),
+        ):
+            representative_observations.setdefault(
+                observation.assignment_id,
+                observation,
+            )
+        thesis_counts: Counter[ShadowThesisStatus] = Counter(
+            item.thesis_status for item in representative_observations.values()
+        )
+        invalidation_counts: Counter[str] = Counter()
+        for observation in representative_observations.values():
+            invalidation_counts.update(observation.invalidation_reason_codes)
+
+        memo_ids: set[str] = set()
+        decision_ids: set[str] = set()
+        complete_chain_count = 0
+        mature_assignment_ids = set(representative_observations)
+        memo_coverage_counts: Counter[str] = Counter()
+        memo_open_gap_event_count = 0
+        memo_degradation_event_count = 0
+        memo_confidences: list[Decimal] = []
+        for assignment in assignments:
+            if assignment.research_memo_id is None or assignment.decision_id is None:
+                continue
+            memo = self._assignment_memo(assignment)
+            if memo is None:
+                continue
+            memo_ids.add(memo.memo_id)
+            decision_ids.add(assignment.decision_id)
+            complete_chain_count += assignment.assignment_id in mature_assignment_ids
+            memo_coverage_counts[memo.coverage_status.value] += 1
+            memo_open_gap_event_count += bool(memo.open_gap_codes)
+            memo_degradation_event_count += bool(memo.degradation_codes)
+            memo_confidences.append(Decimal(str(memo.confidence_cap)))
+        mature_count = len(representative_observations)
+        formal_forward_count = len(
+            {item.independence_key for item in assignments}
+        )
+        research_status = (
+            ShadowPerformanceStatus.EVALUATED
+            if complete_chain_count >= policy.minimum_independent_decisions
+            and mature_count >= policy.minimum_independent_decisions
+            else ShadowPerformanceStatus.COLLECTING
+        )
+        research_findings: list[str] = []
+        if complete_chain_count < policy.minimum_independent_decisions:
+            research_findings.append("COMPLETE_RESEARCH_CHAINS_UNDER_MINIMUM")
+        if mature_count < policy.minimum_independent_decisions:
+            research_findings.append("MATURE_FUTURE_EVENTS_UNDER_MINIMUM")
+        research_quality = ShadowResearchQuality(
+            status=research_status,
+            independent_event_count=formal_forward_count,
+            research_memo_count=len(memo_ids),
+            shadow_decision_count=len(decision_ids),
+            complete_chain_count=complete_chain_count,
+            mature_future_event_count=mature_count,
+            formal_forward_event_count=formal_forward_count,
+            thesis_status_counts={
+                key: thesis_counts[key] for key in sorted(thesis_counts, key=str)
+            },
+            invalidation_reason_counts={
+                key: invalidation_counts[key] for key in sorted(invalidation_counts)
+            },
+            memo_coverage_counts={
+                key: memo_coverage_counts[key]
+                for key in sorted(memo_coverage_counts)
+            },
+            memo_open_gap_event_count=memo_open_gap_event_count,
+            memo_degradation_event_count=memo_degradation_event_count,
+            mean_memo_confidence_cap=(
+                sum(memo_confidences, Decimal("0"))
+                / Decimal(len(memo_confidences))
+                if memo_confidences
+                else None
+            ),
+            finding_codes=sorted(research_findings),
+            created_at=(
+                max(item.created_at for item in representative_observations.values())
+                if representative_observations
+                else max((item.created_at for item in assignments), default=self._now())
+            ),
+        )
+        return skill_performance, committee_performance, research_quality
+
+    @staticmethod
+    def _empty_metric_interval(
+        created_at: datetime,
+        policy: ShadowEvaluationPolicy,
+        *,
+        seed: str,
+    ) -> Any:
+        interval, _ = deterministic_block_bootstrap(
+            [],
+            seed=seed,
+            replicates=policy.bootstrap_replicates,
+            block_length=policy.bootstrap_block_length,
+            confidence_level=policy.confidence_level,
+            metric="PAIRED_NET_RETURN_DELTA",
+            created_at=created_at,
+        )
+        return interval
+
+    def _assignment_memo(
+        self,
+        assignment: ShadowDecisionAssignment,
+    ) -> ResearchMemoArtifact | None:
+        if assignment.research_memo_id is None:
+            return None
+        artifact_id = f"ResearchMemoArtifact:{assignment.research_memo_id}"
+        reference = next(
+            (
+                item
+                for item in assignment.artifact_references
+                if item.artifact_id == artifact_id
+                and item.artifact_type == "ResearchMemoArtifact"
+            ),
+            None,
+        )
+        if reference is None or not self.object_store.verify(reference.object_sha256):
+            return None
+        try:
+            memo = ResearchMemoArtifact.model_validate_json(
+                self.object_store.get_bytes(reference.object_sha256)
+            )
+        except ValueError:
+            return None
+        return memo if memo.memo_id == assignment.research_memo_id else None
+
     @staticmethod
     def _walk_forward_folds(
         pairs: list[
@@ -1976,6 +2760,8 @@ class ShadowEvaluationService:
                 findings.add("PATH_UNCERTAINTY_RATE_EXCEEDED")
             if dual_rate < policy.minimum_dual_source_rate:
                 findings.add("DUAL_SOURCE_RATE_INSUFFICIENT")
+        if independent < policy.minimum_independent_decisions:
+            return ShadowEvidenceStatus.COLLECTING, sorted(findings)
         if observation_months < policy.provisional_observation_months:
             return ShadowEvidenceStatus.COLLECTING, sorted(findings)
         sample_findings = {
@@ -2148,6 +2934,8 @@ class ShadowEvaluationService:
         request: ShadowStudyCreateRequest,
         *,
         persist: bool,
+        registered_at: datetime | None = None,
+        prospective_eligible: bool = False,
     ) -> _PreparedStudy:
         policy, policy_object_hash = self._policy_reference(persist=persist)
         config_hash = content_hash(policy)
@@ -2227,6 +3015,7 @@ class ShadowEvaluationService:
             arm_ids=arm_ids,
             evidence_status=ShadowEvidenceStatus.COLLECTING,
             study_sha256=study_hash,
+            registered_at=registered_at,
             created_at=request.created_at,
         )
         manifest_payload = canonical_json_bytes(manifest.model_dump(mode="json"))
@@ -2256,6 +3045,8 @@ class ShadowEvaluationService:
                 arms,
                 manifest_object_hash=manifest_object_hash,
                 arm_object_hashes=arm_object_hashes,
+                registered_at=registered_at or self._now(),
+                prospective_eligible=prospective_eligible,
             )
         return _PreparedStudy(
             policy=policy,
@@ -2420,6 +3211,290 @@ class ShadowEvaluationService:
         if assignment.symbol not in members:
             raise ValueError("shadow assignment symbol is absent from its candidate snapshot")
 
+    def _validate_observation_market_provenance(
+        self,
+        draft: ShadowExecutionObservationDraft,
+        *,
+        study: ShadowStudyManifest,
+        now: datetime,
+    ) -> tuple[list[str], bool]:
+        formal = study.mode is ShadowStudyMode.FORWARD_FORMAL
+        if formal and (
+            draft.outcome_data_source
+            is not ShadowOutcomeDataSource.LIVE_FORWARD_MARKET
+        ):
+            raise ValueError(
+                "formal shadow observations require live forward market data"
+            )
+        if (
+            study.mode is ShadowStudyMode.EXPLORATORY_RETROSPECTIVE
+            and draft.outcome_data_source
+            is not ShadowOutcomeDataSource.RETROSPECTIVE_REPLAY
+        ):
+            raise ValueError(
+                "retrospective observations must be explicitly marked as replay"
+            )
+        if draft.outcome_data_source is ShadowOutcomeDataSource.LEGACY_UNVERIFIED:
+            return [], False
+        if draft.data_available_at is None or not draft.market_snapshot_ids:
+            raise ValueError("shadow market provenance is incomplete")
+        snapshots = []
+        for snapshot_id in draft.market_snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if snapshot is None:
+                raise ValueError(
+                    f"unknown shadow market source snapshot: {snapshot_id}"
+                )
+            if snapshot.fetch_status.value != "SUCCEEDED":
+                raise ValueError("shadow market source snapshot was not successful")
+            if not self.object_store.verify(snapshot.object_sha256):
+                raise ValueError("shadow market source snapshot is corrupted")
+            if snapshot.available_to_system_at > now or snapshot.fetched_at > now:
+                raise ValueError("shadow market source snapshot is not yet available")
+            snapshots.append(snapshot)
+        latest_availability = max(
+            snapshot.available_to_system_at for snapshot in snapshots
+        )
+        if draft.data_available_at != latest_availability:
+            raise ValueError(
+                "shadow data availability must match the source snapshot maximum"
+            )
+        if formal and any(
+            snapshot.available_to_system_at <= draft.signal_time
+            or snapshot.fetched_at <= draft.signal_time
+            for snapshot in snapshots
+        ):
+            raise ValueError(
+                "formal shadow outcomes require market snapshots fetched after the signal"
+            )
+        source_count = len({snapshot.source_id for snapshot in snapshots})
+        if (
+            draft.replay_quality is ReplayQuality.DUAL_SOURCE_5M_VERIFIED
+            and source_count < 2
+        ):
+            raise ValueError("dual-source replay quality requires two market sources")
+        snapshot_object_hashes = sorted(
+            snapshot.object_sha256 for snapshot in snapshots
+        )
+        self._validate_forward_market_manifest(
+            draft,
+            snapshot_object_hashes=snapshot_object_hashes,
+        )
+        return (
+            snapshot_object_hashes,
+            formal,
+        )
+
+    def _validate_forward_market_manifest(
+        self,
+        draft: ShadowExecutionObservationDraft,
+        *,
+        snapshot_object_hashes: list[str],
+    ) -> None:
+        try:
+            payload = json.loads(
+                self.object_store.get_bytes(draft.market_manifest_sha256)
+            )
+            if not isinstance(payload, dict):
+                raise TypeError
+            stored_content_hash = str(payload["content_hash"])
+            unhashed = dict(payload)
+            unhashed.pop("content_hash")
+            actual_start = datetime.fromisoformat(str(payload["actual_start"]))
+            actual_end = datetime.fromisoformat(str(payload["actual_end"]))
+            data_available_at = datetime.fromisoformat(
+                str(payload["data_available_at"])
+            )
+            frozen_at = datetime.fromisoformat(str(payload["frozen_at"]))
+            canonical_manifest_content_hash = str(
+                payload["canonical_manifest_content_hash"]
+            )
+            snapshot_ids = [str(item) for item in payload["source_snapshot_ids"]]
+            observation_ids = [
+                str(item) for item in payload["market_observation_ids"]
+            ]
+            raw_market_bars = payload["market_bars"]
+            if not isinstance(raw_market_bars, list):
+                raise TypeError
+            market_bars: list[_ForwardMarketBar] = []
+            for raw_bar in raw_market_bars:
+                if not isinstance(raw_bar, dict):
+                    raise TypeError
+                market_bars.append(
+                    _ForwardMarketBar(
+                        observation_id=str(raw_bar["observation_id"]),
+                        timestamp=datetime.fromisoformat(
+                            str(raw_bar["timestamp"])
+                        ),
+                        open_fen=int(raw_bar["open_fen"]),
+                        high_fen=int(raw_bar["high_fen"]),
+                        low_fen=int(raw_bar["low_fen"]),
+                        close_fen=int(raw_bar["close_fen"]),
+                        volume_shares=int(raw_bar["volume_shares"]),
+                    )
+                )
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            OSError,
+        ) as exc:
+            raise ValueError(
+                "shadow market manifest requires a frozen forward-data envelope"
+            ) from exc
+        if stored_content_hash != content_hash(unhashed):
+            raise ValueError("shadow market manifest content hash mismatch")
+        if (
+            len(canonical_manifest_content_hash) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in canonical_manifest_content_hash
+            )
+        ):
+            raise ValueError("shadow canonical market manifest hash is invalid")
+        evidence_id = f"shadow-forward-market:{stored_content_hash}"
+        if not self._artifact_matches(
+            evidence_id,
+            "ShadowForwardMarketEvidence",
+            draft.market_manifest_sha256,
+            input_hashes=sorted(
+                [
+                    canonical_manifest_content_hash,
+                    *snapshot_object_hashes,
+                ]
+            ),
+        ):
+            raise ValueError(
+                "shadow market manifest is not registered forward evidence"
+            )
+        if (
+            str(payload.get("schema_version"))
+            != "shadow-forward-market-evidence-v2"
+            or str(payload.get("assignment_id")) != draft.assignment_id
+            or str(payload.get("symbol")) != draft.symbol
+            or str(payload.get("market")) != draft.market.value
+            or str(payload.get("frequency")) != "5m"
+            or str(payload.get("adjustment_mode")) != "NONE"
+            or str(payload.get("replay_quality")) != draft.replay_quality.value
+        ):
+            raise ValueError("shadow market manifest scope does not match the observation")
+        if snapshot_ids != draft.market_snapshot_ids:
+            raise ValueError("shadow market manifest snapshot lineage mismatch")
+        if observation_ids != draft.market_observation_ids:
+            raise ValueError("shadow market manifest observation lineage mismatch")
+        if sorted(item.observation_id for item in market_bars) != observation_ids:
+            raise ValueError("shadow market bar identities do not match the lineage")
+        market_timestamps = [item.timestamp for item in market_bars]
+        if (
+            not market_bars
+            or len(set(market_timestamps)) != len(market_timestamps)
+            or market_timestamps != sorted(market_timestamps)
+        ):
+            raise ValueError("shadow market bars must have unique ordered timestamps")
+        for item in market_bars:
+            if (
+                min(
+                    item.open_fen,
+                    item.high_fen,
+                    item.low_fen,
+                    item.close_fen,
+                )
+                <= 0
+                or item.high_fen < max(item.open_fen, item.close_fen)
+                or item.low_fen > min(item.open_fen, item.close_fen)
+                or item.volume_shares < 0
+            ):
+                raise ValueError("shadow market bar OHLCV facts are invalid")
+        if any(
+            item.tzinfo is None or item.utcoffset() is None
+            for item in (actual_start, actual_end, data_available_at, frozen_at)
+        ):
+            raise ValueError("shadow market manifest timestamps must be timezone-aware")
+        if actual_end < actual_start:
+            raise ValueError("shadow market manifest range is invalid")
+        if (
+            market_bars[0].timestamp != actual_start
+            or market_bars[-1].timestamp != actual_end
+        ):
+            raise ValueError("shadow market bar range does not match the envelope")
+        if data_available_at != draft.data_available_at:
+            raise ValueError("shadow market manifest availability mismatch")
+        if frozen_at < data_available_at or frozen_at > draft.created_at:
+            raise ValueError("shadow market manifest freeze time is invalid")
+        if draft.valuation_time is not None and actual_end < draft.valuation_time:
+            raise ValueError("shadow market manifest does not reach the valuation time")
+        if draft.entry_time is not None and actual_start > draft.entry_time:
+            raise ValueError("shadow market manifest does not cover the entry time")
+        self._validate_observation_prices(draft, market_bars)
+
+    @staticmethod
+    def _validate_observation_prices(
+        draft: ShadowExecutionObservationDraft,
+        market_bars: list[_ForwardMarketBar],
+    ) -> None:
+        if draft.fill_status not in {
+            ShadowFillStatus.PARTIAL,
+            ShadowFillStatus.FULL,
+        }:
+            return
+        assert draft.entry_time is not None
+        assert draft.valuation_time is not None
+        assert draft.entry_price_fen is not None
+        assert draft.valuation_price_fen is not None
+        assert draft.highest_price_fen is not None
+        assert draft.lowest_price_fen is not None
+        entry_bar = next(
+            (
+                item
+                for item in market_bars
+                if item.timestamp == draft.entry_time
+            ),
+            None,
+        )
+        valuation_bar = next(
+            (
+                item
+                for item in market_bars
+                if item.timestamp == draft.valuation_time
+            ),
+            None,
+        )
+        if entry_bar is None or valuation_bar is None:
+            raise ValueError(
+                "shadow entry and valuation times require exact frozen 5m bars"
+            )
+        if not (
+            entry_bar.low_fen
+            <= draft.entry_price_fen
+            <= entry_bar.high_fen
+        ):
+            raise ValueError("shadow entry price is outside its frozen 5m bar")
+        if not (
+            valuation_bar.low_fen
+            <= draft.valuation_price_fen
+            <= valuation_bar.high_fen
+        ):
+            raise ValueError("shadow valuation price is outside its frozen 5m bar")
+        holding_bars = [
+            item
+            for item in market_bars
+            if draft.entry_time <= item.timestamp <= draft.valuation_time
+        ]
+        if (
+            draft.highest_price_fen
+            != max(item.high_fen for item in holding_bars)
+            or draft.lowest_price_fen
+            != min(item.low_fen for item in holding_bars)
+        ):
+            raise ValueError(
+                "shadow holding-period extrema differ from frozen 5m bars"
+            )
+        if draft.market_volume_shares != entry_bar.volume_shares:
+            raise ValueError(
+                "shadow entry volume differs from the frozen 5m bar"
+            )
+
     @staticmethod
     def _validate_arm_inputs(
         request: ShadowDecisionAssignmentRequest,
@@ -2442,10 +3517,13 @@ class ShadowEvaluationService:
             ):
                 raise ValueError("specialist shadow arms require a frozen SpecialistDelta")
             if arm.arm_type is ShadowArmType.FULL_COMMITTEE and not {
+                "ResearchMemoArtifact",
                 "DecisionPack",
                 "TradeProtocol",
             }.issubset(types):
-                raise ValueError("full committee shadow arms require decision and protocol")
+                raise ValueError(
+                    "full committee shadow arms require memo, decision, and protocol"
+                )
 
     def _validate_committee_contract(
         self,
@@ -2466,6 +3544,11 @@ class ShadowEvaluationService:
         )
         if full_signal is None:
             raise ValueError("shadow assignment is missing its full committee signal")
+        memo_artifact_ids = [
+            artifact_id
+            for artifact_id in full_signal.input_artifact_ids
+            if registry[artifact_id]["type"] == "ResearchMemoArtifact"
+        ]
         decision_artifact_ids = [
             artifact_id
             for artifact_id in full_signal.input_artifact_ids
@@ -2476,16 +3559,41 @@ class ShadowEvaluationService:
             for artifact_id in full_signal.input_artifact_ids
             if registry[artifact_id]["type"] == "TradeProtocol"
         ]
-        if len(decision_artifact_ids) != 1 or protocol_artifact_ids != [
-            f"TradeProtocol:{protocol.protocol_id}"
-        ]:
-            raise ValueError("full committee arms require one exact decision/protocol pair")
+        expected_memo_artifact_id = (
+            f"ResearchMemoArtifact:{request.research_memo_id}"
+            if request.research_memo_id is not None
+            else None
+        )
+        if (
+            memo_artifact_ids != [expected_memo_artifact_id]
+            or len(decision_artifact_ids) != 1
+            or protocol_artifact_ids != [f"TradeProtocol:{protocol.protocol_id}"]
+        ):
+            raise ValueError(
+                "full committee arms require one exact memo/decision/protocol chain"
+            )
+        memo_artifact_id = memo_artifact_ids[0]
+        memo = ResearchMemoArtifact.model_validate_json(
+            self.object_store.get_bytes(registry[memo_artifact_id]["object_hash"])
+        )
+        if (
+            memo_artifact_id != f"ResearchMemoArtifact:{memo.memo_id}"
+            or memo.memo_id != request.research_memo_id
+            or memo.company_id != request.company_id
+            or memo.as_of != request.signal_time
+        ):
+            raise ValueError("shadow ResearchMemo identity or point-in-time scope mismatch")
         decision_artifact_id = decision_artifact_ids[0]
         decision = DecisionPack.model_validate_json(
             self.object_store.get_bytes(registry[decision_artifact_id]["object_hash"])
         )
-        if decision_artifact_id != f"DecisionPack:{decision.decision_id}":
+        if (
+            decision_artifact_id != f"DecisionPack:{decision.decision_id}"
+            or decision.decision_id != request.decision_id
+        ):
             raise ValueError("shadow DecisionPack registry identity mismatch")
+        if registry[memo_artifact_id]["object_hash"] not in decision.frozen_input_hashes:
+            raise ValueError("shadow DecisionPack does not freeze the ResearchMemo")
         if (
             decision.decision_id != protocol.decision_id
             or decision.decision_sha256 != protocol.decision_sha256
@@ -2495,7 +3603,7 @@ class ShadowEvaluationService:
         ):
             raise ValueError("shadow committee decision/protocol lineage mismatch")
         if (
-            decision.as_of > request.signal_time
+            decision.as_of != request.signal_time
             or decision.created_at > request.signal_time
             or protocol.created_at > request.signal_time
         ):
@@ -2635,3 +3743,36 @@ def _without_created_at(value: Any) -> Any:
     if isinstance(value, list):
         return [_without_created_at(child) for child in value]
     return value
+
+
+def _skill_status(report: ShadowEvaluationReport) -> ShadowPerformanceStatus:
+    if not report.skill_performance:
+        return ShadowPerformanceStatus.COLLECTING
+    if all(
+        item.status is ShadowPerformanceStatus.EVALUATED
+        for item in report.skill_performance
+    ):
+        return ShadowPerformanceStatus.EVALUATED
+    return ShadowPerformanceStatus.COLLECTING
+
+
+def _price_to_fen(value: Decimal) -> int:
+    return int(
+        (value * Decimal("100")).quantize(
+            Decimal("1"),
+            rounding=ROUND_HALF_UP,
+        )
+    )
+
+
+def _volume_to_shares(value: Decimal, unit: VolumeUnit) -> int:
+    if unit is VolumeUnit.SHARE:
+        shares = value
+    elif unit is VolumeUnit.LOT_100_SHARES:
+        shares = value * Decimal("100")
+    else:
+        raise ValueError("canonical forward bars require a known volume unit")
+    integral = shares.to_integral_value()
+    if shares != integral or integral < 0:
+        raise ValueError("canonical forward bar volume must resolve to whole shares")
+    return int(integral)

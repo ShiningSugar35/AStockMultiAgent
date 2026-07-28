@@ -1,12 +1,12 @@
 schema_version: "1.0"
 created_at: "2026-07-17T00:00:00+00:00"
 policy_id: generic-a-share-shadow-evaluation
-policy_version: shadow-evaluation-policy-v1
-engine_version: shadow-evaluation-engine-v1
+policy_version: shadow-evaluation-policy-v2
+engine_version: shadow-evaluation-engine-v2
 effective_from: "2026-07-17T00:00:00+08:00"
 regime_rule_version: market-regime-v1
 independence_rule_version: shadow-independence-v1
-statistics_version: shadow-statistics-v1
+statistics_version: shadow-statistics-v2
 cost_model_version: shadow-round-trip-cost-v1
 fill_model_version: shadow-conservative-5m-v1
 corporate_action_version: shadow-corporate-actions-v1
@@ -39,6 +39,7 @@ maximum_path_uncertainty_rate: "0.05"
 minimum_dual_source_rate: "0.90"
 maximum_single_profit_contribution: "0.20"
 maximum_regime_profit_contribution: "0.70"
+maximum_signal_registration_lag_seconds: 300
 formal_pit_statuses:
   - CERTIFIED
   - DOCUMENT_RECONSTRUCTED

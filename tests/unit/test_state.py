@@ -64,6 +64,9 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0041",
         "0042",
         "0043",
+        "0044",
+        "0045",
+        "0046",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -120,6 +123,85 @@ def test_book_visual_semantics_migration_upgrades_cleanly_from_0042(
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='book_visual_semantic_ref'"
         ).fetchone()
+
+
+def test_phase7_forward_close_migration_marks_legacy_rows_unverified(
+    tmp_path: Path,
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 45):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    assert state.migrate()[-1] == "0044"
+
+    migration = (
+        PROJECT_ROOT / "migrations" / "0045_phase7_forward_research_close.sql"
+    )
+    shutil.copy(migration, migrations / migration.name)
+    assert state.migrate() == ["0045"]
+    assert state.migrate() == []
+    with state.connect() as connection:
+        study_columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(shadow_study_index)"
+            ).fetchall()
+        }
+        assignment_columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(shadow_assignment_index)"
+            ).fetchall()
+        }
+        observation_columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(shadow_observation_index)"
+            ).fetchall()
+        }
+    assert {"registered_at", "prospective_eligible"} <= study_columns
+    assert {
+        "research_memo_id",
+        "decision_id",
+        "registered_at",
+        "prospective_eligible",
+    } <= assignment_columns
+    assert {
+        "outcome_data_source",
+        "data_available_at",
+        "thesis_status",
+        "registered_at",
+        "forward_data_eligible",
+    } <= observation_columns
+
+
+def test_phase7_independence_migration_adds_formal_identity_guards(
+    tmp_path: Path,
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 46):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    assert state.migrate()[-1] == "0045"
+
+    migration = PROJECT_ROOT / "migrations" / "0046_phase7_event_independence.sql"
+    shutil.copy(migration, migrations / migration.name)
+    assert state.migrate() == ["0046"]
+    with state.connect() as connection:
+        indexes = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA index_list(shadow_assignment_index)"
+            ).fetchall()
+        }
+    assert {
+        "idx_shadow_assignment_formal_memo",
+        "idx_shadow_assignment_formal_decision",
+    } <= indexes
 
 
 def test_market_reference_migration_upgrades_cleanly_from_0037(tmp_path: Path) -> None:

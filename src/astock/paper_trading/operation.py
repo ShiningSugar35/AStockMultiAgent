@@ -358,18 +358,24 @@ class PaperOperationService:
         if committed is not None:
             return self._finish_committed(request, request_hash, committed)
 
-        self._validate_confirmation(request, confirmation, request_hash)
+        authorization_key = self._validate_confirmation(
+            request,
+            confirmation,
+            request_hash,
+        )
         assert confirmation is not None
         request_bytes = paper_request_bytes(request)
         confirmation_bytes = paper_confirmation_bytes(confirmation)
         request_ref = self.objects.put_bytes(request_bytes)
         confirmation_ref = self.objects.put_bytes(confirmation_bytes)
+        authorization_key_ref = self.objects.put_bytes(authorization_key)
         self._register(
             request,
             confirmation,
             request_hash,
             request_ref.sha256,
             confirmation_ref.sha256,
+            authorization_key_ref.sha256,
         )
         previous = self._completed_report(request.operation_id)
         if previous is not None:
@@ -431,7 +437,7 @@ class PaperOperationService:
         request: PaperOperationRequest,
         confirmation: PaperUserConfirmation | None,
         request_hash: str,
-    ) -> None:
+    ) -> bytes:
         if confirmation is None:
             raise _policy("A signed independent user confirmation is required")
         if confirmation.schema_version != "paper-user-confirmation-v2":
@@ -448,34 +454,19 @@ class PaperOperationService:
         key_pem = self.trusted_confirmation_keys.get(confirmation.key_id)
         if key_pem is None:
             raise _policy("Confirmation key is not configured or trusted")
-        try:
-            public_key = serialization.load_pem_public_key(
-                key_pem.encode("utf-8") if isinstance(key_pem, str) else key_pem
-            )
-            signature = base64.b64decode(confirmation.signature_base64, validate=True)
-            signed = paper_confirmation_signing_bytes(confirmation)
-            if confirmation.signature_algorithm == "ED25519":
-                if not isinstance(public_key, ed25519.Ed25519PublicKey):
-                    raise _policy("Confirmation key algorithm mismatch")
-                public_key.verify(signature, signed)
-            else:
-                if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(
-                    public_key.curve, ec.SECP256R1
-                ):
-                    raise _policy("Confirmation key algorithm mismatch")
-                public_key.verify(signature, signed, ec.ECDSA(hashes.SHA256()))
-        except (ValueError, TypeError, binascii.Error, InvalidSignature) as exc:
-            raise _policy("Confirmation signature verification failed") from exc
+        key_bytes = key_pem.encode("utf-8") if isinstance(key_pem, str) else key_pem
+        if not paper_confirmation_signature_valid(confirmation, key_bytes):
+            raise _policy("Confirmation signature verification failed")
         if confirmation.confirmed_at < request.requested_at:
             raise _policy("Confirmation predates the request")
         now = self.clock().astimezone(UTC)
         if confirmation.confirmed_at.astimezone(UTC) > now:
             raise _policy("Confirmation timestamp is in the future")
-        if (
-            now > request.expires_at.astimezone(UTC)
-            or now > confirmation.expires_at.astimezone(UTC)
+        if now > request.expires_at.astimezone(UTC) or now > confirmation.expires_at.astimezone(
+            UTC
         ):
             raise _policy("Operation confirmation has expired")
+        return key_bytes
 
     def _register(
         self,
@@ -484,6 +475,7 @@ class PaperOperationService:
         request_hash: str,
         request_object_hash: str,
         confirmation_object_hash: str,
+        authorization_key_object_hash: str,
     ) -> None:
         now = self.clock().astimezone(UTC).isoformat()
         request_json = paper_request_bytes(request).decode()
@@ -569,6 +561,29 @@ class PaperOperationService:
                         confirmation.nonce,
                         confirmation.signature_algorithm,
                         confirmation_json,
+                        now,
+                    ),
+                )
+            key_binding = connection.execute(
+                "SELECT key_id,public_key_object_hash FROM "
+                "paper_confirmation_key_binding WHERE confirmation_id=?",
+                (confirmation.confirmation_id,),
+            ).fetchone()
+            expected_key_binding = (
+                confirmation.key_id,
+                authorization_key_object_hash,
+            )
+            if key_binding is not None and tuple(key_binding) != expected_key_binding:
+                raise _policy("Paper confirmation authorization-key collision")
+            if key_binding is None:
+                connection.execute(
+                    "INSERT INTO paper_confirmation_key_binding("
+                    "confirmation_id,key_id,public_key_object_hash,created_at"
+                    ") VALUES(?,?,?,?)",
+                    (
+                        confirmation.confirmation_id,
+                        confirmation.key_id,
+                        authorization_key_object_hash,
                         now,
                     ),
                 )
@@ -720,11 +735,7 @@ class PaperOperationService:
             key=lambda item: item.session_date,
             default=None,
         )
-        if (
-            prior is None
-            or previous_open_date is None
-            or prior.session_date != previous_open_date
-        ):
+        if prior is None or previous_open_date is None or prior.session_date != previous_open_date:
             raise _needs_info(
                 "Previous unadjusted close for the latest open session is unavailable"
             )
@@ -869,9 +880,7 @@ class PaperOperationService:
                     action.status is not CorporateActionStatus.TERMS_VERIFIED
                     or not action.ledger_eligible
                 ):
-                    raise _needs_info(
-                        "Corporate action is not TERMS_VERIFIED and ledger eligible"
-                    )
+                    raise _needs_info("Corporate action is not TERMS_VERIFIED and ledger eligible")
                 verified_actions.append((action, release_id))
         verified_actions.sort(key=_corporate_action_sort_key)
         with self.ledger.atomic():
@@ -918,9 +927,7 @@ class PaperOperationService:
             "applied_action_ids": applied_actions,
         }
 
-    def _mark(
-        self, request: PaperOperationRequest, payload: PaperMarkPayload
-    ) -> dict[str, object]:
+    def _mark(self, request: PaperOperationRequest, payload: PaperMarkPayload) -> dict[str, object]:
         if payload.as_of > request.requested_at:
             raise _policy("Mark as_of cannot be in the future")
         held_symbols = {
@@ -967,9 +974,7 @@ class PaperOperationService:
         for instrument_id, release_id in sorted(payload.daily_release_ids.items()):
             market_text, symbol = instrument_id.split(":", maxsplit=1)
             market = Market(market_text)
-            rows = self.references.daily(
-                market, symbol, release_id, visible_at=payload.as_of
-            )
+            rows = self.references.daily(market, symbol, release_id, visible_at=payload.as_of)
             if any(
                 item.market is not market
                 or item.symbol != symbol
@@ -1091,13 +1096,17 @@ class PaperOperationService:
             operations = connection.execute(
                 "SELECT r.operation_id,r.request_hash,r.request_object_hash,"
                 "c.confirmation_hash,c.confirmation_object_hash,e.status,e.result_hash,"
-                "e.report_object_hash FROM paper_operation_request r "
+                "e.report_object_hash,k.key_id,k.public_key_object_hash "
+                "FROM paper_operation_request r "
                 "JOIN paper_operation_confirmation c ON c.operation_id=r.operation_id "
+                "LEFT JOIN paper_confirmation_key_binding k "
+                "ON k.confirmation_id=c.confirmation_id "
                 "JOIN paper_operation_execution e ON e.operation_id=r.operation_id "
                 "WHERE r.account_id=?",
                 (account_id,),
             ).fetchall()
             for row in operations:
+                stored_confirmation: PaperUserConfirmation | None = None
                 if not self.objects.verify(str(row["request_object_hash"])):
                     issues.append(f"REQUEST_OBJECT_CORRUPT:{row['operation_id']}")
                 else:
@@ -1116,15 +1125,28 @@ class PaperOperationService:
                         stored_confirmation = PaperUserConfirmation.model_validate_json(
                             self.objects.get_bytes(str(row["confirmation_object_hash"]))
                         )
-                        if (
-                            paper_confirmation_hash(stored_confirmation)
-                            != row["confirmation_hash"]
-                        ):
-                            issues.append(
-                                f"CONFIRMATION_HASH_MISMATCH:{row['operation_id']}"
-                            )
-                    except ValidationError:
+                        if paper_confirmation_hash(stored_confirmation) != row["confirmation_hash"]:
+                            issues.append(f"CONFIRMATION_HASH_MISMATCH:{row['operation_id']}")
+                    except (OSError, ValidationError):
                         issues.append(f"CONFIRMATION_OBJECT_INVALID:{row['operation_id']}")
+                if row["public_key_object_hash"] is None or not self.objects.verify(
+                    str(row["public_key_object_hash"])
+                ):
+                    issues.append(f"AUTHORIZATION_KEY_OBJECT_CORRUPT:{row['operation_id']}")
+                else:
+                    try:
+                        signature_valid = (
+                            stored_confirmation is not None
+                            and row["key_id"] == stored_confirmation.key_id
+                            and paper_confirmation_signature_valid(
+                                stored_confirmation,
+                                self.objects.get_bytes(str(row["public_key_object_hash"])),
+                            )
+                        )
+                    except OSError:
+                        signature_valid = False
+                    if not signature_valid:
+                        issues.append(f"CONFIRMATION_SIGNATURE_INVALID:{row['operation_id']}")
                 if row["status"] == PaperOperationStatus.COMPLETE.value and (
                     not row["report_object_hash"]
                     or not self.objects.verify(str(row["report_object_hash"]))
@@ -1247,9 +1269,7 @@ class PaperOperationService:
                     report.operation_id,
                 ),
             )
-            self._transition(
-                connection, report.operation_id, PaperOperationStatus.COMPLETE, now
-            )
+            self._transition(connection, report.operation_id, PaperOperationStatus.COMPLETE, now)
 
     def _finish_committed(
         self,
@@ -1329,9 +1349,7 @@ class PaperOperationService:
                     operation_id,
                 ),
             )
-            self._transition(
-                connection, operation_id, PaperOperationStatus.COMMITTED, now
-            )
+            self._transition(connection, operation_id, PaperOperationStatus.COMMITTED, now)
 
     def _committed_result(self, operation_id: str) -> dict[str, object] | None:
         with closing(self.state.connect()) as connection:
@@ -1388,9 +1406,7 @@ class PaperOperationService:
             ).fetchone()
         if row is None or row["status"] != PaperOperationStatus.COMPLETE.value:
             return None
-        if not row["report_object_hash"] or not self.objects.verify(
-            str(row["report_object_hash"])
-        ):
+        if not row["report_object_hash"] or not self.objects.verify(str(row["report_object_hash"])):
             raise _policy("Completed operation report object hash mismatch")
         object_hash = str(row["report_object_hash"])
         try:
@@ -1415,8 +1431,7 @@ class PaperOperationService:
         )
         if (
             actual_binding != expected_binding
-            or report.status
-            not in {PaperOperationStatus.COMPLETE, PaperOperationStatus.RECOVERED}
+            or report.status not in {PaperOperationStatus.COMPLETE, PaperOperationStatus.RECOVERED}
             or content_hash(report.result) != row["result_hash"]
         ):
             raise _policy("Completed operation report binding mismatch")
@@ -1495,6 +1510,34 @@ def paper_confirmation_signing_bytes(confirmation: PaperUserConfirmation) -> byt
     )
 
 
+def paper_confirmation_signature_valid(
+    confirmation: PaperUserConfirmation,
+    public_key_pem: str | bytes,
+) -> bool:
+    """Reverify one frozen manual confirmation without relying on mutable config."""
+
+    try:
+        public_key = serialization.load_pem_public_key(
+            public_key_pem.encode("utf-8") if isinstance(public_key_pem, str) else public_key_pem
+        )
+        signature = base64.b64decode(confirmation.signature_base64, validate=True)
+        signed = paper_confirmation_signing_bytes(confirmation)
+        if confirmation.signature_algorithm == "ED25519":
+            if not isinstance(public_key, ed25519.Ed25519PublicKey):
+                return False
+            public_key.verify(signature, signed)
+        else:
+            if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(
+                public_key.curve,
+                ec.SECP256R1,
+            ):
+                return False
+            public_key.verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+    except (ValueError, TypeError, binascii.Error, InvalidSignature):
+        return False
+    return True
+
+
 def paper_fee_schedule_bytes(schedule: ReplayFeeSchedule) -> bytes:
     return canonical_json_bytes(_strip_created_at(schedule.model_dump(mode="json")))
 
@@ -1513,11 +1556,7 @@ def load_paper_confirmation(path: Path) -> PaperUserConfirmation:
 
 def _strip_created_at(value: Any) -> Any:
     if isinstance(value, dict):
-        return {
-            key: _strip_created_at(item)
-            for key, item in value.items()
-            if key != "created_at"
-        }
+        return {key: _strip_created_at(item) for key, item in value.items() if key != "created_at"}
     if isinstance(value, list):
         return [_strip_created_at(item) for item in value]
     return value
@@ -1579,5 +1618,6 @@ __all__ = [
     "load_paper_confirmation",
     "load_paper_operation",
     "paper_confirmation_hash",
+    "paper_confirmation_signature_valid",
     "paper_request_hash",
 ]

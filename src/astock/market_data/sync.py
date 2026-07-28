@@ -120,6 +120,9 @@ class MarketSyncService:
                     selected,
                     canonical_report,
                     source_batch_ids=[batch.batch_id for batch, _ in usable],
+                    source_snapshot_ids=[
+                        batch.raw_snapshot_id for batch, _ in usable
+                    ],
                 )
                 canonical_updated = True
                 canonical_publish_reason = "PUBLISHED_QUALITY_PASSED_INCREMENT"

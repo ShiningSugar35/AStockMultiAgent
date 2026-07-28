@@ -81,7 +81,7 @@ class _ReferenceFixture:
                 is_open=True,
                 source_snapshot_id="calendar-source",
                 available_to_system_at=NOW - timedelta(days=1),
-            )
+            ),
         ]
 
     def instrument(
@@ -121,9 +121,7 @@ class _ReferenceFixture:
                 adjustment_mode=AdjustmentMode.NONE,
                 is_st=self.is_st,
                 source_snapshot_id="daily-source",
-                available_to_system_at=datetime(
-                    2026, 7, 17, 15, 1, tzinfo=SHANGHAI
-                ),
+                available_to_system_at=datetime(2026, 7, 17, 15, 1, tzinfo=SHANGHAI),
             )
         ]
 
@@ -195,12 +193,8 @@ class _StalePreviousCloseFixture(_ReferenceFixture):
             prior.model_copy(
                 update={
                     "session_date": date(2026, 7, 16),
-                    "session_close_at": datetime(
-                        2026, 7, 16, 15, 0, tzinfo=SHANGHAI
-                    ),
-                    "available_to_system_at": datetime(
-                        2026, 7, 16, 15, 1, tzinfo=SHANGHAI
-                    ),
+                    "session_close_at": datetime(2026, 7, 16, 15, 0, tzinfo=SHANGHAI),
+                    "available_to_system_at": datetime(2026, 7, 16, 15, 1, tzinfo=SHANGHAI),
                 }
             )
         ]
@@ -304,9 +298,7 @@ def _service(
     )
 
 
-def _bind_pending_settlement_identity(
-    state: StateStore, *, market: Market, symbol: str
-) -> None:
+def _bind_pending_settlement_identity(state: StateStore, *, market: Market, symbol: str) -> None:
     with state.transaction() as connection:
         rows = connection.execute(
             "SELECT settlement_id FROM position_settlement WHERE symbol=? "
@@ -408,10 +400,13 @@ def test_confirmed_place_is_immutable_and_idempotent(
             (request.operation_id,),
         ).fetchone()[0]
         assert execution_status == "COMPLETE"
-        assert connection.execute(
-            "SELECT COUNT(*) FROM paper_operation_transition WHERE operation_id=?",
-            (request.operation_id,),
-        ).fetchone()[0] == 4
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM paper_operation_transition WHERE operation_id=?",
+                (request.operation_id,),
+            ).fetchone()[0]
+            == 4
+        )
         stored = connection.execute(
             "SELECT payload_json,request_object_hash FROM paper_operation_request "
             "WHERE operation_id=?",
@@ -440,9 +435,12 @@ def test_confirmed_place_is_immutable_and_idempotent(
         assert schedule["schedule_json"].encode() == object_store.get_bytes(
             schedule["schedule_object_hash"]
         )
-        assert connection.execute(
-            "SELECT fee_schedule_hash FROM paper_order_rule_binding"
-        ).fetchone()[0] == schedule["schedule_hash"]
+        assert (
+            connection.execute("SELECT fee_schedule_hash FROM paper_order_rule_binding").fetchone()[
+                0
+            ]
+            == schedule["schedule_hash"]
+        )
 
 
 def test_concurrent_exact_operation_commits_one_order(
@@ -452,9 +450,7 @@ def test_concurrent_exact_operation_commits_one_order(
     request = _request()
     confirmation = _confirmation(request)
     with ThreadPoolExecutor(max_workers=2) as executor:
-        reports = list(
-            executor.map(lambda _: service.execute(request, confirmation), range(2))
-        )
+        reports = list(executor.map(lambda _: service.execute(request, confirmation), range(2)))
     assert reports[0] == reports[1]
     assert len(ledger.open_orders("paper")) == 1
     with state.connect() as connection:
@@ -468,26 +464,18 @@ def test_operation_idempotency_key_rejects_another_payload(
     state: StateStore, object_store: ObjectStore
 ) -> None:
     service, ledger = _service(state, object_store)
-    first = _operation_request(
-        _request(limit_price_fen=1000).payload, "same-user-key"
-    )
+    first = _operation_request(_request(limit_price_fen=1000).payload, "same-user-key")
     service.execute(first, _confirmation(first))
-    collision = _operation_request(
-        _request(limit_price_fen=1001).payload, "same-user-key"
-    )
+    collision = _operation_request(_request(limit_price_fen=1001).payload, "same-user-key")
     with pytest.raises(PolicyError, match="idempotency-key collision"):
         service.execute(collision, _confirmation(collision))
     assert len(ledger.open_orders("paper")) == 1
 
 
-def test_expired_confirmation_writes_no_order(
-    state: StateStore, object_store: ObjectStore
-) -> None:
+def test_expired_confirmation_writes_no_order(state: StateStore, object_store: ObjectStore) -> None:
     service, ledger = _service(state, object_store)
     request = _request()
-    expired = _confirmation(request).model_copy(
-        update={"expires_at": NOW + timedelta(minutes=1)}
-    )
+    expired = _confirmation(request).model_copy(update={"expires_at": NOW + timedelta(minutes=1)})
     expired = _resign_confirmation(expired)
     with pytest.raises(PolicyError, match="expired"):
         service.execute(request, expired)
@@ -514,15 +502,11 @@ def test_cancel_mark_and_recover_stay_inside_confirmed_boundary(
     assert marked.result["mark_id"]
     assert ledger.status("paper")["last_event_seq"] == journal_before
 
-    cancel = _operation_request(
-        PaperCancelOrderPayload(order_id=order.order_id), "cancel-1"
-    )
+    cancel = _operation_request(PaperCancelOrderPayload(order_id=order.order_id), "cancel-1")
     service.execute(cancel, _confirmation(cancel))
     assert ledger.open_orders("paper") == []
 
-    recover = _operation_request(
-        PaperRecoverPayload(as_of=NOW), "recover-1"
-    )
+    recover = _operation_request(PaperRecoverPayload(as_of=NOW), "recover-1")
     recovered = service.execute(recover, _confirmation(recover))
     assert recovered.result["status"] == "HEALTHY_NOOP", recovered.result
 
@@ -745,6 +729,28 @@ def test_recover_detects_object_corruption_before_expiring_orders(
     assert ledger.get_order(order.order_id).status.value == "ACCEPTED"
 
 
+def test_recover_detects_frozen_authorization_key_corruption(
+    state: StateStore,
+    object_store: ObjectStore,
+) -> None:
+    service, _ = _service(state, object_store)
+    request = _request()
+    confirmation = _confirmation(request)
+    service.execute(request, confirmation)
+    with state.connect() as connection:
+        key_object_hash = connection.execute(
+            "SELECT public_key_object_hash FROM paper_confirmation_key_binding "
+            "WHERE confirmation_id=?",
+            (confirmation.confirmation_id,),
+        ).fetchone()[0]
+    object_store.path_for(str(key_object_hash)).write_bytes(b"corrupt")
+
+    integrity_issues = service._paper_object_issues("paper")
+    assert any(
+        str(item).startswith("AUTHORIZATION_KEY_OBJECT_CORRUPT:") for item in integrity_issues
+    )
+
+
 def test_fee_schedule_market_and_effective_date_boundaries(
     state: StateStore, object_store: ObjectStore
 ) -> None:
@@ -821,10 +827,13 @@ def test_settle_response_crash_recovers_original_committed_result(
         service.execute(settle, confirmation)
     assert ledger.status("paper")["positions"][0]["qty_available"] == 100
     with state.connect() as connection:
-        assert connection.execute(
-            "SELECT status FROM paper_operation_execution WHERE operation_id=?",
-            (settle.operation_id,),
-        ).fetchone()[0] == "COMPLETE"
+        assert (
+            connection.execute(
+                "SELECT status FROM paper_operation_execution WHERE operation_id=?",
+                (settle.operation_id,),
+            ).fetchone()[0]
+            == "COMPLETE"
+        )
 
     monkeypatch.setattr(service, "_after_commit", lambda report: None)
     recovered = service.execute(settle, confirmation)
@@ -963,9 +972,7 @@ def test_verified_stock_action_applies_once_and_collision_is_rejected(
         "settle-fractional-action",
     )
     with pytest.raises(PolicyError, match="Fractional"):
-        fractional_service.execute(
-            fractional_settle, _confirmation(fractional_settle)
-        )
+        fractional_service.execute(fractional_settle, _confirmation(fractional_settle))
     assert ledger.status("paper")["positions"][0]["qty_total"] == 110
 
     ambiguous_cash = action.model_copy(
@@ -1000,14 +1007,20 @@ def test_verified_stock_action_applies_once_and_collision_is_rejected(
     with pytest.raises(PolicyError, match="after-tax"):
         cash_service.execute(cash_settle, _confirmation(cash_settle))
     with state.connect() as connection:
-        assert connection.execute(
-            "SELECT status FROM paper_operation_execution WHERE operation_id=?",
-            (cash_settle.operation_id,),
-        ).fetchone()[0] == "NEEDS_INFO"
-        assert connection.execute(
-            "SELECT COUNT(*) FROM corporate_action_event WHERE event_id=?",
-            (ambiguous_cash.observation_id,),
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT status FROM paper_operation_execution WHERE operation_id=?",
+                (cash_settle.operation_id,),
+            ).fetchone()[0]
+            == "NEEDS_INFO"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM corporate_action_event WHERE event_id=?",
+                (ambiguous_cash.observation_id,),
+            ).fetchone()[0]
+            == 0
+        )
 
     recover = _operation_request(PaperRecoverPayload(as_of=NOW), "recover-after-action")
     recovered = service.execute(recover, _confirmation(recover))
@@ -1015,9 +1028,7 @@ def test_verified_stock_action_applies_once_and_collision_is_rejected(
 
 
 def test_paper_operation_supports_windows_chinese_paths(tmp_path: Path) -> None:
-    state = StateStore(
-        tmp_path / "模拟交易" / "状态.sqlite", PROJECT_ROOT / "migrations"
-    )
+    state = StateStore(tmp_path / "模拟交易" / "状态.sqlite", PROJECT_ROOT / "migrations")
     state.migrate()
     objects = ObjectStore(tmp_path / "模拟交易" / "对象" / "sha256")
     service, ledger = _service(state, objects)

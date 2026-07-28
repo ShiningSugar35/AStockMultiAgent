@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import pytest
 from pydantic import ValidationError
 
@@ -23,10 +24,15 @@ from astock.schemas import (
     ShadowExecutionObservationDraft,
     ShadowFillStatus,
     ShadowObservationStatus,
+    ShadowOutcomeDataSource,
+    ShadowPerformanceStatus,
+    ShadowResearchQuality,
     ShadowStudyCreateRequest,
     ShadowStudyMode,
+    ShadowThesisStatus,
 )
 from astock.shadow import load_shadow_evaluation_policy
+from astock.shadow.storage import ParquetShadowStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AS_OF = datetime(2026, 7, 17, tzinfo=UTC)
@@ -157,7 +163,9 @@ def test_shadow_policy_and_frozen_study_contracts() -> None:
     assert isolated.research_status is ShadowArmResearchStatus.RESEARCH_ISOLATED
 
 
-def test_shadow_observation_recalculates_execution_and_maturity() -> None:
+def test_shadow_observation_recalculates_execution_and_maturity(
+    tmp_path: Path,
+) -> None:
     draft = ShadowExecutionObservationDraft(
         observation_version="observation-v1",
         study_id="study:1",
@@ -221,6 +229,34 @@ def test_shadow_observation_recalculates_execution_and_maturity() -> None:
         optimistic_net_pnl_fen=9_900,
         created_at=AS_OF,
     )
+    with pytest.raises(ValidationError, match="market snapshots and availability"):
+        ShadowExecutionObservationDraft.model_validate(
+            {
+                **draft.model_dump(mode="python"),
+                "outcome_data_source": (
+                    ShadowOutcomeDataSource.LIVE_FORWARD_MARKET
+                ),
+            }
+        )
+    with pytest.raises(ValidationError, match="explicit reason codes"):
+        ShadowExecutionObservationDraft.model_validate(
+            {
+                **draft.model_dump(mode="python"),
+                "thesis_status": ShadowThesisStatus.INVALIDATED,
+            }
+        )
+    live = ShadowExecutionObservationDraft.model_validate(
+        {
+            **draft.model_dump(mode="python"),
+            "outcome_data_source": ShadowOutcomeDataSource.LIVE_FORWARD_MARKET,
+            "data_available_at": AS_OF + timedelta(days=90),
+            "market_snapshot_ids": ["snapshot:eastmoney", "snapshot:sina"],
+            "thesis_status": ShadowThesisStatus.INVALIDATED,
+            "invalidation_reason_codes": ["DEMAND_ASSUMPTION_FAILED"],
+            "created_at": AS_OF + timedelta(days=90),
+        }
+    )
+    assert live.thesis_status is ShadowThesisStatus.INVALIDATED
     observation = ShadowExecutionObservation(
         **draft.model_dump(mode="python", exclude={"schema_version", "created_at"}),
         observation_id="observation:1",
@@ -230,6 +266,25 @@ def test_shadow_observation_recalculates_execution_and_maturity() -> None:
         created_at=AS_OF,
     )
     assert observation.net_return == Decimal("0.099")
+    parquet = ParquetShadowStore(tmp_path / "parquet")
+    parquet_path = parquet.write(observation, object_sha256="c" * 64)
+    current_table = pq.ParquetFile(parquet_path).read()
+    legacy_table = current_table.select(
+        [
+            name
+            for name in current_table.column_names
+            if name
+            not in {
+                "outcome_data_source",
+                "data_available_at",
+                "market_snapshot_ids",
+                "thesis_status",
+                "invalidation_reason_codes",
+            }
+        ]
+    )
+    pq.write_table(legacy_table, parquet_path)
+    assert parquet.verify(observation, object_sha256="c" * 64)
 
     with pytest.raises(ValidationError, match="net PnL"):
         ShadowExecutionObservationDraft.model_validate(
@@ -374,3 +429,36 @@ def test_phase8_admission_cannot_disagree_with_deterministic_gates() -> None:
     }
     with pytest.raises(ValidationError, match="must match all"):
         Phase8AdmissionReport.model_validate(payload)
+
+
+def test_research_quality_treats_maturity_as_subset_of_forward_events() -> None:
+    quality = ShadowResearchQuality(
+        status=ShadowPerformanceStatus.COLLECTING,
+        independent_event_count=1,
+        research_memo_count=1,
+        shadow_decision_count=1,
+        complete_chain_count=0,
+        mature_future_event_count=0,
+        formal_forward_event_count=1,
+        thesis_status_counts={},
+        invalidation_reason_counts={},
+        memo_coverage_counts={},
+        memo_open_gap_event_count=0,
+        memo_degradation_event_count=0,
+        finding_codes=["MATURE_FUTURE_EVENTS_UNDER_MINIMUM"],
+        created_at=AS_OF,
+    )
+    assert quality.formal_forward_event_count == 1
+    assert quality.mature_future_event_count == 0
+    with pytest.raises(
+        ValidationError,
+        match="mature future events cannot exceed formal forward",
+    ):
+        ShadowResearchQuality.model_validate(
+            quality.model_copy(
+                update={
+                    "formal_forward_event_count": 0,
+                    "mature_future_event_count": 1,
+                }
+            ).model_dump(mode="python")
+        )

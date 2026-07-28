@@ -96,6 +96,26 @@ def test_phase6_migration_archives_legacy_protocol_without_reauthorizing_it(
     migration = PROJECT_ROOT / "migrations" / "0044_phase6_decision_close.sql"
     shutil.copy(migration, migrations / migration.name)
     assert state.migrate() == ["0044"]
+    with state.connect() as connection:
+        assert (
+            connection.execute("SELECT protocol_id FROM committee_trade_protocol_index").fetchone()[
+                "protocol_id"
+            ]
+            == "legacy-protocol-v1"
+        )
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='committee_trade_protocol_index_legacy'"
+        ).fetchone()
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='paper_confirmation_key_binding'"
+        ).fetchone()
+
+    for version in range(45, 48):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    assert state.migrate() == ["0045", "0046", "0047"]
     with state.transaction() as connection:
         legacy = connection.execute(
             "SELECT protocol_id FROM committee_trade_protocol_index_legacy"

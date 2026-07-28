@@ -135,12 +135,12 @@
     },
     {
       "path": "src/astock/cli.py",
-      "sha256": "94d3bc8b30f95cf4a7e7e04a53b0000f0c670f135076076fa14dd75d74a69b41",
+      "sha256": "fc56a950f0e1a70329f35cae91c550af03ea9af1570ae0863f9cf4f28d7c6377",
       "purpose": "v1 and v2 request discrimination"
     },
     {
       "path": "src/astock/schemas/__init__.py",
-      "sha256": "a2e164c9868e62e81d876d64c253520db1d4c4b03b0d3e3f64160164c7036bec",
+      "sha256": "a45807741057aa8f8c935f024962928466c8cf16cd76abc179b5930764989fb8",
       "purpose": "public v2 schema exports"
     },
     {
@@ -219,7 +219,7 @@
       "purpose": "v2 memo lifecycle regression"
     }
   ],
-  "local_adaptation_sha256": "82f0840fe705f207ba99529e430275fe5b7aa96e0cc0275c661b7aee9444cca6",
+  "local_adaptation_sha256": "3fafa90266683066a1da770f3564f833f6c3a0429d522dac1b90314241a560e7",
   "normal_runtime_network_required": false,
   "source_vendored": false,
   "upgrade_policy": "A new upstream commit or local contract version requires a new audit_id and manifest; v1 manifests and artifacts remain immutable."

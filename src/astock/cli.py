@@ -62,6 +62,9 @@ from astock.knowledge import (
     KnowledgeStructureProfileService,
     ParquetKnowledgeStore,
     ParquetSemanticStore,
+    ReviewedBookSkillService,
+    ReviewedKnowledgeRepository,
+    ReviewedParquetStore,
     SemanticEmbeddingService,
     SemanticFunnelRepository,
     SemanticFunnelService,
@@ -3537,9 +3540,7 @@ def phase7_status_update(
             "status": service.status().status,
             "phase7_status_document": status_document,
             "migration_integrity_status": (
-                "BLOCKED_CHECKSUM_MISMATCH"
-                if migration_integrity_issue
-                else "PASS"
+                "BLOCKED_CHECKSUM_MISMATCH" if migration_integrity_issue else "PASS"
             ),
         }
     )
@@ -3785,6 +3786,140 @@ def knowledge_semantic_status(
             "latest_usable_run": usable_payload,
         }
     )
+
+
+@app.command("knowledge-reviewed-distill")
+def knowledge_reviewed_distill(
+    source_run_id: Annotated[
+        str,
+        typer.Argument(help="Frozen source semantic run id."),
+    ],
+    review_workbook: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Human review workbook.",
+        ),
+    ] = Path("docs/复核工作表_价值投资功法.xlsx"),
+    source_pdf: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Frozen source PDF.",
+        ),
+    ] = Path("docs/《价值投资功法》Mr.Dang.pdf"),
+    batch_size: Annotated[int, typer.Option(min=1, max=128)] = 16,
+) -> None:
+    """Rebuild reviewed book arguments and distill a shadow-only skill library."""
+
+    paths, state, objects = _services()
+    model_directory = default_model_directory(paths.runtime)
+    asset = verify_local_model(model_directory)
+    execution = ReviewedBookSkillService(
+        state=state,
+        object_store=objects,
+        parquet_store=ReviewedParquetStore(paths.parquet),
+        semantic_config=load_semantic_funnel_config(
+            paths.root / "configs" / "knowledge_semantic_funnel.yaml"
+        ),
+        embedding_backend=SentenceTransformerBackend(
+            model_directory,
+            batch_size=batch_size,
+        ),
+        embedding_asset=asset,
+    ).run(
+        review_workbook=review_workbook,
+        source_pdf=source_pdf,
+        source_run_id=source_run_id,
+    )
+    _emit(
+        {
+            "status": execution.result.run.stage,
+            "run_id": execution.result.run.run_id,
+            "idempotent_replay": execution.idempotent_replay,
+            "statistics": execution.result.statistics,
+            "unresolved_excel_rows": (execution.result.coverage.unresolved_excel_rows),
+            "source_run_unchanged": (execution.result.coverage.source_run_unchanged),
+            "source_embedding_reused": False,
+            "source_skill_reused": False,
+            "shadow_ready_skill_ids": (execution.result.shadow_bundle.ready_skill_ids),
+            "formal_committee_weight_allowed": False,
+        }
+    )
+
+
+@app.command("knowledge-reviewed-status")
+def knowledge_reviewed_status(
+    run_id: Annotated[str, typer.Argument(help="Reviewed semantic run id.")],
+) -> None:
+    """Return counts and unresolved rows for one reviewed run."""
+
+    _, state, objects = _services()
+    repository = ReviewedKnowledgeRepository(state, objects)
+    try:
+        result = repository.result(run_id)
+    except KeyError:
+        _emit({"status": "NOT_RUN", "run_id": run_id})
+        return
+    _emit(
+        {
+            "status": result.run.stage,
+            "run": result.run,
+            "statistics": result.statistics,
+            "coverage": result.coverage,
+            "shadow_bundle": result.shadow_bundle,
+        }
+    )
+
+
+@app.command("knowledge-reviewed-audit")
+def knowledge_reviewed_audit(
+    run_id: Annotated[str, typer.Argument(help="Reviewed semantic run id.")],
+) -> None:
+    """Verify stored reviewed lineage and database integrity evidence."""
+
+    _, state, objects = _services()
+    repository = ReviewedKnowledgeRepository(state, objects)
+    result = repository.result(run_id)
+    with state.connect() as connection:
+        foreign_key_rows = connection.execute("PRAGMA foreign_key_check").fetchall()
+        integrity_row = connection.execute("PRAGMA integrity_check").fetchone()
+    _emit(
+        {
+            "status": (
+                "PASS"
+                if (
+                    not foreign_key_rows
+                    and integrity_row
+                    and integrity_row[0] == "ok"
+                    and result.coverage.source_run_unchanged
+                    and not result.coverage.source_embedding_reused
+                    and not result.coverage.source_skill_reused
+                )
+                else "FAIL"
+            ),
+            "run_id": run_id,
+            "foreign_key_check": len(foreign_key_rows),
+            "integrity_check": integrity_row[0] if integrity_row else "unknown",
+            "coverage": result.coverage,
+        }
+    )
+
+
+@app.command("knowledge-reviewed-shadow-context")
+def knowledge_reviewed_shadow_context(
+    run_id: Annotated[str, typer.Argument(help="Reviewed semantic run id.")],
+) -> None:
+    """Emit only reviewed READY_FOR_SHADOW rules, without production authority."""
+
+    _, state, objects = _services()
+    _emit(ReviewedKnowledgeRepository(state, objects).shadow_context(run_id))
 
 
 @app.command("knowledge-semantic-model-install")

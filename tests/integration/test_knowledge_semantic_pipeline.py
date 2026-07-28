@@ -46,6 +46,9 @@ from astock.schemas import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SEMANTIC_PACKET_PROMPT = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "semantic_packet_prompt.md"
+)
 
 
 class RefusingEmbeddingBackend:
@@ -696,7 +699,7 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
         objects,
         ParquetSemanticStore(tmp_path / "parquet"),
         tmp_path / "runtime",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).export(argument_execution.run.run_id)
     lines = [
         json.loads(line)
@@ -740,7 +743,7 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
         objects,
         ParquetSemanticStore(tmp_path / "parquet"),
         tmp_path / "runtime",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).export(argument_execution.run.run_id)
     assert repeated_packet.batch.batch_id == packet.batch.batch_id
     assert repeated_packet.batch.packet_object_sha256 == packet.batch.packet_object_sha256
@@ -837,7 +840,7 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
                 objects,
                 ParquetSemanticStore(tmp_path / "parquet"),
                 tmp_path / "runtime",
-                PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+                SEMANTIC_PACKET_PROMPT,
             ).stage_results(packet.batch.batch_id, invalid_file)
         with state.connect() as connection:
             assert (
@@ -855,7 +858,7 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
         objects,
         ParquetSemanticStore(tmp_path / "parquet"),
         tmp_path / "runtime",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).stage_results(packet.batch.batch_id, result_file)
     assert staged.status is SemanticLlmBatchStatus.RESULT_STAGED
     repeated_stage = SemanticPacketService(
@@ -863,7 +866,7 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
         objects,
         ParquetSemanticStore(tmp_path / "parquet"),
         tmp_path / "runtime",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).stage_results(packet.batch.batch_id, result_file)
     assert repeated_stage == staged
     changed_result = packet.batch_directory / "changed-results.jsonl"
@@ -879,7 +882,7 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
             objects,
             ParquetSemanticStore(tmp_path / "parquet"),
             tmp_path / "runtime",
-            PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+            SEMANTIC_PACKET_PROMPT,
         ).stage_results(packet.batch.batch_id, changed_result)
     changed_prompt = tmp_path / "changed-prompt.md"
     changed_prompt.write_text("changed contract", encoding="utf-8")
@@ -896,7 +899,7 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
         objects,
         ParquetSemanticStore(tmp_path / "parquet"),
         tmp_path / "runtime",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).import_results(packet.batch.batch_id)
     assert imported.status is SemanticLlmBatchStatus.IMPORTED
     assert candidate_count == 1
@@ -905,7 +908,7 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
         objects,
         ParquetSemanticStore(tmp_path / "parquet"),
         tmp_path / "runtime",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).import_results(packet.batch.batch_id)
     assert repeated_import == imported
     assert repeated_candidate_count == 1

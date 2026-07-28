@@ -52,6 +52,15 @@ from astock.knowledge.python_recovery import (
     ZhihuPythonRecoveryService,
 )
 from astock.knowledge.repository import ContentRegistration, KnowledgeRepository
+from astock.knowledge.reviewed_repository import (
+    ReviewedKnowledgeRepository,
+    ReviewedResult,
+)
+from astock.knowledge.reviewed_service import (
+    ReviewedBookSkillService,
+    ReviewedExecution,
+)
+from astock.knowledge.reviewed_storage import ReviewedParquetStore
 from astock.knowledge.semantic_embedding import (
     MODEL_ID,
     MODEL_REVISION,
@@ -155,6 +164,11 @@ __all__ = [
     "SemanticVectorRecord",
     "SentenceTransformerBackend",
     "RecordedEmbeddingBackend",
+    "ReviewedBookSkillService",
+    "ReviewedExecution",
+    "ReviewedKnowledgeRepository",
+    "ReviewedParquetStore",
+    "ReviewedResult",
     "build_argument_units",
     "default_model_directory",
     "get_knowledge_source",

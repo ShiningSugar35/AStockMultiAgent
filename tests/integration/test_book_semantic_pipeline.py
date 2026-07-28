@@ -39,6 +39,9 @@ from astock.schemas import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SEMANTIC_PACKET_PROMPT = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "semantic_packet_prompt.md"
+)
 
 
 @dataclass
@@ -410,7 +413,7 @@ def test_claim_chart_conclusion_become_one_argument_with_exact_visual_lineage(
         objects,
         parquet,
         tmp_path / "runtime-book",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).export(semantic_run.run_id)
     packet_payload = json.loads(
         packet.packet_file.read_text(encoding="utf-8").splitlines()[0]
@@ -596,7 +599,7 @@ def test_no_keyword_visual_page_keeps_complete_three_view_and_packet_lineage(
         objects,
         parquet,
         tmp_path / "runtime-no-keyword",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).export(semantic_run.run_id)
     assert packet.batch.exported_argument_count == 1
     assert packet.held_back_structural_count == 1
@@ -712,7 +715,7 @@ def test_nonvisual_review_argument_gets_same_run_lineage_without_becoming_candid
         objects,
         parquet,
         tmp_path / "runtime-nonvisual-review",
-        PROJECT_ROOT / "OPENCODE_DEEPSEEK_PROMPT.md",
+        SEMANTIC_PACKET_PROMPT,
     ).export(semantic_run.run_id)
     assert packet.batch.exported_argument_count == 1
     assert packet.held_back_structural_count == 1

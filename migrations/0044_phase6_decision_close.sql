@@ -19,18 +19,40 @@ CREATE TABLE committee_trade_protocol_index (
     CHECK(paper_simulation_allowed = ledger_write_allowed)
 );
 
--- Legacy protocol objects used the pre-Phase-6 execution contract. Keep their
--- immutable index for audit, but never reinterpret them as paper-only
--- authorizations. Re-running the committee creates a new versioned protocol id
--- in the active index.
+INSERT INTO committee_trade_protocol_index(
+    protocol_id,
+    decision_id,
+    company_id,
+    verdict,
+    protocol_status,
+    strategy_id,
+    effective_from,
+    requires_user_confirmation,
+    broker_execution_allowed,
+    paper_simulation_allowed,
+    ledger_write_allowed,
+    object_hash,
+    input_hash,
+    created_at
+)
+SELECT
+    protocol_id,
+    decision_id,
+    company_id,
+    verdict,
+    protocol_status,
+    strategy_id,
+    effective_from,
+    requires_user_confirmation,
+    0,
+    0,
+    0,
+    object_hash,
+    input_hash,
+    created_at
+FROM committee_trade_protocol_index_legacy;
 
-CREATE TABLE paper_confirmation_key_binding (
-    confirmation_id TEXT PRIMARY KEY
-        REFERENCES paper_operation_confirmation(confirmation_id),
-    key_id TEXT NOT NULL,
-    public_key_object_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
+DROP TABLE committee_trade_protocol_index_legacy;
 
 CREATE TABLE paper_execution_request_index (
     execution_request_id TEXT PRIMARY KEY,

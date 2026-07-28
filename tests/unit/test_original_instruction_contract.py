@@ -43,7 +43,6 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     for required in (
         "开发计划只写未完成项",
         "维护契约",
-        "K5-D4-R",
         "K5-D5",
         "K5-D6",
         "知乎图片证据链",
@@ -73,6 +72,7 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     assert "DeepSeek 执行" not in plan
     assert "人工审核" not in plan
     assert "K5-D3：" not in plan
+    assert "K5-D4-R：" not in plan
     assert "2P + A + 14" not in plan
     assert "旧段落级链" not in design
 

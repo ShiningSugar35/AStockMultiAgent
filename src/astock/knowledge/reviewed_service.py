@@ -259,6 +259,7 @@ class _RuleDraft:
     known_failure_modes: tuple[str, ...]
     applicable_industries: tuple[str, ...]
     holding_horizon: tuple[str, ...]
+    uncertainty_reason: tuple[str, ...]
     status: ReviewedSkillStatus
 
 
@@ -520,6 +521,20 @@ class ReviewedBookSkillService:
                 for argument_id in skill.source_argument_unit_ids
             }
         )
+        rule_by_id = {rule.rule_id: rule for rule in rules}
+        all_rule_ids = sorted(rule_by_id)
+        shadow_rule_ids = sorted(
+            {
+                rule_id
+                for skill in all_skills
+                if skill.status is ReviewedSkillStatus.READY_FOR_SHADOW
+                for rule_id in skill.rule_ids
+                if (
+                    rule_by_id.get(rule_id, None)
+                    and rule_by_id[rule_id].status is ReviewedSkillStatus.READY_FOR_SHADOW
+                )
+            }
+        )
         shadow_bundle = ReviewedShadowBundle(
             bundle_id=f"reviewed-shadow-bundle:{
                 content_hash(
@@ -527,6 +542,8 @@ class ReviewedBookSkillService:
                         'run_id': run_id,
                         'ready_skill_ids': ready_ids,
                         'needs_user_review_skill_ids': review_skill_ids,
+                        'all_rule_ids': all_rule_ids,
+                        'shadow_rule_ids': shadow_rule_ids,
                         'source_argument_unit_ids': shadow_source_arguments,
                     }
                 )
@@ -534,6 +551,8 @@ class ReviewedBookSkillService:
             run_id=run_id,
             ready_skill_ids=ready_ids,
             needs_user_review_skill_ids=review_skill_ids,
+            all_rule_ids=all_rule_ids,
+            shadow_rule_ids=shadow_rule_ids,
             source_argument_unit_ids=shadow_source_arguments,
             formal_committee_weight_allowed=False,
         )
@@ -1283,7 +1302,7 @@ def _most_specific_title(titles: Sequence[str]) -> str:
     )[0]
 
 
-def _rule_draft(argument: ReviewedArgumentUnit, text: str) -> _RuleDraft:
+def _legacy_rule_draft(argument: ReviewedArgumentUnit, text: str) -> _RuleDraft:
     fields = {name: tuple(_sentences_for(text, terms)) for name, terms in _FIELD_KEYWORDS.items()}
     sentences = _source_sentences(text)
     reasoning = tuple(sentences[:4]) or (INSUFFICIENT_SOURCE,)
@@ -1297,6 +1316,11 @@ def _rule_draft(argument: ReviewedArgumentUnit, text: str) -> _RuleDraft:
             and (fields["invalidation"] or fields["failure"])
         )
         else ReviewedSkillStatus.NEEDS_USER_REVIEW
+    )
+    uncertainty_reason: tuple[str, ...] = (
+        ()
+        if status is ReviewedSkillStatus.READY_FOR_SHADOW
+        else ("legacy_draft_unavailable",)
     )
     return _RuleDraft(
         argument=argument,
@@ -1317,8 +1341,111 @@ def _rule_draft(argument: ReviewedArgumentUnit, text: str) -> _RuleDraft:
         known_failure_modes=fields["failure"] or (INSUFFICIENT_SOURCE,),
         applicable_industries=fields["industry"] or (INSUFFICIENT_SOURCE,),
         holding_horizon=fields["horizon"] or (INSUFFICIENT_SOURCE,),
+        uncertainty_reason=uncertainty_reason,
         status=status,
     )
+
+
+def _build_rule_draft(argument: ReviewedArgumentUnit, text: str) -> _RuleDraft:
+    fields = {
+        name: tuple(_sentences_for(text, terms))
+        for name, terms in _FIELD_KEYWORDS.items()
+    }
+    sentences = _source_sentences(text)
+    applicable_conditions = _compact_rule_items("条件", fields["conditions"])
+    required_evidence = _compact_rule_items("证据", fields["evidence"])
+    positive_signals = _compact_rule_items("正向", fields["positive"])
+    negative_signals = _compact_rule_items("反向", fields["negative"])
+    invalidation_conditions = _compact_rule_items("失效", fields["invalidation"])
+    known_failure_modes = _compact_rule_items("失效案例", fields["failure"])
+    applicable_industries = _compact_rule_items("行业", fields["industry"])
+    holding_horizon = _compact_rule_items("时间", fields["horizon"])
+    uncertainty: list[str] = []
+    if argument.status is not ReviewedArgumentStatus.READY:
+        uncertainty.append("来源AU尚未通过人工复核，无法直接成为规则。")
+    if not applicable_conditions:
+        uncertainty.append("当前文本未识别到稳定可复用的触发条件。")
+    if not required_evidence:
+        uncertainty.append("当前文本未识别到可核验的证据锚点。")
+    if not (positive_signals or negative_signals):
+        uncertainty.append("未识别支持/反对信号，规则边界不足。")
+    if not (invalidation_conditions or known_failure_modes):
+        uncertainty.append("未识别反例或失效条件，缺少安全约束。")
+    if len(sentences) < 2:
+        uncertainty.append("文本长度过短，难以稳定生成抽象规则。")
+    status = (
+        ReviewedSkillStatus.READY_FOR_SHADOW
+        if not uncertainty
+        else ReviewedSkillStatus.NEEDS_USER_REVIEW
+    )
+    return _RuleDraft(
+        argument=argument,
+        text=text,
+        source_ref=ReviewedSourceRef(
+            argument_unit_id=argument.argument_unit_id,
+            paragraph_ids=[ref.source_paragraph_id for ref in argument.paragraph_refs],
+            page_numbers=sorted({ref.page_number for ref in argument.paragraph_refs}),
+            text_object_sha256=argument.text_object_sha256,
+        ),
+        decision_question=(
+            f"在“{argument.title}”场景下，何时应执行对应的投资行动？"
+        ),
+        applicable_conditions=applicable_conditions or (INSUFFICIENT_SOURCE,),
+        reasoning_steps=(
+            _compact_rule_items(
+                "推理",
+                [
+                    f"先确认“{argument.title}”的触发边界。",
+                    (
+                        "建立证据链："
+                        f"{_join_with_conjunction(applicable_conditions)}；"
+                        f"{_join_with_conjunction(required_evidence)}"
+                    ),
+                    "再提取支持/反对与失效信号，形成可执行规则判断。",
+                    "未满足约束条件时不触发该规则。",
+                ],
+            )
+        ),
+        required_evidence=required_evidence or (INSUFFICIENT_SOURCE,),
+        positive_signals=positive_signals or (INSUFFICIENT_SOURCE,),
+        negative_signals=negative_signals or (INSUFFICIENT_SOURCE,),
+        invalidation_conditions=invalidation_conditions or (INSUFFICIENT_SOURCE,),
+        known_failure_modes=known_failure_modes or (INSUFFICIENT_SOURCE,),
+        applicable_industries=applicable_industries or (INSUFFICIENT_SOURCE,),
+        holding_horizon=holding_horizon or (INSUFFICIENT_SOURCE,),
+        uncertainty_reason=tuple(uncertainty),
+        status=status,
+    )
+
+
+def _rule_draft(argument: ReviewedArgumentUnit, text: str) -> _RuleDraft:
+    return _build_rule_draft(argument, text)
+
+
+def _compact_rule_items(label: str, raw_items: Sequence[str]) -> tuple[str, ...]:
+    outputs = []
+    for item in raw_items:
+        clause = _compact_clause(item)
+        if clause:
+            outputs.append(f"{label}：{clause}")
+    return tuple(dict.fromkeys(outputs))[:4]
+
+
+def _compact_clause(sentence: str) -> str:
+    text = _SPACE.sub(" ", re.sub(r"^\[[^\]]+\]\s*", "", sentence)).strip()
+    if not text:
+        return ""
+    if len(text) > 180:
+        return f"{text[:177]}..."
+    return text
+
+
+def _join_with_conjunction(items: Sequence[str]) -> str:
+    if not items:
+        return "待补充"
+    if len(items) == 1:
+        return items[0]
+    return "，并".join(items)
 
 
 def _source_sentences(text: str) -> list[str]:
@@ -1403,20 +1530,9 @@ def _merge_rule_cluster(run_id: str, cluster: Sequence[_RuleDraft]) -> MethodRul
         ),
         "holding_horizon": _merge_source_lists(item.holding_horizon for item in cluster),
     }
-    status = (
-        ReviewedSkillStatus.READY_FOR_SHADOW
-        if any(item.status is ReviewedSkillStatus.READY_FOR_SHADOW for item in cluster)
-        and INSUFFICIENT_SOURCE not in field_values["applicable_conditions"]
-        and INSUFFICIENT_SOURCE not in field_values["required_evidence"]
-        and (
-            INSUFFICIENT_SOURCE not in field_values["positive_signals"]
-            or INSUFFICIENT_SOURCE not in field_values["negative_signals"]
-        )
-        and (
-            INSUFFICIENT_SOURCE not in field_values["invalidation_conditions"]
-            or INSUFFICIENT_SOURCE not in field_values["known_failure_modes"]
-        )
-        else ReviewedSkillStatus.NEEDS_USER_REVIEW
+    status = _rule_cluster_status(
+        cluster=cluster,
+        field_values=field_values,
     )
     signature = content_hash(
         {
@@ -1444,6 +1560,22 @@ def _merge_rule_cluster(run_id: str, cluster: Sequence[_RuleDraft]) -> MethodRul
         source_refs=source_refs,
         status=status,
     )
+
+
+def _rule_cluster_status(
+    *,
+    cluster: Sequence[_RuleDraft],
+    field_values: dict[str, list[str]],
+) -> ReviewedSkillStatus:
+    if any(item.status is ReviewedSkillStatus.NEEDS_USER_REVIEW for item in cluster):
+        return ReviewedSkillStatus.NEEDS_USER_REVIEW
+    if any(
+        INSUFFICIENT_SOURCE in value for value in field_values.values()
+    ):
+        return ReviewedSkillStatus.NEEDS_USER_REVIEW
+    if any(item.uncertainty_reason for item in cluster):
+        return ReviewedSkillStatus.NEEDS_USER_REVIEW
+    return ReviewedSkillStatus.READY_FOR_SHADOW
 
 
 def _merge_source_lists(values: Any) -> list[str]:

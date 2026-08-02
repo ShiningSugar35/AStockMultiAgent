@@ -453,6 +453,8 @@ class ReviewedShadowBundle(AStockModel):
     run_id: str = Field(min_length=1)
     ready_skill_ids: list[str]
     needs_user_review_skill_ids: list[str]
+    all_rule_ids: list[str] = Field(default_factory=list)
+    shadow_rule_ids: list[str] = Field(default_factory=list)
     source_argument_unit_ids: list[str]
     formal_committee_weight_allowed: bool = False
 
@@ -462,6 +464,8 @@ class ReviewedShadowBundle(AStockModel):
             raise ValueError("shadow bundles cannot self-authorize committee weight")
         if set(self.ready_skill_ids).intersection(self.needs_user_review_skill_ids):
             raise ValueError("shadow bundle skill states must be disjoint")
+        if not set(self.shadow_rule_ids).issubset(set(self.all_rule_ids)):
+            raise ValueError("shadow rule ids must be covered by all rule ids")
         return self
 
 

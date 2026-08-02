@@ -54,6 +54,8 @@ from astock.financial_integrity import (
 )
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
 from astock.knowledge import (
+    DirectSourceDistillationService,
+    DirectSourceRealRunService,
     DistillationRepository,
     KnowledgeCoverageAuditService,
     KnowledgeDistillationService,
@@ -3920,6 +3922,276 @@ def knowledge_reviewed_shadow_context(
 
     _, state, objects = _services()
     _emit(ReviewedKnowledgeRepository(state, objects).shadow_context(run_id))
+
+
+@app.command("knowledge-direct-skill-init")
+def knowledge_direct_skill_init(
+    manifest_file: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Strict frozen direct-source run manifest JSON.",
+        ),
+    ],
+) -> None:
+    """Initialize one independent direct-source run from immutable object hashes."""
+
+    _, state, objects = _services()
+    _emit(DirectSourceDistillationService(state, objects).init_file(manifest_file))
+
+
+def _direct_real_run_service() -> DirectSourceRealRunService:
+    """Construct the prepare/verify service without implicit migration writes."""
+
+    paths = ProjectPaths.discover()
+    return DirectSourceRealRunService(
+        StateStore(paths.state_db, paths.root / "migrations"),
+        ObjectStore(paths.objects),
+        paths.root,
+    )
+
+
+@app.command("knowledge-direct-real-run-prepare")
+def knowledge_direct_real_run_prepare(
+    state_file: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Frozen, private-safe direct-distillation checkpoint JSON.",
+        ),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Directory for deterministic private-safe release JSON files.",
+        ),
+    ],
+    frozen_contract: Annotated[
+        Path,
+        typer.Option(
+            "--frozen-contract",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Frozen article-boundary and audited-visual lineage contract JSON.",
+        ),
+    ],
+) -> None:
+    """Read current-source gates and one historical run-row fingerprint for a release."""
+
+    try:
+        _emit(_direct_real_run_service().prepare(state_file, output_dir, frozen_contract))
+    except (AStockError, ValueError) as exc:
+        if isinstance(exc, AStockError):
+            _emit(
+                {
+                    "status": "REJECTED",
+                    "failure_class": exc.failure_class.value,
+                    "message": str(exc),
+                    "details": exc.details,
+                }
+            )
+        else:
+            _emit(
+                {
+                    "status": "REJECTED",
+                    "failure_class": "INVALID_ARGUMENT",
+                    "message": str(exc),
+                }
+            )
+        raise typer.Exit(code=3) from exc
+
+
+@app.command("knowledge-direct-real-run-verify")
+def knowledge_direct_real_run_verify(
+    state_file: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="The exact frozen checkpoint used for prepare.",
+        ),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Prepared release directory containing the three deterministic JSON files.",
+        ),
+    ],
+    frozen_contract: Annotated[
+        Path,
+        typer.Option(
+            "--frozen-contract",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="The exact frozen boundary and visual contract used for prepare.",
+        ),
+    ],
+) -> None:
+    """Recompute every frozen identity and fail closed on release or source drift."""
+
+    try:
+        _emit(_direct_real_run_service().verify(state_file, output_dir, frozen_contract))
+    except (AStockError, ValueError) as exc:
+        if isinstance(exc, AStockError):
+            _emit(
+                {
+                    "status": "REJECTED",
+                    "failure_class": exc.failure_class.value,
+                    "message": str(exc),
+                    "details": exc.details,
+                }
+            )
+        else:
+            _emit(
+                {
+                    "status": "REJECTED",
+                    "failure_class": "INVALID_ARGUMENT",
+                    "message": str(exc),
+                }
+            )
+        raise typer.Exit(code=3) from exc
+
+
+@app.command("knowledge-direct-skill-packet-export")
+def knowledge_direct_skill_packet_export(
+    run_id: Annotated[str, typer.Argument(help="Direct-source run id.")],
+    batch_id: Annotated[str, typer.Argument(help="One frozen chapter batch id.")],
+    output_file: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Destination for the strict private Sol packet JSON.",
+        ),
+    ],
+) -> None:
+    """Export exactly one chapter plus bounded adjacent context and current visuals."""
+
+    _, state, objects = _services()
+    packet = DirectSourceDistillationService(state, objects).packet_export(
+        run_id,
+        batch_id,
+    )
+    atomic_write_text(
+        output_file,
+        canonical_json_bytes(packet).decode("utf-8") + "\n",
+    )
+    _emit(
+        {
+            "status": "PACKET_EXPORTED",
+            "run_id": run_id,
+            "batch_id": batch_id,
+            "packet_hash": packet["packet_hash"],
+            "packet_object_hash": packet["packet_object_hash"],
+            "idempotent_replay": packet["idempotent_replay"],
+            "formal_committee_weight_allowed": False,
+        }
+    )
+
+
+@app.command("knowledge-direct-skill-batch-import")
+def knowledge_direct_skill_batch_import(
+    run_id: Annotated[str, typer.Argument(help="Direct-source run id.")],
+    batch_id: Annotated[str, typer.Argument(help="Frozen chapter batch id.")],
+    result_file: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Existing strict Sol batch output JSON.",
+        ),
+    ],
+) -> None:
+    """Validate, freeze, and atomically import one existing Sol JSON batch."""
+
+    _, state, objects = _services()
+    _emit(
+        DirectSourceDistillationService(state, objects).batch_import_file(
+            run_id,
+            batch_id,
+            result_file,
+        )
+    )
+
+
+@app.command("knowledge-direct-skill-finalize")
+def knowledge_direct_skill_finalize(
+    run_id: Annotated[str, typer.Argument(help="Direct-source run id.")],
+    manifest_file: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Sol-confirmed post-generation dedup manifest JSON.",
+        ),
+    ],
+) -> None:
+    """Finalize all imported chapters with one Sol-confirmed dedup manifest."""
+
+    _, state, objects = _services()
+    _emit(
+        DirectSourceDistillationService(state, objects).finalize_file(
+            run_id,
+            manifest_file,
+        )
+    )
+
+
+@app.command("knowledge-direct-skill-status")
+def knowledge_direct_skill_status(
+    run_id: Annotated[str, typer.Argument(help="Direct-source run id.")],
+) -> None:
+    """Report direct-source acceptance counts and unresolved Skills."""
+
+    _, state, objects = _services()
+    _emit(DirectSourceDistillationService(state, objects).status(run_id))
+
+
+@app.command("knowledge-direct-skill-audit")
+def knowledge_direct_skill_audit(
+    run_id: Annotated[str, typer.Argument(help="Direct-source run id.")],
+) -> None:
+    """Audit hashes, lineage, idempotency, SQLite integrity, and shadow safety."""
+
+    _, state, objects = _services()
+    _emit(DirectSourceDistillationService(state, objects).audit(run_id))
+
+
+@app.command("knowledge-direct-skill-shadow-context")
+def knowledge_direct_skill_shadow_context(
+    run_id: Annotated[str, typer.Argument(help="Direct-source run id.")],
+) -> None:
+    """Return only triple-validated READY Skills with no committee weight."""
+
+    _, state, objects = _services()
+    _emit(DirectSourceDistillationService(state, objects).shadow_context(run_id))
 
 
 @app.command("knowledge-semantic-model-install")

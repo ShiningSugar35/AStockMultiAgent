@@ -299,6 +299,26 @@ class ReviewedKnowledgeRepository:
                         ),
                     )
 
+    def load_decisions(self, run_id: str) -> list[ReviewDecision]:
+        with self.state.connect() as connection:
+            decision_rows = connection.execute(
+                "SELECT decision_json FROM knowledge_review_decision "
+                "WHERE run_id=? ORDER BY excel_row",
+                (run_id,),
+            ).fetchall()
+            if not decision_rows:
+                return []
+        return [ReviewDecision.model_validate_json(row["decision_json"]) for row in decision_rows]
+
+    def load_reviewed_arguments(self, run_id: str) -> tuple[ReviewedArgumentUnit, ...]:
+        with self.state.connect() as connection:
+            argument_rows = connection.execute(
+                "SELECT unit_json FROM knowledge_reviewed_argument_unit "
+                "WHERE run_id=? ORDER BY argument_unit_id",
+                (run_id,),
+            ).fetchall()
+        return tuple(ReviewedArgumentUnit.model_validate_json(row["unit_json"]) for row in argument_rows)
+
     def save_arguments(
         self,
         arguments: Sequence[ReviewedArgumentUnit],
@@ -669,6 +689,35 @@ class ReviewedKnowledgeRepository:
                 ),
             )
 
+    def delete_distillation_artifacts(self, run_id: str) -> None:
+        with self.state.transaction() as connection:
+            table_deletes: list[tuple[str, str | None]] = [
+                ("knowledge_viewpoint_card_au_ref", "card_id IN (SELECT card_id FROM knowledge_viewpoint_card WHERE run_id=?)"),
+                ("knowledge_viewpoint_card", "run_id=?"),
+                ("knowledge_method_rule_au_ref", "rule_id IN (SELECT rule_id FROM knowledge_method_rule WHERE run_id=?)"),
+                ("knowledge_reviewed_skill_rule_ref", "skill_id IN (SELECT skill_id FROM knowledge_reviewed_skill WHERE run_id=?)"),
+                ("knowledge_reviewed_skill_au_ref", "skill_id IN (SELECT skill_id FROM knowledge_reviewed_skill WHERE run_id=?)"),
+                ("knowledge_reviewed_skill", "run_id=?"),
+                ("knowledge_method_rule", "run_id=?"),
+                ("knowledge_author_skill_coverage", "run_id=?"),
+                ("knowledge_reviewed_shadow_bundle", "run_id=?"),
+            ]
+            for table, predicate in table_deletes:
+                query = f"DELETE FROM {table} WHERE {predicate}"
+                connection.execute(query, (run_id,))
+            connection.execute(
+                "DELETE FROM knowledge_reviewed_coverage_report WHERE run_id=?",
+                (run_id,),
+            )
+
+    def replace_coverage(self, report: ReviewedCoverageReport) -> None:
+        with self.state.transaction() as connection:
+            connection.execute(
+                "DELETE FROM knowledge_reviewed_coverage_report WHERE run_id=?",
+                (report.run_id,),
+            )
+        self.save_coverage(report)
+
     def save_coverage(self, report: ReviewedCoverageReport) -> None:
         now = _utc_text(datetime.now(UTC))
         with self.state.transaction() as connection:
@@ -760,25 +809,55 @@ class ReviewedKnowledgeRepository:
                 "formal_committee_weight_allowed": False,
                 "skills": [],
                 "rules": [],
+                "non_ready_rule_count": 0,
             }
         placeholders = ",".join("?" for _ in ready_ids)
         with self.state.connect() as connection:
             skill_rows = connection.execute(
-                "SELECT manifest_json FROM knowledge_reviewed_skill "
+                "SELECT manifest_json, status FROM knowledge_reviewed_skill "
                 f"WHERE skill_id IN ({placeholders}) ORDER BY skill_kind,skill_category",
                 tuple(ready_ids),
             ).fetchall()
             rule_rows = connection.execute(
-                "SELECT DISTINCT r.rule_json FROM knowledge_method_rule r "
+                "SELECT DISTINCT r.rule_id, r.status, r.rule_json "
+                "FROM knowledge_method_rule r "
                 "JOIN knowledge_reviewed_skill_rule_ref sr ON sr.rule_id=r.rule_id "
-                f"WHERE sr.skill_id IN ({placeholders}) ORDER BY r.rule_id",
+                f"WHERE sr.skill_id IN ({placeholders}) "
+                "ORDER BY r.rule_id",
                 tuple(ready_ids),
             ).fetchall()
+        skills = []
+        for row in skill_rows:
+            if str(row["status"]) != "READY_FOR_SHADOW":
+                continue
+            try:
+                manifest = json.loads(row["manifest_json"])
+            except json.JSONDecodeError:
+                continue
+            if manifest.get("status") == "READY_FOR_SHADOW":
+                skills.append(manifest)
+        rules: list[dict[str, object]] = []
+        non_ready_rule_count = 0
+        for row in rule_rows:
+            if row["status"] != "READY_FOR_SHADOW":
+                non_ready_rule_count += 1
+                continue
+            try:
+                rule = MethodRule.model_validate_json(row["rule_json"])
+            except Exception:
+                non_ready_rule_count += 1
+                continue
+            rule_payload = rule.model_dump(mode="json")
+            if rule_payload.get("status") == "READY_FOR_SHADOW":
+                rules.append(rule_payload)
+            else:
+                non_ready_rule_count += 1
         return {
             "run_id": run_id,
             "formal_committee_weight_allowed": False,
-            "skills": [json.loads(row["manifest_json"]) for row in skill_rows],
-            "rules": [json.loads(row["rule_json"]) for row in rule_rows],
+            "skills": skills,
+            "rules": rules,
+            "non_ready_rule_count": non_ready_rule_count,
         }
 
     def _save_skill(

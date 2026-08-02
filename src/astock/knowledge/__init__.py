@@ -31,6 +31,10 @@ from astock.knowledge.config import (
     load_knowledge_sources,
     load_zhihu_endpoint_templates,
 )
+from astock.knowledge.direct_source_distillation_service import (
+    DirectSourceDistillationService,
+)
+from astock.knowledge.direct_source_real_run_service import DirectSourceRealRunService
 from astock.knowledge.distillation import (
     DistillationExecution,
     KnowledgeDistillationService,
@@ -117,6 +121,8 @@ __all__ = [
     "KnowledgeDraftExecution",
     "KnowledgeDraftRepository",
     "KnowledgeDraftService",
+    "DirectSourceDistillationService",
+    "DirectSourceRealRunService",
     "KnowledgeDistillationService",
     "KnowledgeRepository",
     "KnowledgeStructureProfileService",

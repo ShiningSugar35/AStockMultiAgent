@@ -69,6 +69,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0046",
         "0047",
         "0048",
+        "0049",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -98,6 +99,27 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='knowledge_reviewed_skill'"
         ).fetchone()
+        for table in (
+            "knowledge_direct_run",
+            "knowledge_direct_source",
+            "knowledge_direct_chapter_batch",
+            "knowledge_direct_chapter_fragment",
+            "knowledge_direct_chapter_visual_ref",
+            "knowledge_direct_raw_sol_candidate",
+            "knowledge_direct_candidate_source_ref",
+            "knowledge_direct_candidate_visual_ref",
+            "knowledge_direct_sol_confirmed_dedup_manifest",
+            "knowledge_direct_final_skill",
+            "knowledge_direct_final_skill_module",
+            "knowledge_direct_final_source_ref",
+            "knowledge_direct_final_visual_ref",
+            "knowledge_direct_final_to_candidate_contribution",
+            "knowledge_direct_shadow_bundle",
+        ):
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
         for table in (
             "book_visual_run",
             "book_image_evidence",

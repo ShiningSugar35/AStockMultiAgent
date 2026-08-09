@@ -57,6 +57,7 @@ from astock.knowledge import (
     DirectSourceDistillationService,
     DirectSourceRealRunService,
     DistillationRepository,
+    KnowledgeCompletionRepository,
     KnowledgeCoverageAuditService,
     KnowledgeDistillationService,
     KnowledgeDraftService,
@@ -64,6 +65,7 @@ from astock.knowledge import (
     KnowledgeStructureProfileService,
     ParquetKnowledgeStore,
     ParquetSemanticStore,
+    RepositoryKnowledgeSkillProvider,
     ReviewedBookSkillService,
     ReviewedKnowledgeRepository,
     ReviewedParquetStore,
@@ -90,6 +92,7 @@ from astock.knowledge import (
     load_zhihu_endpoint_templates,
     loopback_installer_url,
     loopback_status_url,
+    register_knowledge_completion_commands,
     serve_loopback_capture,
     verify_local_model,
 )
@@ -136,6 +139,7 @@ from astock.research import (
     load_research_core_config,
     load_research_diagnostic_config,
     load_research_skill_registry,
+    register_research_runtime_commands,
     validate_registry_open_source_audits,
     verify_open_source_tree,
 )
@@ -362,6 +366,18 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
     return value
+
+
+register_knowledge_completion_commands(app, _services, _emit)
+register_research_runtime_commands(
+    app,
+    _services,
+    _emit,
+    lambda state, objects: RepositoryKnowledgeSkillProvider(
+        KnowledgeCompletionRepository(state),
+        objects,
+    ),
+)
 
 
 def _parse_local_datetime(value: str, *, end_of_day: bool = False) -> datetime:

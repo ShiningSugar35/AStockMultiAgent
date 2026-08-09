@@ -42,6 +42,7 @@ from astock.schemas import (
     FrozenEvidencePack,
     HoldingEvidenceUpdate,
     HoldingReviewPack,
+    KnowledgeSkillDelta,
     PositionAction,
     PositionActionProposal,
     PositionMonitoringPlan,
@@ -61,6 +62,7 @@ _INITIAL_ARTIFACT_MODELS: dict[str, type[AStockModel]] = {
     "BaseCasePack": BaseCasePack,
     "SpecialistRoutePlan": SpecialistRoutePlan,
     "SpecialistDelta": SpecialistDelta,
+    "KnowledgeSkillDelta": KnowledgeSkillDelta,
     "SpecialistDiagnosticReport": SpecialistDiagnosticReport,
     "ResearchMemoArtifact": ResearchMemoArtifact,
     "FinancialIntegrityEvidencePack": FinancialIntegrityEvidencePack,
@@ -75,6 +77,7 @@ _EXPECTED_ROLES = {
     "BaseCasePack": CommitteeInputRole.PRIMARY,
     "SpecialistRoutePlan": CommitteeInputRole.SPECIALIST,
     "SpecialistDelta": CommitteeInputRole.SPECIALIST,
+    "KnowledgeSkillDelta": CommitteeInputRole.SPECIALIST,
     "SpecialistDiagnosticReport": CommitteeInputRole.SPECIALIST,
     "ResearchMemoArtifact": CommitteeInputRole.PRIMARY,
     "FinancialIntegrityEvidencePack": CommitteeInputRole.FINANCIAL,
@@ -884,6 +887,7 @@ class CommitteeService:
                 raise ValueError(f"committee requires exactly one {required}")
         for singular in (
             "FinancialIntegrityEvidencePack",
+            "KnowledgeSkillDelta",
             "PositionMonitoringPlan",
             "HoldingEvidenceUpdate",
             "HoldingReviewPack",
@@ -909,6 +913,15 @@ class CommitteeService:
             or memo.as_of != base.as_of
         ):
             raise ValueError("committee research lineage/company/as_of mismatch")
+        knowledge_models = by_type.get("KnowledgeSkillDelta", [])
+        if knowledge_models:
+            knowledge_delta = cast(KnowledgeSkillDelta, knowledge_models[0])
+            if (
+                knowledge_delta.company_id != request.assessment.company_id
+                or knowledge_delta.as_of != request.assessment.as_of
+            ):
+                raise ValueError("committee KnowledgeSkillDelta company/as_of mismatch")
+
         deltas = [cast(SpecialistDelta, item) for item in by_type.get("SpecialistDelta", [])]
         expected_delta_ids = sorted(item.delta_id for item in memo.delta_references)
         actual_delta_ids = sorted(item.delta_id for item in deltas)

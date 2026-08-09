@@ -28,6 +28,7 @@ from astock.research.formal_preparation import (
     ResearchPreparationExecution,
     ResearchPreparationRejectedError,
 )
+from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.lifecycle import (
     HoldingReviewExecution,
     PositionLifecycleService,
@@ -42,6 +43,9 @@ from astock.research.open_source_audit import (
 from astock.research.phase4 import Phase4ChainService
 from astock.research.repository import ResearchRepository
 from astock.research.request import ResearchRequestExecution, ResearchRequestService
+from astock.research.runtime import ResearchRunService
+from astock.research.runtime_cli import register_research_runtime_commands
+from astock.research.runtime_readiness import ResearchRuntimeReadinessService
 from astock.research.service import (
     BaseCaseExecution,
     EvidenceFreezeExecution,
@@ -72,6 +76,10 @@ __all__ = [
     "ResearchMemoExecution",
     "ResearchRequestExecution",
     "ResearchRequestService",
+    "KnowledgeSkillProvider",
+    "ResearchRunService",
+    "ResearchRuntimeReadinessService",
+    "register_research_runtime_commands",
     "HoldingReviewExecution",
     "LifecycleRepository",
     "PositionLifecycleService",

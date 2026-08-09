@@ -1,0 +1,109 @@
+{
+  "schema_version": "direct-knowledge-review-batch-v1",
+  "run_id": "direct-source-v4:1c42336cff1a00ac1b18ee85e82f1ba63714b0a4f3c6685451e9abb8ee849eef",
+  "actor": "GPT-5.6 Sol / explicitly delegated by user",
+  "reviewed_at": "2026-08-09T07:45:57Z",
+  "expected_pending_count": 20,
+  "decisions": [
+    {
+      "skill_name": "Ring-fence speculation from the core portfolio",
+      "decision": "REJECT",
+      "reason": "核心与投机资金隔离的原则可取，但该 Skill 原样绑定了尚未验证的分账户、股息干预与流动性边界；当前合同没有修改后批准状态，因此拒绝整条规则准入。"
+    },
+    {
+      "skill_name": "Build a verified research information stack",
+      "decision": "REJECT",
+      "reason": "命名信息服务具有时效性，且该 Skill 的底层文档核验、来源降级与失效协议不足；未经补强即准入会把信息源清单误当成已验证事实栈。"
+    },
+    {
+      "skill_name": "Official catalyst and defense-supply-chain verification",
+      "decision": "APPROVE",
+      "reason": "可迁移的方法是把催化剂与军工供应链说法降级为待验证假设，并要求公告、合同、招投标或监管文件等强证据；具体需求与公司事实仍必须在每次研究时重新冻结。"
+    },
+    {
+      "skill_name": "Simple-asset tourism business and downside review",
+      "decision": "REJECT",
+      "reason": "旅游案例的数据、项目假设和估值分位均依赖具体公司与时点；原样准入会携带可能过期的案例事实，不能仅凭一般性的简单资产逻辑替代当前证据。"
+    },
+    {
+      "skill_name": "Technology-theme uncertainty screen",
+      "decision": "REJECT",
+      "reason": "量子等技术主题的技术可行性、商业化与估值证据尚未冻结，而这些不确定性正是该 Skill 决策方向的核心；当前不能把主题案例固化为稳定生产规则。"
+    },
+    {
+      "skill_name": "Use staged exits only as a behavioral training rule",
+      "decision": "REJECT",
+      "reason": "分批卖出比例及约 30% 目标属于未经样本校准的行为处方，不是可直接迁移的确定性规则；在缺少前向评估前不应进入 admitted registry。"
+    },
+    {
+      "skill_name": "Treat policy narratives and company forecasts as hypotheses requiring source verification",
+      "decision": "APPROVE",
+      "reason": "把政策叙事和公司预测视为假设、再回到官方原始文件核验，是稳定的证据纪律；案例缺少原文件不影响该方法本身，运行时仍须对每个具体断言重新取证。"
+    },
+    {
+      "skill_name": "Ignore cancellable opening-auction indications",
+      "decision": "APPROVE",
+      "reason": "可撤销竞价阶段的指示价格应降低权重这一原则可迁移，但必须以研究时点的交易所现行规则为前置条件；规则变化或场所不同即触发失效，不能把具体时段永久硬编码为事实。"
+    },
+    {
+      "skill_name": "Treat seasonal-theme calendars as hypotheses requiring validation",
+      "decision": "APPROVE",
+      "reason": "季节主题日历只作为待检验假设，并要求样本、收益口径、交易成本与样本外验证，属于稳定研究方法；示例日历本身不得被当成已验证收益规律。"
+    },
+    {
+      "skill_name": "Apply a pre-during-post drawdown response plan",
+      "decision": "REJECT",
+      "reason": "高股息假设及 5%–7% 等触发阈值缺少估值、波动率与前向样本校准；原样规则会把示例阈值提升为硬风控，当前不应准入。"
+    },
+    {
+      "skill_name": "Speculation admission and risk gate",
+      "decision": "REJECT",
+      "reason": "该规则依赖特定时点的估值、流动性和案例观察，尚未形成跨标的可复现的准入指标；不能把一次案例经验直接升级为稳定投机门禁。"
+    },
+    {
+      "skill_name": "Set investment risk by loss-recovery capacity",
+      "decision": "REJECT",
+      "reason": "损失恢复能力应影响风险预算的方向是合理的，但 100 万元阈值和收入假设不可泛化；整条 Skill 未剥离这些个人化数值，故拒绝原样准入。"
+    },
+    {
+      "skill_name": "Reassess holding period from current relative risk and return",
+      "decision": "REJECT",
+      "reason": "相对风险收益应影响持有期这一原则尚未操作化为可测量、可复算的比较合同；在缺少输入定义、阈值和失效条件前不能成为 admitted Skill。"
+    },
+    {
+      "skill_name": "Mine-automation equipment value-chain screen",
+      "decision": "REJECT",
+      "reason": "产品排名、渗透率和经营观察均属于时点性行业与公司事实，且尚无当前强证据冻结；该主题筛选不能以历史案例事实原样进入长期知识注册表。"
+    },
+    {
+      "skill_name": "Use pre-calculated marketable limit orders only after execution-risk review",
+      "decision": "APPROVE",
+      "reason": "先完成成交、涨跌幅、竞价、现金与流动性风险核验，再决定是否使用预计算限价，是安全优先的通用执行原则；任何具体价位和场所规则必须由运行时分类工件重新验证。"
+    },
+    {
+      "skill_name": "Regulated niche moat and payout-sustainability test",
+      "decision": "APPROVE",
+      "reason": "牌照型细分壁垒与分红可持续性可以作为通用研究框架，但牌照、股权和分红事实必须来自最新公告、年报或监管文件；这些是运行时输入而非 Skill 内永久事实。"
+    },
+    {
+      "skill_name": "Use exclusion filters to improve the candidate pool",
+      "decision": "REJECT",
+      "reason": "50/60/40 概率、PE 阈值和行业排除属于未经统一样本校准的启发式示例；在缺少验证前直接准入会把任意阈值变成候选硬筛规则。"
+    },
+    {
+      "skill_name": "Demand an independently testable edge before using a marketed trading tactic",
+      "decision": "APPROVE",
+      "reason": "在采用营销化交易技巧前要求独立、可复现、可反证的优势证据，是稳定的研究纪律；关于散户或量化竞争的具体断言不作为该原则成立的前提。"
+    },
+    {
+      "skill_name": "Staged-project valuation with completion haircut",
+      "decision": "APPROVE",
+      "reason": "分阶段项目估值并对未完成价值折价属于可迁移的情景估值方法；项目进度、可比交易和商品假设必须在每次使用时从当前原始材料更新，不能沿用历史案例数值。"
+    },
+    {
+      "skill_name": "Pre-stage an exit order only under a verified risk protocol",
+      "decision": "REJECT",
+      "reason": "A50 阈值、集合竞价和隔夜委托均依赖当前交易场所与券商规则，且属于执行敏感硬条件；在 TradingClassification 与执行协议完全绑定前不应把该整条规则准入。"
+    }
+  ]
+}

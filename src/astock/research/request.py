@@ -51,13 +51,14 @@ class ResearchRequestService:
         company_or_name: str,
         *,
         requested_modules: list[ResearchRequestModule | str] | None = None,
+        as_of: datetime | None = None,
     ) -> ResearchRequestExecution:
         input_value = (company_or_name or "").strip()
         if not input_value:
             raise ValueError("company input must not be empty")
 
-        now = datetime.now(UTC)
-        request = self._resolve_request(input_value, now, requested_modules)
+        effective_as_of = (as_of or datetime.now(UTC)).astimezone(UTC)
+        request = self._resolve_request(input_value, effective_as_of, requested_modules)
         request_id = self._request_identity(request)
         artifact_id = f"ResearchRequest:{request_id}"
         existing_object_hash = self._artifact_object_hash(artifact_id)

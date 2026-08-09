@@ -19,8 +19,8 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
     manifests = validate_registry_open_source_audits(registry, PROJECT_ROOT)
 
     assert {manifest.audit_id for manifest in manifests} == {
-        "serenity-muxuuu-c2fe93de-local-v2",
-        "serenity-haskaomni-332037ea-local-v2",
+        "serenity-muxuuu-c2fe93de-local-v3",
+        "serenity-haskaomni-332037ea-local-v3",
     }
     assert all(manifest.license_id == "MIT" for manifest in manifests)
     assert all(not manifest.source_vendored for manifest in manifests)

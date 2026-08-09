@@ -1,0 +1,190 @@
+{
+  "schema_version": "1.0",
+  "created_at": "2026-08-09T15:59:00Z",
+  "audit_manifest_version": "open-source-audit-v3",
+  "audit_id": "serenity-muxuuu-c2fe93de-local-v3",
+  "upstream_repository": "https://github.com/muxuuu/serenity-skill",
+  "commit_sha": "c2fe93deedfd0d1bd9fe7ef0601ea1b9c20ea24a",
+  "license_id": "MIT",
+  "license_path": "LICENSE",
+  "license_sha256": "f1980506005c63ee51b5b9e58fd963f13ea072badf1273db98c40f498e468d52",
+  "reviewed_files": [
+    {
+      "path": "LICENSE",
+      "sha256": "f1980506005c63ee51b5b9e58fd963f13ea072badf1273db98c40f498e468d52",
+      "purpose": "license"
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "576f5698a5f7222057e5a7fd7c9c85c069bfcf3cc24232dd624d09694bafb901",
+      "purpose": "primary bottleneck workflow"
+    },
+    {
+      "path": "references/deep-research-workflow.md",
+      "sha256": "a6073e15a5dcbae0d8968e7203049a676b15a139672c9f8dac28b7c11507dab1",
+      "purpose": "research stages"
+    },
+    {
+      "path": "references/evidence-ladder.md",
+      "sha256": "97a6533fd990be3448d22fda4a58b05ac9c7d98de0e41ea5f974dd4be38816d4",
+      "purpose": "evidence strength"
+    },
+    {
+      "path": "references/research-sources.md",
+      "sha256": "14e09cb8564b7fcfc31c44ba8bfe642de4d025ceb47311cfc8bd4daf3a58553f",
+      "purpose": "source policy"
+    },
+    {
+      "path": "references/risk-and-compliance.md",
+      "sha256": "1e1e39ecfeef2b02c865cf0feb76a127dc64b12bea998197f63ff1669d59efa8",
+      "purpose": "research-only boundary"
+    },
+    {
+      "path": "assets/bottleneck-scorecard.json",
+      "sha256": "5208bb65b7dc93a7c8be5af3d23ab897d36e2e75a02921d2e75e23ea511f72a0",
+      "purpose": "upstream scorecard reviewed but not adopted as a production weight"
+    },
+    {
+      "path": "scripts/validate_skill.py",
+      "sha256": "ce309e581d9dba2fce849a25fe585e284a08b709e1b21517d080883b96bff836",
+      "purpose": "upstream validation reference"
+    },
+    {
+      "path": "scripts/serenity_scorecard.py",
+      "sha256": "ef1b42c5f2aad2a7023b0a9e6d292b62c7ea46aef9c1d796b9acaced5d2416f1",
+      "purpose": "upstream scoring implementation reviewed but not executed"
+    },
+    {
+      "path": "evals/test-cases.md",
+      "sha256": "8731eb3a31c655e3d6ac8dcb111deb0fd4d2383a3c6af117db5abcb52eacbdf7",
+      "purpose": "upstream evaluation cases"
+    },
+    {
+      "path": "examples/a-share-ai-semiconductor-demo.md",
+      "sha256": "33060ff2bdca9dba7675c0d185eb77d8dd72c433c01e1111ed19c5388d947ffd",
+      "purpose": "A-share adaptation example"
+    }
+  ],
+  "local_mappings": [
+    {
+      "local_contract_id": "IndustryBottleneckSkill",
+      "local_contract_version": "industry-bottleneck-v2",
+      "upstream_files": [
+        "SKILL.md",
+        "references/deep-research-workflow.md",
+        "references/evidence-ladder.md",
+        "references/risk-and-compliance.md"
+      ],
+      "adaptation_decision": "Reuse the system-change to necessary-link to scarcity to value-capture method as an explicit tree, universe and evidence-union contract; fixed scores remain report-only and cannot change confidence, valuation, risk, position or orders."
+    }
+  ],
+  "local_patch_set": [
+    "A_SHARE_OFFICIAL_EVIDENCE_PRIORITY",
+    "FROZEN_EVIDENCE_AND_OFFLINE_COMMITTEE",
+    "EXPLICIT_INDUSTRY_TREE_AND_VALUE_CAPTURE_V2",
+    "REPORT_ONLY_NO_POSITION_INSTRUCTION",
+    "NO_TRADE_EXECUTION"
+  ],
+  "local_patch_sha256": "34881fd8531fb685bd87821080a4f9a62767dbf4827bfc1ae533c3b4eac7db4f",
+  "local_adaptation_files": [
+    {
+      "path": "configs/research_skills.yaml",
+      "sha256": "a4e775299f87468e0ab2038fb8b278142c4344d478fae780e91d340e76192650",
+      "purpose": "active v2 Skill registry and audited source mapping"
+    },
+    {
+      "path": "configs/research_diagnostics.yaml",
+      "sha256": "ae45f1272e194982af9c23594b763bd004a3d7989b851a951f1f9b42e79cbba4",
+      "purpose": "versioned diagnostic thresholds"
+    },
+    {
+      "path": "src/astock/cli.py",
+      "sha256": "e33866cfcd3d573cf7e30a5f6581eeb9f1850b2998677f4aa598b0df5b82634f",
+      "purpose": "v1 and v2 request discrimination plus registered completion/runtime commands"
+    },
+    {
+      "path": "src/astock/schemas/__init__.py",
+      "sha256": "6cf56484fba2a4245c5644f7f5e7135d51855d684083278c819681f6fea1913b",
+      "purpose": "public v2 and completion/runtime schema exports"
+    },
+    {
+      "path": "src/astock/schemas/research.py",
+      "sha256": "1c6e6134096bd1c0518eeec94cf383114a70dfd9f301aa2dcc812bc046f241d5",
+      "purpose": "v1/v2 SpecialistDelta conservation"
+    },
+    {
+      "path": "src/astock/schemas/diagnostics.py",
+      "sha256": "45923c4985b1c5389e4598a24aa7bdb0ef64c6eeab36e7e2f9ee8ca50b404635",
+      "purpose": "diagnostic report and memo lineage"
+    },
+    {
+      "path": "src/astock/schemas/serenity_v2.py",
+      "sha256": "4fd9f1902522f1cff0e90ee494433f0ae99da57ff6bf46fd32ea786a9b820413",
+      "purpose": "strict Serenity v2 method contracts"
+    },
+    {
+      "path": "src/astock/schemas/open_source.py",
+      "sha256": "6e36129ad2e608a9e0dfc46d03aaa70f76b9a88c47d80d4b3a926c7ca8b8f869",
+      "purpose": "open-source audit schema"
+    },
+    {
+      "path": "src/astock/research/config.py",
+      "sha256": "2d810566a75cc60225116034147d59c07fedb5a23f00c6d35461241e366a8a5a",
+      "purpose": "fail-closed registry loader"
+    },
+    {
+      "path": "src/astock/research/skills.py",
+      "sha256": "6cbfd6e8bef8d501ff68e69db279004f0e3c135e1b23d82e2d7554a9b0d71b5e",
+      "purpose": "method-contract evidence conservation"
+    },
+    {
+      "path": "src/astock/research/diagnostics.py",
+      "sha256": "3f5517260cc298c10c41f3723eec562b67672a7360559730663fafd7ee992bd1",
+      "purpose": "report-only v2 diagnostics and memo composition"
+    },
+    {
+      "path": "src/astock/research/lifecycle.py",
+      "sha256": "d7b6676240cd90920533c53c899354c43f638ab3677314f504c15a2b16767a7c",
+      "purpose": "memo composer lineage propagation"
+    },
+    {
+      "path": "src/astock/research/open_source_audit.py",
+      "sha256": "669043b241541545c86272d68b90e1040e8f44aff04058034cebd551f891eedf",
+      "purpose": "offline source and local implementation verifier"
+    },
+    {
+      "path": "src/astock/committee/service.py",
+      "sha256": "8d8c6b40f3445496c237b17d24d1b7b3a24ecaf8120631ed6cc058557144f48b",
+      "purpose": "frozen memo and knowledge-delta lineage validation"
+    },
+    {
+      "path": "tests/unit/test_open_source_audits.py",
+      "sha256": "e4c37158dc9bea735f6310698f16379d16fdaf43b0abb230637897ba8da856da",
+      "purpose": "audit manifest drift regression"
+    },
+    {
+      "path": "tests/unit/test_research_diagnostics_schemas.py",
+      "sha256": "765f8e4e2a38b7a5f440113aa602aeb3038c1927a60bcee8e8a85bb18ef5b335",
+      "purpose": "v1 compatibility and frequency contract regression"
+    },
+    {
+      "path": "tests/integration/test_research_core.py",
+      "sha256": "4d97f1ef2fee1996e02b05d02e29e0634705ba39afe360c7c4b07c556b676ebf",
+      "purpose": "routing and frozen evidence regression"
+    },
+    {
+      "path": "tests/integration/test_research_diagnostics.py",
+      "sha256": "d8885883edf58ff62c95782485cd3a0ff20ae5055f38f41c833ba2348d13b97e",
+      "purpose": "v2 diagnostics, PIT and false-precision regression"
+    },
+    {
+      "path": "tests/integration/test_position_lifecycle.py",
+      "sha256": "bfa031503449205d810262441372a04af5f4e90a7b763f0774b66798d5cde77f",
+      "purpose": "v2 memo lifecycle regression"
+    }
+  ],
+  "local_adaptation_sha256": "8e8c15e0050c964ea014871e1f70d5788551af96c5e1ec43ce4411c0eed82e12",
+  "normal_runtime_network_required": false,
+  "source_vendored": false,
+  "upgrade_policy": "A new upstream commit or local contract version requires a new audit_id and manifest; prior audit manifests and artifacts remain immutable."
+}

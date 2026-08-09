@@ -215,6 +215,21 @@ class StateStore:
         result["cursor"] = json.loads(result.pop("cursor_json"))
         return result
 
+    def artifact_record(self, artifact_id: str) -> dict[str, Any] | None:
+        """Return one registered artifact without exposing a raw database connection."""
+
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                "SELECT artifact_id,type,schema_version,object_hash,input_hashes_json,created_at "
+                "FROM artifact_registry WHERE artifact_id=?",
+                (artifact_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["input_hashes"] = json.loads(result.pop("input_hashes_json"))
+        return result
+
     def set_collection_checkpoint(
         self,
         checkpoint: CollectionCheckpoint,

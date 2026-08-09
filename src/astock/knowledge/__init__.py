@@ -25,6 +25,12 @@ from astock.knowledge.comments import (
     derive_author_participation_chains,
     derive_keyword_filtered_author_participation_chains,
 )
+from astock.knowledge.completion_cli import register_knowledge_completion_commands
+from astock.knowledge.completion_repository import KnowledgeCompletionRepository
+from astock.knowledge.completion_service import (
+    KnowledgeCompletionService,
+    ZhihuVisualCompletionService,
+)
 from astock.knowledge.config import (
     get_knowledge_source,
     load_distillation_rules,
@@ -51,6 +57,7 @@ from astock.knowledge.imports import (
     ZhihuResponseImportService,
 )
 from astock.knowledge.manual_tasks import ZhihuManualTaskService
+from astock.knowledge.provider import RepositoryKnowledgeSkillProvider
 from astock.knowledge.python_recovery import (
     ZhihuPythonRecoveryExecution,
     ZhihuPythonRecoveryService,
@@ -117,6 +124,8 @@ __all__ = [
     "ContentRegistration",
     "DistillationExecution",
     "DistillationRepository",
+    "KnowledgeCompletionRepository",
+    "KnowledgeCompletionService",
     "KnowledgeCoverageAuditService",
     "KnowledgeDraftExecution",
     "KnowledgeDraftRepository",
@@ -175,6 +184,8 @@ __all__ = [
     "ReviewedKnowledgeRepository",
     "ReviewedParquetStore",
     "ReviewedResult",
+    "RepositoryKnowledgeSkillProvider",
+    "ZhihuVisualCompletionService",
     "build_argument_units",
     "default_model_directory",
     "get_knowledge_source",
@@ -193,4 +204,5 @@ __all__ = [
     "install_local_model",
     "verify_local_model",
     "serve_loopback_capture",
+    "register_knowledge_completion_commands",
 ]

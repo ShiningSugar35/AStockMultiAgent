@@ -77,8 +77,7 @@ class KnowledgeCompletionRepository:
     def all_final_rows(self, run_id: str) -> list[dict[str, Any]]:
         with closing(self.state.connect()) as connection:
             rows = connection.execute(
-                "SELECT * FROM knowledge_direct_final_skill WHERE run_id=? "
-                "ORDER BY final_skill_id",
+                "SELECT * FROM knowledge_direct_final_skill WHERE run_id=? ORDER BY final_skill_id",
                 (run_id,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -262,6 +261,20 @@ class KnowledgeCompletionRepository:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def latest_published_run_id(self) -> str | None:
+        """Return the latest immutable base run that has a published registry."""
+
+        with closing(self.state.connect()) as connection:
+            visual = connection.execute(
+                "SELECT base_run_id FROM knowledge_visual_skill_release ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            if visual is not None:
+                return str(visual["base_run_id"])
+            direct = connection.execute(
+                "SELECT run_id FROM knowledge_skill_registry_release ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        return str(direct["run_id"]) if direct is not None else None
+
     def registry_members(self, release_id: str) -> list[dict[str, Any]]:
         with closing(self.state.connect()) as connection:
             rows = connection.execute(
@@ -404,11 +417,7 @@ class KnowledgeCompletionRepository:
             "frozen_source_count": int(run["frozen_source_count"]),
             "frozen_batch_count": int(run["frozen_batch_count"]),
             "manifest_object_hash": str(run["manifest_object_hash"]),
-            "finalized_at": (
-                str(run["finalized_at"])
-                if run["finalized_at"] is not None
-                else None
-            ),
+            "finalized_at": (str(run["finalized_at"]) if run["finalized_at"] is not None else None),
             "sources": [dict(row) for row in sources],
         }
 
@@ -648,9 +657,9 @@ class KnowledgeCompletionRepository:
                 ).fetchone()[0]
             )
             assets = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM knowledge_zhihu_visual_asset"
-                ).fetchone()[0]
+                connection.execute("SELECT COUNT(*) FROM knowledge_zhihu_visual_asset").fetchone()[
+                    0
+                ]
             )
         return {
             "asset_count": assets,

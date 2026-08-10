@@ -9,11 +9,22 @@ from typing import Annotated, Any
 
 import typer
 
+from astock.adaptive.service import AdaptiveResearchStatusService
+from astock.market_data.storage import CanonicalMarketStore
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
 from astock.research.trading_classification import TradingClassificationService
-from astock.schemas.research_runtime import ResearchRunRequest, TradingClassificationDraft
+from astock.schemas.research_runtime import (
+    ResearchRunMode,
+    ResearchRunRequest,
+    TradingClassificationDraft,
+)
+from astock.shadow.config import load_shadow_evaluation_policy
+from astock.shadow.formal_study import ensure_default_formal_study
+from astock.shadow.service import ShadowEvaluationService
+from astock.shadow.status import write_phase7_status
+from astock.shadow.storage import ParquetShadowStore
 
 
 def _load_request(path: Path) -> ResearchRunRequest:
@@ -51,6 +62,60 @@ def register_research_runtime_commands(
             knowledge_provider=knowledge_provider_factory(state, objects),
         )
 
+    def shadow() -> tuple[Any, ShadowEvaluationService]:
+        paths, state, objects = services()
+        return paths, ShadowEvaluationService(
+            state,
+            objects,
+            load_shadow_evaluation_policy(paths.root / "configs" / "shadow_evaluation.yaml"),
+            ParquetShadowStore(paths.parquet),
+            CanonicalMarketStore(paths.parquet, paths.manifests),
+        )
+
+    @app.command("research-plan")
+    def research_plan(
+        company_id: Annotated[str, typer.Argument()],
+        as_of: Annotated[str, typer.Option("--as-of")],
+        mode: Annotated[ResearchRunMode, typer.Option()] = ResearchRunMode.RECORDED_INPUT,
+    ) -> None:
+        emit(
+            runtime().plan(
+                ResearchRunRequest(
+                    company_id=company_id,
+                    as_of=datetime.fromisoformat(as_of),
+                    mode=mode,
+                )
+            )
+        )
+
+    @app.command("phase7-study-ensure")
+    def phase7_study_ensure(
+        candidate_set_id: Annotated[str, typer.Option()] = "phase7-forward-live-v1",
+    ) -> None:
+        paths, service = shadow()
+        study, reused = ensure_default_formal_study(
+            service,
+            now=datetime.now().astimezone(),
+            candidate_set_id=candidate_set_id,
+        )
+        status_path = write_phase7_status(service, paths.root / "phase7_status.md")
+        emit(
+            {
+                "status": study.evidence_status,
+                "study_id": study.study_id,
+                "reused_existing": reused,
+                "formal_event_count": service.status(study.study_id).formal_forward_event_count,
+                "phase7_status_document": status_path,
+            }
+        )
+
+    @app.command("phase8-status")
+    def phase8_status(
+        study_id: Annotated[str | None, typer.Option("--study-id")] = None,
+    ) -> None:
+        _, service = shadow()
+        emit(AdaptiveResearchStatusService(service).status(study_id))
+
     @app.command("research-run-plan")
     def research_run_plan(
         request_file: Annotated[
@@ -59,6 +124,24 @@ def register_research_runtime_commands(
         ],
     ) -> None:
         emit(runtime().plan(_load_request(request_file)))
+
+    @app.command("research-run-company")
+    def research_run_company(
+        company_id: Annotated[str, typer.Argument()],
+        as_of: Annotated[str, typer.Option("--as-of")],
+        mode: Annotated[ResearchRunMode, typer.Option()] = ResearchRunMode.RECORDED_INPUT,
+        sync_reference_inputs: Annotated[bool, typer.Option()] = True,
+    ) -> None:
+        emit(
+            runtime().run(
+                ResearchRunRequest(
+                    company_id=company_id,
+                    as_of=datetime.fromisoformat(as_of),
+                    mode=mode,
+                    sync_reference_inputs=sync_reference_inputs,
+                )
+            )
+        )
 
     @app.command("research-run")
     def research_run(
@@ -74,12 +157,25 @@ def register_research_runtime_commands(
         result = runtime().status(run_id)
         emit(result if result is not None else {"status": "NOT_RUN", "run_id": run_id})
 
+    @app.command("research-status")
+    def research_status(run_id: Annotated[str, typer.Argument()]) -> None:
+        result = runtime().status(run_id)
+        emit(result if result is not None else {"status": "NOT_RUN", "run_id": run_id})
+
     @app.command("research-run-audit")
     def research_run_audit(run_id: Annotated[str, typer.Argument()]) -> None:
         emit(runtime().audit(run_id))
 
+    @app.command("research-audit")
+    def research_audit(run_id: Annotated[str, typer.Argument()]) -> None:
+        emit(runtime().audit(run_id))
+
     @app.command("research-run-recover")
     def research_run_recover(run_id: Annotated[str, typer.Argument()]) -> None:
+        emit(runtime().recover(run_id))
+
+    @app.command("research-recover")
+    def research_recover(run_id: Annotated[str, typer.Argument()]) -> None:
         emit(runtime().recover(run_id))
 
     @app.command("research-run-benchmark")
@@ -90,6 +186,23 @@ def register_research_runtime_commands(
         ],
     ) -> None:
         emit(runtime().benchmark(_load_request(request_file)))
+
+    @app.command("trading-classification-resolve")
+    def trading_classification_resolve(
+        company_id: Annotated[str, typer.Argument()],
+        as_of: Annotated[str, typer.Option("--as-of")],
+        live: Annotated[bool, typer.Option()] = False,
+        sync_reference_inputs: Annotated[bool, typer.Option()] = True,
+    ) -> None:
+        service = runtime().classification
+        emit(
+            service.resolve(
+                company_id,
+                datetime.fromisoformat(as_of),
+                live=live,
+                sync_reference_inputs=sync_reference_inputs,
+            )
+        )
 
     @app.command("trading-classification-freeze")
     def trading_classification_freeze(

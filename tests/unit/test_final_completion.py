@@ -42,13 +42,21 @@ def test_final_completion_cli_commands_are_registered() -> None:
         "knowledge-provider-select",
         "knowledge-zhihu-visual-capture",
         "knowledge-zhihu-visual-status",
+        "research-plan",
         "research-run-plan",
+        "research-run-company",
         "research-run",
         "research-run-status",
+        "research-status",
         "research-run-audit",
+        "research-audit",
         "research-run-recover",
+        "research-recover",
         "research-run-benchmark",
+        "trading-classification-resolve",
         "trading-classification-freeze",
+        "phase7-study-ensure",
+        "phase8-status",
         "trading-classification-status",
         "trading-classification-audit",
         "research-runtime-readiness",
@@ -135,6 +143,34 @@ def test_research_runtime_source_stays_outside_knowledge_storage() -> None:
     )
     assert all(item not in source for item in forbidden)
     assert "KnowledgeSkillProvider" in source
+
+
+def test_final_trade_protocol_is_frozen_only_after_classification_audit() -> None:
+    source = (ROOT / "src" / "astock" / "research" / "runtime.py").read_text(
+        encoding="utf-8"
+    )
+    committee_draft = source.index('outputs["committee_protocol_draft"]')
+    classification_status = source.index("classification_status =", committee_draft)
+    classification_audit = source.index("classification_audit =", classification_status)
+    final_protocol = source.index("self._freeze_classified_protocol(", classification_audit)
+    paper_decision = source.index('outputs["paper_decision"]', final_protocol)
+
+    assert committee_draft < classification_status < classification_audit < final_protocol
+    assert final_protocol < paper_decision
+
+
+def test_classified_protocol_schema_binds_exact_classification_hash() -> None:
+    source = (
+        ROOT / "src" / "astock" / "schemas" / "research_runtime.py"
+    ).read_text(encoding="utf-8")
+    start = source.index("class ClassifiedTradeProtocol")
+    end = source.index("class ResearchPaperDecision", start)
+    contract = source[start:end]
+
+    assert "trading_classification_artifact_id" in contract
+    assert "trading_classification_object_hash" in contract
+    assert "broker_execution_allowed: Literal[False]" in contract
+    assert "paper_ledger_write_allowed: Literal[False]" in contract
 
 
 def test_research_run_plan_fails_closed_from_company_and_as_of_only(

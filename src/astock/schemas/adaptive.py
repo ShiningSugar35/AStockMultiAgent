@@ -15,9 +15,7 @@ from astock.schemas.shadow import MarketRegime, Phase8AdmissionStatus, ShadowMet
 
 class AdaptiveResearchCapabilityStatus(StrEnum):
     NOT_ENTERED_BY_DESIGN = "NOT_ENTERED_BY_DESIGN"
-    AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL = (
-        "AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL"
-    )
+    AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL = "AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL"
     RULE_STATE_MACHINE_SHADOW_RESEARCH = "RULE_STATE_MACHINE_SHADOW_RESEARCH"
     OFFLINE_DYNAMIC_WEIGHT_RESEARCH = "OFFLINE_DYNAMIC_WEIGHT_RESEARCH"
     CONTEXTUAL_BANDIT_SHADOW_RESEARCH = "CONTEXTUAL_BANDIT_SHADOW_RESEARCH"
@@ -82,29 +80,26 @@ class AdaptiveResearchPrerequisiteCheck(AStockModel):
     independent_decision_count: int = Field(ge=0)
     qualifying_market_state_count: int = Field(ge=0)
     qualifying_walk_forward_fold_count: int = Field(ge=0)
-    required_observation_months: Literal[12] = 12
-    required_independent_decision_count: Literal[100] = 100
-    required_market_state_count: Literal[5] = 5
-    required_walk_forward_fold_count: Literal[3] = 3
+    required_observation_months: int = Field(ge=1)
+    required_independent_decision_count: int = Field(ge=1)
+    required_market_state_count: int = Field(ge=1)
+    required_walk_forward_fold_count: int = Field(ge=1)
     gate_results: dict[str, bool] = Field(min_length=4, max_length=4)
     all_prerequisites_met: bool
 
     @model_validator(mode="after")
     def validate_gate_results(self) -> AdaptiveResearchPrerequisiteCheck:
         expected = {
-            "FIVE_MARKET_STATES": (
-                self.qualifying_market_state_count
-                >= self.required_market_state_count
+            "MINIMUM_MARKET_STATES": (
+                self.qualifying_market_state_count >= self.required_market_state_count
             ),
-            "ONE_HUNDRED_INDEPENDENT_DECISIONS": (
-                self.independent_decision_count
-                >= self.required_independent_decision_count
+            "MINIMUM_INDEPENDENT_DECISIONS": (
+                self.independent_decision_count >= self.required_independent_decision_count
             ),
-            "THREE_QUALIFYING_WALK_FORWARD_FOLDS": (
-                self.qualifying_walk_forward_fold_count
-                >= self.required_walk_forward_fold_count
+            "MINIMUM_QUALIFYING_WALK_FORWARD_FOLDS": (
+                self.qualifying_walk_forward_fold_count >= self.required_walk_forward_fold_count
             ),
-            "TWELVE_MONTH_REAL_FORWARD": (
+            "MINIMUM_REAL_FORWARD_MONTHS": (
                 self.real_forward_study
                 and self.observation_months >= self.required_observation_months
             ),
@@ -168,8 +163,7 @@ class AdaptiveResearchInputSummary(AStockModel):
             self.future_outcome_object_sha256s,
         ):
             if any(
-                len(value) != 64
-                or any(character not in "0123456789abcdef" for character in value)
+                len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
                 for value in values
             ):
                 raise ValueError("adaptive research input hashes must be lowercase SHA-256")
@@ -206,10 +200,7 @@ class AdaptiveSkillStability(AStockModel):
     def validate_stability(self) -> AdaptiveSkillStability:
         _require_sorted_unique(self.harmful_market_states, "harmful market states")
         _require_sorted_unique(self.reason_codes, "skill stability reason codes")
-        if (
-            self.positive_walk_forward_fold_count
-            > self.qualifying_walk_forward_fold_count
-        ):
+        if self.positive_walk_forward_fold_count > self.qualifying_walk_forward_fold_count:
             raise ValueError("positive folds cannot exceed qualifying folds")
         expected_ratio = (
             Decimal(self.positive_walk_forward_fold_count)
@@ -224,17 +215,13 @@ class AdaptiveSkillStability(AStockModel):
             and self.paired_net_return_delta.lower > 0
         )
         significant = (
-            self.holm_adjusted_p_value is not None
-            and self.holm_adjusted_p_value <= Decimal("0.05")
+            self.holm_adjusted_p_value is not None and self.holm_adjusted_p_value <= Decimal("0.05")
         )
         stable = (
-            self.paired_decision_count
-            >= self.required_independent_decision_count
-            and self.qualifying_walk_forward_fold_count
-            >= self.required_walk_forward_fold_count
+            self.paired_decision_count >= self.required_independent_decision_count
+            and self.qualifying_walk_forward_fold_count >= self.required_walk_forward_fold_count
             and self.positive_fold_ratio >= self.minimum_positive_fold_ratio
-            and self.qualifying_market_state_count
-            >= self.required_market_state_count
+            and self.qualifying_market_state_count >= self.required_market_state_count
             and not self.harmful_market_states
             and interval_positive
             and significant
@@ -310,10 +297,7 @@ class AdaptiveSkillEvaluation(AStockModel):
         )
         if self.adjustment_recommended != expected_adjustment:
             raise ValueError("Skill adjustment boolean disagrees with its recommendation")
-        if (
-            self.adjustment_recommendation
-            is AdaptiveAdjustmentRecommendation.NOT_EVALUATED
-        ):
+        if self.adjustment_recommendation is AdaptiveAdjustmentRecommendation.NOT_EVALUATED:
             raise ValueError("persisted Skill evaluations cannot be NOT_EVALUATED")
         return self
 
@@ -363,9 +347,7 @@ class AdaptiveResearchReport(AStockModel):
         )
         if self.adjustment_recommended != expected_adjustment:
             raise ValueError("adaptive report adjustment boolean is inconsistent")
-        entered = (
-            self.phase8_status is AdaptiveResearchPhaseStatus.ENTERED_SHADOW_RESEARCH
-        )
+        entered = self.phase8_status is AdaptiveResearchPhaseStatus.ENTERED_SHADOW_RESEARCH
         if entered:
             if (
                 not self.prerequisites.all_prerequisites_met
@@ -379,11 +361,9 @@ class AdaptiveResearchReport(AStockModel):
             ):
                 raise ValueError("entered Phase 8 reports require complete audited lineage")
             if (
-                self.workflow_stage
-                is not AdaptiveResearchWorkflowStage.AWAITING_HUMAN_APPROVAL
+                self.workflow_stage is not AdaptiveResearchWorkflowStage.AWAITING_HUMAN_APPROVAL
                 or self.human_approval_status != "PENDING"
-                or self.adjustment_recommendation
-                is AdaptiveAdjustmentRecommendation.NOT_EVALUATED
+                or self.adjustment_recommendation is AdaptiveAdjustmentRecommendation.NOT_EVALUATED
             ):
                 raise ValueError("evaluated Phase 8 reports must await human approval")
         else:
@@ -423,6 +403,7 @@ class AdaptiveResearchStatusReport(AStockModel):
     )
     phase8_admission_status: Phase8AdmissionStatus | None = None
     phase7_audit_status: Literal["NOT_RUN", "PASS", "PARTIAL"]
+    user_admission_status: Literal["NOT_ADMITTED"] = "NOT_ADMITTED"
     capability_status: AdaptiveResearchCapabilityStatus
     observation_months: Decimal = Field(ge=0)
     independent_decision_count: int = Field(ge=0)
@@ -457,18 +438,15 @@ class AdaptiveResearchStatusReport(AStockModel):
                 Decimal("0"),
             ),
             max(
-                self.required_independent_decision_count
-                - self.independent_decision_count,
+                self.required_independent_decision_count - self.independent_decision_count,
                 0,
             ),
             max(
-                self.required_walk_forward_fold_count
-                - self.qualifying_walk_forward_fold_count,
+                self.required_walk_forward_fold_count - self.qualifying_walk_forward_fold_count,
                 0,
             ),
             max(
-                self.required_market_regime_count
-                - self.qualifying_market_regime_count,
+                self.required_market_regime_count - self.qualifying_market_regime_count,
                 0,
             ),
         )
@@ -510,9 +488,7 @@ class AdaptiveResearchStatusReport(AStockModel):
         )
         if self.next_permitted_stage is not expected_next:
             raise ValueError("adaptive research next stage disagrees with its admission gate")
-        if bool(self.phase8_admission_id) != bool(
-            self.phase8_admission_object_sha256
-        ):
+        if bool(self.phase8_admission_id) != bool(self.phase8_admission_object_sha256):
             raise ValueError("adaptive admission identity and object hash must appear together")
         if bool(self.shadow_report_id) != bool(self.shadow_report_object_sha256):
             raise ValueError("adaptive report identity and object hash must appear together")

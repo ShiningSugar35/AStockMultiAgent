@@ -86,7 +86,7 @@ class PaperReferenceVerifier(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PaperInstrumentTradingFacts:
-    """Explicit PIT classification; never inferred from a symbol prefix or ST name."""
+    """Explicit PIT classification derived only from frozen reference/rule artifacts."""
 
     board: str
     risk_status: str
@@ -94,6 +94,27 @@ class PaperInstrumentTradingFacts:
     suspension_status_verified: bool
     suspended: bool
     evidence_id: str
+    special_regime: str = "ORDINARY"
+    price_limit_rate_bps: int | None = None
+    rule_version: str | None = None
+    instrument_release_id: str | None = None
+    calendar_release_id: str | None = None
+    daily_release_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PaperBoardRule:
+    market: Market
+    board: str
+    symbol_prefixes: tuple[str, ...]
+    effective_from: date
+    no_fixed_price_limit_first_n_sessions: int
+    source_urls: tuple[str, ...]
+
+    def matches(self, symbol: str, trade_date: date) -> bool:
+        return self.effective_from <= trade_date and any(
+            symbol.startswith(prefix) for prefix in self.symbol_prefixes
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +131,23 @@ class PaperPriceLimitRule:
 class PaperTradingRuleBook:
     rule_version: str
     price_limit_rules: tuple[PaperPriceLimitRule, ...]
+    board_rules: tuple[PaperBoardRule, ...] = ()
+
+    def board_rule(
+        self,
+        *,
+        market: Market,
+        symbol: str,
+        trade_date: date,
+    ) -> PaperBoardRule:
+        matches = [
+            rule
+            for rule in self.board_rules
+            if rule.market is market and rule.matches(symbol, trade_date)
+        ]
+        if len(matches) != 1:
+            raise _needs_info("No exact effective-dated board-code rule is frozen")
+        return matches[0]
 
     def price_limit_bps(
         self,
@@ -150,7 +188,31 @@ def load_paper_trading_rules(path: Path) -> PaperTradingRuleBook:
                 source_urls=tuple(str(item) for item in value.get("source_urls", [])),
             )
         )
-    return PaperTradingRuleBook(str(raw["rule_version"]), tuple(rules))
+    board_rules: list[PaperBoardRule] = []
+    for value in raw.get("board_rules", []):
+        if not isinstance(value, dict):
+            raise ValueError("Invalid paper board rule")
+        prefixes = tuple(str(item) for item in value.get("symbol_prefixes", []))
+        if not prefixes or len(prefixes) != len(set(prefixes)):
+            raise ValueError("Paper board rule prefixes must be non-empty and unique")
+        first_n = int(value.get("no_fixed_price_limit_first_n_sessions", 0))
+        if first_n < 0:
+            raise ValueError("Paper board special-session count cannot be negative")
+        board_rules.append(
+            PaperBoardRule(
+                market=Market(str(value["market"])),
+                board=str(value["board"]),
+                symbol_prefixes=prefixes,
+                effective_from=datetime.fromisoformat(str(value["effective_from"])).date(),
+                no_fixed_price_limit_first_n_sessions=first_n,
+                source_urls=tuple(str(item) for item in value.get("source_urls", [])),
+            )
+        )
+    return PaperTradingRuleBook(
+        str(raw["rule_version"]),
+        tuple(rules),
+        tuple(board_rules),
+    )
 
 
 def load_paper_authorization_keys(path: Path) -> dict[str, str]:
@@ -176,10 +238,15 @@ def load_paper_authorization_keys(path: Path) -> dict[str, str]:
 
 
 class MarketReferencePaperVerifier:
-    """Read only P5X-2 releases after the reference service verifies their full chain."""
+    """Read only PIT reference releases and derive versioned trading facts."""
 
-    def __init__(self, reference: MarketReferenceService) -> None:
+    def __init__(
+        self,
+        reference: MarketReferenceService,
+        trading_rules: PaperTradingRuleBook | None = None,
+    ) -> None:
         self.reference = reference
+        self.trading_rules = trading_rules
 
     def calendar(
         self, market: Market, release_id: str, *, visible_at: datetime
@@ -215,6 +282,45 @@ class MarketReferencePaperVerifier:
         if len(matches) != 1:
             raise _needs_info("Instrument release does not prove one tradable symbol")
         return matches[0]
+
+    def resolve_instrument(
+        self,
+        symbol: str,
+        *,
+        visible_at: datetime,
+    ) -> tuple[InstrumentRecord, str]:
+        matches: list[tuple[InstrumentRecord, str]] = []
+        for scope in ("ALL", Market.XSHG.value, Market.XSHE.value, Market.BJSE.value):
+            try:
+                manifest = self._visible_manifest(
+                    ReferenceDatasetKind.INSTRUMENT_MASTER,
+                    scope,
+                    visible_at=visible_at,
+                    require_certified=False,
+                )
+                records = self._records(
+                    ReferenceDatasetKind.INSTRUMENT_MASTER,
+                    scope,
+                    manifest.release_id,
+                    visible_at,
+                    InstrumentRecord,
+                    require_certified=False,
+                )
+            except PolicyError:
+                continue
+            matches.extend(
+                (item, manifest.release_id)
+                for item in records
+                if item.symbol == symbol and item.tradable
+            )
+        unique = {
+            (item.instrument_id, release_id): (item, release_id) for item, release_id in matches
+        }
+        identities = {item.instrument_id for item, _ in unique.values()}
+        if len(identities) != 1:
+            raise _needs_info("Visible instrument master does not prove one tradable identity")
+        chosen = sorted(unique.values(), key=lambda item: item[1])[-1]
+        return chosen
 
     def daily(
         self, market: Market, symbol: str, release_id: str, *, visible_at: datetime
@@ -267,9 +373,192 @@ class MarketReferencePaperVerifier:
         *,
         visible_at: datetime,
     ) -> PaperInstrumentTradingFacts:
-        raise _needs_info(
-            "Instrument release does not yet prove board, risk regime, suspension, and exclusions"
+        if self.trading_rules is None:
+            raise _needs_info("Versioned paper trading rules are not configured")
+        local = visible_at.astimezone(_SHANGHAI)
+        trade_date = local.date()
+        if instrument.available_to_system_at > visible_at or instrument.status_date > trade_date:
+            raise _needs_info("Instrument classification contains future-visible status")
+        if instrument.listing_date is None:
+            raise _needs_info(
+                "Instrument listing date is required for special-regime classification"
+            )
+        if instrument.listing_date > trade_date:
+            raise _needs_info("Instrument is not yet listed at the requested as_of")
+        if instrument.delisting_date is not None and instrument.delisting_date <= trade_date:
+            raise _needs_info(
+                "Delisted/delisting instrument requires a dedicated special-regime source"
+            )
+
+        instrument_manifest = self._instrument_manifest(instrument, visible_at=visible_at)
+        board_rule = self.trading_rules.board_rule(
+            market=instrument.market,
+            symbol=instrument.symbol,
+            trade_date=trade_date,
         )
+        calendar_manifest = self._visible_manifest(
+            ReferenceDatasetKind.TRADING_CALENDAR,
+            instrument.market.value,
+            visible_at=visible_at,
+            require_certified=False,
+        )
+        sessions = self._records(
+            ReferenceDatasetKind.TRADING_CALENDAR,
+            instrument.market.value,
+            calendar_manifest.release_id,
+            visible_at,
+            TradingSession,
+            require_certified=False,
+        )
+        open_dates = sorted(item.session_date for item in sessions if item.is_open)
+        completed_open_dates = [item for item in open_dates if item <= trade_date]
+        if not completed_open_dates:
+            raise _needs_info("No point-in-time visible open session exists for classification")
+        target_session = completed_open_dates[-1]
+        if target_session == trade_date and local.time() < time(15, 0):
+            raise _needs_info(
+                "Current-session suspension cannot be verified before the session close"
+            )
+
+        daily_manifest = self._visible_manifest(
+            ReferenceDatasetKind.DAILY_UNADJUSTED,
+            f"{instrument.market.value}:{instrument.symbol}",
+            visible_at=visible_at,
+            require_certified=False,
+        )
+        daily = self._records(
+            ReferenceDatasetKind.DAILY_UNADJUSTED,
+            f"{instrument.market.value}:{instrument.symbol}",
+            daily_manifest.release_id,
+            visible_at,
+            DailyBarObservation,
+            require_certified=False,
+        )
+        target_rows = [item for item in daily if item.session_date == target_session]
+        if len(target_rows) != 1:
+            raise _needs_info(
+                "Latest open session lacks one exact daily record; suspension is not inferable"
+            )
+        target_bar = target_rows[0]
+        suspended = target_bar.volume == 0
+
+        special_regime = "ORDINARY"
+        fixed_limit = True
+        rate_bps: int | None = None
+        listing_age_days = (target_session - instrument.listing_date).days
+        if listing_age_days <= 45:
+            if instrument.listing_date not in open_dates:
+                raise _needs_info(
+                    "Calendar coverage does not include the listing date needed for IPO regime"
+                )
+            sessions_since_listing = [
+                item for item in open_dates if instrument.listing_date <= item <= target_session
+            ]
+            if len(sessions_since_listing) <= board_rule.no_fixed_price_limit_first_n_sessions:
+                special_regime = "IPO_INITIAL_NO_FIXED_PRICE_LIMIT"
+                fixed_limit = False
+        if suspended:
+            special_regime = "SUSPENDED"
+            fixed_limit = False
+        if fixed_limit:
+            rate_bps = self.trading_rules.price_limit_bps(
+                market=instrument.market,
+                board=board_rule.board,
+                risk_status="RISK_WARNING" if instrument.is_st else "NORMAL",
+                trade_date=target_session,
+            )
+
+        # A mature ordinary classification must prove recent continuity so a first-day
+        # relisting/special-session condition cannot be silently inferred away.
+        recent_open_dates = [item for item in open_dates if item <= target_session][-5:]
+        observed_dates = {item.session_date for item in daily}
+        if special_regime == "ORDINARY" and (
+            len(recent_open_dates) < 5
+            or any(item not in observed_dates for item in recent_open_dates)
+        ):
+            raise _needs_info(
+                "Recent daily continuity is insufficient to exclude a special trading regime"
+            )
+
+        evidence_id = content_hash(
+            {
+                "rule_version": self.trading_rules.rule_version,
+                "instrument_snapshot_id": instrument.source_snapshot_id,
+                "instrument_release_id": instrument_manifest.release_id,
+                "calendar_release_id": calendar_manifest.release_id,
+                "daily_release_id": daily_manifest.release_id,
+                "target_session": target_session.isoformat(),
+                "board": board_rule.board,
+                "risk_status": "RISK_WARNING" if instrument.is_st else "NORMAL",
+                "special_regime": special_regime,
+                "suspended": suspended,
+            }
+        )
+        return PaperInstrumentTradingFacts(
+            board=board_rule.board,
+            risk_status="RISK_WARNING" if instrument.is_st else "NORMAL",
+            fixed_price_limit_eligible=fixed_limit,
+            suspension_status_verified=True,
+            suspended=suspended,
+            evidence_id=evidence_id,
+            special_regime=special_regime,
+            price_limit_rate_bps=rate_bps,
+            rule_version=self.trading_rules.rule_version,
+            instrument_release_id=instrument_manifest.release_id,
+            calendar_release_id=calendar_manifest.release_id,
+            daily_release_id=daily_manifest.release_id,
+        )
+
+    def _instrument_manifest(
+        self,
+        instrument: InstrumentRecord,
+        *,
+        visible_at: datetime,
+    ) -> DatasetReleaseManifest:
+        for scope in (instrument.market.value, "ALL"):
+            try:
+                manifest = self._visible_manifest(
+                    ReferenceDatasetKind.INSTRUMENT_MASTER,
+                    scope,
+                    visible_at=visible_at,
+                    require_certified=False,
+                )
+                records = self._records(
+                    ReferenceDatasetKind.INSTRUMENT_MASTER,
+                    scope,
+                    manifest.release_id,
+                    visible_at,
+                    InstrumentRecord,
+                    require_certified=False,
+                )
+            except PolicyError:
+                continue
+            if any(item == instrument for item in records):
+                return manifest
+        raise _needs_info("Instrument is not bound to one visible reference release")
+
+    def _visible_manifest(
+        self,
+        kind: ReferenceDatasetKind,
+        scope: str,
+        *,
+        visible_at: datetime,
+        require_certified: bool,
+    ) -> DatasetReleaseManifest:
+        status = self.reference.status(kind, scope, as_of=visible_at)
+        if status.get("status") != "AVAILABLE":
+            raise _needs_info(f"Verified {kind.value} release is unavailable")
+        try:
+            manifest = DatasetReleaseManifest.model_validate(status["release"])
+        except (KeyError, ValidationError) as exc:
+            raise _needs_info("Reference release manifest is invalid") from exc
+        if manifest.coverage.status is not ReferenceCoverageStatus.COMPLETE:
+            raise _needs_info("Reference release coverage is not COMPLETE")
+        if require_certified and manifest.pit_status is not ReferencePitStatus.CERTIFIED:
+            raise _needs_info("Operational reference requires COMPLETE/CERTIFIED coverage")
+        if not require_certified and manifest.pit_status is ReferencePitStatus.UNVERIFIED:
+            raise _needs_info("Research classification requires PIT-visible reference coverage")
+        return manifest
 
     def _records(
         self,
@@ -278,21 +567,17 @@ class MarketReferencePaperVerifier:
         release_id: str,
         visible_at: datetime,
         model: type[_RecordT],
+        *,
+        require_certified: bool = True,
     ) -> list[_RecordT]:
-        status = self.reference.status(kind, scope, as_of=visible_at)
-        if status.get("status") != "AVAILABLE":
-            raise _needs_info(f"Verified {kind.value} release is unavailable")
-        try:
-            manifest = DatasetReleaseManifest.model_validate(status["release"])
-        except (KeyError, ValidationError) as exc:
-            raise _needs_info("Reference release manifest is invalid") from exc
+        manifest = self._visible_manifest(
+            kind,
+            scope,
+            visible_at=visible_at,
+            require_certified=require_certified,
+        )
         if manifest.release_id != release_id:
             raise _needs_info("Requested release is not the point-in-time visible head")
-        if (
-            manifest.coverage.status is not ReferenceCoverageStatus.COMPLETE
-            or manifest.pit_status is not ReferencePitStatus.CERTIFIED
-        ):
-            raise _needs_info("Operational reference requires COMPLETE/CERTIFIED coverage")
         records: list[_RecordT] = []
         for descriptor in manifest.canonical_files:
             path = (self.reference.parquet.root / descriptor.path).resolve()

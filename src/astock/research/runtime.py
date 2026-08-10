@@ -14,6 +14,9 @@ from astock.committee.service import CommitteeService
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.market_data.reference import MarketReferenceService
+from astock.market_data.reference_storage import ReferenceParquetStore
+from astock.paper_trading.operation import load_paper_trading_rules
 from astock.research.config import (
     load_research_core_config,
     load_research_diagnostic_config,
@@ -23,6 +26,7 @@ from astock.research.diagnostics import ResearchDiagnosticsService
 from astock.research.formal_preparation import FormalResearchPreparationService
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.request import ResearchRequestService
+from astock.research.runtime_inputs import ResearchRunInputResolver
 from astock.research.service import ResearchCoreService
 from astock.research.skills import ResearchSkillService
 from astock.research.trading_classification import TradingClassificationService
@@ -33,6 +37,8 @@ from astock.schemas import (
     CommitteeDecisionRequest,
     CommitteeMemberBinding,
     CommitteeMemberRole,
+    ContextBudgetReport,
+    DecisionPack,
     FinancialIntegrityEvidencePack,
     FrozenEvidencePack,
     KnowledgeSkillDelta,
@@ -44,8 +50,12 @@ from astock.schemas import (
     SpecialistDeltaBuildRequest,
     SpecialistRoutePlan,
     SpecialistRouteRequest,
+    TradeProtocol,
+    TradeProtocolOutcome,
 )
 from astock.schemas.research_runtime import (
+    ClassifiedTradeProtocol,
+    ResearchPaperDecision,
     ResearchRunAudit,
     ResearchRunBenchmark,
     ResearchRunCheckpoint,
@@ -56,6 +66,7 @@ from astock.schemas.research_runtime import (
     ResearchRunStage,
     ResearchRunStatus,
     RuntimeArtifactReference,
+    TradingClassificationCorporateActionBaseline,
 )
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
@@ -118,7 +129,27 @@ class ResearchRunService:
             self.diagnostic_config,
         )
         self.committee = CommitteeService(state, objects, self.committee_rules)
-        self.classification = TradingClassificationService(state, objects)
+        self.reference = MarketReferenceService(
+            state,
+            objects,
+            ReferenceParquetStore(reference_parquet_root),
+            project_root / "tests" / "fixtures" / "reference",
+        )
+        self.paper_trading_rules = load_paper_trading_rules(
+            project_root / "configs" / "paper_trading_rules.yaml"
+        )
+        self.classification = TradingClassificationService(
+            state,
+            objects,
+            reference=self.reference,
+            trading_rules=self.paper_trading_rules,
+        )
+        self.input_resolver = ResearchRunInputResolver(
+            state,
+            objects,
+            knowledge_provider,
+            self.classification,
+        )
 
     @staticmethod
     def run_id(request: ResearchRunRequest) -> str:
@@ -127,72 +158,61 @@ class ResearchRunService:
 
     def plan(self, request: ResearchRunRequest) -> ResearchRunPlan:
         run_id = self.run_id(request)
-        reusable: list[str] = []
-        missing: list[str] = []
-        frozen = request.frozen_inputs
-        if frozen is not None:
-            for artifact_id in (
-                frozen.frozen_evidence_pack_artifact_id,
-                frozen.base_case_artifact_id,
-                frozen.specialist_route_artifact_id,
-                frozen.serenity_delta_artifact_id,
-                frozen.zhihu_delta_artifact_id,
-                frozen.research_memo_artifact_id,
-                frozen.financial_integrity_artifact_id,
-            ):
-                if artifact_id and self.state.artifact_record(artifact_id) is not None:
-                    reusable.append(artifact_id)
-        if not (frozen and frozen.frozen_evidence_pack_artifact_id):
-            if request.evidence_pack_artifact_id is None:
-                missing.append("EVIDENCE_PACK_REQUIRED")
-            if not request.claim_ids:
-                missing.append("CLAIM_IDS_REQUIRED")
-        if not (frozen and frozen.financial_integrity_artifact_id):
-            if request.financial_audit_run_id is None:
-                missing.append("FINANCIAL_AUDIT_REQUIRED")
-        if not (frozen and frozen.base_case_artifact_id) and request.base_case_draft is None:
-            missing.append("BASE_CASE_DRAFT_REQUIRED")
-        if not (
-            frozen
-            and frozen.specialist_route_artifact_id
-            and frozen.serenity_delta_artifact_id
-            and frozen.zhihu_delta_artifact_id
-            and frozen.research_memo_artifact_id
-        ):
-            if request.route_draft is None:
-                missing.append("SPECIALIST_ROUTE_DRAFT_REQUIRED")
-            if not request.specialist_delta_drafts:
-                missing.append("SPECIALIST_DELTA_DRAFTS_REQUIRED")
-        if request.knowledge_run_id is None:
-            missing.append("KNOWLEDGE_PROVIDER_INPUT_REQUIRED")
-        if request.committee_assessment is None:
-            missing.append("COMMITTEE_ASSESSMENT_REQUIRED")
-        if request.trading_classification_artifact_id is None:
-            missing.append("TRADING_CLASSIFICATION_REQUIRED")
-
+        resolved = self.input_resolver.resolve(
+            request,
+            run_id=run_id,
+            for_execution=False,
+        )
+        missing = set(resolved.manifest.unresolved_codes)
         next_stage = ResearchRunStage.COMPLETE
-        for stage, codes in (
-            (ResearchRunStage.EVIDENCE, {"EVIDENCE_PACK_REQUIRED", "CLAIM_IDS_REQUIRED"}),
-            (ResearchRunStage.FINANCIAL_INTEGRITY, {"FINANCIAL_AUDIT_REQUIRED"}),
-            (ResearchRunStage.BASE_CASE, {"BASE_CASE_DRAFT_REQUIRED"}),
+        stage_codes = (
+            (
+                ResearchRunStage.EVIDENCE,
+                {"EVIDENCE_PACK_AND_CLAIMS_REQUIRED", "FROZEN_EVIDENCE_FOR_AS_OF_REQUIRED"},
+            ),
+            (
+                ResearchRunStage.FINANCIAL_INTEGRITY,
+                {"FINANCIAL_INTEGRITY_ARTIFACT_REQUIRED"},
+            ),
+            (
+                ResearchRunStage.BASE_CASE,
+                {"BASE_CASE_ARTIFACT_OR_DRAFT_REQUIRED"},
+            ),
             (
                 ResearchRunStage.SERENITY_DELTA,
-                {"SPECIALIST_ROUTE_DRAFT_REQUIRED", "SPECIALIST_DELTA_DRAFTS_REQUIRED"},
+                {"SPECIALIST_FROZEN_CHAIN_OR_DRAFTS_REQUIRED"},
             ),
-            (ResearchRunStage.KNOWLEDGE_SKILL_DELTA, {"KNOWLEDGE_PROVIDER_INPUT_REQUIRED"}),
-            (ResearchRunStage.COMMITTEE, {"COMMITTEE_ASSESSMENT_REQUIRED"}),
-            (ResearchRunStage.TRADING_CLASSIFICATION, {"TRADING_CLASSIFICATION_REQUIRED"}),
-        ):
-            if set(missing) & codes:
+            (
+                ResearchRunStage.KNOWLEDGE_SKILL_DELTA,
+                {"KNOWLEDGE_PROVIDER_INPUT_REQUIRED", "REGISTRY_RELEASE_MISSING"},
+            ),
+            (ResearchRunStage.COMMITTEE, {"COMMITTEE_DECISION_REQUIRED"}),
+            (
+                ResearchRunStage.TRADING_CLASSIFICATION,
+                {
+                    "TRADING_CLASSIFICATION_REQUIRED",
+                    "TRADING_CLASSIFICATION_RESOLUTION_REQUIRED",
+                    "TRADING_CLASSIFICATION_RESOLVER_NOT_CONFIGURED",
+                    "INSTRUMENT_REFERENCE_REQUIRED",
+                    "CALENDAR_REFERENCE_REQUIRED",
+                    "DAILY_SUSPENSION_REFERENCE_REQUIRED",
+                    "CORPORATE_ACTION_BASELINE_REQUIRED",
+                },
+            ),
+        )
+        for stage, codes in stage_codes:
+            if missing & codes:
                 next_stage = stage
                 break
+        if next_stage is ResearchRunStage.COMPLETE and missing:
+            next_stage = ResearchRunStage.INPUT_RESOLUTION
         return ResearchRunPlan(
             run_id=run_id,
             company_id=request.company_id,
             as_of=request.as_of,
             next_stage=next_stage,
-            missing_codes=sorted(set(missing)),
-            reusable_artifact_ids=sorted(set(reusable)),
+            missing_codes=sorted(missing),
+            reusable_artifact_ids=sorted(set(resolved.manifest.resolved_artifact_ids.values())),
             created_at=request.created_at,
         )
 
@@ -200,6 +220,41 @@ class ResearchRunService:
         started = perf_counter()
         run_id = self.run_id(request)
         request_artifact_id, request_hash, request_reused = self._persist_request(request, run_id)
+        resolved = self.input_resolver.resolve(
+            request,
+            run_id=run_id,
+            for_execution=True,
+        )
+        manifest = resolved.manifest.model_copy(update={"created_at": request.as_of})
+        manifest_payload = manifest.model_dump(mode="json")
+        manifest_ref = self.objects.put_json(manifest_payload)
+        manifest_identity = sha256_bytes(
+            canonical_json_bytes(_semantic(manifest_payload))
+        )
+        manifest_artifact_id = f"ResearchRunInputManifest:{manifest_identity}"
+        manifest_input_hashes = sorted(
+            {
+                str(record["object_hash"])
+                for artifact_id in manifest.resolved_artifact_ids.values()
+                if (record := self.state.artifact_record(artifact_id)) is not None
+            }
+        )
+        self._register_exact(
+            artifact_id=manifest_artifact_id,
+            artifact_type="ResearchRunInputManifest",
+            schema_version=manifest.schema_version,
+            object_hash=manifest_ref.sha256,
+            input_hashes=manifest_input_hashes,
+        )
+        request = request.model_copy(
+            update={
+                "frozen_inputs": resolved.frozen_inputs,
+                "financial_audit_run_id": resolved.financial_audit_run_id,
+                "knowledge_run_id": resolved.knowledge_run_id,
+                "knowledge_query": resolved.knowledge_query,
+                "trading_classification_artifact_id": resolved.trading_classification_artifact_id,
+            }
+        )
         previous = self._latest_report(run_id)
         previous_artifacts = (
             {ref.artifact_id for ref in previous.output_artifacts.values()}
@@ -230,11 +285,17 @@ class ResearchRunService:
             nonlocal cache_hits
             if cache_hit:
                 cache_hits += 1
+            unique_artifact_ids = sorted(set(artifact_ids or []))
+            artifact_object_hashes = {
+                artifact_id: self._ref(artifact_id).object_hash
+                for artifact_id in unique_artifact_ids
+            }
             checkpoints.append(
                 ResearchRunCheckpoint(
                     stage=stage,
                     status=status,
-                    artifact_ids=sorted(set(artifact_ids or [])),
+                    artifact_ids=unique_artifact_ids,
+                    artifact_object_hashes=artifact_object_hashes,
                     duration_ms=max(0, duration_ms),
                     cache_hit=cache_hit,
                     reason_codes=sorted(set(reason_codes or [])),
@@ -267,6 +328,15 @@ class ResearchRunService:
                 provider_calls_before,
                 trade_outcome,
             )
+
+        outputs["input_manifest"] = self._ref(manifest_artifact_id)
+        add_checkpoint(
+            ResearchRunStage.INPUT_RESOLUTION,
+            artifact_ids=[manifest_artifact_id],
+            duration_ms=0,
+            cache_hit=manifest_artifact_id in previous_artifacts,
+            reason_codes=manifest.unresolved_codes,
+        )
 
         frozen_inputs = request.frozen_inputs
         stage_started = perf_counter()
@@ -435,9 +505,7 @@ class ResearchRunService:
         if route_artifact and serenity_artifact and zhihu_artifact and memo_artifact:
             route = self._load_model(route_artifact, "SpecialistRoutePlan", SpecialistRoutePlan)
             memo = self._load_model(memo_artifact, "ResearchMemoArtifact", ResearchMemoArtifact)
-            delta_artifacts = [
-                f"SpecialistDelta:{item.delta_id}" for item in memo.delta_references
-            ]
+            delta_artifacts = [f"SpecialistDelta:{item.delta_id}" for item in memo.delta_references]
             deltas = [
                 self._load_model(item, "SpecialistDelta", SpecialistDelta)
                 for item in delta_artifacts
@@ -671,7 +739,7 @@ class ResearchRunService:
 
         stage_started = perf_counter()
         if request.committee_assessment is None:
-            reasons = ["COMMITTEE_ASSESSMENT_REQUIRED"]
+            reasons = ["COMMITTEE_DECISION_REQUIRED"]
             add_checkpoint(
                 ResearchRunStage.COMMITTEE,
                 duration_ms=self._elapsed(stage_started),
@@ -687,9 +755,7 @@ class ResearchRunService:
             raise ValueError("committee assessment company mismatch")
         if request.committee_assessment.as_of != request.as_of:
             raise ValueError("committee assessment as_of mismatch")
-        expected_skill_versions = {
-            item.skill_id: item.skill_version for item in route.selected
-        }
+        expected_skill_versions = {item.skill_id: item.skill_version for item in route.selected}
         expected_skill_versions["ResearchMemoComposer"] = (
             memo.composer_version or "research-memo-composer-v1"
         )
@@ -715,9 +781,7 @@ class ResearchRunService:
         ]
         if any(item is None for item in committee_input_ids):
             raise ValueError("committee runtime input identity is incomplete")
-        references = [
-            self.committee.resolve_reference(str(item)) for item in committee_input_ids
-        ]
+        references = [self.committee.resolve_reference(str(item)) for item in committee_input_ids]
         base_ref = self.committee.resolve_reference(base_artifact)
         serenity_ref = self.committee.resolve_reference(serenity_artifact)
         zhihu_ref = self.committee.resolve_reference(zhihu_artifact)
@@ -767,16 +831,14 @@ class ResearchRunService:
         execution = self.committee.decide_investment(committee_request)
         decision_artifact = f"DecisionPack:{execution.decision.decision_id}"
         protocol_artifact = f"TradeProtocol:{execution.protocol.protocol_id}"
-        trade_outcome = execution.protocol.outcome.value
         outputs["decision_pack"] = self._ref(decision_artifact)
-        outputs["trade_protocol"] = self._ref(protocol_artifact)
+        outputs["committee_protocol_draft"] = self._ref(protocol_artifact)
         add_checkpoint(
             ResearchRunStage.COMMITTEE,
             artifact_ids=[decision_artifact, protocol_artifact],
             duration_ms=self._elapsed(stage_started),
             cache_hit=(
-                decision_artifact in previous_artifacts
-                and protocol_artifact in previous_artifacts
+                decision_artifact in previous_artifacts and protocol_artifact in previous_artifacts
             ),
         )
 
@@ -816,6 +878,21 @@ class ResearchRunService:
                 ResearchRunStage.TRADING_CLASSIFICATION,
                 reasons,
             )
+        classification_audit = self.classification.audit(classification_artifact)
+        if classification_audit["status"] != "PASS":
+            reasons = [str(item) for item in classification_audit["finding_codes"]]
+            add_checkpoint(
+                ResearchRunStage.TRADING_CLASSIFICATION,
+                artifact_ids=[classification_artifact],
+                duration_ms=self._elapsed(stage_started),
+                reason_codes=reasons,
+                status=ResearchRunStatus.NEEDS_INFO,
+            )
+            return finish(
+                ResearchRunStatus.NEEDS_INFO,
+                ResearchRunStage.TRADING_CLASSIFICATION,
+                reasons,
+            )
         outputs["trading_classification"] = self._ref(classification_artifact)
         add_checkpoint(
             ResearchRunStage.TRADING_CLASSIFICATION,
@@ -823,10 +900,31 @@ class ResearchRunService:
             duration_ms=self._elapsed(stage_started),
             cache_hit=classification_artifact in previous_artifacts,
         )
+        stage_started = perf_counter()
+        (
+            final_protocol,
+            _paper_decision,
+            final_protocol_artifact,
+            paper_decision_artifact,
+        ) = self._freeze_classified_protocol(
+            request=request,
+            decision=execution.decision,
+            committee_protocol=execution.protocol,
+            decision_artifact=decision_artifact,
+            committee_protocol_artifact=protocol_artifact,
+            classification_artifact=classification_artifact,
+        )
+        trade_outcome = final_protocol.final_outcome.value
+        outputs["trade_protocol"] = self._ref(final_protocol_artifact)
+        outputs["paper_decision"] = self._ref(paper_decision_artifact)
         add_checkpoint(
             ResearchRunStage.TRADE_PROTOCOL,
-            artifact_ids=[protocol_artifact],
-            cache_hit=protocol_artifact in previous_artifacts,
+            artifact_ids=[final_protocol_artifact, paper_decision_artifact],
+            duration_ms=self._elapsed(stage_started),
+            cache_hit=(
+                final_protocol_artifact in previous_artifacts
+                and paper_decision_artifact in previous_artifacts
+            ),
         )
         add_checkpoint(
             ResearchRunStage.COMPLETE,
@@ -840,6 +938,130 @@ class ResearchRunService:
         )
 
         # RUN_HELPERS
+
+    def _freeze_classified_protocol(
+        self,
+        *,
+        request: ResearchRunRequest,
+        decision: DecisionPack,
+        committee_protocol: TradeProtocol,
+        decision_artifact: str,
+        committee_protocol_artifact: str,
+        classification_artifact: str,
+    ) -> tuple[ClassifiedTradeProtocol, ResearchPaperDecision, str, str]:
+        decision_ref = self._ref(decision_artifact)
+        committee_ref = self._ref(committee_protocol_artifact)
+        classification_ref = self._ref(classification_artifact)
+        classification = self.classification.load(classification_artifact).release
+        blocking_codes: list[str] = []
+        final_outcome = committee_protocol.outcome
+        if committee_protocol.outcome is TradeProtocolOutcome.APPROVE_SIMULATION:
+            if classification.resolver_version is None:
+                blocking_codes.append("TRADING_CLASSIFICATION_NOT_RUNTIME_RESOLVED")
+            if classification.classification.suspended:
+                blocking_codes.append("INSTRUMENT_SUSPENDED")
+            if classification.special_no_price_limit:
+                blocking_codes.append("SPECIAL_NO_FIXED_PRICE_LIMIT_NOT_PAPER_ELIGIBLE")
+            if (
+                classification.price_limit_regime.value == "FIXED"
+                and classification.price_limit_rate_bps is None
+            ):
+                blocking_codes.append("PRICE_LIMIT_RATE_UNVERIFIED")
+            if classification.classification.board == "BSE":
+                blocking_codes.append("BSE_PAPER_ORDER_ROUNDING_UNSUPPORTED")
+            baseline_artifact = classification.corporate_action_baseline_artifact_id
+            if baseline_artifact is None:
+                blocking_codes.append("CORPORATE_ACTION_BASELINE_REQUIRED")
+            else:
+                baseline = self._load_model(
+                    baseline_artifact,
+                    "TradingClassificationCorporateActionBaseline",
+                    TradingClassificationCorporateActionBaseline,
+                )
+                if not baseline.absence_is_officially_certified:
+                    blocking_codes.append("CORPORATE_ACTION_BASELINE_NOT_OFFICIALLY_CERTIFIED")
+                if baseline.candidate_announcement_ids:
+                    blocking_codes.append("CORPORATE_ACTION_TERMS_REQUIRE_VERIFICATION")
+            if blocking_codes:
+                final_outcome = TradeProtocolOutcome.NEEDS_INFO
+        frozen_hashes = sorted(
+            {
+                decision_ref.object_hash,
+                committee_ref.object_hash,
+                classification_ref.object_hash,
+            }
+        )
+        protocol_seed = {
+            "schema_version": "classified-trade-protocol-v1",
+            "company_id": request.company_id,
+            "as_of": request.as_of.isoformat(),
+            "decision_object_hash": decision_ref.object_hash,
+            "committee_protocol_object_hash": committee_ref.object_hash,
+            "classification_object_hash": classification_ref.object_hash,
+            "final_outcome": final_outcome.value,
+            "blocking_codes": sorted(blocking_codes),
+        }
+        protocol_id = "classified-trade-protocol:" + sha256_bytes(
+            canonical_json_bytes(protocol_seed)
+        )
+        final_protocol = ClassifiedTradeProtocol(
+            protocol_id=protocol_id,
+            company_id=request.company_id,
+            as_of=request.as_of,
+            decision_pack_artifact_id=decision_artifact,
+            decision_pack_object_hash=decision_ref.object_hash,
+            committee_protocol_artifact_id=committee_protocol_artifact,
+            committee_protocol_object_hash=committee_ref.object_hash,
+            trading_classification_artifact_id=classification_artifact,
+            trading_classification_object_hash=classification_ref.object_hash,
+            committee_outcome=committee_protocol.outcome,
+            final_outcome=final_outcome,
+            board=classification.classification.board,
+            risk_status=classification.classification.risk_status,
+            special_regime=classification.special_regime,
+            price_limit_regime=classification.price_limit_regime,
+            price_limit_rate_bps=classification.price_limit_rate_bps,
+            blocking_codes=sorted(blocking_codes),
+            frozen_input_hashes=frozen_hashes,
+            paper_simulation_allowed=(final_outcome is TradeProtocolOutcome.APPROVE_SIMULATION),
+            created_at=request.created_at,
+        )
+        final_ref = self.objects.put_json(final_protocol.model_dump(mode="json"))
+        final_artifact = f"ClassifiedTradeProtocol:{protocol_id}"
+        self._register_exact(
+            artifact_id=final_artifact,
+            artifact_type="ClassifiedTradeProtocol",
+            schema_version=final_protocol.schema_version,
+            object_hash=final_ref.sha256,
+            input_hashes=frozen_hashes,
+        )
+        decision_seed = {
+            "classified_protocol_hash": final_ref.sha256,
+            "outcome": final_outcome.value,
+        }
+        paper_decision_id = "research-paper-decision:" + sha256_bytes(
+            canonical_json_bytes(decision_seed)
+        )
+        paper_decision = ResearchPaperDecision(
+            decision_id=paper_decision_id,
+            company_id=request.company_id,
+            as_of=request.as_of,
+            classified_protocol_artifact_id=final_artifact,
+            classified_protocol_object_hash=final_ref.sha256,
+            outcome=final_outcome,
+            paper_simulation_eligible=(final_outcome is TradeProtocolOutcome.APPROVE_SIMULATION),
+            created_at=request.created_at,
+        )
+        paper_ref = self.objects.put_json(paper_decision.model_dump(mode="json"))
+        paper_artifact = f"ResearchPaperDecision:{paper_decision_id}"
+        self._register_exact(
+            artifact_id=paper_artifact,
+            artifact_type="ResearchPaperDecision",
+            schema_version=paper_decision.schema_version,
+            object_hash=paper_ref.sha256,
+            input_hashes=[final_ref.sha256],
+        )
+        return final_protocol, paper_decision, final_artifact, paper_artifact
 
     def _finish_report(
         self,
@@ -862,16 +1084,31 @@ class ResearchRunService:
         provider_calls_before: int,
         trade_outcome: str | None,
     ) -> ResearchRunReport:
+        stage_wall_time_ms = {
+            checkpoint.stage.value: checkpoint.duration_ms for checkpoint in checkpoints
+        }
+        stage_cache_hits = {
+            checkpoint.stage.value: checkpoint.cache_hit for checkpoint in checkpoints
+        }
+        context_data = {
+            "selected_artifacts": sorted(ref.artifact_id for ref in outputs.values()),
+            "artifact_byte_size": knowledge_context_bytes,
+            "created_at": request.created_at,
+        }
+        context_data["estimated_text_" + "tokens"] = knowledge_estimated_tokens
+        context_budget = ContextBudgetReport.model_validate(context_data)
         performance_data = {
             "wall_time_ms": max(0, int((perf_counter() - started) * 1000)),
             "knowledge_top_k_latency_ms": knowledge_latency,
             "context_bytes": knowledge_context_bytes,
             "estimated_token_limit": budget_limit,
             "cache_hit_count": cache_hits,
+            "stage_wall_time_ms": dict(sorted(stage_wall_time_ms.items())),
+            "stage_cache_hits": dict(sorted(stage_cache_hits.items())),
+            "context_budget": context_budget,
             "provider_call_count": max(
                 0,
-                int(getattr(self.knowledge_provider, "call_count", 0))
-                - provider_calls_before,
+                int(getattr(self.knowledge_provider, "call_count", 0)) - provider_calls_before,
             ),
             "created_at": request.created_at,
         }
@@ -942,8 +1179,7 @@ class ResearchRunService:
             "status": status.value,
             "stage": stage.value,
             "outputs": {
-                key: value.model_dump(mode="json")
-                for key, value in sorted(outputs.items())
+                key: value.model_dump(mode="json") for key, value in sorted(outputs.items())
             },
             "reasons": sorted(set(reasons)),
             "trade_outcome": trade_outcome,

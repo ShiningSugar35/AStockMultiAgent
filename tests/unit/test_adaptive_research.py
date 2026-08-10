@@ -210,6 +210,7 @@ def test_no_study_status_is_stable_fail_closed_and_has_no_database_writes(
         is AdaptiveResearchCapabilityStatus.NOT_ENTERED_BY_DESIGN
     )
     assert first.phase7_audit_status == "NOT_RUN"
+    assert first.user_admission_status == "NOT_ADMITTED"
     assert first.reason_codes == ["PHASE7_STUDY_NOT_RUN"]
     assert first.shadow_policy_version == "shadow-evaluation-policy-v2"
     assert first.observation_month_gap == Decimal("12")
@@ -282,6 +283,7 @@ def test_eligible_admission_still_requires_explicit_versioned_approval() -> None
         is AdaptiveResearchNextStage.EXPLICIT_RULE_RESEARCH_APPROVAL
     )
     assert result.reason_codes == ["EXPLICIT_RULE_RESEARCH_APPROVAL_REQUIRED"]
+    assert result.user_admission_status == "NOT_ADMITTED"
     assert result.shadow_report_id == "report:ready"
     assert result.phase8_admission_id == "admission:ready"
     assert result.observation_months == Decimal("12.25")

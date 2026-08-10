@@ -4,6 +4,8 @@ effective_from: 2026-07-06
 policy:
   history_before_effective_from: FAIL_CLOSED
   unknown_board_or_risk_status: FAIL_CLOSED
+  board_resolution: FROZEN_OFFICIAL_CODE_RULES_ONLY
+  suspension_resolution: VERIFIED_CALENDAR_AND_DAILY_ONLY
   unsupported_regimes:
     - IPO_FIRST_FIVE_DAYS
     - RELISTING_FIRST_DAY
@@ -14,6 +16,12 @@ policy:
     - NON_ORDINARY_A_SHARE
     - SUSPENDED
 authorization_keys: []
+board_rules:
+  - {market: XSHG, board: STAR, symbol_prefixes: ["688"], effective_from: 2026-07-06, no_fixed_price_limit_first_n_sessions: 5, source_urls: ["https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"]}
+  - {market: XSHG, board: MAIN, symbol_prefixes: ["600", "601", "603", "605"], effective_from: 2026-07-06, no_fixed_price_limit_first_n_sessions: 5, source_urls: ["https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"]}
+  - {market: XSHE, board: CHINEXT, symbol_prefixes: ["300", "301"], effective_from: 2026-07-06, no_fixed_price_limit_first_n_sessions: 5, source_urls: ["https://www.szse.cn/lawrules/rule/allrules/bussiness/t20260424_620190.html", "https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf"]}
+  - {market: XSHE, board: MAIN, symbol_prefixes: ["000", "001", "002", "003"], effective_from: 2026-07-06, no_fixed_price_limit_first_n_sessions: 5, source_urls: ["https://www.szse.cn/lawrules/rule/allrules/bussiness/t20260424_620190.html", "https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf"]}
+  - {market: BJSE, board: BSE, symbol_prefixes: ["4", "8", "9"], effective_from: 2026-07-06, no_fixed_price_limit_first_n_sessions: 1, source_urls: ["https://www.bse.cn/jygl_list/200028217.html"]}
 price_limit_rules:
   - {market: XSHG, board: MAIN, risk_status: NORMAL, effective_from: 2026-07-06, rate_bps: 1000, source_urls: ["https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"]}
   - {market: XSHG, board: MAIN, risk_status: RISK_WARNING, effective_from: 2026-07-06, rate_bps: 1000, source_urls: ["https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"]}

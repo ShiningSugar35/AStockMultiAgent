@@ -46,6 +46,11 @@ class RepositoryKnowledgeSkillProvider:
         self._cache: dict[str, KnowledgeSkillSelection] = {}
         self.call_count = 0
 
+    def default_run_id(self) -> str | None:
+        """Return the latest published immutable registry base run."""
+
+        return self.repository.latest_published_run_id()
+
     def status(self, run_id: str) -> KnowledgeProviderStatus:
         completion = self.repository.completion_status(run_id)
         total = int(completion["total_skill_count"])
@@ -123,10 +128,7 @@ class RepositoryKnowledgeSkillProvider:
                 rejected_count=rejected,
                 eligible_skill_count=0,
             )
-        if (
-            self.repository.artifact_object_hash(release_artifact_id)
-            != release_object_hash
-        ):
+        if self.repository.artifact_object_hash(release_artifact_id) != release_object_hash:
             return KnowledgeProviderStatus(
                 run_id=run_id,
                 status=KnowledgeProviderReadiness.NEEDS_INFO,
@@ -153,10 +155,7 @@ class RepositoryKnowledgeSkillProvider:
                 rejected_count=rejected,
                 eligible_skill_count=0,
             )
-        if any(
-            not self.objects.verify(str(member["skill_object_hash"]))
-            for member in members
-        ):
+        if any(not self.objects.verify(str(member["skill_object_hash"])) for member in members):
             return KnowledgeProviderStatus(
                 run_id=run_id,
                 status=KnowledgeProviderReadiness.NEEDS_INFO,
@@ -463,8 +462,7 @@ class RepositoryKnowledgeSkillProvider:
                 or skill_payload.get("skill_name") != str(row["skill_name"])
                 or skill_payload.get("primary_module") != str(row["primary_module"])
                 or skill_payload.get("secondary_modules") != secondary_values
-                or skill_payload.get("decision_question")
-                != str(row["decision_question"])
+                or skill_payload.get("decision_question") != str(row["decision_question"])
                 or skill_payload.get("core_principle") != str(row["core_principle"])
                 or skill_payload.get("formal_committee_weight_allowed") is not False
                 or payload_source_hashes != member_source_hashes

@@ -57,9 +57,7 @@ class AdaptiveResearchStatusService:
         self.shadow_service = shadow_service
         self.repository = shadow_service.repository
         self.object_store = shadow_service.object_store
-        self._default_thresholds = self._policy_thresholds(
-            shadow_service.configured_policy
-        )
+        self._default_thresholds = self._policy_thresholds(shadow_service.configured_policy)
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def status(self, study_id: str | None = None) -> AdaptiveResearchStatusReport:
@@ -128,11 +126,7 @@ class AdaptiveResearchStatusService:
                 thresholds=thresholds,
             )
         report = self.repository.get_report(report_id)
-        if (
-            report is None
-            or report.report_id != report_id
-            or report.study_id != resolved_study_id
-        ):
+        if report is None or report.report_id != report_id or report.study_id != resolved_study_id:
             reasons.add("BLOCKED_BY_INTEGRITY")
             reasons.add("PHASE7_REPORT_LINEAGE_INVALID")
             return self._build(
@@ -144,9 +138,7 @@ class AdaptiveResearchStatusService:
 
         counts = self._report_counts(report)
         thresholds = self._report_thresholds(report)
-        admission_summary = self.repository.latest_admission_summary(
-            resolved_study_id
-        )
+        admission_summary = self.repository.latest_admission_summary(resolved_study_id)
         if admission_summary is None:
             reasons.add("PHASE8_ADMISSION_NOT_AVAILABLE")
             return self._build(
@@ -195,8 +187,7 @@ class AdaptiveResearchStatusService:
             audit_status = "PARTIAL"
 
         eligible = (
-            admission.status
-            is Phase8AdmissionStatus.ELIGIBLE_RULE_STATE_MACHINE_RESEARCH
+            admission.status is Phase8AdmissionStatus.ELIGIBLE_RULE_STATE_MACHINE_RESEARCH
             and audit_status == "PASS"
         )
         if eligible:
@@ -237,8 +228,7 @@ class AdaptiveResearchStatusService:
         qualifying_folds = max(
             (
                 sum(
-                    fold.independent_decision_count
-                    >= report.required_decisions_per_fold
+                    fold.independent_decision_count >= report.required_decisions_per_fold
                     for fold in comparison.folds
                 )
                 for comparison in report.comparisons
@@ -263,9 +253,7 @@ class AdaptiveResearchStatusService:
         return {
             "shadow_policy_version": policy.policy_version,
             "required_observation_months": policy.phase8_observation_months,
-            "required_independent_decision_count": (
-                policy.minimum_independent_decisions
-            ),
+            "required_independent_decision_count": (policy.minimum_independent_decisions),
             "required_walk_forward_fold_count": policy.minimum_walk_forward_folds,
             "required_decisions_per_fold": policy.minimum_decisions_per_fold,
             "required_market_regime_count": policy.minimum_regime_count,
@@ -276,15 +264,9 @@ class AdaptiveResearchStatusService:
     def _report_thresholds(report: ShadowEvaluationReport) -> _AdaptiveThresholds:
         return {
             "shadow_policy_version": report.policy_version,
-            "required_observation_months": (
-                report.required_phase8_observation_months
-            ),
-            "required_independent_decision_count": (
-                report.required_independent_decisions
-            ),
-            "required_walk_forward_fold_count": (
-                report.required_walk_forward_folds
-            ),
+            "required_observation_months": (report.required_phase8_observation_months),
+            "required_independent_decision_count": (report.required_independent_decisions),
+            "required_walk_forward_fold_count": (report.required_walk_forward_folds),
             "required_decisions_per_fold": report.required_decisions_per_fold,
             "required_market_regime_count": report.required_regime_count,
             "required_decisions_per_regime": report.required_decisions_per_regime,
@@ -346,13 +328,11 @@ class AdaptiveResearchStatusService:
     ) -> AdaptiveResearchStatusReport:
         resolved_thresholds = thresholds or self._default_thresholds
         observation_month_gap = max(
-            Decimal(resolved_thresholds["required_observation_months"])
-            - observation_months,
+            Decimal(resolved_thresholds["required_observation_months"]) - observation_months,
             Decimal("0"),
         )
         independent_decision_gap = max(
-            resolved_thresholds["required_independent_decision_count"]
-            - independent_decision_count,
+            resolved_thresholds["required_independent_decision_count"] - independent_decision_count,
             0,
         )
         qualifying_walk_forward_fold_gap = max(
@@ -361,8 +341,7 @@ class AdaptiveResearchStatusService:
             0,
         )
         qualifying_market_regime_gap = max(
-            resolved_thresholds["required_market_regime_count"]
-            - qualifying_market_regime_count,
+            resolved_thresholds["required_market_regime_count"] - qualifying_market_regime_count,
             0,
         )
         identity = {
@@ -377,19 +356,16 @@ class AdaptiveResearchStatusService:
             "phase8_admission_object_sha256": phase8_admission_object_sha256,
             "phase8_admission_status": phase8_admission_status,
             "phase7_audit_status": phase7_audit_status,
+            "user_admission_status": "NOT_ADMITTED",
             "capability_status": capability_status,
             "observation_months": observation_months,
             "independent_decision_count": independent_decision_count,
             "mature_observation_count": mature_observation_count,
-            "qualifying_walk_forward_fold_count": (
-                qualifying_walk_forward_fold_count
-            ),
+            "qualifying_walk_forward_fold_count": (qualifying_walk_forward_fold_count),
             "qualifying_market_regime_count": qualifying_market_regime_count,
             "observation_month_gap": observation_month_gap,
             "independent_decision_gap": independent_decision_gap,
-            "qualifying_walk_forward_fold_gap": (
-                qualifying_walk_forward_fold_gap
-            ),
+            "qualifying_walk_forward_fold_gap": (qualifying_walk_forward_fold_gap),
             "qualifying_market_regime_gap": qualifying_market_regime_gap,
             "reason_codes": sorted(set(reason_codes)),
             "adaptive_weights_enabled": False,
@@ -414,33 +390,21 @@ class AdaptiveResearchStatusService:
             observation_months=observation_months,
             independent_decision_count=independent_decision_count,
             mature_observation_count=mature_observation_count,
-            qualifying_walk_forward_fold_count=(
-                qualifying_walk_forward_fold_count
-            ),
+            qualifying_walk_forward_fold_count=(qualifying_walk_forward_fold_count),
             qualifying_market_regime_count=qualifying_market_regime_count,
-            required_observation_months=resolved_thresholds[
-                "required_observation_months"
-            ],
+            required_observation_months=resolved_thresholds["required_observation_months"],
             required_independent_decision_count=resolved_thresholds[
                 "required_independent_decision_count"
             ],
             required_walk_forward_fold_count=resolved_thresholds[
                 "required_walk_forward_fold_count"
             ],
-            required_decisions_per_fold=resolved_thresholds[
-                "required_decisions_per_fold"
-            ],
-            required_market_regime_count=resolved_thresholds[
-                "required_market_regime_count"
-            ],
-            required_decisions_per_regime=resolved_thresholds[
-                "required_decisions_per_regime"
-            ],
+            required_decisions_per_fold=resolved_thresholds["required_decisions_per_fold"],
+            required_market_regime_count=resolved_thresholds["required_market_regime_count"],
+            required_decisions_per_regime=resolved_thresholds["required_decisions_per_regime"],
             observation_month_gap=observation_month_gap,
             independent_decision_gap=independent_decision_gap,
-            qualifying_walk_forward_fold_gap=(
-                qualifying_walk_forward_fold_gap
-            ),
+            qualifying_walk_forward_fold_gap=(qualifying_walk_forward_fold_gap),
             qualifying_market_regime_gap=qualifying_market_regime_gap,
             reason_codes=sorted(set(reason_codes)),
             adaptive_weights_enabled=False,

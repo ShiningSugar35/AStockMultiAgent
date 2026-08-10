@@ -87,6 +87,14 @@ class CommitteeRepository:
             self.object_store.get_bytes(str(row["object_hash"]))
         )
 
+    def latest_assessment_summary(self, company_id: str) -> dict[str, object] | None:
+        return self._one(
+            "SELECT assessment_id,company_id,decision_scope,as_of,evidence_count,"
+            "object_hash,request_hash,created_at FROM committee_assessment_index "
+            "WHERE company_id=? ORDER BY as_of DESC,created_at DESC,assessment_id DESC LIMIT 1",
+            (company_id,),
+        )
+
     def register_assessment(
         self,
         assessment: CommitteeAssessmentSnapshot,

@@ -128,6 +128,37 @@ class FinancialIntegrityRepository:
             created_at=datetime.fromisoformat(str(row["created_at"])),
         )
 
+    def latest_succeeded_run(
+        self,
+        company_id: str,
+        *,
+        as_of: datetime,
+    ) -> FinancialAuditRunRecord | None:
+        """Return the latest succeeded audit visible no later than the requested as_of."""
+
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT audit_run_id FROM financial_audit_run "
+                "WHERE company_id=? AND status='SUCCEEDED' ORDER BY created_at DESC",
+                (company_id,),
+            ).fetchall()
+        candidates: list[FinancialAuditRunRecord] = []
+        for row in rows:
+            record = self.get_run(str(row["audit_run_id"]))
+            if record is None:
+                continue
+            try:
+                record_as_of = datetime.fromisoformat(record.as_of)
+            except ValueError:
+                continue
+            if record_as_of <= as_of and record.report_object_hash:
+                candidates.append(record)
+        return max(
+            candidates,
+            key=lambda item: datetime.fromisoformat(item.as_of),
+            default=None,
+        )
+
     def get_pack(self, audit_run_id: str) -> FinancialIntegrityEvidencePack | None:
         record = self.get_run(audit_run_id)
         if record is None or record.report_object_hash is None:

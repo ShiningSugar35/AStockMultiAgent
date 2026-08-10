@@ -43,10 +43,10 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     for required in (
         "开发计划只写未完成项",
         "维护契约",
-        "K5-D5",
-        "K5-D6",
-        "知乎图片证据链",
-        "OpenCode/DeepSeek",
+        "Phase 5：COMPLETE",
+        "Phase 5 已完成后的不可变边界",
+        "composite registry",
+        "Priority 1：可恢复的单股票 Research Runtime",
     ):
         assert required in plan
     for required in (
@@ -54,11 +54,16 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
         "当前能力",
         "Phase 5 采集覆盖",
         "论证级语义链",
+        "三位知乎作者真实视觉证据与视觉增强 Skill",
+        "VisualEvidencePack",
+        "COMPOSITE_REGISTRY_READY",
         "《价值投资功法》视觉证据链",
         "OpenCode 边界",
         "research-skills-v2",
     ):
         assert required in acceptance
+    assert "K5-D5" not in plan
+    assert "K5-D6" not in plan
     assert "Spark 首次实现" not in acceptance
     assert "Sol takeover" not in acceptance
     assert "SER-1" not in plan

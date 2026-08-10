@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -14,6 +15,8 @@ from astock.knowledge.completion_service import (
     ZhihuVisualCompletionService,
 )
 from astock.knowledge.provider import RepositoryKnowledgeSkillProvider
+from astock.knowledge.visual_pipeline import ZhihuVisualPipelineService
+from astock.knowledge.visual_skill_service import VisualSkillService
 from astock.schemas.knowledge_completion import (
     KnowledgeProviderReadiness,
     KnowledgeSkillQuery,
@@ -177,6 +180,113 @@ def register_knowledge_completion_commands(
     def visual_status() -> None:
         _, state, objects = services()
         emit(ZhihuVisualCompletionService(state, objects).status())
+
+    @app.command("knowledge-zhihu-visual-plan")
+    def visual_plan(author_source_id: Annotated[str, typer.Argument()]) -> None:
+        _, state, objects = services()
+        pipeline = ZhihuVisualPipelineService(state, objects)
+        manifest = pipeline.plan(author_source_id)
+        artifact_id = f"ZhihuVisualInventoryManifest:{manifest.manifest_id}"
+        record = state.artifact_record(artifact_id)
+        reason_counts = Counter(
+            reason for entry in manifest.entries for reason in entry.reason_codes
+        )
+        emit(
+            {
+                "run_id": manifest.run_id,
+                "author_source_id": manifest.author_source_id,
+                "semantic_run_id": manifest.semantic_run_id,
+                "inventory_artifact_id": artifact_id,
+                "inventory_object_hash": record["object_hash"] if record else None,
+                "source_content_count": manifest.source_content_count,
+                "image_reference_count": manifest.image_reference_count,
+                "ready_for_capture_count": manifest.ready_for_capture_count,
+                "blocked_count": manifest.blocked_count,
+                "reason_counts": dict(sorted(reason_counts.items())),
+                "formal_committee_weight_allowed": False,
+            }
+        )
+
+    @app.command("knowledge-zhihu-visual-run")
+    def visual_run(
+        author_source_id: Annotated[str, typer.Argument()],
+        max_images: Annotated[int | None, typer.Option("--max-images", min=1)] = None,
+        request_interval_seconds: Annotated[
+            float,
+            typer.Option("--request-interval-seconds", min=0.0),
+        ] = 0.0,
+        workers: Annotated[int, typer.Option("--workers", min=1, max=8)] = 4,
+    ) -> None:
+        _, state, objects = services()
+        emit(
+            ZhihuVisualPipelineService(state, objects).run(
+                author_source_id,
+                max_images=max_images,
+                request_interval_seconds=request_interval_seconds,
+                workers=workers,
+            )
+        )
+
+    @app.command("knowledge-zhihu-visual-run-status")
+    def visual_run_status(author_source_id: Annotated[str, typer.Argument()]) -> None:
+        _, state, objects = services()
+        emit(ZhihuVisualPipelineService(state, objects).status(author_source_id))
+
+    @app.command("knowledge-visual-skill-generate")
+    def visual_skill_generate(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        _, state, objects = services()
+        emit(VisualSkillService(state, objects).generate(base_run_id))
+
+    @app.command("knowledge-visual-skill-review")
+    def visual_skill_review(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        _, state, objects = services()
+        emit(VisualSkillService(state, objects).review_all(base_run_id))
+
+    @app.command("knowledge-visual-skill-publish")
+    def visual_skill_publish(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        _, state, objects = services()
+        emit(VisualSkillService(state, objects).publish(base_run_id))
+
+    @app.command("knowledge-visual-skill-audit")
+    def visual_skill_audit(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        _, state, objects = services()
+        emit(VisualSkillService(state, objects).audit(base_run_id))
+
+    @app.command("knowledge-visual-skill-status")
+    def visual_skill_status(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        _, state, objects = services()
+        emit(VisualSkillService(state, objects).status(base_run_id))
+
+    @app.command("knowledge-visual-skill-finalize")
+    def visual_skill_finalize(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        _, state, objects = services()
+        service = VisualSkillService(state, objects)
+        generation = service.generate(base_run_id)
+        preflight = service.audit(base_run_id)
+        if preflight["status"] != "PASS":
+            raise RuntimeError(f"visual Skill preflight failed: {preflight['findings']}")
+        review = service.review_all(base_run_id)
+        release = service.publish(base_run_id)
+        audit = service.audit(base_run_id)
+        provider = RepositoryKnowledgeSkillProvider(
+            KnowledgeCompletionRepository(state),
+            objects,
+        ).status(base_run_id)
+        if audit["status"] != "PASS":
+            raise RuntimeError(f"visual Skill final audit failed: {audit['findings']}")
+        if provider.status is not KnowledgeProviderReadiness.READY:
+            raise RuntimeError(f"composite provider is not READY: {provider.reason_code}")
+        emit(
+            {
+                "generation": generation,
+                "preflight": preflight,
+                "review": review,
+                "release": release,
+                "audit": audit,
+                "provider": provider.model_dump(mode="json"),
+                "formal_committee_weight_allowed": False,
+            }
+        )
 
 
 __all__ = ["register_knowledge_completion_commands"]

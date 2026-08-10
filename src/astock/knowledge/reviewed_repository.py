@@ -317,7 +317,10 @@ class ReviewedKnowledgeRepository:
                 "WHERE run_id=? ORDER BY argument_unit_id",
                 (run_id,),
             ).fetchall()
-        return tuple(ReviewedArgumentUnit.model_validate_json(row["unit_json"]) for row in argument_rows)
+        return tuple(
+            ReviewedArgumentUnit.model_validate_json(row["unit_json"])
+            for row in argument_rows
+        )
 
     def save_arguments(
         self,
@@ -692,11 +695,23 @@ class ReviewedKnowledgeRepository:
     def delete_distillation_artifacts(self, run_id: str) -> None:
         with self.state.transaction() as connection:
             table_deletes: list[tuple[str, str | None]] = [
-                ("knowledge_viewpoint_card_au_ref", "card_id IN (SELECT card_id FROM knowledge_viewpoint_card WHERE run_id=?)"),
+                (
+                    "knowledge_viewpoint_card_au_ref",
+                    "card_id IN (SELECT card_id FROM knowledge_viewpoint_card WHERE run_id=?)",
+                ),
                 ("knowledge_viewpoint_card", "run_id=?"),
-                ("knowledge_method_rule_au_ref", "rule_id IN (SELECT rule_id FROM knowledge_method_rule WHERE run_id=?)"),
-                ("knowledge_reviewed_skill_rule_ref", "skill_id IN (SELECT skill_id FROM knowledge_reviewed_skill WHERE run_id=?)"),
-                ("knowledge_reviewed_skill_au_ref", "skill_id IN (SELECT skill_id FROM knowledge_reviewed_skill WHERE run_id=?)"),
+                (
+                    "knowledge_method_rule_au_ref",
+                    "rule_id IN (SELECT rule_id FROM knowledge_method_rule WHERE run_id=?)",
+                ),
+                (
+                    "knowledge_reviewed_skill_rule_ref",
+                    "skill_id IN (SELECT skill_id FROM knowledge_reviewed_skill WHERE run_id=?)",
+                ),
+                (
+                    "knowledge_reviewed_skill_au_ref",
+                    "skill_id IN (SELECT skill_id FROM knowledge_reviewed_skill WHERE run_id=?)",
+                ),
                 ("knowledge_reviewed_skill", "run_id=?"),
                 ("knowledge_method_rule", "run_id=?"),
                 ("knowledge_author_skill_coverage", "run_id=?"),

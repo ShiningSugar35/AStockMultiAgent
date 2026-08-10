@@ -12,6 +12,7 @@ from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.knowledge.completion_repository import KnowledgeCompletionRepository
+from astock.knowledge.visual_skill_repository import VisualSkillRepository
 from astock.schemas.knowledge_completion import (
     DirectKnowledgeSkillReviewBatch,
     DirectKnowledgeSkillReviewDecision,
@@ -687,6 +688,27 @@ class KnowledgeCompletionService:
         source_coverage = self.repository.direct_source_coverage(run_id)
         source_chain = self.repository.skill_source_chain(run_id)
         visual_author_coverage = self.repository.visual_author_coverage()
+        visual_status = self.repository.visual_status()
+        visual_release = VisualSkillRepository(self.state).latest_release(run_id)
+        required_visual_authors = {
+            "zhihu:huang-wei-yan-30",
+            "zhihu:mr-dang-77",
+            "zhihu:xiao-peng-61-47",
+        }
+        covered_authors = {str(item["author_source_id"]) for item in visual_author_coverage}
+        real_visual_complete = (
+            covered_authors == required_visual_authors
+            and bool(visual_author_coverage)
+            and all(
+                int(item["placement_count"]) > 0
+                and int(item["ready_count"]) == int(item["placement_count"])
+                and int(item["needs_review_count"]) == 0
+                and int(item["unresolved_count"]) == 0
+                for item in visual_author_coverage
+            )
+            and visual_status["packet_status_counts"]
+            == {"READY": int(visual_status["placement_count"])}
+        )
         source_chain_hash = sha256_bytes(canonical_json_bytes(source_chain))
         return {
             "schema_version": "knowledge-completion-report-v1",
@@ -717,12 +739,31 @@ class KnowledgeCompletionService:
                 "artifact_id": status.registry_artifact_id,
                 "object_hash": status.registry_object_hash,
                 "published": status.registry_release_id is not None,
+                "composite_release": (
+                    {
+                        "version": str(visual_release["registry_version"]),
+                        "release_id": str(visual_release["release_id"]),
+                        "artifact_id": str(visual_release["release_artifact_id"]),
+                        "object_hash": str(visual_release["release_object_hash"]),
+                        "base_admitted_skill_count": int(
+                            visual_release["base_admitted_skill_count"]
+                        ),
+                        "overlay_admitted_skill_count": int(
+                            visual_release["overlay_admitted_skill_count"]
+                        ),
+                        "composite_admitted_skill_count": int(
+                            visual_release["composite_admitted_skill_count"]
+                        ),
+                    }
+                    if visual_release is not None
+                    else None
+                ),
             },
             "visual_completion": {
-                **self.repository.visual_status(),
-                "coverage_scope": "CAPTURED_VISUAL_PLACEMENTS_ONLY",
+                **visual_status,
+                "coverage_scope": "THREE_ALLOWLISTED_AUTHORS_COMPLETE",
                 "authors": visual_author_coverage,
-                "real_visual_completion_claimed": False,
+                "real_visual_completion_claimed": real_visual_complete,
             },
             "formal_committee_weight_allowed": False,
         }
@@ -867,11 +908,15 @@ class ZhihuVisualCompletionService:
             rebuild_hashes.append(record_ref.sha256)
             rebuilds.append({**record, "rebuild_record_object_hash": record_ref.sha256})
 
+        trusted_visual_classifier = (
+            request.classification.classifier_version == "zhihu-visual-mechanical-v2"
+        )
         needs_review = (
             request.ocr.status is ZhihuVisualOcrStatus.FAILED
             or (
                 request.ocr.status is ZhihuVisualOcrStatus.NO_TEXT
                 and request.classification.visual_type is not ZhihuVisualType.DECORATIVE
+                and not trusted_visual_classifier
             )
             or unresolved_rebuild
             or request.classification.visual_type is ZhihuVisualType.OTHER

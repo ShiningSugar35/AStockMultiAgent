@@ -9,6 +9,7 @@ from time import perf_counter
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.knowledge.completion_repository import KnowledgeCompletionRepository
+from astock.knowledge.visual_skill_repository import VisualSkillRepository
 from astock.schemas.direct_source_distillation import DirectSkillModule
 from astock.schemas.knowledge_completion import (
     KnowledgeAdmissionBasis,
@@ -40,6 +41,7 @@ class RepositoryKnowledgeSkillProvider:
         objects: ObjectStore,
     ) -> None:
         self.repository = repository
+        self.visual_repository = VisualSkillRepository(repository.state)
         self.objects = objects
         self._cache: dict[str, KnowledgeSkillSelection] = {}
         self.call_count = 0
@@ -184,7 +186,7 @@ class RepositoryKnowledgeSkillProvider:
                 rejected_count=rejected,
                 eligible_skill_count=0,
             )
-        return KnowledgeProviderStatus(
+        baseline = KnowledgeProviderStatus(
             run_id=run_id,
             status=KnowledgeProviderReadiness.READY,
             mode=KnowledgeProviderMode.REGISTRY_RELEASE,
@@ -198,6 +200,94 @@ class RepositoryKnowledgeSkillProvider:
             registry_release_id=str(release["release_id"]),
             registry_artifact_id=str(release["release_artifact_id"]),
             registry_object_hash=str(release["release_object_hash"]),
+        )
+        return self._composite_status(baseline, release)
+
+    def _composite_status(
+        self,
+        baseline: KnowledgeProviderStatus,
+        base_release: dict[str, object],
+    ) -> KnowledgeProviderStatus:
+        overlay = self.visual_repository.latest_release(baseline.run_id)
+        if overlay is None:
+            return baseline
+        if (
+            str(overlay["base_registry_release_id"]) != str(base_release["release_id"])
+            or str(overlay["base_registry_object_hash"]) != str(base_release["release_object_hash"])
+            or int(overlay["base_admitted_skill_count"]) != baseline.eligible_skill_count
+        ):
+            return self._blocked_composite_status(baseline, "COMPOSITE_BASE_REGISTRY_DRIFT")
+        release_hash = str(overlay["release_object_hash"])
+        artifact_id = str(overlay["release_artifact_id"])
+        if not self.objects.verify(release_hash):
+            return self._blocked_composite_status(baseline, "COMPOSITE_REGISTRY_OBJECT_MISSING")
+        if self.repository.artifact_object_hash(artifact_id) != release_hash:
+            return self._blocked_composite_status(baseline, "COMPOSITE_REGISTRY_ARTIFACT_DRIFT")
+        members = self.visual_repository.release_members(str(overlay["release_id"]))
+        overlay_admitted = int(overlay["overlay_admitted_skill_count"])
+        if len(members) != overlay_admitted:
+            return self._blocked_composite_status(baseline, "COMPOSITE_REGISTRY_MEMBER_COUNT_DRIFT")
+        for member in members:
+            skill_hash = str(member["skill_object_hash"])
+            if not self.objects.verify(skill_hash):
+                return self._blocked_composite_status(
+                    baseline,
+                    "COMPOSITE_REGISTRY_MEMBER_OBJECT_MISSING",
+                )
+            if self.repository.artifact_object_hash(str(member["skill_artifact_id"])) != skill_hash:
+                return self._blocked_composite_status(
+                    baseline,
+                    "COMPOSITE_REGISTRY_MEMBER_ARTIFACT_DRIFT",
+                )
+            try:
+                source_hashes = json.loads(str(member["source_hashes_json"]))
+            except json.JSONDecodeError:
+                return self._blocked_composite_status(
+                    baseline,
+                    "COMPOSITE_REGISTRY_SOURCE_HASHES_INVALID",
+                )
+            if not isinstance(source_hashes, list) or not all(
+                isinstance(item, str) and self.objects.verify(item) for item in source_hashes
+            ):
+                return self._blocked_composite_status(
+                    baseline,
+                    "COMPOSITE_REGISTRY_SOURCE_OBJECT_MISSING",
+                )
+        composite = int(overlay["composite_admitted_skill_count"])
+        if composite != baseline.eligible_skill_count + overlay_admitted:
+            return self._blocked_composite_status(baseline, "COMPOSITE_REGISTRY_COUNT_DRIFT")
+        return KnowledgeProviderStatus(
+            run_id=baseline.run_id,
+            status=KnowledgeProviderReadiness.READY,
+            mode=KnowledgeProviderMode.REGISTRY_RELEASE,
+            reason_code="COMPOSITE_REGISTRY_READY",
+            total_skill_count=baseline.total_skill_count + int(overlay["overlay_candidate_count"]),
+            ready_skill_count=baseline.ready_skill_count,
+            pending_review_count=0,
+            approved_count=baseline.approved_count + int(overlay["overlay_approved_count"]),
+            rejected_count=baseline.rejected_count + int(overlay["overlay_rejected_count"]),
+            eligible_skill_count=composite,
+            registry_release_id=str(overlay["release_id"]),
+            registry_artifact_id=artifact_id,
+            registry_object_hash=release_hash,
+        )
+
+    @staticmethod
+    def _blocked_composite_status(
+        baseline: KnowledgeProviderStatus,
+        reason_code: str,
+    ) -> KnowledgeProviderStatus:
+        return KnowledgeProviderStatus(
+            run_id=baseline.run_id,
+            status=KnowledgeProviderReadiness.NEEDS_INFO,
+            mode=KnowledgeProviderMode.BLOCKED,
+            reason_code=reason_code,
+            total_skill_count=baseline.total_skill_count,
+            ready_skill_count=baseline.ready_skill_count,
+            pending_review_count=0,
+            approved_count=baseline.approved_count,
+            rejected_count=baseline.rejected_count,
+            eligible_skill_count=0,
         )
 
     def _blocked_selection(
@@ -247,6 +337,26 @@ class RepositoryKnowledgeSkillProvider:
         self._cache[cache_key] = selection
         return selection
 
+    def _eligible_rows(
+        self,
+        run_id: str,
+        provider_status: KnowledgeProviderStatus,
+    ) -> list[dict[str, object]]:
+        rows = [dict(row) for row in self.repository.eligible_skill_rows(run_id)]
+        for row in rows:
+            row["skill_origin"] = "DIRECT"
+        overlay = self.visual_repository.latest_release(run_id)
+        if (
+            overlay is not None
+            and provider_status.registry_release_id == str(overlay["release_id"])
+            and provider_status.reason_code == "COMPOSITE_REGISTRY_READY"
+        ):
+            rows.extend(
+                dict(row)
+                for row in self.visual_repository.overlay_skill_rows(str(overlay["release_id"]))
+            )
+        return rows
+
     def select(self, run_id: str, query: KnowledgeSkillQuery) -> KnowledgeSkillSelection:
         started = perf_counter()
         self.call_count += 1
@@ -276,7 +386,7 @@ class RepositoryKnowledgeSkillProvider:
         requested_modules = set(query.modules)
         query_terms = _terms(query.query)
         filtered: list[tuple[dict[str, object], set[str]]] = []
-        for raw_row in self.repository.eligible_skill_rows(run_id):
+        for raw_row in self._eligible_rows(run_id, provider_status):
             row = dict(raw_row)
             skill_hash = str(row["skill_object_hash"])
             skill_json = str(row["skill_json"])
@@ -314,22 +424,42 @@ class RepositoryKnowledgeSkillProvider:
                     started=started,
                 )
             member_source_hashes = sorted(set(source_hash_values))
-            payload_source_hashes = sorted(
-                {
-                    str(item.get("source_object_hash"))
-                    for item in skill_payload.get("source_refs", [])
-                    if isinstance(item, dict) and item.get("source_object_hash")
-                }
-            )
-            expected_status = (
-                "READY_FOR_SHADOW"
-                if str(row["admission_basis"]) == KnowledgeAdmissionBasis.READY.value
-                else "NEEDS_USER_REVIEW"
-            )
+            origin = str(row.get("skill_origin", "DIRECT"))
+            if origin == "VISUAL_OVERLAY":
+                raw_payload_sources = skill_payload.get("source_hashes", [])
+                payload_source_hashes = (
+                    sorted(set(raw_payload_sources))
+                    if isinstance(raw_payload_sources, list)
+                    and all(isinstance(item, str) for item in raw_payload_sources)
+                    else []
+                )
+                binding_valid = (
+                    str(row["admission_basis"]) == KnowledgeAdmissionBasis.APPROVED.value
+                    and str(row["status"]) == "READY_FOR_SHADOW"
+                    and skill_payload.get("status") == "READY_FOR_SHADOW"
+                    and skill_payload.get("community_source_only") is True
+                    and skill_payload.get("factual_use_requires_stronger_source") is True
+                    and skill_payload.get("standalone_visual_distillation") is False
+                    and skill_payload.get("merge_policy") == "MERGE_WITH_BOTH"
+                )
+            else:
+                payload_source_hashes = sorted(
+                    {
+                        str(item.get("source_object_hash"))
+                        for item in skill_payload.get("source_refs", [])
+                        if isinstance(item, dict) and item.get("source_object_hash")
+                    }
+                )
+                expected_status = (
+                    "READY_FOR_SHADOW"
+                    if str(row["admission_basis"]) == KnowledgeAdmissionBasis.READY.value
+                    else "NEEDS_USER_REVIEW"
+                )
+                binding_valid = str(row["status"]) == expected_status
             if (
-                skill_payload.get("final_skill_id") != str(row["final_skill_id"])
+                not binding_valid
+                or skill_payload.get("final_skill_id") != str(row["final_skill_id"])
                 or skill_payload.get("status") != str(row["status"])
-                or str(row["status"]) != expected_status
                 or skill_payload.get("skill_name") != str(row["skill_name"])
                 or skill_payload.get("primary_module") != str(row["primary_module"])
                 or skill_payload.get("secondary_modules") != secondary_values

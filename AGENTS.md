@@ -27,7 +27,7 @@
 - Phase 5 当前目标仅为白名单作者的回答、想法、文章和专栏正文。统一覆盖审计冻结截点及并发回归已完成；专栏按容器关系建模，B1b0 合同门已验收，B1b1 在取得真实无凭据枚举快照前为 `BLOCKED_EXTERNAL_OBSERVATION`，不得猜接口或声称可用。
 - Phase 5 蒸馏粒度固定为 `SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate`；Paragraph 是存储、定位及本地语义辅助视图单位，只有完整 ArgumentUnit 可产生最终语义分数、DeepSeek 输入和 Skill 候选。
 - 图片证据必须经过不可变图片快照、PDF bbox 或 DOM 定位、逐图 OCR、类型和前后 Paragraph 回填；图片 Paragraph 永远不能独立蒸馏，夹在论点与结论之间时必须 `MERGE_WITH_BOTH`。OCR 或上下文不完整时 AU 保持 `NEEDS_REVIEW`。
-- 《价值投资功法》当前视觉覆盖证据为 249 页、57 个含图页、74/74 placements；71 个非装饰图映射到 55 个 AU，11 个 READY、44 个 REVIEW。三位作者已有纯文本 v3 包仍为 `PROVISIONAL_TEXT_VIEW`，知乎图片证据冻结前不得作为最终蒸馏输入。
+- 《价值投资功法》历史视觉覆盖证据仍为 249 页、57 个含图页、74/74 placements；71 个非装饰图映射到 55 个 AU，11 个 READY、44 个 REVIEW。三位知乎作者的真实视觉支线已于 2026-08-10 完成：2,503/2,503 placements、2,306 unique assets、2,503 READY、0 REVIEW/BLOCKED；三份 `VisualEvidencePack` 均 READY。visual Skill generation 评估 951 个真实视觉关联 AU，生成 422 个 admitted overlay Skill、529 个 NO_SKILL；baseline 231 + overlay 422 形成 composite registry 653，`KnowledgeSkillProvider` 状态为 `COMPOSITE_REGISTRY_READY`。后续不得回退为 `PROVISIONAL_TEXT_VIEW`，也不得绕过 composite registry 直接读取 knowledge 表。
 
 ## 行情与模拟盘
 

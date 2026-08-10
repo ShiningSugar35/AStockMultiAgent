@@ -23,11 +23,37 @@ class OcrEngine(Protocol):
 class RapidOcrEngine:
     name = "rapidocr-onnxruntime"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        max_side_len: int | None = None,
+        intra_op_num_threads: int | None = None,
+        inter_op_num_threads: int | None = None,
+    ) -> None:
         from rapidocr_onnxruntime import RapidOCR
 
         self.version = version("rapidocr-onnxruntime")
-        self._engine = RapidOCR()
+        kwargs: dict[str, int] = {}
+        if max_side_len is not None:
+            if max_side_len < 320:
+                raise ValueError("RapidOCR max_side_len must be at least 320")
+            kwargs["max_side_len"] = max_side_len
+        if intra_op_num_threads is not None:
+            if intra_op_num_threads < 1:
+                raise ValueError("RapidOCR intra_op_num_threads must be positive")
+            kwargs["intra_op_num_threads"] = intra_op_num_threads
+        if inter_op_num_threads is not None:
+            if inter_op_num_threads < 1:
+                raise ValueError("RapidOCR inter_op_num_threads must be positive")
+            kwargs["inter_op_num_threads"] = inter_op_num_threads
+        if kwargs:
+            suffix = f"-max{max_side_len}" if max_side_len is not None else ""
+            if intra_op_num_threads is not None:
+                suffix += f"-intra{intra_op_num_threads}"
+            if inter_op_num_threads is not None:
+                suffix += f"-inter{inter_op_num_threads}"
+            self.name = f"rapidocr-onnxruntime{suffix}"
+        self._engine = RapidOCR(**kwargs)  # type: ignore[arg-type]
 
     def recognize(self, image_bytes: bytes) -> OcrResult:
         raw_result, _ = self._engine(image_bytes)

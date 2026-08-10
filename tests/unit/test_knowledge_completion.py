@@ -15,6 +15,7 @@ from astock.knowledge.completion_service import (
     ZhihuVisualCompletionService,
 )
 from astock.knowledge.provider import RepositoryKnowledgeSkillProvider
+from astock.knowledge.visual_skill_service import VisualSkillService
 from astock.schemas.knowledge_completion import (
     DirectKnowledgeSkillReviewBatch,
     DirectKnowledgeSkillReviewSpec,
@@ -32,6 +33,11 @@ from astock.schemas.knowledge_completion import (
     ZhihuVisualOcrStatus,
     ZhihuVisualPacketStatus,
     ZhihuVisualType,
+)
+from astock.schemas.knowledge_visual import (
+    VisualEvidencePack,
+    ZhihuVisualPacketReference,
+    ZhihuVisualPackStatus,
 )
 
 
@@ -520,3 +526,224 @@ def test_zhihu_visual_url_allowlist_rejects_host_confusion() -> None:
                 )
             ],
         )
+
+
+def _seed_visual_overlay_author(state, object_store, author: str, suffix: str) -> None:
+    anchor = datetime(2026, 8, 10, 2, 0, tzinfo=UTC)
+    now = anchor.isoformat()
+    snapshot_ref = object_store.put_json({"author": author, "body": f"fixture-{suffix}"})
+    snapshot_id = f"snapshot:visual-overlay:{suffix}"
+    semantic_run_id = f"knowledge-semantic-run:visual-overlay:{suffix}"
+    item_id = f"semantic-item:visual-overlay:{suffix}"
+    argument_id = f"argument-unit:visual-overlay:{suffix}"
+    content_id = f"content-{suffix}"
+    argument_text = (
+        f"[1|CLAIM] {suffix}估值时不能只看单一倍数，需要把现金流质量、"
+        "行业位置与图表证据共同核对。\n"
+        f"[2|CONCLUSION] {suffix}若图表与正文结论不一致，应回到原始披露并降低判断置信度。"
+    )
+    argument_text_ref = object_store.put_bytes(argument_text.encode("utf-8"))
+    normalized_ref = object_store.put_json({"normalized": suffix})
+    unit_payload = {
+        "argument_unit_id": argument_id,
+        "method_categories": ["VALUATION"],
+        "reason_codes": ["VISUAL_TEST_METHOD"],
+    }
+    previous_ref = object_store.put_json(unit_payload)
+    rebuilt_ref = object_store.put_json({"rebuilt": suffix, "merge_policy": "MERGE_WITH_BOTH"})
+    with state.transaction() as connection:
+        connection.execute(
+            "INSERT INTO source_snapshot_index("
+            "snapshot_id,source_id,object_hash,fetched_at,availability_at,fetch_status) "
+            "VALUES(?,?,?,?,?,?)",
+            (snapshot_id, author, snapshot_ref.sha256, now, now, "SUCCEEDED"),
+        )
+        connection.execute(
+            "INSERT INTO knowledge_semantic_run("
+            "run_id,author_source_id,input_manifest_hash,pipeline_version,stage,run_json,"
+            "started_at,finished_at) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                semantic_run_id,
+                author,
+                sha256_bytes(f"manifest-{suffix}".encode()),
+                "knowledge-semantic-funnel-three-view-v3",
+                "ARGUMENT_UNITS_BUILT",
+                json.dumps({"content_item_count": 1}, separators=(",", ":")),
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO knowledge_semantic_content_item("
+            "item_id,run_id,author_source_id,content_type,content_id,content_version_id,"
+            "source_snapshot_id,source_object_hash,normalized_object_hash,paragraph_count,"
+            "item_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                item_id,
+                semantic_run_id,
+                author,
+                "answers",
+                content_id,
+                f"version-{suffix}",
+                snapshot_id,
+                snapshot_ref.sha256,
+                normalized_ref.sha256,
+                0,
+                json.dumps({"item_id": item_id}, separators=(",", ":")),
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO knowledge_argument_unit("
+            "argument_unit_id,run_id,item_id,author_source_id,content_id,start_ordinal,"
+            "end_ordinal,text_object_hash,status,topic_relevance,"
+            "methodological_completeness,unit_json,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                argument_id,
+                semantic_run_id,
+                item_id,
+                author,
+                content_id,
+                1,
+                2,
+                argument_text_ref.sha256,
+                "READY",
+                0.9,
+                0.9,
+                json.dumps(unit_payload, separators=(",", ":")),
+                now,
+            ),
+        )
+
+    visual_service = ZhihuVisualCompletionService(state, object_store)
+    request = ZhihuVisualCaptureRequest(
+        placement_id=f"zhihu-placement:visual-overlay:{suffix}",
+        source_snapshot_id=snapshot_id,
+        source_item_id=item_id,
+        author_source_id=author,
+        content_id=content_id,
+        image_url=f"https://pic1.zhimg.com/v2-visual-overlay-{suffix}.png",
+        response_mime="image/png",
+        dom_locator=ZhihuDomImageLocator(dom_path="visible-block[1]/img", image_ordinal=1),
+        ocr=ZhihuOcrAttempt(
+            status=ZhihuVisualOcrStatus.SUCCEEDED,
+            engine_version="recorded-ocr-v1",
+            text=f"{suffix} 估值 图表 现金流",
+            confidence=0.95,
+        ),
+        classification=ZhihuVisualClassification(
+            visual_type=ZhihuVisualType.TABLE,
+            classifier_version="recorded-classifier-v1",
+            confidence=0.9,
+        ),
+        preceding_context=ZhihuParagraphContext(
+            paragraph_id=f"paragraph-before-{suffix}",
+            paragraph_ordinal=1,
+            text=f"{suffix}估值前文。",
+        ),
+        following_context=ZhihuParagraphContext(
+            paragraph_id=f"paragraph-after-{suffix}",
+            paragraph_ordinal=2,
+            text=f"{suffix}估值后文。",
+        ),
+        affected_argument_rebuilds=[
+            ZhihuAffectedArgumentRebuild(
+                argument_unit_id=argument_id,
+                previous_argument_object_hash=previous_ref.sha256,
+                rebuilt_argument_object_hash=rebuilt_ref.sha256,
+                status=ZhihuArgumentRebuildStatus.READY,
+            )
+        ],
+    )
+    capture = visual_service.capture(
+        request,
+        b"\x89PNG\r\n\x1a\n" + f"visual-overlay-{suffix}".encode(),
+    )
+    inventory_ref = object_store.put_json({"inventory": suffix})
+    pack = VisualEvidencePack(
+        pack_id=f"visual-evidence-pack:test:{suffix}",
+        run_id=f"zhihu-visual-run:test:{suffix}",
+        author_source_id=author,
+        semantic_run_id=semantic_run_id,
+        inventory_artifact_id=f"inventory:test:{suffix}",
+        inventory_object_hash=inventory_ref.sha256,
+        source_snapshot_ids=[snapshot_id],
+        source_snapshot_object_hashes=[snapshot_ref.sha256],
+        image_reference_count=1,
+        placement_count=1,
+        unique_asset_count=1,
+        ready_count=1,
+        needs_review_count=0,
+        blocked_count=0,
+        status=ZhihuVisualPackStatus.READY,
+        packet_references=[
+            ZhihuVisualPacketReference(
+                placement_id=request.placement_id,
+                packet_artifact_id=capture.packet_artifact_id,
+                packet_object_hash=capture.packet_object_hash,
+                image_object_hash=capture.image_object_hash,
+                packet_status=ZhihuVisualPacketStatus.READY,
+                visual_type=ZhihuVisualType.TABLE,
+                ocr_status=ZhihuVisualOcrStatus.SUCCEEDED.value,
+                created_at=anchor,
+            )
+        ],
+        created_at=anchor,
+    )
+    pack_ref = object_store.put_json(pack.model_dump(mode="json"))
+    state.register_artifact(
+        artifact_id=f"VisualEvidencePack:{pack.pack_id}",
+        artifact_type="VisualEvidencePack",
+        schema_version=pack.schema_version,
+        object_hash=pack_ref.sha256,
+        input_hashes=[inventory_ref.sha256, capture.packet_object_hash],
+    )
+
+
+def test_visual_skill_overlay_publishes_and_provider_reads_composite_registry(
+    state,
+    object_store,
+) -> None:
+    base_run_id = _seed_minimal_direct_run(state, object_store)
+    completion = KnowledgeCompletionService(state, object_store)
+    completion.apply_review_batch(_review_batch(base_run_id))
+    completion.publish_registry(base_run_id)
+    authors = (
+        ("zhihu:mr-dang-77", "dang"),
+        ("zhihu:huang-wei-yan-30", "huang"),
+        ("zhihu:xiao-peng-61-47", "xiao"),
+    )
+    for author, suffix in authors:
+        _seed_visual_overlay_author(state, object_store, author, suffix)
+
+    visual = VisualSkillService(state, object_store)
+    generated = visual.generate(base_run_id)
+    assert generated["candidate_count"] == 3
+    assert generated["no_skill_count"] == 0
+    assert visual.audit(base_run_id)["status"] == "PASS"
+    reviewed = visual.review_all(base_run_id)
+    assert reviewed["review"] == {"approved": 3, "rejected": 0, "pending": 0}
+    published = visual.publish(base_run_id)
+    assert published["release"]["base_admitted_skill_count"] == 2
+    assert published["release"]["overlay_admitted_skill_count"] == 3
+    assert published["release"]["composite_admitted_skill_count"] == 5
+    assert visual.audit(base_run_id)["status"] == "PASS"
+
+    provider = RepositoryKnowledgeSkillProvider(
+        KnowledgeCompletionRepository(state),
+        object_store,
+    )
+    provider_status = provider.status(base_run_id)
+    assert provider_status.status is KnowledgeProviderReadiness.READY
+    assert provider_status.reason_code == "COMPOSITE_REGISTRY_READY"
+    assert provider_status.eligible_skill_count == 5
+    query = KnowledgeSkillQuery(query="估值", top_k=5)
+    selection = provider.select(base_run_id, query)
+    assert selection.selected_count == 3
+    assert all(item.final_skill_id.startswith("visual-skill:") for item in selection.skills)
+    assert provider.select(base_run_id, query).cache_hit is True
+
+    report = cast(dict[str, Any], completion.report(base_run_id))
+    assert report["visual_completion"]["real_visual_completion_claimed"] is True
+    assert report["registry"]["composite_release"]["composite_admitted_skill_count"] == 5

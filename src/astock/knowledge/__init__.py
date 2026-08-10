@@ -119,6 +119,10 @@ from astock.knowledge.transport import (
     ZhihuHttpTransport,
     ZhihuResponseTransport,
 )
+from astock.knowledge.visual_pipeline import ZhihuVisualPipelineService
+from astock.knowledge.visual_repository import ZhihuVisualRepository
+from astock.knowledge.visual_skill_repository import VisualSkillRepository
+from astock.knowledge.visual_skill_service import VisualSkillService
 
 __all__ = [
     "ContentRegistration",
@@ -185,7 +189,11 @@ __all__ = [
     "ReviewedParquetStore",
     "ReviewedResult",
     "RepositoryKnowledgeSkillProvider",
+    "VisualSkillRepository",
+    "VisualSkillService",
     "ZhihuVisualCompletionService",
+    "ZhihuVisualPipelineService",
+    "ZhihuVisualRepository",
     "build_argument_units",
     "default_model_directory",
     "get_knowledge_source",

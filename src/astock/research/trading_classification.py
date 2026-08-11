@@ -11,10 +11,17 @@ from astock.core.errors import PolicyError
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents.cninfo import CninfoDisclosureProvider
 from astock.market_data.reference import MarketReferenceService
 from astock.paper_trading.operation import (
     MarketReferencePaperVerifier,
     PaperTradingRuleBook,
+)
+from astock.schemas.documents import (
+    DisclosureCategory,
+    DisclosureExchange,
+    DisclosureSearchBatch,
+    DisclosureSearchRequest,
 )
 from astock.schemas.market import Market
 from astock.schemas.paper import PaperTradingClassification
@@ -32,6 +39,22 @@ from astock.schemas.research_runtime import (
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _RESOLVER_VERSION = "market-reference-trading-classification-v1"
+_OFFICIAL_BASELINE_MAX_AGE = timedelta(minutes=5)
+_CORPORATE_ACTION_TITLE_TERMS = (
+    "权益分派",
+    "利润分配",
+    "分红",
+    "派息",
+    "除权",
+    "除息",
+    "送股",
+    "转增",
+    "配股",
+    "拆股",
+    "缩股",
+    "回购注销",
+    "注销股份",
+)
 
 
 class TradingClassificationStatusReport(TypedDict):
@@ -116,6 +139,118 @@ class TradingClassificationService:
             reason_codes=sorted(set(reasons)),
             created_at=as_of,
         )
+
+    def capture_official_corporate_action_baseline(
+        self,
+        company_id: str,
+        *,
+        live: bool,
+        provider: CninfoDisclosureProvider | None = None,
+    ) -> tuple[str, TradingClassificationCorporateActionBaseline]:
+        """Freeze a prospective CNINFO enumeration before a later research decision."""
+
+        if not live:
+            raise ValueError(
+                "official corporate-action baseline capture requires explicit live opt-in"
+            )
+        if self.reference is None or self.trading_rules is None:
+            raise ValueError("trading classification resolver is not configured")
+        self.reference.sync_instruments(live=True)
+        visible_at = datetime.now(UTC)
+        verifier = MarketReferencePaperVerifier(self.reference, self.trading_rules)
+        instrument, _ = verifier.resolve_instrument(company_id, visible_at=visible_at)
+        if instrument.listing_date is None:
+            raise ValueError("official corporate-action baseline requires a listing date")
+        exchange = {
+            Market.XSHG: DisclosureExchange.SSE,
+            Market.XSHE: DisclosureExchange.SZSE,
+        }.get(instrument.market)
+        if exchange is None:
+            raise ValueError("official corporate-action baseline is unavailable for this market")
+        official = provider or CninfoDisclosureProvider(self.objects, self.state)
+        local_date = visible_at.astimezone(_SHANGHAI).date()
+        coverage_start = max(instrument.listing_date, local_date - timedelta(days=45))
+        first = official.search(
+            DisclosureSearchRequest(
+                symbol=instrument.symbol,
+                exchange=exchange,
+                start_date=coverage_start,
+                end_date=local_date,
+                category=DisclosureCategory.ALL,
+                page_number=1,
+                page_size=100,
+            )
+        )
+        batches = [first]
+        for page_number in range(2, first.total_pages + 1):
+            batches.append(
+                official.search(first.request.model_copy(update={"page_number": page_number}))
+            )
+        self._validate_official_enumeration(batches)
+        snapshot_ids = sorted({item.raw_snapshot_id for item in batches})
+        announcements = {
+            item.announcement_id: item for batch in batches for item in batch.announcements
+        }
+        candidates = sorted(
+            announcement_id
+            for announcement_id, announcement in announcements.items()
+            if any(term in announcement.title for term in _CORPORATE_ACTION_TITLE_TERMS)
+        )
+        available_times = []
+        for snapshot_id in snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if snapshot is None or not self.objects.verify(snapshot.object_sha256):
+                raise ValueError("official corporate-action query snapshot is unavailable")
+            available_times.append(snapshot.available_to_system_at)
+        captured_at = max(available_times)
+        payload = {
+            "company_id": company_id,
+            "market": instrument.market.value,
+            "symbol": instrument.symbol,
+            "as_of": captured_at.isoformat(),
+            "window_start": coverage_start.isoformat(),
+            "window_end": local_date.isoformat(),
+            "reference_status": (
+                "OFFICIAL_ENUMERATION_COMPLETE" if not candidates else "OFFICIAL_CANDIDATES_FOUND"
+            ),
+            "official_query_snapshot_ids": snapshot_ids,
+            "candidate_announcement_ids": candidates,
+            "observed_record_count": first.total_count,
+        }
+        digest = sha256_bytes(canonical_json_bytes(payload))
+        baseline = TradingClassificationCorporateActionBaseline(
+            baseline_id=f"trading-corporate-action-baseline:{digest}",
+            company_id=company_id,
+            market=instrument.market,
+            symbol=instrument.symbol,
+            as_of=captured_at,
+            window_start=payload["window_start"],
+            window_end=payload["window_end"],
+            reference_status=payload["reference_status"],
+            raw_snapshot_ids=snapshot_ids,
+            official_query_snapshot_ids=snapshot_ids,
+            candidate_announcement_ids=candidates,
+            observed_record_count=first.total_count,
+            reason_codes=([] if not candidates else ["OFFICIAL_CORPORATE_ACTION_CANDIDATES_FOUND"]),
+            absence_is_officially_certified=not candidates,
+            created_at=captured_at,
+        )
+        artifact_id = self._register_official_baseline(baseline)
+        artifact_record = self.state.artifact_record(artifact_id)
+        if artifact_record is None:
+            raise RuntimeError("official corporate-action baseline artifact disappeared")
+        self.state.set_checkpoint(
+            scope_type="trading-classification-corporate-baseline",
+            scope_key=company_id,
+            cursor={
+                "artifact_id": artifact_id,
+                "captured_at": captured_at.isoformat(),
+                "certified": baseline.absence_is_officially_certified,
+            },
+            status=("SUCCEEDED" if baseline.absence_is_officially_certified else "NEEDS_INFO"),
+            object_hash=str(artifact_record["object_hash"]),
+        )
+        return artifact_id, baseline
 
     def resolve(
         self,
@@ -213,15 +348,15 @@ class TradingClassificationService:
                 live=live,
                 sync=sync_reference_inputs,
             )
-            baseline_artifact_id = self._freeze_corporate_action_baseline(
-                company_id=company_id,
-                market=instrument.market,
-                symbol=instrument.symbol,
-                as_of=as_of,
-                report=corporate_report,
-            )
-            source_artifacts.add(baseline_artifact_id)
             if corporate_report is None:
+                baseline_artifact_id = self._freeze_corporate_action_baseline(
+                    company_id=company_id,
+                    market=instrument.market,
+                    symbol=instrument.symbol,
+                    as_of=as_of,
+                    report=None,
+                )
+                source_artifacts.add(baseline_artifact_id)
                 return TradingClassificationResolution(
                     company_id=company_id,
                     as_of=as_of,
@@ -232,6 +367,14 @@ class TradingClassificationService:
                     created_at=as_of,
                 )
             if corporate_report.coverage.record_count > 0:
+                baseline_artifact_id = self._freeze_corporate_action_baseline(
+                    company_id=company_id,
+                    market=instrument.market,
+                    symbol=instrument.symbol,
+                    as_of=as_of,
+                    report=corporate_report,
+                )
+                source_artifacts.add(baseline_artifact_id)
                 return TradingClassificationResolution(
                     company_id=company_id,
                     as_of=as_of,
@@ -243,12 +386,27 @@ class TradingClassificationService:
                     live_sync_attempted=sync_attempted,
                     created_at=as_of,
                 )
-            baseline_record = self.state.artifact_record(baseline_artifact_id)
-            if baseline_record is None:
-                raise ValueError("corporate-action baseline artifact is unavailable")
-            baseline = TradingClassificationCorporateActionBaseline.model_validate_json(
-                self.objects.get_bytes(str(baseline_record["object_hash"]))
-            )
+            official_baseline = self._fresh_official_baseline(company_id, as_of)
+            if official_baseline is None:
+                baseline_artifact_id = self._freeze_corporate_action_baseline(
+                    company_id=company_id,
+                    market=instrument.market,
+                    symbol=instrument.symbol,
+                    as_of=as_of,
+                    report=corporate_report,
+                )
+                source_artifacts.add(baseline_artifact_id)
+                return TradingClassificationResolution(
+                    company_id=company_id,
+                    as_of=as_of,
+                    status=TradingClassificationStatus.NEEDS_INFO,
+                    source_artifact_ids=sorted(source_artifacts),
+                    reason_codes=["CORPORATE_ACTION_BASELINE_NOT_CERTIFIED"],
+                    live_sync_attempted=sync_attempted,
+                    created_at=as_of,
+                )
+            baseline_artifact_id, baseline = official_baseline
+            source_artifacts.add(baseline_artifact_id)
             if not baseline.absence_is_officially_certified:
                 return TradingClassificationResolution(
                     company_id=company_id,
@@ -340,6 +498,16 @@ class TradingClassificationService:
                 raise ValueError("corporate-action baseline object is unavailable")
             if draft.corporate_action_baseline_artifact_id not in draft.source_artifact_ids:
                 raise ValueError("corporate-action baseline must be one of the frozen sources")
+            baseline_payload = TradingClassificationCorporateActionBaseline.model_validate_json(
+                self.objects.get_bytes(baseline_hash)
+            )
+            self._validate_official_baseline(
+                baseline_payload,
+                company_id=draft.company_id,
+                market=draft.market,
+                symbol=draft.symbol,
+                as_of=draft.as_of,
+            )
             if draft.resolver_version is not None:
                 if str(baseline["type"]) != "TradingClassificationCorporateActionBaseline":
                     raise ValueError(
@@ -533,6 +701,26 @@ class TradingClassificationService:
             ):
                 if required is None or required not in release.source_artifact_ids:
                     findings.append("CLASSIFICATION_RESOLVER_LINEAGE_DRIFT")
+            baseline_id = release.corporate_action_baseline_artifact_id
+            if baseline_id is not None:
+                try:
+                    baseline_record = self.state.artifact_record(baseline_id)
+                    if baseline_record is None:
+                        raise ValueError("classification corporate-action baseline is missing")
+                    baseline = TradingClassificationCorporateActionBaseline.model_validate_json(
+                        self.objects.get_bytes(str(baseline_record["object_hash"]))
+                    )
+                    self._validate_official_baseline(
+                        baseline,
+                        company_id=release.company_id,
+                        market=release.market,
+                        symbol=release.symbol,
+                        as_of=release.as_of,
+                    )
+                    if not baseline.absence_is_officially_certified:
+                        raise ValueError("classification baseline is not officially certified")
+                except (OSError, ValueError):
+                    findings.append("CLASSIFICATION_CORPORATE_ACTION_BASELINE_INVALID")
         return {
             "status": "PASS" if not findings else "FAIL",
             "artifact_id": artifact_id,
@@ -540,6 +728,153 @@ class TradingClassificationService:
             "finding_codes": sorted(set(findings)),
             "broker_execution_allowed": False,
         }
+
+    def _validate_official_baseline(
+        self,
+        baseline: TradingClassificationCorporateActionBaseline,
+        *,
+        company_id: str,
+        market: Market,
+        symbol: str,
+        as_of: datetime,
+    ) -> None:
+        if (
+            baseline.company_id != company_id
+            or baseline.market is not market
+            or baseline.symbol != symbol
+        ):
+            raise ValueError("corporate-action baseline instrument identity mismatch")
+        if baseline.as_of > as_of:
+            raise ValueError("corporate-action baseline is future-visible")
+        if baseline.absence_is_officially_certified:
+            if baseline.reference_status != "OFFICIAL_ENUMERATION_COMPLETE":
+                raise ValueError("certified corporate-action baseline status is invalid")
+            if baseline.candidate_announcement_ids:
+                raise ValueError("certified corporate-action baseline cannot carry candidates")
+        for snapshot_id in baseline.official_query_snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if snapshot is None:
+                raise ValueError("official corporate-action query snapshot is unknown")
+            if snapshot.source_id != "cninfo-disclosures:index":
+                raise ValueError("corporate-action baseline requires a CNINFO index snapshot")
+            if snapshot.fetch_status.value != "SUCCEEDED":
+                raise ValueError("official corporate-action query snapshot was not successful")
+            if snapshot.available_to_system_at > baseline.as_of:
+                raise ValueError("official corporate-action query snapshot is future-visible")
+            if not self.objects.verify(snapshot.object_sha256):
+                raise ValueError("official corporate-action query snapshot object is unavailable")
+        if baseline.absence_is_officially_certified and not baseline.official_query_snapshot_ids:
+            raise ValueError(
+                "certified corporate-action baseline requires official query snapshots"
+            )
+
+    def _fresh_official_baseline(
+        self,
+        company_id: str,
+        as_of: datetime,
+    ) -> tuple[str, TradingClassificationCorporateActionBaseline] | None:
+        checkpoint = self.state.get_checkpoint(
+            "trading-classification-corporate-baseline",
+            company_id,
+        )
+        if checkpoint is None:
+            return None
+        artifact_id = checkpoint["cursor"].get("artifact_id")
+        if not artifact_id:
+            return None
+        record = self.state.artifact_record(str(artifact_id))
+        if record is None or str(record["type"]) != "TradingClassificationCorporateActionBaseline":
+            return None
+        object_hash = str(record["object_hash"])
+        if not self.objects.verify(object_hash):
+            return None
+        baseline = TradingClassificationCorporateActionBaseline.model_validate_json(
+            self.objects.get_bytes(object_hash)
+        )
+        try:
+            self._validate_official_baseline(
+                baseline,
+                company_id=company_id,
+                market=baseline.market,
+                symbol=baseline.symbol,
+                as_of=as_of,
+            )
+        except ValueError:
+            return None
+        if as_of - baseline.as_of > _OFFICIAL_BASELINE_MAX_AGE:
+            return None
+        if baseline.as_of.astimezone(_SHANGHAI).date() != as_of.astimezone(_SHANGHAI).date():
+            return None
+        for snapshot_id in baseline.official_query_snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if (
+                snapshot is None
+                or snapshot.available_to_system_at > baseline.as_of
+                or not self.objects.verify(snapshot.object_sha256)
+            ):
+                return None
+        return str(artifact_id), baseline
+
+    def _register_official_baseline(
+        self,
+        baseline: TradingClassificationCorporateActionBaseline,
+    ) -> str:
+        self._validate_official_baseline(
+            baseline,
+            company_id=baseline.company_id,
+            market=baseline.market,
+            symbol=baseline.symbol,
+            as_of=baseline.as_of,
+        )
+        input_hashes: list[str] = []
+        for snapshot_id in baseline.official_query_snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if snapshot is None or not self.objects.verify(snapshot.object_sha256):
+                raise ValueError("official corporate-action baseline snapshot is unavailable")
+            input_hashes.append(snapshot.object_sha256)
+        input_hashes = sorted(set(input_hashes))
+        object_ref = self.objects.put_json(baseline.model_dump(mode="json"))
+        artifact_id = f"TradingClassificationCorporateActionBaseline:{baseline.baseline_id}"
+        existing = self.state.artifact_record(artifact_id)
+        if existing is not None:
+            if (
+                str(existing["type"]) != "TradingClassificationCorporateActionBaseline"
+                or str(existing["schema_version"]) != baseline.schema_version
+                or str(existing["object_hash"]) != object_ref.sha256
+                or sorted(existing["input_hashes"]) != input_hashes
+            ):
+                raise ValueError("official corporate-action baseline identity collision")
+            return artifact_id
+        self.state.register_artifact(
+            artifact_id=artifact_id,
+            artifact_type="TradingClassificationCorporateActionBaseline",
+            schema_version=baseline.schema_version,
+            object_hash=object_ref.sha256,
+            input_hashes=input_hashes,
+        )
+        return artifact_id
+
+    @staticmethod
+    def _validate_official_enumeration(batches: list[DisclosureSearchBatch]) -> None:
+        if not batches:
+            raise ValueError("official corporate-action enumeration is empty")
+        first = batches[0]
+        expected_pages = max(1, first.total_pages)
+        if len(batches) != expected_pages:
+            raise ValueError("official corporate-action enumeration is incomplete")
+        if first.total_count > 0 and first.total_pages < 1:
+            raise ValueError("official corporate-action enumeration page count is invalid")
+        baseline_request = first.request.model_dump(mode="json", exclude={"page_number"})
+        ids: list[str] = []
+        for ordinal, batch in enumerate(batches, start=1):
+            request = batch.request.model_dump(mode="json", exclude={"page_number"})
+            if request != baseline_request or batch.request.page_number != ordinal:
+                raise ValueError("official corporate-action enumeration request drift")
+            if batch.total_count != first.total_count or batch.total_pages != first.total_pages:
+                raise ValueError("official corporate-action enumeration count drift")
+            ids.extend(item.announcement_id for item in batch.announcements)
+        if len(ids) != len(set(ids)) or len(ids) != first.total_count:
+            raise ValueError("official corporate-action enumeration identity coverage mismatch")
 
     def _freeze_rulebook(self, as_of: datetime) -> str:
         assert self.trading_rules is not None

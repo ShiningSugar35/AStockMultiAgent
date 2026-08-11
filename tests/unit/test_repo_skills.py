@@ -16,6 +16,7 @@ EXPECTED = {
     "financial-integrity-audit": ("financial", "audit"),
     "holding-monitor": ("holding", "positions"),
     "paper-trading-recovery": ("paper", "recovery"),
+    "portfolio-manager": ("portfolio", "allocation"),
     "knowledge-ingest": ("allowlisted", "history"),
     "evidence-investigation": ("evidence", "gap"),
 }

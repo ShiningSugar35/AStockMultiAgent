@@ -10,10 +10,13 @@ from typing import Annotated, Any
 import typer
 
 from astock.adaptive.service import AdaptiveResearchStatusService
+from astock.candidates.cli_ext import register_candidate_input_commands
 from astock.market_data.storage import CanonicalMarketStore
+from astock.portfolio.cli import register_portfolio_commands
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
+from astock.research.trade_view import TradePlanViewService
 from astock.research.trading_classification import TradingClassificationService
 from astock.schemas.research_runtime import (
     ResearchRunMode,
@@ -43,6 +46,9 @@ def register_research_runtime_commands(
 ) -> None:
     """Attach staged research and read-only readiness commands to the stable CLI."""
 
+    register_candidate_input_commands(app, services, emit)
+    register_portfolio_commands(app, services, emit)
+
     def runtime() -> ResearchRunService:
         paths, state, objects = services()
         return ResearchRunService(
@@ -61,6 +67,11 @@ def register_research_runtime_commands(
             objects=objects,
             knowledge_provider=knowledge_provider_factory(state, objects),
         )
+
+    def trade_view() -> TradePlanViewService:
+        _, state, objects = services()
+        research_runtime = runtime()
+        return TradePlanViewService(state, objects, research_runtime.reference)
 
     def shadow() -> tuple[Any, ShadowEvaluationService]:
         paths, state, objects = services()
@@ -186,6 +197,32 @@ def register_research_runtime_commands(
         ],
     ) -> None:
         emit(runtime().benchmark(_load_request(request_file)))
+
+    @app.command("trade-plan-view")
+    def trade_plan_view(
+        classified_protocol_artifact_id: Annotated[str, typer.Argument()],
+        reference_price_fen: Annotated[int | None, typer.Option()] = None,
+        reference_price_source: Annotated[str | None, typer.Option()] = None,
+    ) -> None:
+        emit(
+            trade_view().build(
+                classified_protocol_artifact_id,
+                reference_price_fen=reference_price_fen,
+                reference_price_source=reference_price_source,
+            )
+        )
+
+    @app.command("trading-classification-baseline-capture")
+    def trading_classification_baseline_capture(
+        company_id: Annotated[str, typer.Argument()],
+        live: Annotated[bool, typer.Option()] = False,
+    ) -> None:
+        service = runtime().classification
+        artifact_id, baseline = service.capture_official_corporate_action_baseline(
+            company_id,
+            live=live,
+        )
+        emit({"artifact_id": artifact_id, "baseline": baseline})
 
     @app.command("trading-classification-resolve")
     def trading_classification_resolve(

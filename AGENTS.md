@@ -45,6 +45,7 @@
 - 单公司深度研究：`$company-deep-research`
 - 财务可信度：`$financial-integrity-audit`
 - 持仓变化与失效：`$holding-monitor`
+- 组合评估、风险贡献与约束配置：`$portfolio-manager`
 - 模拟盘启动恢复：`$paper-trading-recovery`
 - 白名单知识采集：`$knowledge-ingest`
 - 明确证据缺口：`$evidence-investigation`
@@ -55,9 +56,9 @@
 
 Phase 5 论证链入口包括：`knowledge-semantic-plan`、`knowledge-semantic-run`、`knowledge-semantic-status`、`knowledge-semantic-model-status`、`knowledge-semantic-embedding-run` 和 `knowledge-semantic-packet-export`。未校准相似度不得自动删除，DeepSeek 包不得自动外发。
 
-Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`provider-status`、`sync-instruments`、`sync-calendar`、`sync-daily`、`sync-corporate-actions`、`reference-status` 和 `reference-audit`。Provider 默认使用 recorded 探针；live 必须显式开启。候选入口包括 `candidate-scan`、`candidate-status` 和 `candidate-audit`；候选只表示研究优先级，不得输出交易方向、目标价、订单或持仓。
+Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`provider-status`、`sync-instruments`、`sync-calendar`、`sync-daily`、`sync-corporate-actions`、`reference-status` 和 `reference-audit`。Provider 默认使用 recorded 探针；live 必须显式开启。广泛荐股探索先使用 `research-seeds --live`：它只合并已有 Candidate、市场流动性/规模 Seeds 和由当前已发布大 V Skills 动态推导的 Expert Domain Seeds，不产生 CandidateRecord 或推荐权。候选入口包括 `candidate-input-schema`、`candidate-input-stage`、`candidate-input-run`、`candidate-scan`、`candidate-status` 和 `candidate-audit`；候选只表示研究优先级，不得输出交易方向、目标价、订单或持仓。面向用户的买卖判断必须继续完成单股 Research Runtime 和投委会链。
 
-财务来源稳定入口包括：`sync-financial`、`financial-source-status` 和 `financial-source-audit`。东方财富/Sina 财务值仅为 `SECONDARY_STRUCTURED` 定位线索；只有与 P5X-2 instrument release 一致且由官方原生 PDF 精确证明表名、合并口径、期间列、科目、数值和单位的事实才能进入现有财务审计。公开模拟下单接口尚未验收。
+财务来源稳定入口包括：`sync-financial`、`financial-source-status` 和 `financial-source-audit`。东方财富/Sina 财务值仅为 `SECONDARY_STRUCTURED` 定位线索；只有与 P5X-2 instrument release 一致且由官方原生 PDF 精确证明表名、合并口径、期间列、科目、数值和单位的事实才能进入现有财务审计。Research Runtime 稳定入口包括 `research-plan`、`research-run-company`、`research-status`、`research-audit`、`research-recover`、`trade-plan-view`；组合入口包括 `portfolio-paper-evaluate`、`portfolio-evaluate`、`portfolio-construct`、`portfolio-status`、`portfolio-audit`。模拟下单 prepare/确认链已验收，但任何账本写入仍要求独立人工确认，真实券商执行始终不存在。
 
 ## 开发约定
 

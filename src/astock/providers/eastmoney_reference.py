@@ -53,6 +53,113 @@ class EastMoneyReferenceProvider(HttpProviderBase):
         payload["_astock_request"] = {"market": market.value if market else "ALL"}
         return payload, snapshot
 
+    def fetch_seed_snapshot(
+        self,
+        market: Market,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[str, object], SourceSnapshot]:
+        """Fetch one broad current-market snapshot for research seeding only."""
+
+        if market is Market.INDEX:
+            raise ValueError("research seed snapshot requires an equity market")
+        if live:
+            response, _ = self._get(
+                self.master_endpoint,
+                params={
+                    "pn": 1,
+                    "pz": 10000,
+                    "po": 1,
+                    "np": 1,
+                    "fltt": 2,
+                    "invt": 2,
+                    "fid": "f6",
+                    "fs": _market_filter(market),
+                    "fields": "f2,f3,f6,f8,f12,f13,f14,f20,f21,f24,f25",
+                },
+            )
+        else:
+            response = self._recorded_response(
+                f"seed_snapshot_{market.value}.json",
+                self.master_endpoint,
+            )
+        snapshot = self._persist_stable_response(response)
+        payload = _decode_json(response.content)
+        payload["_astock_request"] = {
+            "market": market.value,
+            "purpose": "RESEARCH_SEED_ONLY",
+        }
+        return payload, snapshot
+
+    def fetch_industry_boards(
+        self,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[str, object], SourceSnapshot]:
+        """Fetch EastMoney public industry-board taxonomy for expert-domain seeding."""
+
+        if live:
+            response, _ = self._get(
+                self.master_endpoint,
+                params={
+                    "pn": 1,
+                    "pz": 1000,
+                    "po": 1,
+                    "np": 1,
+                    "fltt": 2,
+                    "invt": 2,
+                    "fid": "f3",
+                    "fs": "m:90+t:2+f:!50",
+                    "fields": "f12,f14",
+                },
+            )
+        else:
+            response = self._recorded_response("industry_boards.json", self.master_endpoint)
+        snapshot = self._persist_stable_response(response)
+        payload = _decode_json(response.content)
+        payload["_astock_request"] = {
+            "purpose": "EXPERT_DOMAIN_TAXONOMY",
+        }
+        return payload, snapshot
+
+    def fetch_industry_constituents(
+        self,
+        board_code: str,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[str, object], SourceSnapshot]:
+        """Fetch public constituents for one previously discovered industry board."""
+
+        if not board_code.startswith("BK") or not board_code[2:].isdigit():
+            raise ValueError("invalid EastMoney industry board code")
+        if live:
+            response, _ = self._get(
+                self.master_endpoint,
+                params={
+                    "pn": 1,
+                    "pz": 1000,
+                    "po": 1,
+                    "np": 1,
+                    "fltt": 2,
+                    "invt": 2,
+                    "fid": "f6",
+                    "fs": f"b:{board_code}",
+                    "fields": "f2,f3,f6,f8,f12,f13,f14,f20,f21,f24,f25",
+                },
+            )
+        else:
+            response = self._recorded_response(
+                f"industry_{board_code}.json",
+                self.master_endpoint,
+            )
+        snapshot = self._persist_stable_response(response)
+        payload = _decode_json(response.content)
+        payload["_astock_request"] = {
+            "board_code": board_code,
+            "purpose": "EXPERT_DOMAIN_CONSTITUENTS",
+        }
+        return payload, snapshot
+
     def fetch_daily(
         self,
         symbol: str,

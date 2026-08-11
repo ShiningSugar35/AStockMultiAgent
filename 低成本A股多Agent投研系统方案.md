@@ -31,7 +31,7 @@
 9. 记录各 Agent、Skill 和策略的真实历史表现；
 10. 在积累足够样本后，研究市场状态识别、策略权重调整和有限强化学习。
 
-系统允许大模型绕过风险规则，保留默认自动连接券商下单接口。
+系统不允许大模型绕过风险规则，也不保留默认自动连接券商下单接口。
 
 ---
 
@@ -1203,7 +1203,35 @@ ExitReviewPack
 - 作者专家 Skill；
 - 用户指定标的。
 
-## 12.2 中央候选注册表
+## 12.2 低成本 Research Seeds
+
+为避免每次“推荐几只股”都对数千只 A 股逐一执行公告、财务、证据和多 Agent 深研，候选系统之前增加一层**无推荐权的 Research Seeds**。它只负责把全市场压缩成值得进一步花成本的有限集合，不生成 CandidateRecord、BUY、目标价或仓位。
+
+Research Seeds 合并三类来源：
+
+1. **Existing Candidate Seeds**：复用当前可见、已审计的 `RESEARCH_READY` Candidate；
+2. **Market Seeds**：使用当前公开市场快照，仅按流动性、成交规模、流通市值和换手做研究优先级排序，不把涨跌幅方向当推荐信号；
+3. **Expert Skill Seeds**：从当前已发布的几位作者 Skills 动态生成 `ExpertDomainProfile`，再与当前公开行业板块及其成分股交叉。
+
+Expert Skill Seeds 不硬编码“某作者擅长什么行业”。每次运行都从已发布 Skill 的名称、决策问题、核心原则、适用条件、所需证据及正负信号重新统计对当前行业 taxonomy 的支持密度；只有达到版本化最小 Skill 数和占比的领域才进入作者画像。相同 Skill 集合重复命中的父/子行业板块去重，避免一个大类占满 Top-N。没有达到行业密度门的作者保持“无行业型 Expert Seed”，但其通用方法 Skill 仍可在单股 Deep Research 中使用。
+
+ExpertDomainProfile 和 Market Seeds 使用的公开市场/板块响应都先冻结为 `SourceSnapshot`；`ResearchSeedReport` 绑定当前 composite Knowledge registry release/hash，并可独立 audit。行业板块只用于研究范围发现，不允许充当公司正式事实证据。
+
+```text
+Existing RESEARCH_READY Candidate
+        +
+Market Seeds
+        +
+Expert Skill Seeds
+        ↓
+ResearchSeedReport（无推荐权）
+        ↓
+只对有限 Seed 集合补全官方证据 / 财务 / PIT / 质量
+        ↓
+CandidateInputRelease → Candidate Scan → Deep Research → Committee
+```
+
+## 12.3 中央候选注册表
 
 负责：
 
@@ -1220,6 +1248,45 @@ ExitReviewPack
 - 组合已有敞口。
 
 删除“昂贵的股票池 LLM Agent”，保留候选系统。
+
+## 12.4 组合评估与构建
+
+候选系统与组合系统必须分离：候选只负责发现“值得研究”的标的；只有完成单股正式研究、投委会和 TradingClassification，并获得当前 `APPROVE_SIMULATION` 的 `ClassifiedTradeProtocol`，才有资格进入组合构建。
+
+组合层分成两类任务：
+
+```text
+Portfolio Review
+当前持仓 → PIT 日线矩阵 → 风险/集中度/相关性/尾部风险/风险贡献
+
+Portfolio Construction
+已准入单股 → 同一 as_of 对齐 → 多模型提案 → 统一硬约束 → 保留现金
+```
+
+组合评估至少输出：
+
+- 年化波动和下行波动；
+- Beta 和 Tracking Error；
+- 最大回撤；
+- 历史 VaR / CVaR / CDaR；
+- HHI 与有效持仓数；
+- 两两相关性；
+- 边际风险贡献；
+- 总敞口、现金、行业/风险组暴露；
+- 数据质量、PIT 和公司行动风险提示。
+
+组合构建不把单一均值—方差优化器视为“标准答案”，固定比较四类方案：
+
+1. **受约束等权**：默认稳健基准，减少预期收益估计误差；
+2. **逆波动率**：只使用波动信息分配风险；
+3. **层次风险分配（HRP-style）**：按相关簇和簇内风险递归分配；
+4. **收缩协方差最小方差**：使用 Ledoit-Wolf covariance shrinkage，再做 long-only minimum-variance。
+
+统一约束优先于优化结果：禁止杠杆，执行单股、总敞口、组暴露和其他版本化风险上限；无法安全分配的部分保留现金，不强行满仓。默认方法保持受约束等权，除非真实 Phase 7 样本外证据证明其他方案在相同候选集、费用、PIT 和约束下具有稳定增量价值。
+
+当前项目没有已经验收的正式申万/中证行业 taxonomy release，因此组合构建中的 `risk_group` 只能作为显式来源的辅助组约束；系统必须标记其 provenance，不得把调用者或模型自行判断的组标签冒充官方行业分类。
+
+实现参考吸收的是成熟开源组合库和专业组合管理中的共同原则：风险模型、目标函数和约束分离；协方差收缩；HRP/风险预算；CVaR/CDaR 等尾部风险；walk-forward / 样本外检验；以及简单等权基准。项目不直接复制第三方库的“最优组合”结论，所有正式权重仍由本地确定性代码、冻结输入和本项目风险规则生成。
 
 ---
 
@@ -1754,6 +1821,28 @@ Spark 等能力有限模型可负责机械处理；高质量方法抽象和正�
 → 缺口
 → 模拟研究资格
 ```
+
+用户还可以直接问：
+
+```text
+这只股票现在能不能买？什么位置考虑进入？预期卖出位和失效条件是什么？
+```
+
+系统必须先完成单股正式研究和投委会，再由 `TradePlanView` 把 `ClassifiedTradeProtocol`、DecisionPack 和 TradingClassification 投影成普通用户可读的交易计划。没有结构化价格证据时，系统只能给 entry/stop/take-profit/invalidation 规则及以冻结参考价换算的委员会情景区间；情景区间不是目标价，禁止由模型临场猜精确买卖点。
+
+组合问题：
+
+```text
+评估我当前的投资组合。
+```
+
+系统返回组合集中度、相关性、Beta、波动/下行波动、最大回撤、VaR/CVaR/CDaR、风险贡献、现金和风险组暴露，并指出哪些持仓贡献了主要尾部风险。
+
+```text
+从当前研究候选中推荐几只股并组成一个组合。
+```
+
+系统必须先做 Candidate shortlist，再逐只完成正式单股研究和投委会；只有当前 `APPROVE_SIMULATION` 标的进入 Portfolio Construction。最终同时给出受约束等权默认方案与逆波动率、HRP-style、收缩最小方差三套对照，并解释为什么保留现金、哪些约束生效、哪些标的因单股研究不通过而被排除。
 
 对于持仓：
 

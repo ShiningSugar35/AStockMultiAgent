@@ -1,0 +1,4 @@
+interface:
+  display_name: "组合评估与构建"
+  short_description: "Evaluate portfolio risk and constrained A-share allocations"
+  default_prompt: "Use $portfolio-manager to evaluate my portfolio or build a constrained portfolio from committee-approved A-share research."

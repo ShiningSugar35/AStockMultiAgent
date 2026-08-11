@@ -1,94 +1,234 @@
-# AStock Research
+# AStockMultiAgent
 
-这是一个面向 A 股研究、证据审计和模拟交易的本地模块化单体。主要交互入口是 Codex，确定性工作由 Python 3.12 的 `astock` CLI 完成。
+AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent 投研与模拟交易系统。自然语言入口可以是 Codex、ChatGPT、Gemini 等支持本地 MCP/仓库工具的模型；确定性的数据、计算、证据、风控和账本工作由 Python 3.12 的 `astock` CLI 完成。
 
-长期架构、未完成工作和当前验收事实分别维护在根目录的
-[低成本A股多Agent投研系统方案.md](低成本A股多Agent投研系统方案.md)、
-[开发计划.md](开发计划.md) 和 [验收报告.md](验收报告.md)。Phase 7 的运行计数由
-[phase7_status.md](phase7_status.md) 持续生成；Phase 6 recorded 决策闭环见
-[phase6_status.md](phase6_status.md)。三者不再在 `docs/` 保留重复副本。
+系统的长期设计、尚未完成的真实运行义务和已经验收的工程事实分别维护在：
 
-当前阶段矩阵：
+- [低成本A股多Agent投研系统方案.md](低成本A股多Agent投研系统方案.md)
+- [开发计划.md](开发计划.md)
+- [验收报告.md](验收报告.md)
+- [phase7_status.md](phase7_status.md)
 
-| 阶段 | 当前状态 | 边界 |
+## 当前产品能力
+
+| 能力 | 当前状态 | 主要入口 |
 |---|---|---|
-| Phase 0～4 | PROGRAM COMPLETE | 原生入口、可恢复状态、行情/账本、证据/PIT、财务可信度和通用投资内核已实现 |
-| Phase 5 | PARTIAL / PROVISIONAL | 三位作者纯文本 v3 包已生成但等待知乎图片证据；《价值投资功法》74/74 图片已 OCR、定位并进入视觉 AU，11 个 READY AU 已冻结为本地包，44 个保留 REVIEW |
-| Phase 6 | PROGRAM COMPLETE / RECORDED ACCEPTANCE PASS | 300750 recorded 链已覆盖研究、四成员冻结委员会、公共 TradeProtocol、签名人工确认和单一模拟订单；不代表当前公司研究 |
-| Phase 7 | PROGRAM COMPLETE / COLLECTING (0/100) | 真实前向闭环已实现；本地 runtime 因并行 0044 校验和漂移只读，三类评估均保持 `COLLECTING` |
-| Phase 8 | P8.0 ONLY | 默认禁用状态壳已实现；P8.1～P8.4 未进入 |
+| 数据 / ObjectStore / Parquet / SQLite / PIT | 已实现 | `probe`、`sync-*`、`reference-*` |
+| 官方公告、PDF/DOCX、Claim-Evidence | 已实现 | `disclosure-*`、文档 / evidence CLI |
+| 财务可信度与红旗审计 | 已实现 | `financial-*` |
+| 候选研究池 | 已实现 | `candidate-input-run`、`candidate-scan`、`candidate-audit` |
+| 单公司 Research Runtime | 已实现 | `research-plan`、`research-run-company`、`research-audit` |
+| Knowledge Skill composite registry | 已发布 | `KnowledgeSkillProvider`，653 admitted Skills |
+| 投资委员会 | 已实现 | `committee-*`；委员会只消费冻结工件 |
+| PIT TradingClassification | 已实现 | `trading-classification-*` |
+| 最终模拟研究协议 | 已实现 | `ClassifiedTradeProtocol`、`trade-plan-view` |
+| 组合评估 | 已实现 | `portfolio-paper-evaluate`、`portfolio-evaluate` |
+| 组合构建 | 已实现 | `portfolio-construct`、`portfolio-audit` |
+| 模拟交易 / 5m 回放 | 已实现核心链 | `paper-*`；任何账本写入仍需独立人工确认 |
+| Phase 7 前向影子评测 | 程序完成 / 真实样本采集中 | 正式 6-arm study，当前 0/100 |
+| Phase 8 自适应准入 | 程序完成 / `NOT_ADMITTED` | 真实 Phase 7 证据达标前全部关闭 |
 
-Phase 5 后续底座矩阵：
+项目**没有真实券商自动下单接口**。真实交易只能由用户在券商端自行执行。
 
-| 能力 | 当前状态 | 边界 |
-|---|---|---|
-| Serenity v2 | ACCEPTED | 两个固定开源 commit 映射到 6 个 v2 方法合同；用户候选路由尚未接通 |
-| Provider Registry | ACCEPTED | 七个免费 Provider；recorded 默认、live 显式开启 |
-| Reference foundation | ACCEPTED | 主数据、日历、未复权日线和公司行动线索；不写模拟账本 |
-| 财务事实源 | ACCEPTED | 东财/Sina 辅助定位；只有精确官方 PDF 证据可认证，当前真实 release 为 0 |
-| 候选注册表 | ACCEPTED | typed/PIT/覆盖证明和审计闭合；候选仅表示值得研究，不含交易指令 |
+## 自然语言用法
 
-Phase 5 正文类型矩阵：
+仓库内 `.agents/skills/` 是网页端/Agent 的主要任务路由。总控 Skill 为 `$astock-research-orchestrator`。
 
-| 类型 | 程序能力 | 线上覆盖 |
-|---|---|---|
-| 回答 | AVAILABLE | PARTIAL |
-| 想法 | AVAILABLE | PARTIAL |
-| 文章 | AVAILABLE | PARTIAL |
-| 专栏 | CONTRACT_GATE | B1b0 已验收；B1b1 等待真实枚举快照，`BLOCKED_EXTERNAL_OBSERVATION` |
+### “这家公司怎么样？”
 
-线上覆盖审计统一使用冻结截点，默认保留 30 秒静默窗口；仅在调用方确认停写时使用 `--quiescence-lag-seconds 0`。
+路由到 `$company-deep-research`：
+
+```text
+官方证据
+→ 财务可信度
+→ BaseCase
+→ Serenity / Knowledge Skill Delta
+→ 反方和证据缺口
+→ 投资委员会
+→ TradingClassification
+→ ClassifiedTradeProtocol
+→ 面向普通用户的解释
+```
+
+先运行：
+
+```powershell
+uv run astock research-plan 300750 --as-of 2026-08-11T10:00:00+08:00
+```
+
+只补齐计划中真正缺失的冻结工件，不重复读取整个资料库。
+
+### “这只股票能不能买？什么位置进？预期卖到哪？”
+
+只有最终 `ClassifiedTradeProtocol` 才能进入交易计划解释：
+
+```powershell
+uv run astock trade-plan-view <ClassifiedTradeProtocol-artifact-id>
+```
+
+`TradePlanView` 汇总委员会的收益/下行情景、置信度、最大模拟仓位、entry rule、止损/移动止损/时间止损、take-profit、论文失效条件、复核事件和交易制度分类。
+
+如果底层没有结构化的精确入场/退出价格证据，系统会明确返回：
+
+- `exact_entry_zone_available=false`
+- `exact_exit_target_available=false`
+
+以参考价换算出的委员会收益区间只是**情景价格区间**，不是目标价预测。
+
+### “评估我的投资组合”
+
+模拟账户可直接：
+
+```powershell
+uv run astock portfolio-paper-evaluate --account-id paper --live
+```
+
+外部只读组合使用严格 `PortfolioAnalysisRequest`：
+
+```powershell
+uv run astock portfolio-schema
+uv run astock portfolio-evaluate portfolio-analysis.json
+```
+
+组合报告覆盖：
+
+- 年化波动与下行波动；
+- Beta 与 Tracking Error；
+- 最大回撤；
+- 历史 VaR / CVaR / CDaR；
+- HHI 与有效持仓数；
+- 两两相关性；
+- 边际风险贡献；
+- 现金 / 总敞口；
+- 行业或风险组暴露；
+- 与委员会硬风险上限的冲突。
+
+### “推荐几只股，组成一个组合”
+
+推荐链先做**低成本 Research Seeds**，再做完整候选证据。Research Seeds 只回答“哪些标的值得花更高成本继续查”，**不能直接产生 BUY**。
+
+```text
+已有 RESEARCH_READY Candidate
+        +
+Market Seeds（流动性 / 规模 / 换手，仅用于研究优先级）
+        +
+Expert Seeds（当前已发布大 V Skills → 动态擅长领域 → 当前行业板块成分）
+        ↓
+ResearchSeedReport
+        ↓
+只对有界 Seed 集合补全官方公告 / 财务 / PIT / 质量证据
+        ↓
+CandidateInputRelease → Candidate Scan
+        ↓
+每只股票独立完成公司研究和投委会
+        ↓
+只保留当前 APPROVE_SIMULATION 的 ClassifiedTradeProtocol
+        ↓
+Portfolio Construction
+```
+
+Expert Seeds 不硬编码“某作者擅长什么”。系统从当前 composite Knowledge registry 的 `skill_name / decision_question / core_principle / applicable_conditions / required_evidence / positive/negative signals` 重新统计每位作者对当前公开行业板块的 Skill 支持密度；知识 registry 更新后领域画像也随之更新。行业匹配只决定研究范围，任何公司事实仍需回到官方证据。
+
+网页/MCP Agent 的第一步：
+
+```powershell
+uv run astock research-seeds --live
+uv run astock research-seeds-status
+uv run astock research-seeds-audit <ResearchSeedReport-artifact-id>
+```
+
+随后只对 Seed 小集合建立完整 Candidate 输入：
+
+```powershell
+uv run astock candidate-input-schema
+uv run astock candidate-input-run candidate-release.json
+```
+
+组合构建：
+
+```powershell
+uv run astock portfolio-construct portfolio-construction.json
+```
+
+系统固定输出四套受约束提案：
+
+1. `EQUAL_WEIGHT_CONSTRAINED`：默认稳健基准；
+2. `INVERSE_VOLATILITY`；
+3. `HIERARCHICAL_RISK`；
+4. `SHRINKAGE_MIN_VARIANCE`：Ledoit-Wolf 协方差收缩 + long-only minimum variance。
+
+默认不会用未校准的预期收益去最大化 Sharpe。单股、总敞口、组暴露等约束先应用，无法安全分配的资金保留现金。除非真实 Phase 7 样本外证据支持改变默认方法，否则受约束等权保持默认。
+
+当前行业/风险组由调用者提供，报告会明确标记 `RISK_GROUP_IS_CALLER_SUPPLIED`；在接入可审计的正式行业 taxonomy release 前，不把该字段冒充官方行业分类。
+
+## Repo Skills
+
+当前主要 Skills：
+
+- `$astock-research-orchestrator`：自然语言总控；
+- `$candidate-scan`：候选研究池；
+- `$company-deep-research`：单公司完整投研；
+- `$financial-integrity-audit`：财务可信度；
+- `$evidence-investigation`：关键证据补全；
+- `$holding-monitor`：持仓增量复核；
+- `$portfolio-manager`：组合评估与受约束构建；
+- `$paper-trading-recovery`：模拟盘恢复；
+- `$knowledge-ingest`：批准来源的知识采集。
+
+Agent 的默认低 token 工作方式是：先读最终压缩工件，再按 evidence locator 精确打开必要证据。不要让多个 Agent 重复读取同一批原文。
+
+## 常用确定性命令
 
 ```powershell
 uv sync --all-groups
 uv sync --extra semantic
 uv run astock init
 uv run astock probe
-uv run astock knowledge-semantic-model-status
-uv run astock knowledge-semantic-plan <author-source-id>
-uv run astock knowledge-semantic-run <author-source-id>
-uv run astock knowledge-semantic-embedding-run <semantic-run-id>
-uv run astock knowledge-semantic-packet-export <semantic-run-id>
-# 按 OPENCODE_DEEPSEEK_TASK.md 在 OpenCode 生成结果后：
-uv run astock knowledge-semantic-result-stage <batch-id> <result.jsonl>
-uv run astock knowledge-semantic-result-import <batch-id>
+
+# Provider / reference
 uv run astock provider-list
-uv run astock provider-probe baostock-reference
-uv run astock provider-status baostock-reference
-uv run astock sync-instruments
-uv run astock sync-calendar --exchange XSHG --start 2026-07-01 --end 2026-07-31
-uv run astock sync-daily 600519 --market XSHG --start 2026-07-01 --end 2026-07-31
-uv run astock reference-audit
-uv run astock sync-financial 000001 --market XSHE --period-end 2025-12-31
-uv run astock financial-source-status 000001 --period-end 2025-12-31
-uv run astock financial-source-audit
-uv run astock candidate-scan <request.json>
+uv run astock sync-instruments --live
+uv run astock sync-calendar --exchange XSHG --start 2026-08-01 --end 2026-08-11 --live
+uv run astock sync-daily 600519 --market XSHG --start 2026-04-01 --end 2026-08-11 --live
+
+# 候选
+uv run astock candidate-input-run candidate-release.json
 uv run astock candidate-status --scan-id <scan-id>
 uv run astock candidate-audit <scan-id>
-uv run astock sync-5m 600519 --market XSHG --start 2026-07-01 --end 2026-07-13
-uv run astock quality-report 600519 --market XSHG
-uv run astock private-pdf-ingest <private.pdf> --source-id <id> --title <title> --author-source-id <author-id> --file-version <version> --full
-uv run astock private-docx-ingest <private.docx> --source-id <id> --title <title> --author-source-id <author-id> --file-version <version>
-uv run astock paper-replay 600519 --market XSHG --cursor 2026-07-13T15:00:00+08:00
-# Phase 6 recorded 验收：分析只生成冻结协议，不会创建订单
-uv run astock analyze 300750
-uv run astock phase6-status 300750
-# Phase 7：先冻结研究与决定，未来行情实际可得后再冻结观察证据
-uv run astock shadow-study-create <study-request.json>
-uv run astock shadow-assign <assignment-request.json>
-uv run astock shadow-forward-market-freeze <assignment-id> --symbol 600519 --market XSHG --valuation-time <iso-time>
-uv run astock shadow-observation-record <observation.json>
-uv run astock shadow-evaluate <study-id> --as-of <iso-time>
-uv run astock phase7-status-update
+
+# 单股研究
+uv run astock research-plan 600519 --as-of 2026-08-11T10:00:00+08:00
+uv run astock research-run-company 600519 --as-of 2026-08-11T10:00:00+08:00
+uv run astock research-status <research-run-id>
+uv run astock research-audit <research-run-id>
+uv run astock trade-plan-view <classified-protocol-artifact-id>
+
+# 组合
+uv run astock portfolio-paper-evaluate --account-id paper --live
+uv run astock portfolio-evaluate portfolio-analysis.json
+uv run astock portfolio-construct portfolio-construction.json
+uv run astock portfolio-audit <portfolio-report-artifact-id>
+
+# Phase 7 / 8
+uv run astock phase7-study-ensure
+uv run astock shadow-status --study-id <study-id>
+uv run astock shadow-audit <study-id>
+uv run astock phase8-status --study-id <study-id>
+
+# 工程门
 uv run pytest
 uv run ruff check .
 uv run pyright
 ```
 
-运行数据默认写入 `runtime/`，不会进入 Git；私有 PDF、DOC 和 DOCX 也被显式忽略。项目不提供自动实盘下单接口，也不要求配置外部大模型 API Key。
+## 数据和安全边界
 
-`paper-replay` 使用 `configs/fee_rules.yaml`。印花税和过户费按公开规则留有来源与生效日期；示例券商佣金必须在正式影子账户前按自己的协议确认。北交所当前 5m 实测为东财单源等级，且默认费用档案尚不覆盖北交所，因此不会被误当成已验证回放。
-
-Phase 7 只接受在研究信号后真实采集并冻结的未来行情。价格、成交量、MFE/MAE 必须与不可变 5m
-OHLCV 明细一致，同一 Memo 或 Decision 只能计为一个独立事件。历史回放可以用于探索，但永远不
-增加 100 个正式独立研究事件的计数；系统不做强化学习、动态调权或自动修改 Skill。
+- 所有正式历史输入必须 point-in-time safe；未来可见事实不得倒灌。
+- 社区内容只作方法和研究线索，关键公司事实回到公告、交易所和财报。
+- 委员会不联网、不搜索，只读冻结工件；缺证据返回 `NEEDS_INFO`。
+- 候选排名不是交易指令。
+- 组合优化器不能覆盖单股 `REJECT / WATCH / NEEDS_INFO`。
+- 未复权日线用于真实成交价格和风险诊断时，会显式暴露公司行动跳变风险；不会静默把复权价当成交价。
+- `runtime/`、Cookie、浏览器 Profile、私有资料和密钥不进入 Git。
+- Phase 7 历史回放和 fixture 永远不能增加正式 forward-event count。
+- Phase 8 在真实前向证据达到门槛前保持 `NOT_ADMITTED`；任何自适应研究都需要后续显式、版本化批准。

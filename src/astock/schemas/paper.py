@@ -291,9 +291,19 @@ class PaperReferencePack(AStockModel):
 
 
 class PaperExecutionRequest(AStockModel):
-    schema_version: str = "paper-execution-request-v2"
+    schema_version: str = "paper-execution-request-v3"
     trade_protocol_id: str = Field(min_length=1)
     trade_protocol_object_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    committee_protocol_artifact_id: str | None = None
+    committee_protocol_object_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    trading_classification_artifact_id: str | None = None
+    trading_classification_object_sha256: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
@@ -322,6 +332,26 @@ class PaperExecutionRequest(AStockModel):
         )
         if (reference_values[0] is None) != (reference_values[1] is None):
             raise ValueError("paper reference artifact id and hash must appear together")
+        for label, values in (
+            (
+                "committee protocol",
+                (self.committee_protocol_artifact_id, self.committee_protocol_object_sha256),
+            ),
+            (
+                "trading classification",
+                (
+                    self.trading_classification_artifact_id,
+                    self.trading_classification_object_sha256,
+                ),
+            ),
+        ):
+            if (values[0] is None) != (values[1] is None):
+                raise ValueError(f"{label} artifact id and hash must appear together")
+        classified = self.trade_protocol_id.startswith("ClassifiedTradeProtocol:")
+        if classified != bool(self.committee_protocol_artifact_id):
+            raise ValueError("classified paper requests require committee protocol lineage")
+        if classified != bool(self.trading_classification_artifact_id):
+            raise ValueError("classified paper requests require trading classification lineage")
         return self
 
 

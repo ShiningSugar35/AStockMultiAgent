@@ -1,31 +1,31 @@
 ---
 name: astock-research-orchestrator
-description: Route broad or multi-step A-share research requests across local data, evidence, company research, holding monitoring, and paper recovery. Use for requests such as what to research, whether to inspect a company, checking all holdings, updating the paper account, or any task that spans more than one project skill.
+description: Route broad or multi-step A-share research requests across candidate discovery, company research, trade-plan explanation, portfolio analysis, holding monitoring, evidence, and paper recovery. Use for natural-language questions about a company, whether a stock is worth buying, entry or exit planning, portfolio review, stock recommendations, or any task spanning more than one project skill.
 ---
 
 # A股研究总控
 
-1. Run `uv run astock probe` and treat unavailable capabilities as unavailable.
-2. Inspect existing work with `uv run astock research-chain-status <company_id>`; use `research-chain-audit` before reusing a frozen chain.
-3. Run `uv run astock context-plan --skill <skill> --artifact-id <artifact_id>` with only the required registered artifacts, then route to the narrowest project Skill.
-4. Prefer local/API facts, then MCP, then browser, then a manual investigation task. Run deterministic synchronization and quality commands before reasoning from market data.
-5. Build missing Phase 4 nodes only through their validated research/position CLI; do not duplicate a node that already audits PASS.
-6. Before a decision, require the relevant financial-integrity pack and run `uv run astock committee-input-resolve --artifact-id <id>...`; create a strict request from `committee-schema`, preview it with `committee-plan <request.json>`, then use `committee-decide <request.json>` and `committee-audit <decision_id>`.
-7. If the verdict is `NEEDS_INFO`, route each `committee-task-status <task_id>` to `$evidence-investigation`; after a genuinely new frozen artifact exists, link it with `committee-task-resolve <task_id> <artifact_id>` and create a new committee request/bundle. The committee never performs the search itself.
-8. For a prospective frozen-weight comparison, inspect `shadow-schema`, create the study before its effective time, derive each episode key with `shadow-independence-key`, freeze every arm with `shadow-assign`, and persist the signal-time regime with `market-regime-classify`. Record only reconciled, point-in-time observations through `shadow-observation-record`; then run `shadow-evaluate <study_id> --as-of <timestamp>`, `shadow-status --study-id <study_id>`, and `shadow-audit <study_id>`.
-9. For any request about dynamic weights or entering Phase 8, first run `uv run astock adaptive-research-status [--study-id <study_id>]`. Its underlying audited admission must be `ELIGIBLE_RULE_STATE_MACHINE_RESEARCH`; a capability result other than `AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL` is a hard stop. Even that status only permits asking for explicit approval of a specific study/report/admission version before rule-state-machine shadow research; it never authorizes an algorithm, online weight changes, a brokerage order, or a write to the main paper ledger.
-10. For a durable Codex explanation, run `uv run astock codex-run-init <request> --artifact-id <DecisionPack_or_TradeProtocol_or_ShadowEvaluationReport_or_Phase8AdmissionReport_artifact_id> --require-registered-output`, import that exact registered object with `codex-run-import`, and finish with `codex-run-audit`.
+1. Interpret the user's intent instead of asking them for internal artifact names. Route named-company analysis or “能不能买” to `$company-deep-research`; portfolio/risk/allocation or “推荐几只组成组合” to `$portfolio-manager`; broad idea discovery to `$candidate-scan`; existing-position changes to `$holding-monitor`; accounting credibility to `$financial-integrity-audit`; unresolved facts to `$evidence-investigation`; paper-account integrity/recovery to `$paper-trading-recovery`.
+2. Start with `uv run astock probe`. Reuse registered artifacts only after their relevant audit passes; do not repeat data collection or reread entire source libraries when the required frozen evidence already exists.
+3. For a named stock, begin with `uv run astock research-plan <company_id> --as-of <timestamp>`. Close only the reported gaps through deterministic data/evidence/financial/research commands. The committee never performs the search itself; it never browses or fetches new evidence.
+4. Build the common BaseCase once, route no more than the configured specialist cap, and use the published `KnowledgeSkillProvider` registry for knowledge-method deltas. Do not let multiple Agents reread the same documents; specialists return incremental Delta only.
+5. Before a decision, resolve exact frozen inputs with `committee-input-resolve`, validate the structured assessment with `committee-schema`/`committee-plan`, and finish through the generic Research Runtime. A Committee `TradeProtocol` is only a draft. The user-facing final protocol is `ClassifiedTradeProtocol`, created only after point-in-time TradingClassification status and audit pass. `REJECT`, `WATCH`, and `NEEDS_INFO` remain hard stops.
+6. When the user asks “什么位置进、预期卖到哪、止损怎么设”, run `uv run astock trade-plan-view <ClassifiedTradeProtocol_artifact_id>`. Explain its frozen entry/stop/take-profit/invalidation rules. Committee-implied scenario price ranges are scenarios, not target prices; never invent an exact entry/exit price when `exact_entry_zone_available=false` or `exact_exit_target_available=false`.
+7. For “推荐几只股”, first run `uv run astock research-seeds --live`. Merge existing `RESEARCH_READY` candidates with low-cost market liquidity/scale Seeds and Expert Seeds dynamically derived from the currently published big-V Skills and current public industry-board constituents. This stage only decides what deserves expensive evidence collection. Build complete Candidate evidence only for the bounded Seed set, run `candidate-input-run`/`candidate-scan`, then `$company-deep-research`. Only current `APPROVE_SIMULATION` ClassifiedTradeProtocol artifacts may reach `$portfolio-manager`; neither a ResearchSeed nor a Candidate signal is a recommendation.
+8. For portfolio questions, use `$portfolio-manager`. Keep the constrained equal-weight proposal as the default comparison baseline and show inverse-volatility, hierarchical-risk, and shrinkage-minimum-variance alternatives only as model comparisons until forward evidence supports a default change.
+9. For a formal prospective comparison, use the existing Phase 7 frozen study. Never backfill events after outcomes are visible. Run `uv run astock adaptive-research-status [--study-id <study_id>]` before any Phase 8 discussion. The underlying admission must reach `ELIGIBLE_RULE_STATE_MACHINE_RESEARCH` and the capability must be `AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL`; even then, require explicit rule-research approval for that exact version before isolated shadow research.
+10. For a durable registered explanation, run `uv run astock codex-run-init <request> --artifact-id <final_artifact_id> --require-registered-output`, import the exact registered artifact with `codex-run-import`, and require `codex-run-audit` PASS. Then open only the final compressed report plus exact evidence locators needed to explain material claims. Prefer `ResearchRunReport`, `TradePlanView`, `PortfolioAnalysisReport`, `PortfolioConstructionReport`, or `DecisionPack` over reopening raw documents.
 
 ## Output
 
-Produce a frozen-input `DecisionPack` and one TradeProtocol for every committee decision. For a declared shadow study, also produce an immutable `ShadowEvaluationReport` and `Phase8AdmissionReport`. `REJECT`, `NEEDS_INFO`, and `WATCH` protocols must remain `BLOCKED`; no verdict, protocol, shadow report, or admission report implies an executed trade.
+Lead with a plain-language answer for a non-finance user: what the business/portfolio looks like, what is attractive, what can go wrong, what evidence is strong or weak, and the current action state. Then give the professional layer: key facts and citations, BaseCase and specialist disagreements, valuation/return scenarios, committee outcome, trade-plan rules, portfolio interaction where relevant, information gaps, and immutable report/artifact identities. Distinguish facts, management statements, community leads, model calculations, and Agent inference.
 
 ## Prohibitions
 
-- Do not invent a buy recommendation when the research pipeline is incomplete.
-- Do not write SQLite or canonical Parquet directly.
-- Do not ask the committee to search or fetch new evidence.
+- Do not invent a buy recommendation, entry price, target price, or portfolio weight when the required frozen chain is incomplete.
+- Do not turn `RESEARCH_READY` candidates directly into BUY recommendations.
+- Do not ask the committee to fetch, browse, or create new evidence.
+- Do not bypass the published Knowledge registry or read knowledge tables directly from Research Runtime.
 - Do not backfill a formal shadow assignment after its outcome is visible.
-- Do not change weights or the paper ledger from a shadow evaluation.
-- Do not implement or start Phase 8 research from admission alone; require the explicit rule-research approval reported by `adaptive-research-status`.
-- Do not create or send a real brokerage order.
+- Do not change weights or the paper ledger from a shadow evaluation or Phase 8 admission alone.
+- Do not create or send a real brokerage order. Real trades remain user-executed at the broker.

@@ -127,6 +127,25 @@ class VisualSkillRepository:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def latest_release_any(self) -> dict[str, Any] | None:
+        """Return the latest immutable visual-composite registry release."""
+
+        with closing(self.state.connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM knowledge_visual_skill_release ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def release(self, release_id: str) -> dict[str, Any] | None:
+        """Return one immutable visual-composite registry release by identity."""
+
+        with closing(self.state.connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM knowledge_visual_skill_release WHERE release_id=?",
+                (release_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def release_members(self, release_id: str) -> list[dict[str, Any]]:
         with closing(self.state.connect()) as connection:
             rows = connection.execute(

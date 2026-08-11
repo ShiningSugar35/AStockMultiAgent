@@ -69,9 +69,9 @@ def test_final_completion_cli_commands_are_registered() -> None:
 
 
 def test_direct_review_requires_an_explicit_caller_supplied_batch() -> None:
-    service_source = (
-        ROOT / "src" / "astock" / "knowledge" / "completion_service.py"
-    ).read_text(encoding="utf-8")
+    service_source = (ROOT / "src" / "astock" / "knowledge" / "completion_service.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "direct_knowledge_review_20260809.json" not in service_source
     assert "apply_review_file" in service_source
@@ -79,13 +79,11 @@ def test_direct_review_requires_an_explicit_caller_supplied_batch() -> None:
 
 
 def test_knowledge_completion_finalize_orders_preflight_before_append_only_review() -> None:
-    source = (
-        ROOT / "src" / "astock" / "knowledge" / "completion_cli.py"
-    ).read_text(encoding="utf-8")
-
-    preflight = source.index(
-        "preflight = service.audit(batch.run_id, require_registry=False)"
+    source = (ROOT / "src" / "astock" / "knowledge" / "completion_cli.py").read_text(
+        encoding="utf-8"
     )
+
+    preflight = source.index("preflight = service.audit(batch.run_id, require_registry=False)")
     apply_review = source.index("review = service.apply_review_batch(batch)")
     publish = source.index("release = service.publish_registry(batch.run_id)")
     postflight = source.index("audit = service.audit(batch.run_id)", preflight + 1)
@@ -97,11 +95,7 @@ def test_delegated_review_file_locks_the_twenty_final_decisions() -> None:
     batch = KnowledgeCompletionService.load_review_batch(
         ROOT / "configs" / "direct_knowledge_review_20260809.json"
     )
-    approved = {
-        item.skill_name
-        for item in batch.decisions
-        if item.decision.value == "APPROVE"
-    }
+    approved = {item.skill_name for item in batch.decisions if item.decision.value == "APPROVE"}
 
     assert batch.expected_pending_count == 20
     assert len(batch.decisions) == 20
@@ -114,23 +108,15 @@ def test_delegated_review_file_locks_the_twenty_final_decisions() -> None:
         ),
         "Ignore cancellable opening-auction indications",
         "Treat seasonal-theme calendars as hypotheses requiring validation",
-        (
-            "Use pre-calculated marketable limit orders only after "
-            "execution-risk review"
-        ),
+        ("Use pre-calculated marketable limit orders only after execution-risk review"),
         "Regulated niche moat and payout-sustainability test",
-        (
-            "Demand an independently testable edge before using a marketed "
-            "trading tactic"
-        ),
+        ("Demand an independently testable edge before using a marketed trading tactic"),
         "Staged-project valuation with completion haircut",
     }
 
 
 def test_research_runtime_source_stays_outside_knowledge_storage() -> None:
-    source = (ROOT / "src" / "astock" / "research" / "runtime.py").read_text(
-        encoding="utf-8"
-    )
+    source = (ROOT / "src" / "astock" / "research" / "runtime.py").read_text(encoding="utf-8")
 
     forbidden = (
         "knowledge_direct_",
@@ -146,9 +132,7 @@ def test_research_runtime_source_stays_outside_knowledge_storage() -> None:
 
 
 def test_final_trade_protocol_is_frozen_only_after_classification_audit() -> None:
-    source = (ROOT / "src" / "astock" / "research" / "runtime.py").read_text(
-        encoding="utf-8"
-    )
+    source = (ROOT / "src" / "astock" / "research" / "runtime.py").read_text(encoding="utf-8")
     committee_draft = source.index('outputs["committee_protocol_draft"]')
     classification_status = source.index("classification_status =", committee_draft)
     classification_audit = source.index("classification_audit =", classification_status)
@@ -157,12 +141,18 @@ def test_final_trade_protocol_is_frozen_only_after_classification_audit() -> Non
 
     assert committee_draft < classification_status < classification_audit < final_protocol
     assert final_protocol < paper_decision
+    method_start = source.index("    def _freeze_classified_protocol(")
+    method_end = source.index("    def _finish_report(", method_start)
+    final_contract = source[method_start:method_end]
+    assert "TRADING_CLASSIFICATION_NOT_RUNTIME_RESOLVED" in final_contract
+    assert "CORPORATE_ACTION_BASELINE_NOT_OFFICIALLY_CERTIFIED" in final_contract
+    assert "PRICE_LIMIT_RATE_UNVERIFIED" in final_contract
 
 
 def test_classified_protocol_schema_binds_exact_classification_hash() -> None:
-    source = (
-        ROOT / "src" / "astock" / "schemas" / "research_runtime.py"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "src" / "astock" / "schemas" / "research_runtime.py").read_text(
+        encoding="utf-8"
+    )
     start = source.index("class ClassifiedTradeProtocol")
     end = source.index("class ResearchPaperDecision", start)
     contract = source[start:end]

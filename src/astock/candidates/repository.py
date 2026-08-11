@@ -492,6 +492,27 @@ class CandidateRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def research_ready_records(
+        self,
+        *,
+        as_of: datetime,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return latest visible RESEARCH_READY versions without mutating candidate state."""
+
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM (SELECT v.*,i.company_id,i.instrument_id,s.as_of AS scan_as_of,"
+                "ROW_NUMBER() OVER(PARTITION BY v.candidate_id ORDER BY s.as_of DESC,"
+                "v.rowid DESC) AS rank FROM candidate_record_version v JOIN candidate_identity i "
+                "ON i.candidate_id=v.candidate_id JOIN candidate_scan_run s ON s.scan_id=v.scan_id "
+                "WHERE s.as_of<=?) WHERE rank=1 AND lifecycle_status='RESEARCH_READY' "
+                "ORDER BY CASE strength WHEN 'STRONG' THEN 0 WHEN 'MODERATE' THEN 1 ELSE 2 END,"
+                "company_id LIMIT ?",
+                (as_of.astimezone(UTC).isoformat(), max(1, limit)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def status_by_company(self, company_id: str) -> dict[str, Any] | None:
         with self.state.connect() as connection:
             row = connection.execute(

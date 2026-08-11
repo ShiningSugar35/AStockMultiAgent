@@ -30,6 +30,7 @@ from astock.schemas import (
     MarketBar,
     MarketRegime,
     MarketRegimeFeatures,
+    PaperTradingClassification,
     Phase8AdmissionStatus,
     PointInTimeStatus,
     ReplayQuality,
@@ -55,6 +56,13 @@ from astock.schemas import (
     SourceSnapshot,
     SpecialistCoverageStatus,
     TradeProtocol,
+)
+from astock.schemas.research_runtime import (
+    ClassifiedTradeProtocol,
+    TradingClassificationRelease,
+    TradingClassificationStatus,
+    TradingPriceLimitRegime,
+    TradingSpecialRegime,
 )
 from astock.shadow import (
     ShadowEvaluationService,
@@ -449,6 +457,199 @@ def _assignment_request(
     )
 
 
+def _classified_assignment_request(
+    execution: ShadowStudyExecution,
+    state: StateStore,
+    objects: ObjectStore,
+    service: ShadowEvaluationService,
+) -> ShadowDecisionAssignmentRequest:
+    memo = _memo().model_copy(
+        update={"memo_id": "memo:classified", "company_id": "600000"}
+    )
+    memo_reference = _register_input(
+        state,
+        objects,
+        artifact_id="ResearchMemoArtifact:memo:classified",
+        artifact_type="ResearchMemoArtifact",
+        payload=memo,
+    )
+    decision = _decision(memo_reference.object_sha256).model_copy(
+        update={"decision_id": "decision:classified", "company_id": "600000"}
+    )
+    decision_reference = _register_input(
+        state,
+        objects,
+        artifact_id="DecisionPack:decision:classified",
+        artifact_type="DecisionPack",
+        payload=decision,
+    )
+    protocol = _protocol().model_copy(
+        update={
+            "protocol_id": "protocol:classified",
+            "decision_id": decision.decision_id,
+            "company_id": "600000",
+        }
+    )
+    protocol_reference = _register_input(
+        state,
+        objects,
+        artifact_id="TradeProtocol:protocol:classified",
+        artifact_type="TradeProtocol",
+        payload=protocol,
+    )
+    classification = TradingClassificationRelease(
+        release_id="trading-classification:shadow-classified",
+        company_id="600000",
+        market=Market.XSHG,
+        symbol="600000",
+        as_of=SIGNAL,
+        effective_from=SIGNAL,
+        valid_until=SIGNAL + timedelta(hours=2),
+        classification=PaperTradingClassification(
+            instrument_id="XSHG:600000",
+            board="MAIN",
+            risk_status="NORMAL",
+            fixed_price_limit_eligible=True,
+            suspension_status_verified=True,
+            suspended=False,
+            evidence_id="shadow-classification-evidence",
+            created_at=SIGNAL,
+        ),
+        special_no_price_limit=False,
+        special_regime=TradingSpecialRegime.ORDINARY,
+        price_limit_regime=TradingPriceLimitRegime.FIXED,
+        price_limit_rate_bps=1000,
+        source_artifact_ids=["source:shadow-classification"],
+        source_object_hashes=["9" * 64],
+        status=TradingClassificationStatus.READY,
+        reason_codes=[],
+        created_at=SIGNAL,
+    )
+    classification_reference = _register_input(
+        state,
+        objects,
+        artifact_id=(
+            "TradingClassificationRelease:trading-classification:shadow-classified"
+        ),
+        artifact_type="TradingClassificationRelease",
+        payload=classification,
+    )
+    classified = ClassifiedTradeProtocol(
+        protocol_id="classified-trade-protocol:" + "c" * 64,
+        company_id="600000",
+        as_of=SIGNAL,
+        decision_pack_artifact_id=decision_reference.artifact_id,
+        decision_pack_object_hash=decision_reference.object_sha256,
+        committee_protocol_artifact_id=protocol_reference.artifact_id,
+        committee_protocol_object_hash=protocol_reference.object_sha256,
+        trading_classification_artifact_id=classification_reference.artifact_id,
+        trading_classification_object_hash=classification_reference.object_sha256,
+        committee_outcome=protocol.outcome,
+        final_outcome=protocol.outcome,
+        board="MAIN",
+        risk_status="NORMAL",
+        special_regime=TradingSpecialRegime.ORDINARY,
+        price_limit_regime=TradingPriceLimitRegime.FIXED,
+        price_limit_rate_bps=1000,
+        blocking_codes=[],
+        frozen_input_hashes=sorted(
+            [
+                decision_reference.object_sha256,
+                protocol_reference.object_sha256,
+                classification_reference.object_sha256,
+            ]
+        ),
+        paper_simulation_allowed=True,
+        created_at=SIGNAL,
+    )
+    classified_reference = _register_input(
+        state,
+        objects,
+        artifact_id=f"ClassifiedTradeProtocol:{classified.protocol_id}",
+        artifact_type="ClassifiedTradeProtocol",
+        payload=classified,
+    )
+    base_reference = _register_input(
+        state,
+        objects,
+        artifact_id="BaseCasePack:base:classified",
+        artifact_type="BaseCasePack",
+        payload={"base_case_id": "base:classified", "created_at": SIGNAL.isoformat()},
+    )
+    delta_reference = _register_input(
+        state,
+        objects,
+        artifact_id="SpecialistDelta:delta:classified",
+        artifact_type="SpecialistDelta",
+        payload={"delta_id": "delta:classified", "created_at": SIGNAL.isoformat()},
+    )
+    references = sorted(
+        [
+            base_reference,
+            delta_reference,
+            memo_reference,
+            decision_reference,
+            protocol_reference,
+            classification_reference,
+            classified_reference,
+        ],
+        key=lambda item: item.artifact_id,
+    )
+    type_inputs = {
+        ShadowArmType.RULE_BASELINE: [],
+        ShadowArmType.BASE_CASE_ONLY: [base_reference.artifact_id],
+        ShadowArmType.BASE_CASE_PLUS_SPECIALIST: sorted(
+            [base_reference.artifact_id, delta_reference.artifact_id]
+        ),
+        ShadowArmType.FULL_COMMITTEE: sorted(
+            [
+                decision_reference.artifact_id,
+                memo_reference.artifact_id,
+                protocol_reference.artifact_id,
+                classification_reference.artifact_id,
+                classified_reference.artifact_id,
+            ]
+        ),
+        ShadowArmType.CSI300_BENCHMARK: [],
+        ShadowArmType.EQUAL_WEIGHT_CANDIDATE: [],
+    }
+    signals = sorted(
+        [
+            ShadowArmSignal(
+                arm_id=arm.arm_id,
+                action=ShadowAction.ENTER,
+                input_artifact_ids=type_inputs[arm.arm_type],
+                reason_codes=["CLASSIFIED_PROTOCOL_FROZEN_BEFORE_OUTCOME"],
+                created_at=SIGNAL,
+            )
+            for arm in execution.arms
+        ],
+        key=lambda item: item.arm_id,
+    )
+    return ShadowDecisionAssignmentRequest(
+        study_id=execution.manifest.study_id,
+        candidate_set_id=execution.manifest.candidate_set_id,
+        company_id="600000",
+        symbol="600000",
+        market=Market.XSHG,
+        signal_time=SIGNAL,
+        independence_key=service.build_independence_key(
+            execution.manifest.study_id,
+            company_id="600000",
+            thesis_version="classified-v1",
+            event_id="event:classified",
+        ),
+        thesis_version="classified-v1",
+        event_id="event:classified",
+        research_memo_id=memo.memo_id,
+        decision_id=decision.decision_id,
+        trade_protocol_id=classified.protocol_id,
+        artifact_references=references,
+        arm_signals=signals,
+        created_at=SIGNAL,
+    )
+
+
 def _forward_market_evidence(
     state: StateStore,
     objects: ObjectStore,
@@ -531,6 +732,69 @@ def _forward_market_evidence(
         ),
     )
     return reference.sha256, snapshot_ids, available_at
+
+
+def test_shadow_assignment_accepts_classified_protocol_and_requires_classification(
+    tmp_path: Path,
+) -> None:
+    service, _, _, clock = _service(tmp_path)
+    execution = service.create_study(_study_request())
+    clock.now = SIGNAL
+    request = _classified_assignment_request(
+        execution,
+        service.state,
+        service.object_store,
+        service,
+    )
+    full_arm_id = next(
+        arm.arm_id
+        for arm in execution.arms
+        if arm.arm_type is ShadowArmType.FULL_COMMITTEE
+    )
+    bad_references = [
+        item
+        for item in request.artifact_references
+        if item.artifact_type != "TradingClassificationRelease"
+    ]
+    bad_signals = [
+        item.model_copy(
+            update={
+                "input_artifact_ids": [
+                    artifact_id
+                    for artifact_id in item.input_artifact_ids
+                    if not artifact_id.startswith("TradingClassificationRelease:")
+                ]
+            }
+        )
+        if item.arm_id == full_arm_id
+        else item
+        for item in request.arm_signals
+    ]
+    bad_event_id = "event:classified-missing-classification"
+    bad = request.model_copy(
+        update={
+            "event_id": bad_event_id,
+            "independence_key": service.build_independence_key(
+                execution.manifest.study_id,
+                company_id=request.company_id,
+                thesis_version=request.thesis_version,
+                event_id=bad_event_id,
+            ),
+            "artifact_references": bad_references,
+            "arm_signals": bad_signals,
+        }
+    )
+    with pytest.raises(ValueError, match="classification lineage mismatch"):
+        service.assign(bad)
+
+    assignment = service.assign(request)
+    assert assignment.trade_protocol_id.startswith("classified-trade-protocol:")
+    assert assignment.registered_at == SIGNAL
+    status = service.status(execution.manifest.study_id)
+    assert status.assignment_count == 1
+    assert status.formal_forward_event_count == 1
+    assert status.observation_count == 0
+    assert service.audit(execution.manifest.study_id)["status"] == "PASS"
 
 
 def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> None:

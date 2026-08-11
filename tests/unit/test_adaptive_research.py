@@ -25,15 +25,14 @@ from astock.schemas import (
     ShadowEvaluationReport,
     ShadowFoldResult,
 )
+from astock.schemas.adaptive import AdaptiveResearchPrerequisiteCheck
 from astock.shadow import ShadowEvaluationService, load_shadow_evaluation_policy
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2028, 7, 18, tzinfo=UTC)
 REPORT_OBJECT_HASH = "1" * 64
 ADMISSION_OBJECT_HASH = "2" * 64
-POLICY = load_shadow_evaluation_policy(
-    PROJECT_ROOT / "configs" / "shadow_evaluation.yaml"
-)
+POLICY = load_shadow_evaluation_policy(PROJECT_ROOT / "configs" / "shadow_evaluation.yaml")
 
 
 class _FakeObjectStore:
@@ -92,10 +91,7 @@ class _FakeRepository:
 
 
 def _report() -> ShadowEvaluationReport:
-    folds = [
-        ShadowFoldResult.model_construct(independent_decision_count=20)
-        for _ in range(5)
-    ]
+    folds = [ShadowFoldResult.model_construct(independent_decision_count=20) for _ in range(5)]
     comparison = ShadowComparisonResult.model_construct(folds=folds)
     return ShadowEvaluationReport.model_construct(
         report_id="report:ready",
@@ -122,9 +118,7 @@ def _report() -> ShadowEvaluationReport:
 
 
 def _admission(
-    status: Phase8AdmissionStatus = (
-        Phase8AdmissionStatus.ELIGIBLE_RULE_STATE_MACHINE_RESEARCH
-    ),
+    status: Phase8AdmissionStatus = (Phase8AdmissionStatus.ELIGIBLE_RULE_STATE_MACHINE_RESEARCH),
 ) -> Phase8AdmissionReport:
     eligible = status is Phase8AdmissionStatus.ELIGIBLE_RULE_STATE_MACHINE_RESEARCH
     return Phase8AdmissionReport.model_construct(
@@ -189,14 +183,10 @@ def test_no_study_status_is_stable_fail_closed_and_has_no_database_writes(
     shadow = ShadowEvaluationService(
         state,
         ObjectStore(tmp_path / "objects"),
-        load_shadow_evaluation_policy(
-            PROJECT_ROOT / "configs" / "shadow_evaluation.yaml"
-        ),
+        load_shadow_evaluation_policy(PROJECT_ROOT / "configs" / "shadow_evaluation.yaml"),
     )
     before = _table_counts(state)
-    first = AdaptiveResearchStatusService(shadow, clock=lambda: NOW).status(
-        "study:not-run"
-    )
+    first = AdaptiveResearchStatusService(shadow, clock=lambda: NOW).status("study:not-run")
     second = AdaptiveResearchStatusService(
         shadow,
         clock=lambda: NOW + timedelta(days=1),
@@ -205,10 +195,7 @@ def test_no_study_status_is_stable_fail_closed_and_has_no_database_writes(
 
     assert before == after
     assert first.implementation_status == "IMPLEMENTED_DISABLED_BOUNDARY"
-    assert (
-        first.capability_status
-        is AdaptiveResearchCapabilityStatus.NOT_ENTERED_BY_DESIGN
-    )
+    assert first.capability_status is AdaptiveResearchCapabilityStatus.NOT_ENTERED_BY_DESIGN
     assert first.phase7_audit_status == "NOT_RUN"
     assert first.user_admission_status == "NOT_ADMITTED"
     assert first.reason_codes == ["PHASE7_STUDY_NOT_RUN"]
@@ -218,8 +205,7 @@ def test_no_study_status_is_stable_fail_closed_and_has_no_database_writes(
     assert first.qualifying_walk_forward_fold_gap == 5
     assert first.qualifying_market_regime_gap == 3
     assert (
-        first.next_permitted_stage
-        is AdaptiveResearchNextStage.PHASE7_FORWARD_EVIDENCE_COLLECTION
+        first.next_permitted_stage is AdaptiveResearchNextStage.PHASE7_FORWARD_EVIDENCE_COLLECTION
     )
     assert not first.adaptive_weights_enabled
     assert not first.online_learning_allowed
@@ -241,12 +227,8 @@ def test_missing_report_and_admission_explain_the_forward_evidence_gap() -> None
         "PHASE8_ADMISSION_NOT_AVAILABLE",
     ]
 
-    report_without_admission = _service(report=_report(), admission=None).status(
-        "study:ready"
-    )
-    assert report_without_admission.reason_codes == [
-        "PHASE8_ADMISSION_NOT_AVAILABLE"
-    ]
+    report_without_admission = _service(report=_report(), admission=None).status("study:ready")
+    assert report_without_admission.reason_codes == ["PHASE8_ADMISSION_NOT_AVAILABLE"]
     assert report_without_admission.observation_months == Decimal("12.25")
     assert report_without_admission.qualifying_walk_forward_fold_count == 5
     assert report_without_admission.qualifying_market_regime_count == 3
@@ -255,15 +237,10 @@ def test_missing_report_and_admission_explain_the_forward_evidence_gap() -> None
 def test_noneligible_admission_preserves_deterministic_gate_reasons() -> None:
     result = _service(
         report=_report(),
-        admission=_admission(
-            Phase8AdmissionStatus.NOT_ELIGIBLE_INSUFFICIENT_SAMPLE
-        ),
+        admission=_admission(Phase8AdmissionStatus.NOT_ELIGIBLE_INSUFFICIENT_SAMPLE),
     ).status("study:ready")
 
-    assert (
-        result.capability_status
-        is AdaptiveResearchCapabilityStatus.NOT_ENTERED_BY_DESIGN
-    )
+    assert result.capability_status is AdaptiveResearchCapabilityStatus.NOT_ENTERED_BY_DESIGN
     assert result.phase8_admission_status is (
         Phase8AdmissionStatus.NOT_ELIGIBLE_INSUFFICIENT_SAMPLE
     )
@@ -278,10 +255,7 @@ def test_eligible_admission_still_requires_explicit_versioned_approval() -> None
     assert result.capability_status is (
         AdaptiveResearchCapabilityStatus.AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL
     )
-    assert (
-        result.next_permitted_stage
-        is AdaptiveResearchNextStage.EXPLICIT_RULE_RESEARCH_APPROVAL
-    )
+    assert result.next_permitted_stage is AdaptiveResearchNextStage.EXPLICIT_RULE_RESEARCH_APPROVAL
     assert result.reason_codes == ["EXPLICIT_RULE_RESEARCH_APPROVAL_REQUIRED"]
     assert result.user_admission_status == "NOT_ADMITTED"
     assert result.shadow_report_id == "report:ready"
@@ -312,10 +286,7 @@ def test_audit_or_object_failure_blocks_an_otherwise_eligible_admission() -> Non
         AdaptiveResearchCapabilityStatus.NOT_ENTERED_BY_DESIGN
     )
     assert "BLOCKED_BY_INTEGRITY" in audit_blocked.reason_codes
-    assert (
-        "PHASE7_AUDIT__SHADOW_REPORT_RECALCULATION_MISMATCH"
-        in audit_blocked.reason_codes
-    )
+    assert "PHASE7_AUDIT__SHADOW_REPORT_RECALCULATION_MISMATCH" in audit_blocked.reason_codes
 
     object_blocked = _service(
         report=_report(),
@@ -342,6 +313,29 @@ def test_disabled_boundary_schema_rejects_active_research_or_enabled_flags() -> 
             }
         )
     with pytest.raises(ValidationError):
-        AdaptiveResearchStatusReport.model_validate(
-            {**payload, "adaptive_weights_enabled": True}
-        )
+        AdaptiveResearchStatusReport.model_validate({**payload, "adaptive_weights_enabled": True})
+
+
+def test_phase8_prerequisite_contract_uses_active_policy_thresholds_not_legacy_labels() -> None:
+    check = AdaptiveResearchPrerequisiteCheck(
+        real_forward_study=True,
+        observation_months=Decimal("12"),
+        independent_decision_count=100,
+        qualifying_market_state_count=3,
+        qualifying_walk_forward_fold_count=5,
+        required_observation_months=POLICY.phase8_observation_months,
+        required_independent_decision_count=POLICY.minimum_independent_decisions,
+        required_market_state_count=POLICY.minimum_regime_count,
+        required_walk_forward_fold_count=POLICY.minimum_walk_forward_folds,
+        gate_results={
+            "MINIMUM_INDEPENDENT_DECISIONS": True,
+            "MINIMUM_MARKET_STATES": True,
+            "MINIMUM_QUALIFYING_WALK_FORWARD_FOLDS": True,
+            "MINIMUM_REAL_FORWARD_MONTHS": True,
+        },
+        all_prerequisites_met=True,
+    )
+
+    assert check.required_market_state_count == 3
+    assert check.required_walk_forward_fold_count == 5
+    assert check.all_prerequisites_met

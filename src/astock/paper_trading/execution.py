@@ -34,6 +34,7 @@ from astock.schemas import (
     TradingSession,
 )
 from astock.schemas.reference_data import DailyBarObservation
+from astock.schemas.research_runtime import ClassifiedTradeProtocol, TradingClassificationRelease
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +47,18 @@ class PaperExecutionPreparation:
     execution_request: PaperExecutionRequest
     operation_request: PaperOperationRequest
     reused_existing: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PaperProtocolBinding:
+    authorization_artifact_id: str
+    authorization_object_hash: str
+    committee_protocol: TradeProtocol
+    committee_protocol_artifact_id: str
+    committee_protocol_object_hash: str
+    classified_protocol: ClassifiedTradeProtocol | None = None
+    classification_artifact_id: str | None = None
+    classification_object_hash: str | None = None
 
 
 class RecordedPaperReferenceVerifier(PaperReferenceVerifier):
@@ -165,15 +178,18 @@ class PaperExecutionService:
         expires_at = (expires_at or requested_at + timedelta(minutes=30)).astimezone(UTC)
         if expires_at <= requested_at:
             raise ValueError("paper execution expiry must follow requested_at")
-        protocol_id = trade_protocol_id.removeprefix("TradeProtocol:")
-        protocol, protocol_hash = self._load_protocol(protocol_id)
+        binding = self._load_protocol_binding(trade_protocol_id)
         reference_pack, reference_hash = self._load_reference_pack(reference_pack_artifact_id)
-        self._validate_protocol(protocol, reference_pack, requested_at)
+        self._validate_protocol(binding, reference_pack, requested_at)
 
         input_hash = content_hash(
             {
-                "trade_protocol_id": protocol.protocol_id,
-                "trade_protocol_object_sha256": protocol_hash,
+                "trade_protocol_id": binding.authorization_artifact_id,
+                "trade_protocol_object_sha256": binding.authorization_object_hash,
+                "committee_protocol_artifact_id": binding.committee_protocol_artifact_id,
+                "committee_protocol_object_sha256": binding.committee_protocol_object_hash,
+                "trading_classification_artifact_id": binding.classification_artifact_id,
+                "trading_classification_object_sha256": binding.classification_object_hash,
                 "reference_pack_artifact_id": reference_pack_artifact_id,
                 "reference_pack_object_sha256": reference_hash,
                 "account_id": account_id,
@@ -217,8 +233,20 @@ class PaperExecutionService:
         )
         operation = operation.model_copy(update={"operation_id": paper_request_hash(operation)})
         execution = PaperExecutionRequest(
-            trade_protocol_id=f"TradeProtocol:{protocol.protocol_id}",
-            trade_protocol_object_sha256=protocol_hash,
+            trade_protocol_id=binding.authorization_artifact_id,
+            trade_protocol_object_sha256=binding.authorization_object_hash,
+            committee_protocol_artifact_id=(
+                binding.committee_protocol_artifact_id
+                if binding.classified_protocol is not None
+                else None
+            ),
+            committee_protocol_object_sha256=(
+                binding.committee_protocol_object_hash
+                if binding.classified_protocol is not None
+                else None
+            ),
+            trading_classification_artifact_id=binding.classification_artifact_id,
+            trading_classification_object_sha256=binding.classification_object_hash,
             paper_reference_pack_artifact_id=reference_pack_artifact_id,
             paper_reference_pack_object_sha256=reference_hash,
             account_id=account_id,
@@ -235,6 +263,12 @@ class PaperExecutionService:
         operation_artifact_id = f"PaperOperationRequest:{operation.operation_id}"
         execution_ref = self.objects.put_json(execution.model_dump(mode="json"))
         operation_ref = self.objects.put_json(operation.model_dump(mode="json"))
+        protocol_input_hashes = {
+            binding.authorization_object_hash,
+            binding.committee_protocol_object_hash,
+        }
+        if binding.classification_object_hash is not None:
+            protocol_input_hashes.add(binding.classification_object_hash)
         self.state.register_artifacts(
             [
                 (
@@ -242,14 +276,14 @@ class PaperExecutionService:
                     "PaperOperationRequest",
                     operation.schema_version,
                     operation_ref.sha256,
-                    [protocol_hash, reference_hash],
+                    sorted({*protocol_input_hashes, reference_hash}),
                 ),
                 (
                     execution_artifact_id,
                     "PaperExecutionRequest",
                     execution.schema_version,
                     execution_ref.sha256,
-                    [protocol_hash, reference_hash, operation_ref.sha256],
+                    sorted({*protocol_input_hashes, reference_hash, operation_ref.sha256}),
                 ),
             ]
         )
@@ -258,8 +292,8 @@ class PaperExecutionService:
             execution_artifact_id=execution_artifact_id,
             execution_object_hash=execution_ref.sha256,
             input_hash=input_hash,
-            protocol=protocol,
-            protocol_hash=protocol_hash,
+            committee_protocol_id=binding.committee_protocol.protocol_id,
+            committee_protocol_hash=binding.committee_protocol_object_hash,
             reference_pack_artifact_id=reference_pack_artifact_id,
             reference_hash=reference_hash,
             operation_artifact_id=operation_artifact_id,
@@ -377,15 +411,23 @@ class PaperExecutionService:
         if execution.paper_operation_request_id != operation.operation_id:
             findings.add("EXECUTION_OPERATION_BINDING_MISMATCH")
         try:
-            protocol, protocol_hash = self._load_protocol(
-                execution.trade_protocol_id.removeprefix("TradeProtocol:")
-            )
+            binding = self._load_protocol_binding(execution.trade_protocol_id)
             if (
-                protocol_hash != execution.trade_protocol_object_sha256
-                or protocol.outcome is not TradeProtocolOutcome.APPROVE_SIMULATION
-                or protocol.broker_execution_allowed
+                binding.authorization_object_hash != execution.trade_protocol_object_sha256
+                or binding.committee_protocol.outcome is not TradeProtocolOutcome.APPROVE_SIMULATION
+                or binding.committee_protocol.broker_execution_allowed
             ):
                 findings.add("TRADE_PROTOCOL_BINDING_MISMATCH")
+            if binding.classified_protocol is not None and (
+                execution.committee_protocol_artifact_id != binding.committee_protocol_artifact_id
+                or execution.committee_protocol_object_sha256
+                != binding.committee_protocol_object_hash
+                or execution.trading_classification_artifact_id
+                != binding.classification_artifact_id
+                or execution.trading_classification_object_sha256
+                != binding.classification_object_hash
+            ):
+                findings.add("CLASSIFIED_PROTOCOL_LINEAGE_MISMATCH")
         except (OSError, ValueError):
             findings.add("TRADE_PROTOCOL_BINDING_MISMATCH")
         try:
@@ -515,6 +557,83 @@ class PaperExecutionService:
             "finding_codes": sorted(findings),
         }
 
+    def _load_protocol_binding(self, value: str) -> _PaperProtocolBinding:
+        if value.startswith("ClassifiedTradeProtocol:"):
+            artifact_id = value
+            row = self.state.artifact_record(artifact_id)
+            if row is None or str(row["type"]) != "ClassifiedTradeProtocol":
+                raise ValueError("classified trade protocol is unavailable")
+            object_hash = str(row["object_hash"])
+            if not self.objects.verify(object_hash):
+                raise ValueError("classified trade protocol object is unavailable")
+            classified = ClassifiedTradeProtocol.model_validate_json(
+                self.objects.get_bytes(object_hash)
+            )
+            if (
+                classified.final_outcome is not TradeProtocolOutcome.APPROVE_SIMULATION
+                or not classified.paper_simulation_allowed
+                or classified.blocking_codes
+                or classified.broker_execution_allowed
+            ):
+                raise ValueError("classified trade protocol does not approve paper simulation")
+            committee_artifact = classified.committee_protocol_artifact_id
+            committee_row = self.state.artifact_record(committee_artifact)
+            if committee_row is None or str(committee_row["type"]) != "TradeProtocol":
+                raise ValueError("classified protocol committee lineage is unavailable")
+            committee_hash = str(committee_row["object_hash"])
+            if (
+                committee_hash != classified.committee_protocol_object_hash
+                or not self.objects.verify(committee_hash)
+            ):
+                raise ValueError("classified protocol committee lineage drift")
+            committee = TradeProtocol.model_validate_json(self.objects.get_bytes(committee_hash))
+            classification_artifact = classified.trading_classification_artifact_id
+            classification_row = self.state.artifact_record(classification_artifact)
+            if (
+                classification_row is None
+                or str(classification_row["type"]) != "TradingClassificationRelease"
+            ):
+                raise ValueError("classified protocol classification lineage is unavailable")
+            classification_hash = str(classification_row["object_hash"])
+            if (
+                classification_hash != classified.trading_classification_object_hash
+                or not self.objects.verify(classification_hash)
+            ):
+                raise ValueError("classified protocol classification lineage drift")
+            classification = TradingClassificationRelease.model_validate_json(
+                self.objects.get_bytes(classification_hash)
+            )
+            if (
+                classification.company_id != classified.company_id
+                or classification.as_of != classified.as_of
+                or classification.classification.board != classified.board
+                or classification.classification.risk_status != classified.risk_status
+                or classification.special_regime is not classified.special_regime
+                or classification.price_limit_regime is not classified.price_limit_regime
+                or classification.price_limit_rate_bps != classified.price_limit_rate_bps
+            ):
+                raise ValueError("classified protocol classification projection drift")
+            return _PaperProtocolBinding(
+                authorization_artifact_id=artifact_id,
+                authorization_object_hash=object_hash,
+                committee_protocol=committee,
+                committee_protocol_artifact_id=committee_artifact,
+                committee_protocol_object_hash=committee_hash,
+                classified_protocol=classified,
+                classification_artifact_id=classification_artifact,
+                classification_object_hash=classification_hash,
+            )
+
+        protocol_id = value.removeprefix("TradeProtocol:")
+        protocol, object_hash = self._load_protocol(protocol_id)
+        return _PaperProtocolBinding(
+            authorization_artifact_id=f"TradeProtocol:{protocol.protocol_id}",
+            authorization_object_hash=object_hash,
+            committee_protocol=protocol,
+            committee_protocol_artifact_id=f"TradeProtocol:{protocol.protocol_id}",
+            committee_protocol_object_hash=object_hash,
+        )
+
     def _load_protocol(self, protocol_id: str) -> tuple[TradeProtocol, str]:
         summary = self.committee.protocol_summary(protocol_id)
         protocol = self.committee.get_protocol(protocol_id)
@@ -546,10 +665,11 @@ class PaperExecutionService:
 
     @staticmethod
     def _validate_protocol(
-        protocol: TradeProtocol,
+        binding: _PaperProtocolBinding,
         reference_pack: PaperReferencePack,
         requested_at: datetime,
     ) -> None:
+        protocol = binding.committee_protocol
         if protocol.outcome is not TradeProtocolOutcome.APPROVE_SIMULATION:
             raise ValueError("trade protocol does not approve simulation")
         if (
@@ -560,6 +680,18 @@ class PaperExecutionService:
             raise ValueError("trade protocol execution gates are not paper-only")
         if protocol.company_id != reference_pack.symbol:
             raise ValueError("trade protocol company does not match reference pack")
+        classified = binding.classified_protocol
+        if classified is not None:
+            if classified.company_id != reference_pack.symbol:
+                raise ValueError("classified protocol company does not match reference pack")
+            reference_classification = reference_pack.classification
+            if (
+                reference_classification.board != classified.board
+                or reference_classification.risk_status != classified.risk_status
+                or reference_classification.suspended
+                != (classified.special_regime.value == "SUSPENDED")
+            ):
+                raise ValueError("classified protocol disagrees with the paper reference pack")
         if requested_at < protocol.earliest_executable_time.astimezone(UTC):
             raise ValueError("paper execution precedes the protocol effective time")
         if requested_at > reference_pack.visible_at.astimezone(UTC):
@@ -572,8 +704,8 @@ class PaperExecutionService:
         execution_artifact_id: str,
         execution_object_hash: str,
         input_hash: str,
-        protocol: TradeProtocol,
-        protocol_hash: str,
+        committee_protocol_id: str,
+        committee_protocol_hash: str,
         reference_pack_artifact_id: str,
         reference_hash: str,
         operation_artifact_id: str,
@@ -605,8 +737,8 @@ class PaperExecutionService:
                     execution_artifact_id,
                     execution_object_hash,
                     input_hash,
-                    protocol.protocol_id,
-                    protocol_hash,
+                    committee_protocol_id,
+                    committee_protocol_hash,
                     reference_pack_artifact_id,
                     reference_hash,
                     operation_artifact_id,

@@ -6,11 +6,13 @@ description: Build an evidence-bounded A-share research candidate or observation
 # 候选扫描
 
 1. Run `uv run astock probe` and confirm the local candidate capability is available.
-2. Assemble and register one immutable `CandidateInputRelease` from local versioned instrument/tradability, calendar, unadjusted daily data, corporate-action hints, data-quality report, canonical announcement events, closed financial-integrity evidence, and optional user watchlist or holding review.
-3. Ensure every decisive artifact carries its artifact id, object hash, coverage, availability, and PIT status. Formal historical scans accept only `CERTIFIED` or `DOCUMENT_RECONSTRUCTED` inputs.
-4. Put only the release id and object hash in `CandidateScanRequest`; then run `uv run astock candidate-scan REQUEST.json`.
-5. Inspect with `uv run astock candidate-status --scan-id SCAN_ID` or `--company-id COMPANY_ID`, and verify with `uv run astock candidate-audit SCAN_ID`.
-6. Treat `NEEDS_INFO` as an evidence/coverage gap. It never means that the scan found no candidates.
+2. For a broad current-market discovery request, first run `uv run astock research-seeds --live`. This low-cost stage merges three research-only sources: existing `RESEARCH_READY` candidates, market liquidity/scale Seeds, and Expert Seeds dynamically inferred from the currently published big-V Skills plus current public industry-board constituents. Research Seeds are not CandidateRecords and never imply BUY.
+3. Use the bounded Seed set to assemble one immutable `CandidateInputRelease` from versioned instrument/tradability, calendar, unadjusted daily data, corporate-action hints, data-quality report, canonical announcement events, closed financial-integrity evidence, and optional user watchlist or holding review. Do not perform full evidence/financial collection for the entire A-share market when a smaller Seed set exists.
+4. Ensure every decisive artifact carries its artifact id, object hash, coverage, availability, and PIT status. Formal historical scans accept only `CERTIFIED` or `DOCUMENT_RECONSTRUCTED` inputs. Expert Skill/domain matches are research-scope hints only; company facts still come from official evidence.
+5. For MCP/web-agent workflows, prefer `uv run astock candidate-input-run RELEASE.json` to stage the immutable release and scan it without copying a second large request through the conversation. `candidate-input-schema` exposes the exact release contract; `candidate-input-stage` remains available when a separate scan request is needed.
+6. Otherwise put only the release id and object hash in `CandidateScanRequest`, then run `uv run astock candidate-scan REQUEST.json`.
+7. Inspect with `uv run astock candidate-status --scan-id SCAN_ID` or `--company-id COMPANY_ID`, and verify with `uv run astock candidate-audit SCAN_ID`.
+8. Treat `NEEDS_INFO` as an evidence/coverage gap. It never means that the scan found no candidates. For a user asking which stocks to buy, pass a bounded research-ready shortlist to `$company-deep-research`; do not answer from candidate ranking alone.
 
 ## Deterministic policy
 

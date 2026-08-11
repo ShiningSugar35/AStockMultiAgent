@@ -34,6 +34,7 @@ from astock.schemas import (
     BaseCaseBuildRequest,
     BaseCasePack,
     CommitteeAccessPolicy,
+    CommitteeAssessment,
     CommitteeDecisionRequest,
     CommitteeMemberBinding,
     CommitteeMemberRole,
@@ -751,17 +752,23 @@ class ResearchRunService:
                 ResearchRunStage.COMMITTEE,
                 reasons,
             )
-        if request.committee_assessment.company_id != request.company_id:
+        committee_assessment = CommitteeAssessment.model_validate(
+            request.committee_assessment.model_dump(
+                mode="python",
+                exclude={"assessment_id", "request_sha256"},
+            )
+        )
+        if committee_assessment.company_id != request.company_id:
             raise ValueError("committee assessment company mismatch")
-        if request.committee_assessment.as_of != request.as_of:
+        if committee_assessment.as_of != request.as_of:
             raise ValueError("committee assessment as_of mismatch")
         expected_skill_versions = {item.skill_id: item.skill_version for item in route.selected}
         expected_skill_versions["ResearchMemoComposer"] = (
             memo.composer_version or "research-memo-composer-v1"
         )
-        assessment = request.committee_assessment.model_copy(
+        assessment = committee_assessment.model_copy(
             update={
-                "protocol": request.committee_assessment.protocol.model_copy(
+                "protocol": committee_assessment.protocol.model_copy(
                     update={
                         "evidence_snapshot_id": frozen_evidence.pack_id,
                         "skill_versions": dict(sorted(expected_skill_versions.items())),

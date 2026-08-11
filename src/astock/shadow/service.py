@@ -64,6 +64,7 @@ from astock.schemas import (
     TradeProtocol,
     VolumeUnit,
 )
+from astock.schemas.research_runtime import ClassifiedTradeProtocol, TradingClassificationRelease
 from astock.shadow.repository import ShadowRepository
 from astock.shadow.statistics import (
     deterministic_block_bootstrap,
@@ -88,6 +89,14 @@ class ShadowEvaluationExecution:
     admission: Phase8AdmissionReport
     report_object_sha256: str
     admission_object_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ShadowProtocolBinding:
+    committee_protocol: TradeProtocol
+    authorization_artifact_id: str
+    committee_protocol_artifact_id: str
+    classified_protocol: ClassifiedTradeProtocol | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -434,14 +443,8 @@ class ShadowEvaluationService:
         if actual_arm_ids != expected_arm_ids:
             raise ValueError("shadow assignment must retain every frozen study arm")
         registry = self._validate_artifact_references(request)
-        protocol_artifact_id = f"TradeProtocol:{request.trade_protocol_id}"
-        if protocol_artifact_id not in registry:
-            raise ValueError("shadow assignments require the frozen TradeProtocol")
-        protocol = TradeProtocol.model_validate_json(
-            self.object_store.get_bytes(registry[protocol_artifact_id]["object_hash"])
-        )
-        if protocol.protocol_id != request.trade_protocol_id:
-            raise ValueError("shadow TradeProtocol identity mismatch")
+        protocol_binding = self._resolve_assignment_protocol(request, registry)
+        protocol = protocol_binding.committee_protocol
         if protocol.company_id != request.company_id:
             raise ValueError("shadow assignment company does not match TradeProtocol")
         if protocol.signal_time != request.signal_time:
@@ -1995,24 +1998,16 @@ class ShadowEvaluationService:
             recovered["evaluations"] += 1
         return recovered
 
-    def _assignment_protocol(self, assignment: ShadowDecisionAssignment) -> TradeProtocol:
-        artifact_id = f"TradeProtocol:{assignment.trade_protocol_id}"
-        reference = next(
-            (
-                item
-                for item in assignment.artifact_references
-                if item.artifact_id == artifact_id
-            ),
-            None,
-        )
-        if reference is None or not self.object_store.verify(reference.object_sha256):
-            raise ValueError("shadow assignment TradeProtocol is unavailable")
-        protocol = TradeProtocol.model_validate_json(
-            self.object_store.get_bytes(reference.object_sha256)
-        )
-        if protocol.protocol_id != assignment.trade_protocol_id:
-            raise ValueError("shadow assignment TradeProtocol identity mismatch")
-        return protocol
+    def _assignment_protocol(
+        self,
+        assignment: ShadowDecisionAssignment,
+        registry: dict[str, dict[str, str]] | None = None,
+    ) -> TradeProtocol:
+        resolved_registry = registry or self._validate_artifact_references(assignment)
+        return self._resolve_assignment_protocol(
+            assignment,
+            resolved_registry,
+        ).committee_protocol
 
     def _phase6_contract_integrity(
         self,
@@ -2022,7 +2017,7 @@ class ShadowEvaluationService:
         try:
             for assignment in assignments:
                 registry = self._validate_artifact_references(assignment)
-                protocol = self._assignment_protocol(assignment)
+                protocol = self._assignment_protocol(assignment, registry)
                 self._validate_arm_inputs(assignment, arms, registry)
                 self._validate_committee_contract(
                     assignment,
@@ -3141,6 +3136,89 @@ class ShadowEvaluationService:
         slippage = rounded(Decimal(entry_value + exit_value) * policy.slippage_rate)
         return entry_commission + exit_commission, tax, transfer, slippage
 
+    def _resolve_assignment_protocol(
+        self,
+        request: ShadowDecisionAssignmentRequest,
+        registry: dict[str, dict[str, str]],
+    ) -> _ShadowProtocolBinding:
+        value = request.trade_protocol_id
+        if value.startswith("ClassifiedTradeProtocol:") or value.startswith(
+            "classified-trade-protocol:"
+        ):
+            artifact_id = (
+                value
+                if value.startswith("ClassifiedTradeProtocol:")
+                else f"ClassifiedTradeProtocol:{value}"
+            )
+            row = registry.get(artifact_id)
+            if row is None or row["type"] != "ClassifiedTradeProtocol":
+                raise ValueError("shadow assignments require the frozen ClassifiedTradeProtocol")
+            classified = ClassifiedTradeProtocol.model_validate_json(
+                self.object_store.get_bytes(row["object_hash"])
+            )
+            if (
+                classified.company_id != request.company_id
+                or classified.as_of != request.signal_time
+            ):
+                raise ValueError("shadow ClassifiedTradeProtocol identity mismatch")
+            if classified.broker_execution_allowed:
+                raise ValueError("shadow classified protocol cannot authorize broker execution")
+            committee_artifact = classified.committee_protocol_artifact_id
+            committee_row = registry.get(committee_artifact)
+            if (
+                committee_row is None
+                or committee_row["type"] != "TradeProtocol"
+                or committee_row["object_hash"] != classified.committee_protocol_object_hash
+            ):
+                raise ValueError("shadow classified protocol committee lineage mismatch")
+            classification_artifact = classified.trading_classification_artifact_id
+            classification_row = registry.get(classification_artifact)
+            if (
+                classification_row is None
+                or classification_row["type"] != "TradingClassificationRelease"
+                or classification_row["object_hash"]
+                != classified.trading_classification_object_hash
+            ):
+                raise ValueError("shadow classified protocol classification lineage mismatch")
+            classification = TradingClassificationRelease.model_validate_json(
+                self.object_store.get_bytes(classification_row["object_hash"])
+            )
+            if (
+                classification.company_id != classified.company_id
+                or classification.as_of != classified.as_of
+                or classification.classification.board != classified.board
+                or classification.classification.risk_status != classified.risk_status
+                or classification.special_regime is not classified.special_regime
+                or classification.price_limit_regime is not classified.price_limit_regime
+                or classification.price_limit_rate_bps != classified.price_limit_rate_bps
+            ):
+                raise ValueError("shadow classified protocol classification projection drift")
+            protocol = TradeProtocol.model_validate_json(
+                self.object_store.get_bytes(committee_row["object_hash"])
+            )
+            return _ShadowProtocolBinding(
+                committee_protocol=protocol,
+                authorization_artifact_id=artifact_id,
+                committee_protocol_artifact_id=committee_artifact,
+                classified_protocol=classified,
+            )
+
+        protocol_id = value.removeprefix("TradeProtocol:")
+        artifact_id = f"TradeProtocol:{protocol_id}"
+        row = registry.get(artifact_id)
+        if row is None or row["type"] != "TradeProtocol":
+            raise ValueError("shadow assignments require the frozen TradeProtocol")
+        protocol = TradeProtocol.model_validate_json(
+            self.object_store.get_bytes(row["object_hash"])
+        )
+        if protocol.protocol_id != protocol_id:
+            raise ValueError("shadow TradeProtocol identity mismatch")
+        return _ShadowProtocolBinding(
+            committee_protocol=protocol,
+            authorization_artifact_id=artifact_id,
+            committee_protocol_artifact_id=artifact_id,
+        )
+
     def _validate_artifact_references(
         self,
         request: ShadowDecisionAssignmentRequest,
@@ -3516,14 +3594,22 @@ class ShadowEvaluationService:
                 and "SpecialistDelta" not in types
             ):
                 raise ValueError("specialist shadow arms require a frozen SpecialistDelta")
-            if arm.arm_type is ShadowArmType.FULL_COMMITTEE and not {
-                "ResearchMemoArtifact",
-                "DecisionPack",
-                "TradeProtocol",
-            }.issubset(types):
-                raise ValueError(
-                    "full committee shadow arms require memo, decision, and protocol"
-                )
+            if arm.arm_type is ShadowArmType.FULL_COMMITTEE:
+                required_types = {
+                    "ResearchMemoArtifact",
+                    "DecisionPack",
+                    "TradeProtocol",
+                }
+                if request.trade_protocol_id.startswith(
+                    ("ClassifiedTradeProtocol:", "classified-trade-protocol:")
+                ):
+                    required_types.update(
+                        {"ClassifiedTradeProtocol", "TradingClassificationRelease"}
+                    )
+                if not required_types.issubset(types):
+                    raise ValueError(
+                        "full committee shadow arms require the complete frozen protocol chain"
+                    )
 
     def _validate_committee_contract(
         self,
@@ -3559,6 +3645,17 @@ class ShadowEvaluationService:
             for artifact_id in full_signal.input_artifact_ids
             if registry[artifact_id]["type"] == "TradeProtocol"
         ]
+        protocol_binding = self._resolve_assignment_protocol(request, registry)
+        classified_artifact_ids = [
+            artifact_id
+            for artifact_id in full_signal.input_artifact_ids
+            if registry[artifact_id]["type"] == "ClassifiedTradeProtocol"
+        ]
+        classification_artifact_ids = [
+            artifact_id
+            for artifact_id in full_signal.input_artifact_ids
+            if registry[artifact_id]["type"] == "TradingClassificationRelease"
+        ]
         expected_memo_artifact_id = (
             f"ResearchMemoArtifact:{request.research_memo_id}"
             if request.research_memo_id is not None
@@ -3567,11 +3664,22 @@ class ShadowEvaluationService:
         if (
             memo_artifact_ids != [expected_memo_artifact_id]
             or len(decision_artifact_ids) != 1
-            or protocol_artifact_ids != [f"TradeProtocol:{protocol.protocol_id}"]
+            or protocol_artifact_ids != [protocol_binding.committee_protocol_artifact_id]
         ):
             raise ValueError(
                 "full committee arms require one exact memo/decision/protocol chain"
             )
+        classified = protocol_binding.classified_protocol
+        if classified is None:
+            if classified_artifact_ids or classification_artifact_ids:
+                raise ValueError("legacy shadow protocol cannot claim classified lineage")
+        else:
+            if classified_artifact_ids != [protocol_binding.authorization_artifact_id]:
+                raise ValueError(
+                    "shadow full committee arm must freeze the exact classified protocol"
+                )
+            if classification_artifact_ids != [classified.trading_classification_artifact_id]:
+                raise ValueError("shadow full committee arm must freeze the exact classification")
         memo_artifact_id = memo_artifact_ids[0]
         memo = ResearchMemoArtifact.model_validate_json(
             self.object_store.get_bytes(registry[memo_artifact_id]["object_hash"])
@@ -3592,6 +3700,12 @@ class ShadowEvaluationService:
             or decision.decision_id != request.decision_id
         ):
             raise ValueError("shadow DecisionPack registry identity mismatch")
+        if classified is not None and (
+            decision_artifact_id != classified.decision_pack_artifact_id
+            or registry[decision_artifact_id]["object_hash"]
+            != classified.decision_pack_object_hash
+        ):
+            raise ValueError("shadow classified protocol decision lineage mismatch")
         if registry[memo_artifact_id]["object_hash"] not in decision.frozen_input_hashes:
             raise ValueError("shadow DecisionPack does not freeze the ResearchMemo")
         if (

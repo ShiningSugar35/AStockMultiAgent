@@ -342,6 +342,41 @@ class MarketReferencePaperVerifier:
             raise _needs_info("Daily release contains a mismatched instrument identity")
         return records
 
+    def visible_daily_history(
+        self,
+        market: Market,
+        symbol: str,
+        *,
+        visible_at: datetime,
+        require_certified: bool = False,
+    ) -> tuple[list[DailyBarObservation], str]:
+        """Load the latest immutable daily release visible at one point in time."""
+
+        scope = f"{market.value}:{symbol}"
+        manifest = self._visible_manifest(
+            ReferenceDatasetKind.DAILY_UNADJUSTED,
+            scope,
+            visible_at=visible_at,
+            require_certified=require_certified,
+        )
+        records = self._records(
+            ReferenceDatasetKind.DAILY_UNADJUSTED,
+            scope,
+            manifest.release_id,
+            visible_at,
+            DailyBarObservation,
+            require_certified=require_certified,
+        )
+        instrument_id = f"{market.value}:{symbol}"
+        if any(
+            item.market is not market
+            or item.symbol != symbol
+            or item.instrument_id != instrument_id
+            for item in records
+        ):
+            raise _needs_info("Visible daily release contains a mismatched instrument identity")
+        return records, manifest.release_id
+
     def corporate_actions(
         self, market: Market, release_id: str, *, visible_at: datetime
     ) -> list[CorporateActionObservation]:

@@ -24,10 +24,11 @@
 - 投资结论必须引用 evidence_id/source_snapshot_id，或明确标记为推断/缺口。
 - 社区内容只能作线索；关键事实必须回到公告、交易所、财报等更强来源。
 - 委员会只读冻结工件，禁止重新联网、抓取或启动新研究；缺证据返回 `NEEDS_INFO`。
-- Phase 5 当前目标仅为白名单作者的回答、想法、文章和专栏正文。统一覆盖审计冻结截点及并发回归已完成；专栏按容器关系建模，B1b0 合同门已验收，B1b1 在取得真实无凭据枚举快照前为 `BLOCKED_EXTERNAL_OBSERVATION`，不得猜接口或声称可用。
+- Phase 5 已完成并冻结：白名单作者正文、三位知乎视觉证据、direct-source 243 Skill、baseline 231 admitted 与 visual overlay 422 admitted 均保留不可变历史；当前 Research Runtime 只通过 composite Knowledge registry 653 使用知识资产。专栏真实无凭据枚举仍是独立外部观察边界，不得猜接口或把未取得的覆盖冒充完成。
 - Phase 5 蒸馏粒度固定为 `SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate`；Paragraph 是存储、定位及本地语义辅助视图单位，只有完整 ArgumentUnit 可产生最终语义分数、DeepSeek 输入和 Skill 候选。
 - 图片证据必须经过不可变图片快照、PDF bbox 或 DOM 定位、逐图 OCR、类型和前后 Paragraph 回填；图片 Paragraph 永远不能独立蒸馏，夹在论点与结论之间时必须 `MERGE_WITH_BOTH`。OCR 或上下文不完整时 AU 保持 `NEEDS_REVIEW`。
 - 《价值投资功法》历史视觉覆盖证据仍为 249 页、57 个含图页、74/74 placements；71 个非装饰图映射到 55 个 AU，11 个 READY、44 个 REVIEW。三位知乎作者的真实视觉支线已于 2026-08-10 完成：2,503/2,503 placements、2,306 unique assets、2,503 READY、0 REVIEW/BLOCKED；三份 `VisualEvidencePack` 均 READY。visual Skill generation 评估 951 个真实视觉关联 AU，生成 422 个 admitted overlay Skill、529 个 NO_SKILL；baseline 231 + overlay 422 形成 composite registry 653，`KnowledgeSkillProvider` 状态为 `COMPOSITE_REGISTRY_READY`。后续不得回退为 `PROVISIONAL_TEXT_VIEW`，也不得绕过 composite registry 直接读取 knowledge 表。
+- Serenity 当前活动方法注册表为 `research-skills-v3`。muxuuu/haskaomni 上游代码只经版本化 v4 audit 编译成 typed Specialist contracts；`JuglarCycleStageSkill` 是当前新增的固定资产周期方法。任何 Serenity/scorecard/Juglar 输出都只是 evidence-bound Delta 或 report-only metric，不得直接产生交易权重、目标价、仓位或订单。
 
 ## 行情与模拟盘
 
@@ -56,7 +57,7 @@
 
 Phase 5 论证链入口包括：`knowledge-semantic-plan`、`knowledge-semantic-run`、`knowledge-semantic-status`、`knowledge-semantic-model-status`、`knowledge-semantic-embedding-run` 和 `knowledge-semantic-packet-export`。未校准相似度不得自动删除，DeepSeek 包不得自动外发。
 
-Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`provider-status`、`sync-instruments`、`sync-calendar`、`sync-daily`、`sync-corporate-actions`、`reference-status` 和 `reference-audit`。Provider 默认使用 recorded 探针；live 必须显式开启。广泛荐股探索先使用 `research-seeds --live`：它只合并已有 Candidate、市场流动性/规模 Seeds 和由当前已发布大 V Skills 动态推导的 Expert Domain Seeds，不产生 CandidateRecord 或推荐权。候选入口包括 `candidate-input-schema`、`candidate-input-stage`、`candidate-input-run`、`candidate-scan`、`candidate-status` 和 `candidate-audit`；候选只表示研究优先级，不得输出交易方向、目标价、订单或持仓。面向用户的买卖判断必须继续完成单股 Research Runtime 和投委会链。
+Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`provider-status`、`sync-instruments`、`sync-calendar`、`sync-daily`、`sync-corporate-actions`、`reference-status` 和 `reference-audit`。Provider 默认使用 recorded 探针；live 必须显式开启。广泛荐股探索先使用 `research-seeds --live`：它只合并已有 Candidate、市场流动性/规模 Seeds 和由当前已发布大 V Skills 动态推导的 Expert Domain Seeds，不产生 CandidateRecord 或推荐权；随后优先使用 `research-seeds-promote <ResearchSeedReport-artifact-id> --live` 自动冻结 bounded instrument proof、reference/质量/官方公司行动/公告/财务输入并运行 Candidate Scan。`candidate-input-schema`、`candidate-input-stage`、`candidate-input-run` 只保留为手工/诊断 fallback。候选仍只表示研究优先级，不得输出交易方向、目标价、订单或持仓。面向用户的买卖判断必须继续完成单股 Research Runtime 和投委会链。
 
 财务来源稳定入口包括：`sync-financial`、`financial-source-status` 和 `financial-source-audit`。东方财富/Sina 财务值仅为 `SECONDARY_STRUCTURED` 定位线索；只有与 P5X-2 instrument release 一致且由官方原生 PDF 精确证明表名、合并口径、期间列、科目、数值和单位的事实才能进入现有财务审计。Research Runtime 稳定入口包括 `research-plan`、`research-run-company`、`research-status`、`research-audit`、`research-recover`、`trade-plan-view`；组合入口包括 `portfolio-paper-evaluate`、`portfolio-evaluate`、`portfolio-construct`、`portfolio-status`、`portfolio-audit`。模拟下单 prepare/确认链已验收，但任何账本写入仍要求独立人工确认，真实券商执行始终不存在。
 

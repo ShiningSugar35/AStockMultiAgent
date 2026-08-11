@@ -25,6 +25,14 @@ from astock.schemas import (
     GrowthValuationDiagnosticRequestV2,
     HourlySwingDiagnosticRequest,
     IndustryBottleneckDiagnosticRequestV2,
+    JuglarCounterEvidenceV1,
+    JuglarCycleDiagnosticRequestV2,
+    JuglarCycleDimension,
+    JuglarCycleStageContractV1,
+    JuglarDimensionScoreV1,
+    JuglarMigrationSignalV1,
+    JuglarStage,
+    JuglarStageProbabilityV1,
     PointInTimeStatus,
     ProviderStatus,
     QualityStatus,
@@ -149,6 +157,74 @@ def _industry_contract(base_case, evidence_ids: list[str], ratio: str = "0.2"):
                 threshold=Decimal("0.5"),
                 unit="ratio",
                 deadline=base_case.as_of + timedelta(days=365),
+                evidence_ids=evidence_ids,
+            )
+        ],
+        evidence_ids=evidence_ids,
+    )
+
+
+def _juglar_contract(base_case, evidence_ids: list[str], *, diffuse: bool = False):
+    scores = {
+        JuglarCycleDimension.DEMAND: 1,
+        JuglarCycleDimension.ASP: 1,
+        JuglarCycleDimension.MARGIN: 1,
+        JuglarCycleDimension.CAPEX: 0,
+        JuglarCycleDimension.INVENTORY: 1,
+        JuglarCycleDimension.CAPACITY_RELEASE: 0,
+        JuglarCycleDimension.CUSTOMER_BEHAVIOR: 1,
+        JuglarCycleDimension.CAPITAL_MARKET_REACTION: 1,
+    }
+    probabilities = (
+        {
+            JuglarStage.RECOVERY: Decimal("0.25"),
+            JuglarStage.EXPANSION: Decimal("0.40"),
+            JuglarStage.OVERHEATING: Decimal("0.15"),
+            JuglarStage.DOWNTURN: Decimal("0.10"),
+            JuglarStage.CLEARING: Decimal("0.10"),
+        }
+        if diffuse
+        else {
+            JuglarStage.RECOVERY: Decimal("0.15"),
+            JuglarStage.EXPANSION: Decimal("0.55"),
+            JuglarStage.OVERHEATING: Decimal("0.15"),
+            JuglarStage.DOWNTURN: Decimal("0.10"),
+            JuglarStage.CLEARING: Decimal("0.05"),
+        }
+    )
+    return JuglarCycleStageContractV1(
+        target_company_id=base_case.company_id,
+        as_of=base_case.as_of,
+        core_industry="synthetic equipment",
+        dimension_scores=[
+            JuglarDimensionScoreV1(
+                dimension=dimension,
+                score=score,
+                explanation=f"synthetic {dimension.value.lower()} evidence",
+                evidence_ids=evidence_ids,
+            )
+            for dimension, score in scores.items()
+        ],
+        stage_probabilities=[
+            JuglarStageProbabilityV1(stage=stage, probability=probability)
+            for stage, probability in probabilities.items()
+        ],
+        industry_stage=JuglarStage.EXPANSION,
+        company_operating_stage=JuglarStage.EXPANSION,
+        stock_pricing_stage=JuglarStage.OVERHEATING,
+        counterevidence=[
+            JuglarCounterEvidenceV1(
+                counterevidence_id="juglar-counter:1",
+                statement="future capacity may accelerate",
+                evidence_ids=evidence_ids,
+            )
+        ],
+        migration_signals=[
+            JuglarMigrationSignalV1(
+                signal_id="juglar-migration:1",
+                target_stage=JuglarStage.OVERHEATING,
+                observable="industry capex acceleration",
+                interpretation="broad aggressive expansion would move the cycle toward overheating",
                 evidence_ids=evidence_ids,
             )
         ],
@@ -557,9 +633,7 @@ def test_serenity_v2_contracts_reject_scope_pit_and_false_precision(
 
     correlated = growth.model_dump(mode="python")
     repeated_update = dict(correlated["likelihood_updates"][0])
-    repeated_update.update(
-        {"update_id": "update:2", "sequence": 2, "correlation_group": "group:2"}
-    )
+    repeated_update.update({"update_id": "update:2", "sequence": 2, "correlation_group": "group:2"})
     correlated["likelihood_updates"].append(repeated_update)
     with pytest.raises(ValueError, match="evidence sets must be unique"):
         GrowthProbabilityInputV2.model_validate(correlated)
@@ -603,9 +677,9 @@ def test_serenity_v2_contracts_reject_scope_pit_and_false_precision(
     )
     with pytest.raises(ValueError, match="future"):
         DailyTrendHealthContractV2.model_validate(daily_payload)
-    daily_payload = _daily_contract(
-        base_case, evidence_ids, "0" * 64, full=True
-    ).model_dump(mode="python")
+    daily_payload = _daily_contract(base_case, evidence_ids, "0" * 64, full=True).model_dump(
+        mode="python"
+    )
     daily_payload["moving_averages"][0]["dataset_version"] = "1" * 64
     with pytest.raises(ValueError, match="dataset version"):
         DailyTrendHealthContractV2.model_validate(daily_payload)
@@ -747,9 +821,7 @@ def test_serenity_v2_applies_method_node_grade_policy(
     )
     assert growth.report.status is DiagnosticStatus.PASS
 
-    valuation_payload = _valuation_contract(base_case, official_ids).model_dump(
-        mode="python"
-    )
+    valuation_payload = _valuation_contract(base_case, official_ids).model_dump(mode="python")
     valuation_payload["peg"]["evidence_ids"] = secondary_ids
     valuation_payload["consensus"]["evidence_ids"] = secondary_ids
     valuation_payload["evidence_ids"] = evidence_union
@@ -809,14 +881,12 @@ def test_serenity_v2_applies_method_node_grade_policy(
             DailyTrendDiagnosticRequestV2(
                 base_case_id=base_case.base_case_id,
                 route_plan_id=daily_route.route_plan_id,
-                method_contract=DailyTrendHealthContractV2.model_validate(
-                    invalid_daily_payload
-                ),
+                method_contract=DailyTrendHealthContractV2.model_validate(invalid_daily_payload),
             )
         )
 
 
-def test_six_diagnostics_apply_distinct_rules_and_explicit_degradation(
+def test_seven_diagnostics_apply_distinct_rules_and_explicit_degradation(
     tmp_path: Path,
     state,
 ) -> None:
@@ -1063,6 +1133,41 @@ def test_six_diagnostics_apply_distinct_rules_and_explicit_degradation(
                 ),
             )
         )
+
+    juglar_route = _route(
+        skills,
+        base_case.base_case_id,
+        skill_ids=["JuglarCycleStageSkill"],
+        inputs=[
+            "industry_cycle_evidence",
+            "financial_evidence",
+            "capex_inventory_evidence",
+        ],
+        horizon="long",
+    )
+    juglar = service.diagnose(
+        JuglarCycleDiagnosticRequestV2(
+            base_case_id=base_case.base_case_id,
+            route_plan_id=juglar_route.route_plan_id,
+            method_contract=_juglar_contract(base_case, evidence_ids),
+        )
+    )
+    assert juglar.report.status is DiagnosticStatus.PASS
+    assert "JUGLAR_STAGE_CLASSIFIED" in juglar.report.signal_codes
+    assert "JUGLAR_INDUSTRY_COMPANY_PRICING_DIVERGENCE" in juglar.report.signal_codes
+    assert juglar.delta.confidence_delta == 0
+    assert juglar.delta.valuation_adjustments == []
+    assert juglar.delta.risk_adjustments == []
+    assert len(juglar.delta.industry_specific_metrics) == 13
+    diffuse_juglar = service.diagnose(
+        JuglarCycleDiagnosticRequestV2(
+            base_case_id=base_case.base_case_id,
+            route_plan_id=juglar_route.route_plan_id,
+            method_contract=_juglar_contract(base_case, evidence_ids, diffuse=True),
+        )
+    )
+    assert diffuse_juglar.report.status is DiagnosticStatus.PARTIAL
+    assert diffuse_juglar.report.degradation_codes == ["JUGLAR_STAGE_DIFFUSE"]
 
     hourly_route = _route(
         skills,

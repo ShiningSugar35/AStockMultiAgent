@@ -16,8 +16,10 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | 数据 / ObjectStore / Parquet / SQLite / PIT | 已实现 | `probe`、`sync-*`、`reference-*` |
 | 官方公告、PDF/DOCX、Claim-Evidence | 已实现 | `disclosure-*`、文档 / evidence CLI |
 | 财务可信度与红旗审计 | 已实现 | `financial-*` |
-| 候选研究池 | 已实现 | `candidate-input-run`、`candidate-scan`、`candidate-audit` |
+| Research Seeds → Candidate 自动 Promotion | 已实现 | `research-seeds`、`research-seeds-promote`、`candidate-audit` |
+| 候选研究池 | 已实现 | Promotion 自动组装严格 `CandidateInputRelease`；`candidate-input-run` 保留为手工/诊断入口 |
 | 单公司 Research Runtime | 已实现 | `research-plan`、`research-run-company`、`research-audit` |
+| Serenity typed specialists | 已实现 / v4 上游审计 | `research-skills-v3`：6 个 Serenity 方法 + 独立 Hourly Swing；含 Juglar 周期阶段 |
 | Knowledge Skill composite registry | 已发布 | `KnowledgeSkillProvider`，653 admitted Skills |
 | 投资委员会 | 已实现 | `committee-*`；委员会只消费冻结工件 |
 | PIT TradingClassification | 已实现 | `trading-classification-*` |
@@ -56,7 +58,7 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 uv run astock research-plan 300750 --as-of 2026-08-11T10:00:00+08:00
 ```
 
-只补齐计划中真正缺失的冻结工件，不重复读取整个资料库。
+只补齐计划中真正缺失的冻结工件，不重复读取整个资料库。当前 Serenity 方法注册表为 `research-skills-v3`：在原 Industry Bottleneck、Event-to-Alpha、Growth Probability、Growth Valuation、Daily Trend Health 基础上新增 `JuglarCycleStageSkill`，用于固定资产投资周期的需求/ASP/利润率/Capex/库存/产能/客户行为/资本市场反应八维证据、五阶段概率、反证和迁移信号；它只形成 SpecialistDelta，不直接给目标价或仓位。
 
 ### “这只股票能不能买？什么位置进？预期卖到哪？”
 
@@ -116,9 +118,11 @@ Expert Seeds（当前已发布大 V Skills → 动态擅长领域 → 当前行�
         ↓
 ResearchSeedReport
         ↓
-只对有界 Seed 集合补全官方公告 / 财务 / PIT / 质量证据
+research-seeds-promote
         ↓
-CandidateInputRelease → Candidate Scan
+CandidateInstrumentUniverseProof + 官方公告 / 财务 / PIT / 质量 / 公司行动证据
+        ↓
+自动 CandidateInputRelease → Candidate Scan
         ↓
 每只股票独立完成公司研究和投委会
         ↓
@@ -135,14 +139,12 @@ Expert Seeds 不硬编码“某作者擅长什么”。系统从当前 composite
 uv run astock research-seeds --live
 uv run astock research-seeds-status
 uv run astock research-seeds-audit <ResearchSeedReport-artifact-id>
+uv run astock research-seeds-promote <ResearchSeedReport-artifact-id> --live
+uv run astock research-seeds-promote-status
+uv run astock research-seeds-promote-audit <SeedPromotionReport-artifact-id>
 ```
 
-随后只对 Seed 小集合建立完整 Candidate 输入：
-
-```powershell
-uv run astock candidate-input-schema
-uv run astock candidate-input-run candidate-release.json
-```
+Promotion 只对 Seed 小集合自动补完整 Candidate 输入；已有 `RESEARCH_READY` Candidate 直接复用，证据未闭合的 Seed 返回结构化 task，不会要求网页模型手工拼大 JSON。`candidate-input-schema / candidate-input-run` 仅保留为手工或诊断入口。
 
 组合构建：
 
@@ -191,8 +193,10 @@ uv run astock sync-instruments --live
 uv run astock sync-calendar --exchange XSHG --start 2026-08-01 --end 2026-08-11 --live
 uv run astock sync-daily 600519 --market XSHG --start 2026-04-01 --end 2026-08-11 --live
 
-# 候选
-uv run astock candidate-input-run candidate-release.json
+# Research Seeds / Candidate
+uv run astock research-seeds --live
+uv run astock research-seeds-promote <ResearchSeedReport-artifact-id> --live
+uv run astock research-seeds-promote-audit <SeedPromotionReport-artifact-id>
 uv run astock candidate-status --scan-id <scan-id>
 uv run astock candidate-audit <scan-id>
 

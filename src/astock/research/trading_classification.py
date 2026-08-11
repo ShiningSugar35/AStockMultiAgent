@@ -146,6 +146,7 @@ class TradingClassificationService:
         *,
         live: bool,
         provider: CninfoDisclosureProvider | None = None,
+        sync_instrument_reference: bool = True,
     ) -> tuple[str, TradingClassificationCorporateActionBaseline]:
         """Freeze a prospective CNINFO enumeration before a later research decision."""
 
@@ -155,7 +156,8 @@ class TradingClassificationService:
             )
         if self.reference is None or self.trading_rules is None:
             raise ValueError("trading classification resolver is not configured")
-        self.reference.sync_instruments(live=True)
+        if sync_instrument_reference:
+            self.reference.sync_instruments(live=True)
         visible_at = datetime.now(UTC)
         verifier = MarketReferencePaperVerifier(self.reference, self.trading_rules)
         instrument, _ = verifier.resolve_instrument(company_id, visible_at=visible_at)

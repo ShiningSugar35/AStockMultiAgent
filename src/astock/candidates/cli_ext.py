@@ -16,9 +16,17 @@ from astock.candidates import (
     ProductionCandidateInputVerifier,
     load_candidate_scan_config,
 )
+from astock.candidates.promotion import ResearchSeedPromotionService
 from astock.candidates.seeds import ResearchSeedService
 from astock.core.hashing import content_hash
+from astock.documents.cninfo import CninfoDisclosureProvider
+from astock.financial_sources.service import FinancialSourceService
+from astock.financial_sources.storage import FinancialSourceParquetStore
+from astock.market_data.reference import MarketReferenceService
+from astock.market_data.reference_storage import ReferenceParquetStore
+from astock.paper_trading.operation import load_paper_trading_rules
 from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
+from astock.schemas.candidate_promotion import SeedPromotionRequest
 from astock.schemas.candidates import CandidateInputRelease, CandidateScanRequest
 from astock.schemas.research_seeds import ResearchSeedRequest
 
@@ -61,6 +69,40 @@ def register_candidate_input_commands(
             provider=provider,
         )
 
+    def promotion_service() -> ResearchSeedPromotionService:
+        from astock.research.trading_classification import TradingClassificationService
+
+        paths, state, objects = services()
+        _, scan_service = candidate_service()
+        reference = MarketReferenceService(
+            state,
+            objects,
+            ReferenceParquetStore(paths.parquet),
+            paths.root / "tests" / "fixtures" / "reference",
+        )
+        return ResearchSeedPromotionService(
+            project_root=paths.root,
+            state=state,
+            objects=objects,
+            reference=reference,
+            candidates=scan_service,
+            financial_sources=FinancialSourceService(
+                state,
+                objects,
+                FinancialSourceParquetStore(paths.parquet / "financial_sources"),
+                paths.root,
+            ),
+            trading_classification=TradingClassificationService(
+                state,
+                objects,
+                reference=reference,
+                trading_rules=load_paper_trading_rules(
+                    paths.root / "configs" / "paper_trading_rules.yaml"
+                ),
+            ),
+            cninfo=CninfoDisclosureProvider(objects, state),
+        )
+
     @app.command("research-seeds-schema")
     def research_seeds_schema() -> None:
         emit(ResearchSeedRequest.model_json_schema())
@@ -91,6 +133,34 @@ def register_candidate_input_commands(
     @app.command("research-seeds-audit")
     def research_seeds_audit(artifact_id: Annotated[str, typer.Argument()]) -> None:
         result = seed_service().audit(artifact_id)
+        emit(result)
+        if result["status"] != "PASS":
+            raise typer.Exit(code=2)
+
+    @app.command("research-seeds-promote")
+    def research_seeds_promote(
+        seed_report_artifact_id: Annotated[str, typer.Argument()],
+        live: Annotated[bool, typer.Option("--live")] = False,
+        max_seeds: Annotated[int, typer.Option(min=1, max=60)] = 20,
+    ) -> None:
+        request = SeedPromotionRequest(
+            seed_report_artifact_id=seed_report_artifact_id,
+            max_seeds=max_seeds,
+            live=live,
+            created_at=datetime.now(UTC),
+        )
+        report = promotion_service().promote(request)
+        emit(report)
+        if report.status.value == "NEEDS_INFO":
+            raise typer.Exit(code=3)
+
+    @app.command("research-seeds-promote-status")
+    def research_seeds_promote_status() -> None:
+        emit(promotion_service().status())
+
+    @app.command("research-seeds-promote-audit")
+    def research_seeds_promote_audit(artifact_id: Annotated[str, typer.Argument()]) -> None:
+        result = promotion_service().audit(artifact_id)
         emit(result)
         if result["status"] != "PASS":
             raise typer.Exit(code=2)

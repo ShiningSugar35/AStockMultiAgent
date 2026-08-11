@@ -38,11 +38,14 @@ from astock.schemas.candidates import (
     CandidateCoverageStatus,
     CandidateInputArtifact,
     CandidateInputRelease,
+    CandidateInstrumentUniverseProof,
     CandidatePitStatus,
     CandidateQualityStatus,
     CandidateTradability,
 )
 from astock.schemas.pit import PointInTimeStatus
+from astock.schemas.research_runtime import TradingClassificationCorporateActionBaseline
+from astock.schemas.research_seeds import ResearchSeedReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,12 +120,25 @@ class ProductionCandidateInputVerifier:
         proof_seen = False
         company_by_artifact: dict[str, set[str]] = {}
         for artifact in release.artifacts:
+            corporate_baseline = (
+                artifact.role is CandidateArtifactRole.CORPORATE_ACTION
+                and artifact.artifact_type == "TradingClassificationCorporateActionBaseline"
+            )
+            instrument_proof = (
+                artifact.role is CandidateArtifactRole.INSTRUMENT_TRADABILITY
+                and artifact.artifact_type == "CandidateInstrumentUniverseProof"
+            )
             role_contract = _ROLE_CONTRACTS[artifact.role]
             if (
-                artifact.artifact_type,
-                artifact.artifact_schema_version,
-                artifact.dataset_kind,
-            ) != role_contract:
+                not corporate_baseline
+                and not instrument_proof
+                and (
+                    artifact.artifact_type,
+                    artifact.artifact_schema_version,
+                    artifact.dataset_kind,
+                )
+                != role_contract
+            ):
                 issues.append(f"ARTIFACT_CONTRACT_MISMATCH:{artifact.artifact_id}")
                 continue
             if artifact.artifact_type.startswith("Fixture"):
@@ -132,7 +148,12 @@ class ProductionCandidateInputVerifier:
                 issues.append(f"OBJECT_INVALID:{artifact.artifact_id}")
                 continue
             try:
-                if artifact.role in _REFERENCE_KINDS:
+                if corporate_baseline:
+                    self._verify_corporate_action_baseline(artifact, release)
+                elif instrument_proof:
+                    companies = self._verify_instrument_universe_proof(artifact, release)
+                    company_by_artifact[artifact.artifact_id] = companies
+                elif artifact.role in _REFERENCE_KINDS:
                     companies = self._verify_reference(artifact, release)
                     company_by_artifact[artifact.artifact_id] = companies
                 elif artifact.role is CandidateArtifactRole.DATA_QUALITY:
@@ -205,9 +226,7 @@ class ProductionCandidateInputVerifier:
             self._verify_daily_inputs(artifact, release, daily)
         return set()
 
-    def _reference_records(
-        self, manifest: DatasetReleaseManifest, model: type[Any]
-    ) -> list[Any]:
+    def _reference_records(self, manifest: DatasetReleaseManifest, model: type[Any]) -> list[Any]:
         records: list[Any] = []
         for descriptor in manifest.canonical_files:
             path = (self.reference_root / descriptor.path).resolve()
@@ -227,6 +246,110 @@ class ProductionCandidateInputVerifier:
             return CandidateTradability.DELISTED
         return CandidateTradability.NON_TRADABLE
 
+    def _verify_instrument_universe_proof(
+        self,
+        artifact: CandidateInputArtifact,
+        release: CandidateInputRelease,
+    ) -> set[str]:
+        self._verify_registered_artifact(artifact)
+        proof = CandidateInstrumentUniverseProof.model_validate_json(
+            self.objects.get_bytes(artifact.object_hash)
+        )
+        if (
+            artifact.artifact_id != f"CandidateInstrumentUniverseProof:{proof.proof_id}"
+            or artifact.artifact_schema_version != proof.schema_version
+            or artifact.dataset_kind != "INSTRUMENT_TRADABILITY_SUBSET"
+            or artifact.source_family != "seed-promotion-instrument-subset"
+            or artifact.coverage_status is not CandidateCoverageStatus.COMPLETE
+            or artifact.available_to_system_at != proof.as_of
+            or artifact.source_snapshot_ids != proof.source_snapshot_ids
+            or proof.as_of > release.as_of
+        ):
+            raise ValueError("instrument universe proof wrapper differs from typed proof")
+
+        seed_record = self.state.artifact_record(proof.seed_report_artifact_id)
+        if (
+            seed_record is None
+            or str(seed_record["type"]) != "ResearchSeedReport"
+            or str(seed_record["object_hash"]) != proof.seed_report_object_hash
+            or not self.objects.verify(proof.seed_report_object_hash)
+        ):
+            raise ValueError("instrument universe proof seed lineage is invalid")
+        seed_report = ResearchSeedReport.model_validate_json(
+            self.objects.get_bytes(proof.seed_report_object_hash)
+        )
+        if not set(proof.company_ids).issubset({item.company_id for item in seed_report.seeds}):
+            raise ValueError("instrument universe proof companies are absent from the seed report")
+
+        parent_record = self.state.artifact_record(proof.parent_instrument_artifact_id)
+        if (
+            parent_record is None
+            or str(parent_record["type"]) != "DatasetReleaseManifest"
+            or str(parent_record["object_hash"]) != proof.parent_instrument_object_hash
+            or not self.objects.verify(proof.parent_instrument_object_hash)
+        ):
+            raise ValueError("instrument universe proof parent release is invalid")
+        parent = DatasetReleaseManifest.model_validate_json(
+            self.objects.get_bytes(proof.parent_instrument_object_hash)
+        )
+        expected_pit = {
+            ReferencePitStatus.CERTIFIED: CandidatePitStatus.CERTIFIED,
+            ReferencePitStatus.RECONSTRUCTED: CandidatePitStatus.DOCUMENT_RECONSTRUCTED,
+        }.get(parent.pit_status, CandidatePitStatus.NOT_PIT_SAFE)
+        if (
+            parent.dataset_kind is not ReferenceDatasetKind.INSTRUMENT_MASTER
+            or parent.release_id != proof.parent_release_id
+            or parent.available_to_system_at > proof.as_of
+            or proof.source_snapshot_ids != parent.raw_snapshot_ids
+            or artifact.pit_status is not expected_pit
+            or artifact.formal_status != expected_pit.value
+        ):
+            raise ValueError("instrument universe proof parent metadata is invalid")
+        current = self.reference.status(
+            ReferenceDatasetKind.INSTRUMENT_MASTER,
+            parent.scope_key,
+            as_of=proof.as_of,
+        )
+        if current.get("status") != "AVAILABLE":
+            raise ValueError("instrument universe proof parent release is unavailable")
+        verified_parent = DatasetReleaseManifest.model_validate(current["release"])
+        if verified_parent.release_id != parent.release_id:
+            raise ValueError("instrument universe proof parent release is not the PIT head")
+
+        parent_by_id = {
+            item.instrument_id: item for item in self._reference_records(parent, InstrumentRecord)
+        }
+        proof_by_id = {item.instrument_id: item for item in proof.instruments}
+        if len(parent_by_id) < len(proof_by_id) or not proof_by_id:
+            raise ValueError("instrument universe proof is empty or exceeds its parent")
+        for instrument_id, bounded in proof_by_id.items():
+            parent_instrument = parent_by_id.get(instrument_id)
+            if parent_instrument is None or bounded.model_dump(
+                mode="json", exclude={"created_at"}
+            ) != parent_instrument.model_dump(mode="json", exclude={"created_at"}):
+                raise ValueError("instrument universe proof differs from its parent release")
+
+        companies = [
+            item
+            for item in release.companies
+            if item.instrument_artifact_id == artifact.artifact_id
+        ]
+        if {item.company_id for item in companies} != set(proof.company_ids):
+            raise ValueError("candidate companies differ from the bounded instrument proof")
+        if {item.instrument_id for item in companies} != set(proof_by_id):
+            raise ValueError("candidate instruments differ from the bounded instrument proof")
+        for company in companies:
+            instrument = proof_by_id[company.instrument_id]
+            if (
+                company.market is not instrument.market
+                or company.symbol != instrument.symbol
+                or company.name != instrument.name
+                or company.instrument_type is not instrument.instrument_type
+                or company.tradability is not self._expected_tradability(instrument)
+            ):
+                raise ValueError("candidate fields differ from the bounded instrument proof")
+        return set(proof.company_ids)
+
     def _verify_instrument_inputs(
         self,
         artifact: CandidateInputArtifact,
@@ -241,7 +364,8 @@ class ProductionCandidateInputVerifier:
             for item in release.companies
             if item.instrument_artifact_id == artifact.artifact_id
         ]
-        if {item.instrument_id for item in companies} != set(by_id):
+        candidate_instruments = {item.instrument_id for item in companies}
+        if candidate_instruments != set(by_id):
             raise ValueError("candidate company universe differs from instrument release")
         for company in companies:
             instrument = by_id[company.instrument_id]
@@ -298,15 +422,58 @@ class ProductionCandidateInputVerifier:
                 ):
                     raise ValueError("candidate daily values differ from typed reference")
 
+    def _verify_corporate_action_baseline(
+        self,
+        artifact: CandidateInputArtifact,
+        release: CandidateInputRelease,
+    ) -> None:
+        self._verify_registered_artifact(artifact)
+        baseline = TradingClassificationCorporateActionBaseline.model_validate_json(
+            self.objects.get_bytes(artifact.object_hash)
+        )
+        companies = [
+            item
+            for item in release.companies
+            if item.corporate_action_artifact_id == artifact.artifact_id
+        ]
+        if len(companies) != 1:
+            raise ValueError("corporate-action baseline must bind exactly one candidate")
+        company = companies[0]
+        if (
+            baseline.company_id != company.company_id
+            or baseline.symbol != company.symbol
+            or baseline.market is not company.market
+            or not baseline.absence_is_officially_certified
+            or baseline.candidate_announcement_ids
+            or not baseline.official_query_snapshot_ids
+            or artifact.artifact_schema_version != baseline.schema_version
+            or artifact.dataset_kind != "CORPORATE_ACTION_BASELINE"
+            or artifact.formal_status != "CERTIFIED_ABSENCE"
+            or artifact.coverage_status is not CandidateCoverageStatus.COMPLETE
+            or artifact.pit_status is not CandidatePitStatus.CERTIFIED
+            or artifact.source_family != "cninfo-official-corporate-action-baseline"
+            or artifact.available_to_system_at != baseline.created_at
+            or artifact.source_snapshot_ids != baseline.official_query_snapshot_ids
+            or baseline.created_at > release.as_of
+        ):
+            raise ValueError("corporate-action baseline wrapper differs from certified object")
+        for snapshot_id in baseline.official_query_snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if (
+                snapshot is None
+                or snapshot.source_id != "cninfo-disclosures:index"
+                or snapshot.available_to_system_at > release.as_of
+                or not self.objects.verify(snapshot.object_sha256)
+            ):
+                raise ValueError("corporate-action baseline source snapshot is invalid")
+
     def _verify_quality(
         self,
         artifact: CandidateInputArtifact,
         release: CandidateInputRelease,
     ) -> None:
         self._verify_registered_artifact(artifact)
-        report = DataQualityReport.model_validate_json(
-            self.objects.get_bytes(artifact.object_hash)
-        )
+        report = DataQualityReport.model_validate_json(self.objects.get_bytes(artifact.object_hash))
         companies = [
             item for item in release.companies if item.quality_artifact_id == artifact.artifact_id
         ]
@@ -351,9 +518,7 @@ class ProductionCandidateInputVerifier:
             item.model_dump(mode="json", exclude={"created_at"})
             for item in company.announcement_events
         ]
-        packed = [
-            item.model_dump(mode="json", exclude={"created_at"}) for item in pack.events
-        ]
+        packed = [item.model_dump(mode="json", exclude={"created_at"}) for item in pack.events]
         evidence_ids = {item for event in pack.events for item in event.evidence_ids}
         if (
             pack.schema_version != "candidate-announcement-event-pack-v1"
@@ -418,10 +583,7 @@ class ProductionCandidateInputVerifier:
         companies = {
             item.company_id
             for item in release.companies
-            if any(
-                flag.source_artifact_id == artifact.artifact_id
-                for flag in item.financial_flags
-            )
+            if any(flag.source_artifact_id == artifact.artifact_id for flag in item.financial_flags)
         }
         expected_coverage = {
             FinancialCoverageStatus.COMPLETE: CandidateCoverageStatus.COMPLETE,
@@ -441,16 +603,11 @@ class ProductionCandidateInputVerifier:
             raise ValueError("financial pack PIT lineage is unusable")
         expected_pit = (
             CandidatePitStatus.CERTIFIED
-            if all(
-                item.point_in_time_status is PointInTimeStatus.CERTIFIED
-                for item in typed_pit
-            )
+            if all(item.point_in_time_status is PointInTimeStatus.CERTIFIED for item in typed_pit)
             else CandidatePitStatus.DOCUMENT_RECONSTRUCTED
         )
         bound_companies = [
-            item
-            for item in release.companies
-            if item.financial_artifact_id == artifact.artifact_id
+            item for item in release.companies if item.financial_artifact_id == artifact.artifact_id
         ]
         expected_flags: dict[str, tuple[FinancialSeverity, set[str]]] = {}
         for finding in [*pack.rule_findings, *pack.governance_findings]:
@@ -482,8 +639,7 @@ class ProductionCandidateInputVerifier:
             if item.source_artifact_id == artifact.artifact_id
         }
         if (
-            artifact.artifact_id
-            != f"FinancialIntegrityEvidencePack:{pack.audit_run_id}"
+            artifact.artifact_id != f"FinancialIntegrityEvidencePack:{pack.audit_run_id}"
             or artifact.formal_status != pack.status.value
             or artifact.coverage_status is not expected_coverage
             or artifact.available_to_system_at != pack.created_at
@@ -563,8 +719,7 @@ class ProductionCandidateInputVerifier:
             payload.get("schema_version") != "candidate-watchlist-snapshot-v1"
             or payload.get("confirmed") is not True
             or set(payload.get("intent_ids", [])) != expected_intents
-            or payload.get("available_to_system_at")
-            != artifact.available_to_system_at.isoformat()
+            or payload.get("available_to_system_at") != artifact.available_to_system_at.isoformat()
             or artifact.formal_status != "USER_CONFIRMED"
             or artifact.source_family != "user-watchlist"
             or artifact.pit_status is not CandidatePitStatus.CERTIFIED
@@ -578,9 +733,7 @@ class ProductionCandidateInputVerifier:
         release: CandidateInputRelease,
     ) -> None:
         self._verify_registered_artifact(artifact)
-        review = HoldingReviewPack.model_validate_json(
-            self.objects.get_bytes(artifact.object_hash)
-        )
+        review = HoldingReviewPack.model_validate_json(self.objects.get_bytes(artifact.object_hash))
         expected_ids = {
             item.review_id
             for company in release.companies
@@ -595,8 +748,7 @@ class ProductionCandidateInputVerifier:
         ]
         expected_change = (
             "INVALIDATING_EVIDENCE"
-            if review.thesis_strength_change == "WEAKENED"
-            or review.risk_change == "HIGHER"
+            if review.thesis_strength_change == "WEAKENED" or review.risk_change == "HIGHER"
             else "NEW_EVIDENCE"
             if review.evidence_ids
             or review.triggered_rules
@@ -636,8 +788,7 @@ class ProductionCandidateInputVerifier:
     def _verify_registered_artifact(self, artifact: CandidateInputArtifact) -> None:
         with self.state.connect() as connection:
             row = connection.execute(
-                "SELECT type,schema_version,object_hash FROM artifact_registry "
-                "WHERE artifact_id=?",
+                "SELECT type,schema_version,object_hash FROM artifact_registry WHERE artifact_id=?",
                 (artifact.artifact_id,),
             ).fetchone()
         if row is None or tuple(row) != (

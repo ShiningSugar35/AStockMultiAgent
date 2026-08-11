@@ -2712,6 +2712,7 @@ def research_diagnostic_schema() -> None:
                             "GrowthProbabilitySkill": ("GrowthProbabilityDiagnosticRequestV2"),
                             "GrowthValuationLens": ("GrowthValuationDiagnosticRequestV2"),
                             "DailyTrendHealthSkill": "DailyTrendDiagnosticRequestV2",
+                            "JuglarCycleStageSkill": "JuglarCycleDiagnosticRequestV2",
                         }[item.skill_id]
                         if item.skill_version.endswith("-v2")
                         else {
@@ -2720,6 +2721,7 @@ def research_diagnostic_schema() -> None:
                             "GrowthProbabilitySkill": "GrowthProbabilityDiagnosticRequest",
                             "GrowthValuationLens": "GrowthValuationDiagnosticRequest",
                             "DailyTrendHealthSkill": "DailyTrendDiagnosticRequest",
+                            "JuglarCycleStageSkill": "JuglarCycleDiagnosticRequestV2",
                             "HourlySwingSkill": "HourlySwingDiagnosticRequest",
                         }[item.skill_id]
                     ),

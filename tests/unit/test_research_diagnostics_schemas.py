@@ -13,6 +13,13 @@ from astock.schemas import (
     Frequency,
     GrowthProbabilityDiagnosticRequest,
     GrowthScenario,
+    JuglarCounterEvidenceV1,
+    JuglarCycleDimension,
+    JuglarCycleStageContractV1,
+    JuglarDimensionScoreV1,
+    JuglarMigrationSignalV1,
+    JuglarStage,
+    JuglarStageProbabilityV1,
     QualityStatus,
 )
 
@@ -72,4 +79,63 @@ def test_daily_diagnostic_rejects_hourly_frequency_at_schema_boundary() -> None:
                 "evidence_ids": ["evidence:1"],
                 "created_at": datetime(2026, 1, 1, tzinfo=UTC),
             }
+        )
+
+
+def test_juglar_contract_requires_all_dimensions_and_probability_conservation() -> None:
+    timestamp = datetime(2026, 8, 11, tzinfo=UTC)
+    evidence_ids = ["evidence:1"]
+    dimensions = [
+        JuglarDimensionScoreV1(
+            dimension=dimension,
+            score=0,
+            explanation="synthetic evidence",
+            evidence_ids=evidence_ids,
+        )
+        for dimension in JuglarCycleDimension
+    ]
+    common = {
+        "target_company_id": "600001",
+        "as_of": timestamp,
+        "core_industry": "synthetic industry",
+        "industry_stage": JuglarStage.EXPANSION,
+        "company_operating_stage": JuglarStage.EXPANSION,
+        "stock_pricing_stage": JuglarStage.OVERHEATING,
+        "counterevidence": [
+            JuglarCounterEvidenceV1(
+                counterevidence_id="counter:1",
+                statement="synthetic counter evidence",
+                evidence_ids=evidence_ids,
+            )
+        ],
+        "migration_signals": [
+            JuglarMigrationSignalV1(
+                signal_id="migration:1",
+                target_stage=JuglarStage.OVERHEATING,
+                observable="capex acceleration",
+                interpretation="cycle would migrate toward overheating",
+                evidence_ids=evidence_ids,
+            )
+        ],
+        "evidence_ids": evidence_ids,
+    }
+    bad_probabilities = [
+        JuglarStageProbabilityV1(stage=stage, probability=Decimal("0.18")) for stage in JuglarStage
+    ]
+    with pytest.raises(ValidationError, match="probabilities must sum exactly to one"):
+        JuglarCycleStageContractV1(
+            dimension_scores=dimensions,
+            stage_probabilities=bad_probabilities,
+            **common,
+        )
+
+    duplicate_dimensions = [*dimensions[:-1], dimensions[0]]
+    valid_probabilities = [
+        JuglarStageProbabilityV1(stage=stage, probability=Decimal("0.2")) for stage in JuglarStage
+    ]
+    with pytest.raises(ValidationError, match="eight dimensions once"):
+        JuglarCycleStageContractV1(
+            dimension_scores=duplicate_dimensions,
+            stage_probabilities=valid_probabilities,
+            **common,
         )

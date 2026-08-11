@@ -11,6 +11,7 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.market import InstrumentType, Market
+from astock.schemas.reference_data import InstrumentRecord
 
 
 class CandidateArtifactRole(StrEnum):
@@ -151,6 +152,53 @@ class CandidateInputArtifact(AStockModel):
             raise ValueError("source_snapshot_ids must be unique")
         if len(self.evidence_ids) != len(set(self.evidence_ids)):
             raise ValueError("evidence_ids must be unique")
+        return self
+
+
+class CandidateInstrumentUniverseProof(AStockModel):
+    """Exact bounded instrument subset derived from one frozen ResearchSeedReport."""
+
+    schema_version: str = "candidate-instrument-universe-proof-v1"
+    proof_id: str = Field(min_length=1)
+    seed_report_artifact_id: str = Field(min_length=1)
+    seed_report_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parent_instrument_artifact_id: str = Field(min_length=1)
+    parent_instrument_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parent_release_id: str = Field(min_length=1)
+    as_of: AwareDatetime
+    company_ids: list[str] = Field(min_length=1)
+    instruments: list[InstrumentRecord] = Field(min_length=1)
+    source_snapshot_ids: list[str] = Field(min_length=1)
+    completeness_basis: Literal["RESEARCH_SEED_REPORT"] = "RESEARCH_SEED_REPORT"
+    recommendation_allowed: Literal[False] = False
+    paper_ledger_write_allowed: Literal[False] = False
+    broker_execution_allowed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_proof(self) -> CandidateInstrumentUniverseProof:
+        for label, values in (
+            ("company", self.company_ids),
+            ("snapshot", self.source_snapshot_ids),
+        ):
+            if values != sorted(set(values)):
+                raise ValueError(
+                    f"candidate instrument proof {label} values must be sorted and unique"
+                )
+        instruments = sorted(self.instruments, key=lambda item: item.instrument_id)
+        if self.instruments != instruments:
+            raise ValueError("candidate instrument proof instruments must be sorted")
+        if len({item.instrument_id for item in self.instruments}) != len(self.instruments):
+            raise ValueError("candidate instrument proof instruments must be unique")
+        if self.company_ids != sorted(item.symbol for item in self.instruments):
+            raise ValueError("candidate instrument proof company ids must match instrument symbols")
+        if any(
+            item.available_to_system_at > self.as_of
+            or item.source_snapshot_id not in self.source_snapshot_ids
+            for item in self.instruments
+        ):
+            raise ValueError(
+                "candidate instrument proof contains future or unbound instrument facts"
+            )
         return self
 
 
@@ -318,9 +366,7 @@ class CandidateInputRelease(AStockModel):
             raise ValueError("candidate instrument ids must be unique within a release")
         if len(self.expected_company_ids) != len(set(self.expected_company_ids)):
             raise ValueError("expected company ids must be unique")
-        if len(self.coverage_proof_artifact_ids) != len(
-            set(self.coverage_proof_artifact_ids)
-        ):
+        if len(self.coverage_proof_artifact_ids) != len(set(self.coverage_proof_artifact_ids)):
             raise ValueError("coverage proof artifact ids must be unique")
         required_roles = {
             CandidateArtifactRole.INSTRUMENT_TRADABILITY,
@@ -558,6 +604,7 @@ __all__ = [
     "CandidateHoldingChange",
     "CandidateHoldingObservation",
     "CandidateInputArtifact",
+    "CandidateInstrumentUniverseProof",
     "CandidateInputRelease",
     "CandidateLifecycleStatus",
     "CandidatePitStatus",

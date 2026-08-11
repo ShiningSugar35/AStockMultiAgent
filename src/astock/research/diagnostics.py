@@ -52,6 +52,7 @@ from astock.schemas import (
     SpecialistEvidenceRequest,
     SpecialistMetricInput,
 )
+from astock.schemas.serenity_v2 import JuglarCycleDiagnosticRequestV2
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,9 +139,7 @@ class ResearchDiagnosticsService:
             input_sha256=input_hash,
             config_sha256=config_hash,
             method_contract_sha256=(
-                content_hash(delta.method_contract)
-                if delta.method_contract is not None
-                else None
+                content_hash(delta.method_contract) if delta.method_contract is not None else None
             ),
             created_at=delta.created_at,
         )
@@ -189,9 +188,7 @@ class ResearchDiagnosticsService:
         if route.base_case_id != base_case.base_case_id:
             raise ValueError("research memo route plan must reference the requested BaseCase")
 
-        selected_pairs = {
-            (item.skill_id, item.skill_version) for item in route.selected
-        }
+        selected_pairs = {(item.skill_id, item.skill_version) for item in route.selected}
         deltas: list[SpecialistDelta] = []
         supplied_pairs: set[tuple[str, str]] = set()
         for delta_id in sorted(request.delta_ids):
@@ -233,25 +230,29 @@ class ResearchDiagnosticsService:
                         "memo probability_ref requires a posterior id from a frozen "
                         "GrowthProbability method contract"
                     )
-            valid_source_refs = {
-                finding.finding_id
-                for section in BASE_CASE_SECTIONS
-                for finding in base_case.findings_by_section[section]
-            } | {
-                reference
-                for delta in deltas
-                for reference in (
-                    *(item.finding_id for item in delta.incremental_findings),
-                    *(item.finding_id for item in delta.base_case_corrections),
-                    *(item.metric_id for item in delta.industry_specific_metrics),
-                    *(item.adjustment_id for item in delta.valuation_adjustments),
-                    *(item.adjustment_id for item in delta.risk_adjustments),
-                )
-            } | {
-                reference
-                for delta in deltas
-                for reference in _serenity_method_source_refs(delta)
-            }
+            valid_source_refs = (
+                {
+                    finding.finding_id
+                    for section in BASE_CASE_SECTIONS
+                    for finding in base_case.findings_by_section[section]
+                }
+                | {
+                    reference
+                    for delta in deltas
+                    for reference in (
+                        *(item.finding_id for item in delta.incremental_findings),
+                        *(item.finding_id for item in delta.base_case_corrections),
+                        *(item.metric_id for item in delta.industry_specific_metrics),
+                        *(item.adjustment_id for item in delta.valuation_adjustments),
+                        *(item.adjustment_id for item in delta.risk_adjustments),
+                    )
+                }
+                | {
+                    reference
+                    for delta in deltas
+                    for reference in _serenity_method_source_refs(delta)
+                }
+            )
             structured_refs = _structured_memo_refs(request)
             if not structured_refs.issubset(valid_source_refs):
                 raise ValueError("structured memo references an id outside frozen inputs")
@@ -277,9 +278,7 @@ class ResearchDiagnosticsService:
                 delta_id=delta.delta_id,
                 skill_id=delta.skill_id,
                 skill_version=delta.skill_version,
-                incremental_finding_ids=[
-                    item.finding_id for item in delta.incremental_findings
-                ],
+                incremental_finding_ids=[item.finding_id for item in delta.incremental_findings],
                 correction_ids=[item.finding_id for item in delta.base_case_corrections],
                 metric_ids=[item.metric_id for item in delta.industry_specific_metrics],
                 adjustment_ids=[
@@ -386,10 +385,7 @@ class ResearchDiagnosticsService:
             for value in (
                 self.repository.base_case_object_hash(base_case.base_case_id),
                 self.repository.route_plan_object_hash(route.route_plan_id),
-                *(
-                    self.repository.specialist_delta_object_hash(delta.delta_id)
-                    for delta in deltas
-                ),
+                *(self.repository.specialist_delta_object_hash(delta.delta_id) for delta in deltas),
                 input_hash,
             )
             if value is not None
@@ -455,11 +451,9 @@ class ResearchDiagnosticsService:
                 continue
             report_metadata_mismatch += int(
                 int(str(summary["signal_count"])) != len(report.signal_codes)
-                or int(str(summary["degradation_count"]))
-                != len(report.degradation_codes)
+                or int(str(summary["degradation_count"])) != len(report.degradation_codes)
                 or int(str(summary["metric_count"])) != len(report.metric_names)
-                or int(str(summary["evidence_request_count"]))
-                != len(report.evidence_request_codes)
+                or int(str(summary["evidence_request_count"])) != len(report.evidence_request_codes)
                 or int(str(summary["evidence_count"])) != len(report.evidence_ids)
             )
             delta = self.repository.get_specialist_delta(report.delta_id)
@@ -505,13 +499,11 @@ class ResearchDiagnosticsService:
                 memo_missing = 1
             else:
                 memo_metadata_mismatch = int(
-                    int(str(memo_summary["delta_count"]))
-                    != len(memo.delta_references)
+                    int(str(memo_summary["delta_count"])) != len(memo.delta_references)
                     or int(str(memo_summary["missing_selected_count"]))
                     != len(memo.missing_selected_skill_ids)
                     or int(str(memo_summary["gap_count"])) != len(memo.open_gap_codes)
-                    or int(str(memo_summary["degradation_count"]))
-                    != len(memo.degradation_codes)
+                    or int(str(memo_summary["degradation_count"])) != len(memo.degradation_codes)
                     or int(str(memo_summary["evidence_count"])) != len(memo.evidence_ids)
                 )
                 route = self.repository.get_route_plan(memo.route_plan_id)
@@ -570,6 +562,8 @@ class ResearchDiagnosticsService:
             return self._growth_valuation_v2(request)
         if isinstance(request, DailyTrendDiagnosticRequestV2):
             return self._daily_trend_v2(request)
+        if isinstance(request, JuglarCycleDiagnosticRequestV2):
+            return self._juglar_cycle_v1(request)
         if isinstance(request, IndustryBottleneckDiagnosticRequest):
             return self._industry(request)
         if isinstance(request, EventToAlphaDiagnosticRequest):
@@ -632,6 +626,24 @@ class ResearchDiagnosticsService:
                     SpecialistMetricInput(
                         metric_name="supply_chain_layer_count",
                         value=float(len(contract.chain_nodes)),
+                        unit="count",
+                        evidence_ids=evidence_ids,
+                    ),
+                    SpecialistMetricInput(
+                        metric_name="scarcity_metric_count",
+                        value=float(len(contract.scarcity)),
+                        unit="count",
+                        evidence_ids=evidence_ids,
+                    ),
+                    SpecialistMetricInput(
+                        metric_name="value_capture_company_count",
+                        value=float(len({item.company_id for item in contract.value_capture})),
+                        unit="count",
+                        evidence_ids=evidence_ids,
+                    ),
+                    SpecialistMetricInput(
+                        metric_name="substitution_alternative_count",
+                        value=float(len(contract.substitutions)),
                         unit="count",
                         evidence_ids=evidence_ids,
                     ),
@@ -907,9 +919,7 @@ class ResearchDiagnosticsService:
     ) -> _DiagnosticOutcome:
         contract = request.method_contract
         self._validate_v2_scope(request.base_case_id, contract.target_company_id, contract.as_of)
-        report, report_hash = self._load_quality_report(
-            contract.daily_series.quality_report_id
-        )
+        report, report_hash = self._load_quality_report(contract.daily_series.quality_report_id)
         if (
             report.symbol != contract.daily_series.symbol
             or report.frequency is not contract.daily_series.frequency
@@ -1003,6 +1013,92 @@ class ResearchDiagnosticsService:
             ),
         )
 
+    def _juglar_cycle_v1(
+        self,
+        request: JuglarCycleDiagnosticRequestV2,
+    ) -> _DiagnosticOutcome:
+        contract = request.method_contract
+        self._validate_v2_scope(request.base_case_id, contract.target_company_id, contract.as_of)
+        ranked = sorted(
+            contract.stage_probabilities,
+            key=lambda item: (-item.probability, item.stage.value),
+        )
+        leading = ranked[0]
+        diffuse = leading.probability < Decimal("0.45")
+        stage_divergence = (
+            len(
+                {
+                    contract.industry_stage,
+                    contract.company_operating_stage,
+                    contract.stock_pricing_stage,
+                }
+            )
+            > 1
+        )
+        signal_codes = [
+            "JUGLAR_STAGE_DIFFUSE" if diffuse else "JUGLAR_STAGE_CLASSIFIED",
+            f"JUGLAR_LEADING_STAGE:{leading.stage.value}",
+        ]
+        if stage_divergence:
+            signal_codes.append("JUGLAR_INDUSTRY_COMPANY_PRICING_DIVERGENCE")
+        metrics = [
+            SpecialistMetricInput(
+                metric_name=f"juglar_score:{item.dimension.value.lower()}",
+                value=float(item.score),
+                unit="score_-2_to_2",
+                evidence_ids=item.evidence_ids,
+            )
+            for item in contract.dimension_scores
+        ]
+        metrics.extend(
+            SpecialistMetricInput(
+                metric_name=f"juglar_probability:{item.stage.value.lower()}",
+                value=str(item.probability),
+                unit="probability",
+                evidence_ids=contract.evidence_ids,
+            )
+            for item in contract.stage_probabilities
+        )
+        return _DiagnosticOutcome(
+            status=DiagnosticStatus.PARTIAL if diffuse else DiagnosticStatus.PASS,
+            signal_codes=signal_codes,
+            degradation_codes=["JUGLAR_STAGE_DIFFUSE"] if diffuse else [],
+            delta_request=SpecialistDeltaBuildRequest(
+                base_case_id=request.base_case_id,
+                route_plan_id=request.route_plan_id,
+                skill_id=request.skill_id,
+                skill_version=request.skill_version,
+                incremental_findings=[
+                    ResearchFindingInput(
+                        statement=(
+                            "The fixed-asset investment cycle is classified from frozen demand, "
+                            "ASP, margin, capex, inventory, capacity, customer and market-reaction "
+                            f"evidence. Industry={contract.industry_stage.value}, "
+                            f"company={contract.company_operating_stage.value}, "
+                            f"pricing={contract.stock_pricing_stage.value}; this is a research "
+                            "context classification, not a trading recommendation."
+                        ),
+                        finding_type=ResearchFindingType.ANALYST_INFERENCE,
+                        confidence=float(leading.probability),
+                        critical=False,
+                        evidence_ids=contract.evidence_ids,
+                    )
+                ],
+                base_case_corrections=[],
+                industry_specific_metrics=metrics,
+                additional_evidence_requests=[],
+                failure_modes=["JUGLAR_STAGE_DIFFUSE"] if diffuse else [],
+                confidence_delta=0,
+                valuation_adjustments=[],
+                risk_adjustments=[],
+                coverage_delta={
+                    BaseCaseSection.INDUSTRY_SUPPLY_DEMAND: 0 if diffuse else 0.1,
+                    BaseCaseSection.REINVESTMENT: 0 if diffuse else 0.05,
+                },
+                method_contract=contract,
+            ),
+        )
+
     def _validate_v2_scope(
         self,
         base_case_id: str,
@@ -1040,8 +1136,7 @@ class ResearchDiagnosticsService:
             ("SCARCITY", not request.scarcity_verified),
             (
                 "SUBSTITUTABILITY",
-                request.substitutability_ratio
-                > self.config.industry.max_substitutability_ratio,
+                request.substitutability_ratio > self.config.industry.max_substitutability_ratio,
             ),
             ("VALUE_CAPTURE", not request.value_capture_verified),
         ]
@@ -1107,9 +1202,7 @@ class ResearchDiagnosticsService:
         return _DiagnosticOutcome(
             status=DiagnosticStatus.PASS if complete else DiagnosticStatus.INSUFFICIENT,
             signal_codes=[
-                "BOTTLENECK_CHAIN_VERIFIED"
-                if complete
-                else "BOTTLENECK_CHAIN_INCOMPLETE"
+                "BOTTLENECK_CHAIN_VERIFIED" if complete else "BOTTLENECK_CHAIN_INCOMPLETE"
             ],
             degradation_codes=[] if complete else ["INSUFFICIENT_EVIDENCE"],
             delta_request=delta_request,
@@ -1121,16 +1214,19 @@ class ResearchDiagnosticsService:
             missing.append(("VERIFY_EVENT", "PRIMARY_OFFICIAL_EVENT_EVIDENCE"))
         if request.headline_only:
             missing.append(("REPLACE_HEADLINE_ONLY_INPUT", "FULL_EVENT_DISCLOSURE"))
-        if not all(
-            (
-                request.operating_metric,
-                request.operating_direction,
-                request.financial_metric,
-                request.financial_direction,
-                request.window_start,
-                request.window_end,
+        if (
+            not all(
+                (
+                    request.operating_metric,
+                    request.operating_direction,
+                    request.financial_metric,
+                    request.financial_direction,
+                    request.window_start,
+                    request.window_end,
+                )
             )
-        ) or not request.transmission_evidence_ids:
+            or not request.transmission_evidence_ids
+        ):
             missing.append(("VERIFY_EVENT_TRANSMISSION", "OPERATING_AND_FINANCIAL_EVIDENCE"))
         if not request.falsifier or not request.falsifier_evidence_ids:
             missing.append(("DEFINE_EVENT_FALSIFIER", "FALSIFIER_EVIDENCE"))
@@ -1205,15 +1301,10 @@ class ResearchDiagnosticsService:
             Decimal("0"),
         )
         expected_duration = sum(
-            (
-                item.probability * Decimal(item.duration_years)
-                for item in request.scenarios
-            ),
+            (item.probability * Decimal(item.duration_years) for item in request.scenarios),
             Decimal("0"),
         )
-        scenario_evidence = _ordered_union(
-            *(item.evidence_ids for item in request.scenarios)
-        )
+        scenario_evidence = _ordered_union(*(item.evidence_ids for item in request.scenarios))
         evidence_ids = _ordered_union(
             scenario_evidence,
             request.consensus_evidence_ids,
@@ -1261,9 +1352,7 @@ class ResearchDiagnosticsService:
         degradation = [] if request.consensus_available else ["CONSENSUS_UNAVAILABLE"]
         return _DiagnosticOutcome(
             status=(
-                DiagnosticStatus.PASS
-                if request.consensus_available
-                else DiagnosticStatus.PARTIAL
+                DiagnosticStatus.PASS if request.consensus_available else DiagnosticStatus.PARTIAL
             ),
             signal_codes=["GROWTH_PROBABILITY_CONSERVED"],
             degradation_codes=degradation,
@@ -1349,9 +1438,7 @@ class ResearchDiagnosticsService:
         degradation = [] if request.consensus_available else ["CONSENSUS_UNAVAILABLE"]
         return _DiagnosticOutcome(
             status=(
-                DiagnosticStatus.PASS
-                if request.consensus_available
-                else DiagnosticStatus.PARTIAL
+                DiagnosticStatus.PASS if request.consensus_available else DiagnosticStatus.PARTIAL
             ),
             signal_codes=[signal],
             degradation_codes=degradation,
@@ -1725,6 +1812,8 @@ def _serenity_method_source_refs(delta: SpecialistDelta) -> set[str]:
                     "update_id",
                     "invalidation_id",
                     "factor_id",
+                    "counterevidence_id",
+                    "signal_id",
                 } and isinstance(item, str):
                     refs.add(item)
                 visit(item)
@@ -1736,17 +1825,12 @@ def _serenity_method_source_refs(delta: SpecialistDelta) -> set[str]:
     kind = str(payload["contract_kind"])
     if kind == "INDUSTRY_BOTTLENECK":
         refs.update(f"scarcity:{item['metric']}" for item in payload["scarcity"])
-        refs.update(
-            f"value_capture:{item['company_id']}" for item in payload["value_capture"]
-        )
+        refs.update(f"value_capture:{item['company_id']}" for item in payload["value_capture"])
     elif kind == "EVENT_TO_ALPHA":
         refs.add(f"business_purity:{payload['business_purity']['metric']}")
+        refs.update(f"transmission:{item['step_no']}" for item in payload["transmission_steps"])
         refs.update(
-            f"transmission:{item['step_no']}" for item in payload["transmission_steps"]
-        )
-        refs.update(
-            f"checkpoint:{item['quarter_offset']}"
-            for item in payload["validation_checkpoints"]
+            f"checkpoint:{item['quarter_offset']}" for item in payload["validation_checkpoints"]
         )
         refs.update({"event:scale_elasticity", "event:falsifier"})
         if payload["market_misclassification"] is not None:
@@ -1767,18 +1851,26 @@ def _serenity_method_source_refs(delta: SpecialistDelta) -> set[str]:
             refs.add("valuation:tam_runway")
         if payload["peg"] is not None:
             refs.add("valuation:peg")
-        refs.update(
-            f"valuation:quality:{item['factor_id']}" for item in payload["quality_factors"]
-        )
+        refs.update(f"valuation:quality:{item['factor_id']}" for item in payload["quality_factors"])
     elif kind == "DAILY_TREND_HEALTH":
         refs.add("daily:series")
         refs.update(f"dma:{item['window']}" for item in payload["moving_averages"])
-        refs.update(
-            f"fundamental:{item['metric']}" for item in payload["fundamental_growth"]
-        )
+        refs.update(f"fundamental:{item['metric']}" for item in payload["fundamental_growth"])
         refs.update(
             f"revision:{item['metric']}:{item['forecast_period']}"
             for item in payload["estimate_revisions"]
+        )
+    elif kind == "JUGLAR_CYCLE_STAGE":
+        refs.update(f"juglar:{item['dimension'].lower()}" for item in payload["dimension_scores"])
+        refs.update(
+            f"juglar_stage:{item['stage'].lower()}" for item in payload["stage_probabilities"]
+        )
+        refs.update(
+            {
+                f"juglar_industry:{payload['industry_stage'].lower()}",
+                f"juglar_company:{payload['company_operating_stage'].lower()}",
+                f"juglar_pricing:{payload['stock_pricing_stage'].lower()}",
+            }
         )
     return refs
 
@@ -1798,9 +1890,7 @@ def _bayesian_update(
     result: dict[GrowthHypothesisId, Decimal] = {}
     ordered = list(GrowthHypothesisId)
     for hypothesis_id in ordered[:-1]:
-        result[hypothesis_id] = (weighted[hypothesis_id] / denominator).quantize(
-            quantum
-        )
+        result[hypothesis_id] = (weighted[hypothesis_id] / denominator).quantize(quantum)
     result[ordered[-1]] = Decimal("1") - sum(result.values(), Decimal("0"))
     if result[ordered[-1]] < 0 or result[ordered[-1]] > 1:
         raise ValueError("Bayesian residual normalization escaped probability bounds")

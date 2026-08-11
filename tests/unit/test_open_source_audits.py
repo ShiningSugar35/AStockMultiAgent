@@ -19,8 +19,8 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
     manifests = validate_registry_open_source_audits(registry, PROJECT_ROOT)
 
     assert {manifest.audit_id for manifest in manifests} == {
-        "serenity-muxuuu-c2fe93de-local-v3",
-        "serenity-haskaomni-332037ea-local-v3",
+        "serenity-muxuuu-c2fe93de-local-v4",
+        "serenity-haskaomni-dedcf8f9-local-v4",
     }
     assert all(manifest.license_id == "MIT" for manifest in manifests)
     assert all(not manifest.source_vendored for manifest in manifests)
@@ -40,6 +40,7 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
         "growth-probability-v2",
         "growth-valuation-v2",
         "daily-trend-health-v2",
+        "juglar-cycle-stage-v1",
         "research-memo-composer-v2",
     }
     assert all(
@@ -60,6 +61,7 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
         "GrowthProbabilitySkill",
         "GrowthValuationLens",
         "DailyTrendHealthSkill",
+        "JuglarCycleStageSkill",
         "ResearchMemoComposer",
     }
     assert all(

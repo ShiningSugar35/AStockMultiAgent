@@ -30,9 +30,12 @@ def test_research_skill_registry_has_exact_versioned_contracts_and_three_skill_c
         PROJECT_ROOT / "configs" / "research_skills.yaml"
     )
     assert registry.max_specialists == 3
-    assert len(registry.skills) == 7
-    assert len({item.skill_id for item in registry.skills}) == 7
-    assert sum(item.counts_as_specialist for item in registry.skills) == 6
+    assert len(registry.skills) == 8
+    assert len({item.skill_id for item in registry.skills}) == 8
+    assert sum(item.counts_as_specialist for item in registry.skills) == 7
+    juglar = next(item for item in registry.skills if item.skill_id == "JuglarCycleStageSkill")
+    assert juglar.skill_version == "juglar-cycle-stage-v1"
+    assert juglar.kind.value == "JUGLAR_CYCLE_STAGE"
     memo = next(item for item in registry.skills if item.skill_id == "ResearchMemoComposer")
     assert not memo.counts_as_specialist
 

@@ -13,12 +13,13 @@ from astock.schemas.evidence import EvidenceGrade
 from astock.schemas.pit import PointInTimeStatus
 from astock.schemas.serenity_v2 import SerenityMethodContractV2
 
-_SERENITY_V2_SKILL_VERSIONS = {
+_TYPED_SERENITY_SKILL_VERSIONS = {
     "IndustryBottleneckSkill": "industry-bottleneck-v2",
     "EventToAlphaSkill": "event-to-alpha-v2",
     "GrowthProbabilitySkill": "growth-probability-v2",
     "GrowthValuationLens": "growth-valuation-v2",
     "DailyTrendHealthSkill": "daily-trend-health-v2",
+    "JuglarCycleStageSkill": "juglar-cycle-stage-v1",
 }
 
 
@@ -415,11 +416,7 @@ class BaseCasePack(AStockModel):
         if len(finding_ids) != len(set(finding_ids)):
             raise ValueError("BaseCase finding ids must be unique")
         expected_evidence = sorted(
-            {
-                evidence_id
-                for finding in findings
-                for evidence_id in finding.evidence_ids
-            }
+            {evidence_id for finding in findings for evidence_id in finding.evidence_ids}
         )
         if self.evidence_ids != expected_evidence:
             raise ValueError("BaseCase evidence ids must equal the cited finding union")
@@ -443,6 +440,7 @@ class ResearchSkillKind(StrEnum):
     GROWTH_PROBABILITY = "GROWTH_PROBABILITY"
     GROWTH_VALUATION = "GROWTH_VALUATION"
     DAILY_TREND_HEALTH = "DAILY_TREND_HEALTH"
+    JUGLAR_CYCLE_STAGE = "JUGLAR_CYCLE_STAGE"
     HOURLY_SWING = "HOURLY_SWING"
     RESEARCH_MEMO = "RESEARCH_MEMO"
 
@@ -551,9 +549,7 @@ class ResearchSkillRegistry(AStockModel):
             raise ValueError("specialist confidence caps must cover every coverage status")
         if any(value < 0 or value > 1 for value in self.coverage_confidence_caps.values()):
             raise ValueError("specialist confidence caps must be within 0..1")
-        memo_count = sum(
-            skill.kind is ResearchSkillKind.RESEARCH_MEMO for skill in self.skills
-        )
+        memo_count = sum(skill.kind is ResearchSkillKind.RESEARCH_MEMO for skill in self.skills)
         if memo_count != 1:
             raise ValueError("research Skill registry requires one ResearchMemoComposer")
         known = set(skill_ids)
@@ -647,8 +643,7 @@ class SpecialistRoutePlan(AStockModel):
         if any(item.eligibility is SpecialistEligibility.UNAVAILABLE for item in self.selected):
             raise ValueError("unavailable Skills cannot be selected")
         if any(
-            item.eligibility is not SpecialistEligibility.UNAVAILABLE
-            for item in self.unavailable
+            item.eligibility is not SpecialistEligibility.UNAVAILABLE for item in self.unavailable
         ):
             raise ValueError("unavailable list can only contain unavailable matches")
         if len(self.degradation_codes) != len(set(self.degradation_codes)):
@@ -720,14 +715,14 @@ class SpecialistDeltaBuildRequest(AStockModel):
             raise ValueError("specialist evidence request codes must be unique")
         if len(self.failure_modes) != len(set(self.failure_modes)):
             raise ValueError("specialist failure modes must be unique")
-        expected_v2 = _SERENITY_V2_SKILL_VERSIONS.get(self.skill_id)
-        if self.skill_version == expected_v2:
+        expected_typed = _TYPED_SERENITY_SKILL_VERSIONS.get(self.skill_id)
+        if self.skill_version == expected_typed:
             if self.method_contract is None:
-                raise ValueError("v2 SpecialistDelta requires its method contract")
+                raise ValueError("typed SpecialistDelta requires its method contract")
             if self.method_contract.contract_version != self.skill_version:
                 raise ValueError("method contract version must match the selected Skill")
         elif self.method_contract is not None:
-            raise ValueError("v1 SpecialistDelta cannot carry a v2 method contract")
+            raise ValueError("legacy SpecialistDelta cannot carry a typed method contract")
         return self
 
 
@@ -771,14 +766,14 @@ class SpecialistDelta(AStockModel):
             raise ValueError("SpecialistDelta evidence ids must equal the cited union")
         if len(self.failure_modes) != len(set(self.failure_modes)):
             raise ValueError("SpecialistDelta failure modes must be unique")
-        expected_v2 = _SERENITY_V2_SKILL_VERSIONS.get(self.skill_id)
-        if self.skill_version == expected_v2:
+        expected_typed = _TYPED_SERENITY_SKILL_VERSIONS.get(self.skill_id)
+        if self.skill_version == expected_typed:
             if self.method_contract is None:
-                raise ValueError("v2 SpecialistDelta requires its method contract")
+                raise ValueError("typed SpecialistDelta requires its method contract")
             if self.method_contract.contract_version != self.skill_version:
                 raise ValueError("method contract version must match the selected Skill")
         elif self.method_contract is not None:
-            raise ValueError("v1 SpecialistDelta cannot carry a v2 method contract")
+            raise ValueError("legacy SpecialistDelta cannot carry a typed method contract")
         return self
 
 

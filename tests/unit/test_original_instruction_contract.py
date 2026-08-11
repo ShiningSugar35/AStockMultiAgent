@@ -59,7 +59,7 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
         "COMPOSITE_REGISTRY_READY",
         "《价值投资功法》视觉证据链",
         "OpenCode 边界",
-        "research-skills-v2",
+        "research-skills-v3",
     ):
         assert required in acceptance
     assert "K5-D5" not in plan

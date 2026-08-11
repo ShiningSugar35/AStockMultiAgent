@@ -1,7 +1,7 @@
-registry_version: research-skills-v2
+registry_version: research-skills-v3
 open_source_audit_manifest_files:
-  - third_party/audits/serenity/muxuuu-c2fe93de-v3.json
-  - third_party/audits/serenity/haskaomni-332037ea-v3.json
+  - third_party/audits/serenity/muxuuu-c2fe93de-v4.json
+  - third_party/audits/serenity/haskaomni-dedcf8f9-v4.json
 max_specialists: 3
 coverage_confidence_caps:
   SUFFICIENT: 0.90
@@ -12,10 +12,11 @@ skills:
     skill_version: industry-bottleneck-v2
     kind: INDUSTRY_BOTTLENECK
     source_references:
-      - audit:serenity-muxuuu-c2fe93de-local-v3#SKILL.md
-      - audit:serenity-muxuuu-c2fe93de-local-v3#references/deep-research-workflow.md
-      - audit:serenity-muxuuu-c2fe93de-local-v3#references/evidence-ladder.md
-      - audit:serenity-muxuuu-c2fe93de-local-v3#references/risk-and-compliance.md
+      - audit:serenity-muxuuu-c2fe93de-local-v4#SKILL.md
+      - audit:serenity-muxuuu-c2fe93de-local-v4#references/deep-research-workflow.md
+      - audit:serenity-muxuuu-c2fe93de-local-v4#references/evidence-ladder.md
+      - audit:serenity-muxuuu-c2fe93de-local-v4#references/risk-and-compliance.md
+      - audit:serenity-muxuuu-c2fe93de-local-v4#assets/bottleneck-scorecard.json
       - local:A-share-evidence-adaptation-v1
     trigger_tags: [industry, bottleneck, supply_chain, scarcity]
     industry_tags: [semiconductor, manufacturing, materials, equipment]
@@ -44,8 +45,8 @@ skills:
     skill_version: event-to-alpha-v2
     kind: EVENT_TO_ALPHA
     source_references:
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/serenity-alpha/SKILL.md
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/serenity-alpha/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/serenity-alpha/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/serenity-alpha/references/original-framework.md
       - local:A-share-event-transmission-v1
     trigger_tags: [event, catalyst, policy, announcement]
     industry_tags: []
@@ -75,8 +76,8 @@ skills:
     skill_version: growth-probability-v2
     kind: GROWTH_PROBABILITY
     source_references:
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/bayesian-intrinsic-growth-valuation/SKILL.md
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/bayesian-intrinsic-growth-valuation/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/bayesian-intrinsic-growth-valuation/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/bayesian-intrinsic-growth-valuation/references/original-framework.md
       - local:A-share-growth-probability-v1
     trigger_tags: [growth, scenario, probability]
     industry_tags: []
@@ -106,8 +107,8 @@ skills:
     skill_version: growth-valuation-v2
     kind: GROWTH_VALUATION
     source_references:
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/tam-adj-peg/SKILL.md
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/tam-adj-peg/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/tam-adj-peg/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/tam-adj-peg/references/original-framework.md
       - local:A-share-valuation-expectations-v1
     trigger_tags: [valuation, growth, expectations]
     industry_tags: []
@@ -138,8 +139,8 @@ skills:
     skill_version: daily-trend-health-v2
     kind: DAILY_TREND_HEALTH
     source_references:
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/gf-dma-health-index/SKILL.md
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/gf-dma-health-index/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/gf-dma-health-index/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/gf-dma-health-index/references/original-framework.md
       - local:A-share-daily-quality-gate-v1
     trigger_tags: [trend, daily, market_health]
     industry_tags: []
@@ -162,6 +163,38 @@ skills:
     known_failure_modes: [lookahead_window, threshold_transfer, trend_as_fundamental_fact]
     output_schema: SpecialistDelta
     cost_class: LOW
+    dependencies: []
+    incompatible_skills: []
+    counts_as_specialist: true
+    status: ENABLED_CONTRACT
+
+  - skill_id: JuglarCycleStageSkill
+    skill_version: juglar-cycle-stage-v1
+    kind: JUGLAR_CYCLE_STAGE
+    source_references:
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/juglar-cycle-stock-stage/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/juglar-cycle-stock-stage/references/original-framework.md
+      - local:A-share-fixed-asset-cycle-stage-v1
+    trigger_tags: [cycle, capex, inventory, capacity, asp, industry_stage]
+    industry_tags: [semiconductor, manufacturing, materials, equipment, chemicals, power, property]
+    event_tags: [capacity_expansion, capex_cut, inventory_destocking, price_inflection]
+    horizons: [medium, long]
+    required_inputs: [industry_cycle_evidence, financial_evidence, capex_inventory_evidence]
+    optional_input_degradation_codes:
+      market_reaction: MARKET_REACTION_CONTEXT_UNAVAILABLE
+    required_frequencies: []
+    required_evidence_grades: [PRIMARY_OFFICIAL, SECONDARY]
+    reasoning_steps:
+      - Separate the industry fixed-asset cycle, company operating stage, and stock pricing stage.
+      - Score demand, ASP, margin, capex, inventory, capacity release, customer behavior, and market reaction from frozen evidence.
+      - Assign probabilities across recovery, expansion, overheating, downturn, and clearing without using share price or PE as the cycle classifier.
+      - Preserve counter-evidence and observable migration signals that would move or invalidate the stage classification.
+    positive_signals: [cycle_evidence_complete, stage_probability_concentrated, migration_signals_defined]
+    negative_signals: [stage_probability_diffuse, capex_inventory_conflict, price_narrative_only]
+    invalidation_conditions: [core_cycle_evidence_revised, migration_signal_triggered, counterevidence_strengthened]
+    known_failure_modes: [mechanical_total_score_mapping, stock_price_as_cycle_fact, industry_company_stage_conflation]
+    output_schema: SpecialistDelta
+    cost_class: MEDIUM
     dependencies: []
     incompatible_skills: []
     counts_as_specialist: true
@@ -199,8 +232,8 @@ skills:
     skill_version: research-memo-composer-v2
     kind: RESEARCH_MEMO
     source_references:
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/buy-side-equity-research-memo/SKILL.md
-      - audit:serenity-haskaomni-332037ea-local-v3#skills/buy-side-equity-research-memo/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/buy-side-equity-research-memo/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/buy-side-equity-research-memo/references/original-framework.md
       - local:citation-preserving-memo-v1
     trigger_tags: []
     industry_tags: []

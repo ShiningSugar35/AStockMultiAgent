@@ -19,6 +19,26 @@ class SerenityContractKind(StrEnum):
     GROWTH_PROBABILITY = "GROWTH_PROBABILITY"
     GROWTH_VALUATION = "GROWTH_VALUATION"
     DAILY_TREND_HEALTH = "DAILY_TREND_HEALTH"
+    JUGLAR_CYCLE_STAGE = "JUGLAR_CYCLE_STAGE"
+
+
+class JuglarStage(StrEnum):
+    RECOVERY = "STAGE_1_RECOVERY"
+    EXPANSION = "STAGE_2_EXPANSION"
+    OVERHEATING = "STAGE_3_OVERHEATING"
+    DOWNTURN = "STAGE_4_DOWNTURN"
+    CLEARING = "STAGE_5_CLEARING"
+
+
+class JuglarCycleDimension(StrEnum):
+    DEMAND = "DEMAND"
+    ASP = "ASP"
+    MARGIN = "MARGIN"
+    CAPEX = "CAPEX"
+    INVENTORY = "INVENTORY"
+    CAPACITY_RELEASE = "CAPACITY_RELEASE"
+    CUSTOMER_BEHAVIOR = "CUSTOMER_BEHAVIOR"
+    CAPITAL_MARKET_REACTION = "CAPITAL_MARKET_REACTION"
 
 
 class GrowthHypothesisId(StrEnum):
@@ -188,8 +208,7 @@ class IndustryBottleneckContractV2(AStockModel):
             raise ValueError("industry chain parent must resolve")
         by_id = {item.node_id: item for item in self.chain_nodes}
         if any(
-            item.parent_node_id is not None
-            and item.level != by_id[item.parent_node_id].level + 1
+            item.parent_node_id is not None and item.level != by_id[item.parent_node_id].level + 1
             for item in self.chain_nodes
         ):
             raise ValueError("industry chain child level must equal parent level plus one")
@@ -393,9 +412,7 @@ class GrowthProbabilityInputV2(AStockModel):
             [item.correlation_group for item in self.likelihood_updates],
             "growth likelihood correlation groups",
         )
-        evidence_signatures = [
-            tuple(sorted(item.evidence_ids)) for item in self.likelihood_updates
-        ]
+        evidence_signatures = [tuple(sorted(item.evidence_ids)) for item in self.likelihood_updates]
         _unique(evidence_signatures, "growth likelihood update evidence sets")
         seen_update_evidence: set[str] = set()
         for update in self.likelihood_updates:
@@ -556,9 +573,7 @@ class MovingAverageV2(_EvidenceNode):
     calculated_at: AwareDatetime
     bars_used: int = Field(ge=20)
     dataset_version: str = Field(pattern=r"^[0-9a-f]{64}$")
-    calculation_status: Literal["CALLER_SUPPLIED_REPORT_ONLY"] = (
-        "CALLER_SUPPLIED_REPORT_ONLY"
-    )
+    calculation_status: Literal["CALLER_SUPPLIED_REPORT_ONLY"] = "CALLER_SUPPLIED_REPORT_ONLY"
 
     @model_validator(mode="after")
     def validate_window(self) -> MovingAverageV2:
@@ -632,12 +647,76 @@ class DailyTrendHealthContractV2(AStockModel):
         return self
 
 
+class JuglarDimensionScoreV1(_EvidenceNode):
+    dimension: JuglarCycleDimension
+    score: int = Field(ge=-2, le=2)
+    explanation: str = Field(min_length=1)
+
+
+class JuglarStageProbabilityV1(AStockModel):
+    stage: JuglarStage
+    probability: Decimal = Field(ge=0, le=1)
+
+
+class JuglarMigrationSignalV1(_EvidenceNode):
+    signal_id: str = Field(min_length=1)
+    target_stage: JuglarStage
+    observable: str = Field(min_length=1)
+    interpretation: str = Field(min_length=1)
+
+
+class JuglarCounterEvidenceV1(_EvidenceNode):
+    counterevidence_id: str = Field(min_length=1)
+    statement: str = Field(min_length=1)
+
+
+class JuglarCycleStageContractV1(AStockModel):
+    contract_kind: Literal[SerenityContractKind.JUGLAR_CYCLE_STAGE] = (
+        SerenityContractKind.JUGLAR_CYCLE_STAGE
+    )
+    contract_version: Literal["juglar-cycle-stage-v1"] = "juglar-cycle-stage-v1"
+    target_company_id: str = Field(min_length=1)
+    as_of: AwareDatetime
+    core_industry: str = Field(min_length=1)
+    dimension_scores: list[JuglarDimensionScoreV1] = Field(min_length=8, max_length=8)
+    stage_probabilities: list[JuglarStageProbabilityV1] = Field(min_length=5, max_length=5)
+    industry_stage: JuglarStage
+    company_operating_stage: JuglarStage
+    stock_pricing_stage: JuglarStage
+    counterevidence: list[JuglarCounterEvidenceV1] = Field(min_length=1)
+    migration_signals: list[JuglarMigrationSignalV1] = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_juglar_contract(self) -> JuglarCycleStageContractV1:
+        dimensions = [item.dimension for item in self.dimension_scores]
+        if set(dimensions) != set(JuglarCycleDimension) or len(dimensions) != len(set(dimensions)):
+            raise ValueError("Juglar cycle contract requires each of the eight dimensions once")
+        stages = [item.stage for item in self.stage_probabilities]
+        if set(stages) != set(JuglarStage) or len(stages) != len(set(stages)):
+            raise ValueError("Juglar cycle contract requires all five stage probabilities once")
+        probability_sum = sum((item.probability for item in self.stage_probabilities), Decimal("0"))
+        if probability_sum != Decimal("1"):
+            raise ValueError("Juglar cycle stage probabilities must sum exactly to one")
+        _unique(
+            [item.counterevidence_id for item in self.counterevidence],
+            "Juglar counter-evidence ids",
+        )
+        _unique(
+            [item.signal_id for item in self.migration_signals],
+            "Juglar migration signal ids",
+        )
+        _evidence_union_matches(self)
+        return self
+
+
 SerenityMethodContractV2 = Annotated[
     IndustryBottleneckContractV2
     | EventToAlphaContractV2
     | GrowthProbabilityContractV2
     | GrowthValuationContractV2
-    | DailyTrendHealthContractV2,
+    | DailyTrendHealthContractV2
+    | JuglarCycleStageContractV1,
     Field(discriminator="contract_kind"),
 ]
 
@@ -678,12 +757,19 @@ class DailyTrendDiagnosticRequestV2(_DiagnosticRequestV2Base):
     method_contract: DailyTrendHealthContractV2
 
 
+class JuglarCycleDiagnosticRequestV2(_DiagnosticRequestV2Base):
+    skill_id: Literal["JuglarCycleStageSkill"] = "JuglarCycleStageSkill"
+    skill_version: Literal["juglar-cycle-stage-v1"] = "juglar-cycle-stage-v1"
+    method_contract: JuglarCycleStageContractV1
+
+
 SpecialistDiagnosticRequestV2 = Annotated[
     IndustryBottleneckDiagnosticRequestV2
     | EventToAlphaDiagnosticRequestV2
     | GrowthProbabilityDiagnosticRequestV2
     | GrowthValuationDiagnosticRequestV2
-    | DailyTrendDiagnosticRequestV2,
+    | DailyTrendDiagnosticRequestV2
+    | JuglarCycleDiagnosticRequestV2,
     Field(discriminator="skill_id"),
 ]
 
@@ -845,6 +931,14 @@ __all__ = [
     "GrowthValuationDiagnosticRequestV2",
     "IndustryBottleneckContractV2",
     "IndustryBottleneckDiagnosticRequestV2",
+    "JuglarCounterEvidenceV1",
+    "JuglarCycleDiagnosticRequestV2",
+    "JuglarCycleDimension",
+    "JuglarCycleStageContractV1",
+    "JuglarDimensionScoreV1",
+    "JuglarMigrationSignalV1",
+    "JuglarStage",
+    "JuglarStageProbabilityV1",
     "MemoScenarioCase",
     "ObservableInvalidationV2",
     "ResearchMemoComposeRequestV2",

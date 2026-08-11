@@ -646,13 +646,13 @@ BaseCasePack
 - 公司候选排序；
 - 来源路径。
 
-固定评分权重只作参考，不能直接进生产决策。
+固定评分权重只作参考，不作为本地系统的自动权重。scarcity、substitution、value-capture、产业链层级等可审计维度可以进入 `SpecialistDelta`；aggregate score 仍保持 report-only。
 
 ---
 
 ### `haskaomni/serenity-skill`
 
-拆为五个互补 Skill：
+拆为六个互补方法 Skill，外加一个本地冻结引用的 ResearchMemo Composer：
 
 #### Serenity Alpha
 
@@ -692,7 +692,17 @@ A 股缺乏一致预期时必须降级，不能编造。
 - 稀释；
 - 周期性。
 
-#### Buy-Side Memo
+#### Juglar Cycle Stock Stage
+
+- 先判断行业固定资产投资周期，再判断公司自身经营阶段；
+- 需求、ASP、利润率、Capex、库存、产能释放、客户行为、资本市场反应八维评分；
+- 同时输出复苏 / 扩张 / 过热 / 衰退 / 出清五阶段概率；
+- 行业周期、公司经营阶段、股票定价阶段必须分开；
+- 必须保留反证和可观察迁移信号，不能用股价、PE 或叙事直接判周期。
+
+在本项目中它编译为 `JuglarCycleStageSkill / juglar-cycle-stage-v1` typed contract，只返回 `SpecialistDelta`；除资本市场反应可使用 secondary evidence 外，其余核心维度、反证和迁移信号优先要求官方强证据。
+
+#### Buy-Side Memo / ResearchMemo Composer
 
 - 投资观点；
 - Bull/Base/Bear；
@@ -1226,10 +1236,14 @@ Expert Skill Seeds
         ↓
 ResearchSeedReport（无推荐权）
         ↓
-只对有限 Seed 集合补全官方证据 / 财务 / PIT / 质量
+Seed Promotion
         ↓
-CandidateInputRelease → Candidate Scan → Deep Research → Committee
+CandidateInstrumentUniverseProof + 官方公告 / 财务 / PIT / 质量 / 公司行动证据
+        ↓
+自动 CandidateInputRelease → Candidate Scan → Deep Research → Committee
 ```
+
+Promotion 只自动化取证、组装、校验与扫描，不自动降低 Candidate 门槛。普通 `CandidateInputRelease` 的 Instrument Master 仍要求与候选全集 exact match；只有 Promotion 可生成 `CandidateInstrumentUniverseProof`，把 `ResearchSeedReport → parent Instrument Master → exact bounded seed subset` 的 object hash/版本/快照完整冻结。单只 Seed 缺公告、财务、公司行动或 reference 时只返回结构化 task 并隔离该公司，不拖死整批，也不把缺口解释为“无风险”。
 
 ## 12.3 中央候选注册表
 

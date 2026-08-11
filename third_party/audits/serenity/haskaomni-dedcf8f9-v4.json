@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "created_at": "2026-08-11T08:29:00Z",
+  "audit_manifest_version": "open-source-audit-v4",
+  "audit_id": "serenity-haskaomni-dedcf8f9-local-v4",
+  "upstream_repository": "https://github.com/haskaomni/serenity-skill",
+  "commit_sha": "dedcf8f9ca8bd48f21239456ede50a9eb9f7ecb0",
+  "license_id": "MIT",
+  "license_path": "LICENSE",
+  "license_sha256": "387581ae2cfd9734fac334d60593873ab957c02340d7a07096449f5274e81df6",
+  "reviewed_files": [
+    {
+      "path": "LICENSE",
+      "sha256": "387581ae2cfd9734fac334d60593873ab957c02340d7a07096449f5274e81df6",
+      "purpose": "license"
+    },
+    {
+      "path": "skills/serenity-alpha/SKILL.md",
+      "sha256": "9ec5122edb06a183fd97640489e08c7162678005f0cdb78e7bc7d870f4cb71a3",
+      "purpose": "event-to-alpha workflow"
+    },
+    {
+      "path": "skills/serenity-alpha/references/original-framework.md",
+      "sha256": "e36dd2bc11b44e9dde49d740e58b4f8806e8364a2eb95337fe491cf2425f9061",
+      "purpose": "event framework source"
+    },
+    {
+      "path": "skills/bayesian-intrinsic-growth-valuation/SKILL.md",
+      "sha256": "7c857ce425bda22e0690037395345cbc9df31b6bf625b0df3b55f7930c441585",
+      "purpose": "Bayesian growth workflow"
+    },
+    {
+      "path": "skills/bayesian-intrinsic-growth-valuation/references/original-framework.md",
+      "sha256": "863602bb3d821f72dcffc1fe56bc9325822d22adf18a37de6bf01069ecb9acdc",
+      "purpose": "Bayesian growth framework source"
+    },
+    {
+      "path": "skills/tam-adj-peg/SKILL.md",
+      "sha256": "627ac8cd76f60e418c2f290bd24d2902279542a0ada19ecb845a7f671ac37908",
+      "purpose": "TAM-adjusted PEG workflow"
+    },
+    {
+      "path": "skills/tam-adj-peg/references/original-framework.md",
+      "sha256": "372194436580abcf60ab4d6947984fd6341e2ad2473e383d4631ffdc00ee4e87",
+      "purpose": "growth valuation framework source"
+    },
+    {
+      "path": "skills/gf-dma-health-index/SKILL.md",
+      "sha256": "378cdf1e7b125244324eb4011a07616b1b048f535a82c0162d117c019f130d70",
+      "purpose": "growth-fundamental daily trend-health workflow"
+    },
+    {
+      "path": "skills/gf-dma-health-index/references/original-framework.md",
+      "sha256": "85d44247f006e330f630ab083efc30da09b690b1ae7d6155c9bff3eaeacc3d63",
+      "purpose": "GF-DMA framework source"
+    },
+    {
+      "path": "skills/buy-side-equity-research-memo/SKILL.md",
+      "sha256": "fd0c728631fd39c8ece3a71077fad871e4b92a579d413ed72679c9043e0e6c62",
+      "purpose": "buy-side memo workflow"
+    },
+    {
+      "path": "skills/buy-side-equity-research-memo/references/original-framework.md",
+      "sha256": "7b5e8a8952f2b3d8db25797f29ebcb8424c97ac9c6ac9bfdd449450ec83628ec",
+      "purpose": "buy-side memo framework source"
+    },
+    {
+      "path": "skills/juglar-cycle-stock-stage/SKILL.md",
+      "sha256": "63e895da6d9d9fe3c08eb75ab991b15cedda03ecbbc2609f570b8b05b4c59659",
+      "purpose": "Juglar fixed-asset investment cycle stage workflow"
+    },
+    {
+      "path": "skills/juglar-cycle-stock-stage/references/original-framework.md",
+      "sha256": "1663e8fdb79cdb7d68263672a9fde170b01d6146d642b81bc100490ec284aa2d",
+      "purpose": "Juglar original Chinese framework"
+    }
+  ],
+  "local_mappings": [
+    {
+      "local_contract_id": "EventToAlphaSkill",
+      "local_contract_version": "event-to-alpha-v2",
+      "upstream_files": [
+        "skills/serenity-alpha/SKILL.md",
+        "skills/serenity-alpha/references/original-framework.md"
+      ],
+      "adaptation_decision": "Use PIT-safe event, business-purity, transmission, elasticity, checkpoint and falsifier contracts; never infer a position or order."
+    },
+    {
+      "local_contract_id": "GrowthProbabilitySkill",
+      "local_contract_version": "growth-probability-v2",
+      "upstream_files": [
+        "skills/bayesian-intrinsic-growth-valuation/SKILL.md",
+        "skills/bayesian-intrinsic-growth-valuation/references/original-framework.md"
+      ],
+      "adaptation_decision": "Require H0-H5, exact priors, ordered independent likelihood groups and deterministic posterior trajectories; caller-supplied posteriors are forbidden."
+    },
+    {
+      "local_contract_id": "GrowthValuationLens",
+      "local_contract_version": "growth-valuation-v2",
+      "upstream_files": [
+        "skills/tam-adj-peg/SKILL.md",
+        "skills/tam-adj-peg/references/original-framework.md"
+      ],
+      "adaptation_decision": "Represent TAM, uncalibrated quality factors and PEG with explicit units as report-only observations; target prices and automatic adjustments remain forbidden."
+    },
+    {
+      "local_contract_id": "DailyTrendHealthSkill",
+      "local_contract_version": "daily-trend-health-v2",
+      "upstream_files": [
+        "skills/gf-dma-health-index/SKILL.md",
+        "skills/gf-dma-health-index/references/original-framework.md"
+      ],
+      "adaptation_decision": "Bind 20/50/100/200DMA, fundamentals and estimate revisions to a registered daily DataQualityReport; output is context, never a buy or sell signal."
+    },
+    {
+      "local_contract_id": "ResearchMemoComposer",
+      "local_contract_version": "research-memo-composer-v2",
+      "upstream_files": [
+        "skills/buy-side-equity-research-memo/SKILL.md",
+        "skills/buy-side-equity-research-memo/references/original-framework.md"
+      ],
+      "adaptation_decision": "Compose controversies, Bull/Base/Bear, catalysts, invalidations and monitoring only from frozen BaseCase and delta references, without new research facts."
+    },
+    {
+      "local_contract_id": "JuglarCycleStageSkill",
+      "local_contract_version": "juglar-cycle-stage-v1",
+      "upstream_files": [
+        "skills/juglar-cycle-stock-stage/SKILL.md",
+        "skills/juglar-cycle-stock-stage/references/original-framework.md"
+      ],
+      "adaptation_decision": "Separate industry fixed-asset cycle, company operating stage and stock pricing stage. Require exactly eight evidence-bound cycle dimensions, five normalized stage probabilities, counter-evidence and observable migration signals. Demand, ASP, margin, capex, inventory, capacity, customer behavior, counter-evidence and migration evidence require official-grade support; market-reaction context may use secondary evidence. Output remains a SpecialistDelta and cannot create a target price, position or order."
+    }
+  ],
+  "local_patch_set": [
+    "SEC_TO_A_SHARE_OFFICIAL_EVIDENCE",
+    "EVENT_TO_ALPHA_TESTABLE_TRANSMISSION_V2",
+    "BAYESIAN_H0_H5_EXPLICIT_UPDATES_V2",
+    "TAM_QUALITY_PEG_EXPLICIT_UNITS_REPORT_ONLY",
+    "DAILY_20_50_100_200_QUALITY_GATE",
+    "JUGLAR_EIGHT_DIMENSION_FIVE_STAGE_EVIDENCE_CONTRACT",
+    "MEMO_STRUCTURED_FROZEN_REFERENCE_UNION_V2",
+    "NO_POSITION_SIZING_OR_ORDER"
+  ],
+  "local_patch_sha256": "6148ab7b9dc4d39f5a921a3f0ca9ef3d2ce22c7c9eb75e16f2aa83acac595d41",
+  "local_adaptation_files": [
+    {
+      "path": "configs/research_skills.yaml",
+      "sha256": "5a5c2699f08bd8c1125451407050babe449a0c2f6f462db24f6846ffbb0a0baf",
+      "purpose": "active research-skills-v3 registry and precise upstream mapping"
+    },
+    {
+      "path": "configs/research_diagnostics.yaml",
+      "sha256": "ae45f1272e194982af9c23594b763bd004a3d7989b851a951f1f9b42e79cbba4",
+      "purpose": "versioned deterministic diagnostic thresholds"
+    },
+    {
+      "path": "src/astock/schemas/research.py",
+      "sha256": "43c052e2a10c34bac492b71d9b91dc0b0f1e020d891602ec57e0288b6a5af1b0",
+      "purpose": "research Skill kind, routing and SpecialistDelta contracts"
+    },
+    {
+      "path": "src/astock/schemas/serenity_v2.py",
+      "sha256": "d61159d5edd087a3fad8362030887e25ae03f11ceefac86a9599df8f5854134e",
+      "purpose": "strict Serenity method contracts including Juglar v1"
+    },
+    {
+      "path": "src/astock/research/skills.py",
+      "sha256": "2b963d4c00c2983091501a266c08300cdbf095ffb362a90451798ecbb4749198",
+      "purpose": "routing and per-node evidence-grade conservation"
+    },
+    {
+      "path": "src/astock/research/diagnostics.py",
+      "sha256": "724a48b8df9ee3f138282742b93f0feb764761cefc4489dad8ba8cb9e506ea21",
+      "purpose": "deterministic report-only specialist diagnostics including Juglar stage classification"
+    }
+  ],
+  "local_adaptation_sha256": "6257d26289f37fbcbd73354bd874b50d7db9a06cdaf0281242ed1f9e863ea960",
+  "normal_runtime_network_required": false,
+  "source_vendored": false,
+  "upgrade_policy": "A new upstream commit or local contract version requires a new audit_id and manifest; prior audit manifests and artifacts remain immutable."
+}

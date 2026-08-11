@@ -41,6 +41,8 @@ from astock.schemas.serenity_v2 import (
     GrowthProbabilityContractV2,
     GrowthValuationContractV2,
     IndustryBottleneckContractV2,
+    JuglarCycleDimension,
+    JuglarCycleStageContractV1,
 )
 
 
@@ -87,26 +89,20 @@ class ResearchSkillService:
 
     def register_registry(self) -> SkillRegistryExecution:
         config_hash = content_hash(self.configured_registry)
-        summary = self.repository.skill_registry_summary(
-            self.configured_registry.registry_version
-        )
+        summary = self.repository.skill_registry_summary(self.configured_registry.registry_version)
         if summary is not None:
             if str(summary["config_hash"]) != config_hash:
                 raise ValueError(
                     "research Skill registry version already exists with different content"
                 )
-            registry = self.repository.get_skill_registry(
-                self.configured_registry.registry_version
-            )
+            registry = self.repository.get_skill_registry(self.configured_registry.registry_version)
             assert registry is not None
             return SkillRegistryExecution(
                 registry=registry,
                 object_sha256=str(summary["object_hash"]),
             )
 
-        object_ref = self.object_store.put_json(
-            self.configured_registry.model_dump(mode="json")
-        )
+        object_ref = self.object_store.put_json(self.configured_registry.model_dump(mode="json"))
         registry = self.repository.register_skill_registry(
             self.configured_registry,
             object_hash=object_ref.sha256,
@@ -138,8 +134,7 @@ class ResearchSkillService:
         if any(not item.counts_as_specialist for item in explicit_manifests):
             raise ValueError("ResearchMemoComposer cannot be routed as a specialist")
         if any(
-            item.status is not ResearchSkillStatus.ENABLED_CONTRACT
-            for item in explicit_manifests
+            item.status is not ResearchSkillStatus.ENABLED_CONTRACT for item in explicit_manifests
         ):
             raise ValueError("explicit specialist request contains a disabled Skill")
         self._reject_explicit_incompatibilities(explicit_manifests)
@@ -201,9 +196,7 @@ class ResearchSkillService:
             selected.append(match)
             selected_manifests.append(manifest)
 
-        degradation_codes = {
-            code for match in selected for code in match.degradation_codes
-        }
+        degradation_codes = {code for match in selected for code in match.degradation_codes}
         if unavailable:
             degradation_codes.add("REQUIRED_SPECIALIST_INPUT_UNAVAILABLE")
         if capped:
@@ -272,17 +265,14 @@ class ResearchSkillService:
             raise ValueError(f"unknown specialist route plan: {request.route_plan_id}")
         if route_plan.base_case_id != request.base_case_id:
             raise ValueError("SpecialistDelta BaseCase must match its route plan")
-        selected = {
-            (item.skill_id, item.skill_version): item for item in route_plan.selected
-        }
+        selected = {(item.skill_id, item.skill_version): item for item in route_plan.selected}
         if (request.skill_id, request.skill_version) not in selected:
             raise ValueError("SpecialistDelta can only be produced by a selected Skill version")
         manifest = next(
             (
                 item
                 for item in registry.skills
-                if item.skill_id == request.skill_id
-                and item.skill_version == request.skill_version
+                if item.skill_id == request.skill_id and item.skill_version == request.skill_version
             ),
             None,
         )
@@ -472,8 +462,7 @@ class ResearchSkillService:
         route_metadata_mismatch = int(
             int(str(route_summary["selected_count"])) != len(route.selected)
             or int(str(route_summary["unavailable_count"])) != len(route.unavailable)
-            or int(str(route_summary["degradation_count"]))
-            != len(route.degradation_codes)
+            or int(str(route_summary["degradation_count"])) != len(route.degradation_codes)
             or str(route_summary["coverage_status"]) != route.coverage_status.value
         )
         selected = {(item.skill_id, item.skill_version) for item in route.selected}
@@ -501,12 +490,9 @@ class ResearchSkillService:
                 delta_object_missing += 1
                 continue
             delta_metadata_mismatch += int(
-                int(str(summary["incremental_finding_count"]))
-                != len(delta.incremental_findings)
-                or int(str(summary["correction_count"]))
-                != len(delta.base_case_corrections)
-                or int(str(summary["metric_count"]))
-                != len(delta.industry_specific_metrics)
+                int(str(summary["incremental_finding_count"])) != len(delta.incremental_findings)
+                or int(str(summary["correction_count"])) != len(delta.base_case_corrections)
+                or int(str(summary["metric_count"])) != len(delta.industry_specific_metrics)
                 or int(str(summary["evidence_request_count"]))
                 != len(delta.additional_evidence_requests)
                 or int(str(summary["evidence_count"])) != len(delta.evidence_ids)
@@ -553,8 +539,7 @@ class ResearchSkillService:
             "EVIDENCE_RECORD_MISSING": evidence_record_missing,
             "FUTURE_EVIDENCE": future_evidence,
             "CRITICAL_EVIDENCE_GRADE_MISMATCH": critical_grade_mismatch,
-            "ARTIFACT_REGISTRY_MISMATCH": artifact_registry_mismatch
-            + route_artifact_mismatch,
+            "ARTIFACT_REGISTRY_MISMATCH": artifact_registry_mismatch + route_artifact_mismatch,
         }
         finding_codes = sorted(code for code, count in findings.items() if count)
         return {
@@ -604,10 +589,7 @@ class ResearchSkillService:
             set(manifest.optional_input_degradation_codes) - set(request.available_inputs)
         )
         degradation_codes = sorted(
-            {
-                manifest.optional_input_degradation_codes[item]
-                for item in missing_optional
-            }
+            {manifest.optional_input_degradation_codes[item] for item in missing_optional}
         )
         if missing_inputs or missing_frequencies:
             eligibility = SpecialistEligibility.UNAVAILABLE
@@ -765,9 +747,7 @@ class ResearchSkillService:
         if not evidence_requirements:
             raise ValueError("v2 method contract requires evidence on every method node")
 
-        open_conflict_evidence = self._open_conflict_evidence(
-            evidence_pack.open_conflict_ids
-        )
+        open_conflict_evidence = self._open_conflict_evidence(evidence_pack.open_conflict_ids)
         for node_evidence, required_grade, role in evidence_requirements:
             self._require_frozen_evidence(node_evidence, set(evidence_pack.evidence_ids))
             for evidence_id in node_evidence:
@@ -776,16 +756,11 @@ class ResearchSkillService:
                     PointInTimeStatus.CERTIFIED,
                     PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
                 }:
-                    raise ValueError(
-                        "v2 method evidence requires certified or reconstructed PIT"
-                    )
+                    raise ValueError("v2 method evidence requires certified or reconstructed PIT")
                 grade = evidence_pack.evidence_grade_by_id.get(evidence_id)
                 if grade is None:
                     raise ValueError("v2 method evidence grade is unavailable")
-                if (
-                    _EVIDENCE_GRADE_STRENGTH[grade]
-                    < _EVIDENCE_GRADE_STRENGTH[required_grade]
-                ):
+                if _EVIDENCE_GRADE_STRENGTH[grade] < _EVIDENCE_GRADE_STRENGTH[required_grade]:
                     raise ValueError(
                         f"v2 method evidence for {role} requires {required_grade.value}"
                     )
@@ -871,8 +846,7 @@ def _v2_method_evidence_requirements(
             contract.falsifier,
         ]
         requirements = [
-            (node.evidence_ids, official, "event fact/transmission node")
-            for node in official_nodes
+            (node.evidence_ids, official, "event fact/transmission node") for node in official_nodes
         ]
         if contract.market_misclassification is not None:
             requirements.append(
@@ -905,15 +879,11 @@ def _v2_method_evidence_requirements(
             for node in contract.quality_factors
         ]
         if contract.tam_runway is not None:
-            requirements.append(
-                (contract.tam_runway.evidence_ids, official, "valuation TAM")
-            )
+            requirements.append((contract.tam_runway.evidence_ids, official, "valuation TAM"))
         if contract.peg is not None:
             requirements.append((contract.peg.evidence_ids, secondary, "valuation PEG"))
         if contract.consensus is not None:
-            requirements.append(
-                (contract.consensus.evidence_ids, secondary, "valuation consensus")
-            )
+            requirements.append((contract.consensus.evidence_ids, secondary, "valuation consensus"))
         return requirements
 
     if isinstance(contract, DailyTrendHealthContractV2):
@@ -932,6 +902,29 @@ def _v2_method_evidence_requirements(
                 for node in contract.estimate_revisions
             ),
         ]
+        return requirements
+
+    if isinstance(contract, JuglarCycleStageContractV1):
+        requirements = [
+            (
+                node.evidence_ids,
+                (
+                    secondary
+                    if node.dimension is JuglarCycleDimension.CAPITAL_MARKET_REACTION
+                    else official
+                ),
+                f"Juglar dimension {node.dimension.value}",
+            )
+            for node in contract.dimension_scores
+        ]
+        requirements.extend(
+            (node.evidence_ids, official, "Juglar counter-evidence")
+            for node in contract.counterevidence
+        )
+        requirements.extend(
+            (node.evidence_ids, official, "Juglar migration signal")
+            for node in contract.migration_signals
+        )
         return requirements
 
     raise ValueError("unsupported Serenity v2 method contract")

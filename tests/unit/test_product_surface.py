@@ -15,6 +15,9 @@ def test_web_agent_product_commands_are_registered() -> None:
         "research-seeds",
         "research-seeds-status",
         "research-seeds-audit",
+        "research-seeds-promote",
+        "research-seeds-promote-status",
+        "research-seeds-promote-audit",
         "candidate-input-schema",
         "candidate-input-stage",
         "candidate-input-run",
@@ -49,7 +52,8 @@ def test_natural_language_skills_route_company_trade_and_portfolio_questions() -
         "$candidate-scan",
         "trade-plan-view",
         "ClassifiedTradeProtocol",
-        "candidate-input-run",
+        "research-seeds-promote",
+        "JuglarCycleStageSkill",
         "research-seeds --live",
     ):
         assert term in orchestrator

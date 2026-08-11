@@ -357,8 +357,9 @@ def test_research_specialist_registry_cli_and_invalid_requests_are_safe(
     payload = json.loads(listed.output)
     assert payload["status"] == "REGISTERED"
     assert payload["max_specialists"] == 3
-    assert len(payload["skills"]) == 7
-    assert sum(item["counts_as_specialist"] for item in payload["skills"]) == 6
+    assert len(payload["skills"]) == 8
+    assert any(item["skill_id"] == "JuglarCycleStageSkill" for item in payload["skills"])
+    assert sum(item["counts_as_specialist"] for item in payload["skills"]) == 7
 
     secret = "private-specialist-statement-must-not-be-echoed"
     request = tmp_path / "private-specialist-request.json"
@@ -389,7 +390,7 @@ def test_research_diagnostic_cli_schema_and_invalid_requests_are_safe(
     assert schema.exit_code == 0, schema.output
     payload = json.loads(schema.output)
     assert payload["diagnostics_version"] == "research-diagnostics-v2"
-    assert len(payload["diagnostics"]) == 6
+    assert len(payload["diagnostics"]) == 7
     assert {
         item["skill_id"]: item["input_schema"] for item in payload["diagnostics"]
     } == {
@@ -398,6 +399,7 @@ def test_research_diagnostic_cli_schema_and_invalid_requests_are_safe(
         "GrowthProbabilitySkill": "GrowthProbabilityDiagnosticRequestV2",
         "GrowthValuationLens": "GrowthValuationDiagnosticRequestV2",
         "DailyTrendHealthSkill": "DailyTrendDiagnosticRequestV2",
+        "JuglarCycleStageSkill": "JuglarCycleDiagnosticRequestV2",
         "HourlySwingSkill": "HourlySwingDiagnosticRequest",
     }
     assert payload["memo"]["skill_id"] == "ResearchMemoComposer"

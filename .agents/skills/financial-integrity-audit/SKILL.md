@@ -11,6 +11,10 @@ description: Audit financial consistency, recalculated metrics, document conflic
 4. Bind every finding to evidence or label it as a data gap.
 5. Escalate document conflicts; do not label a company fraudulent.
 
+## Workflows
+
+- [`docs/workflows/workflow-financial-integrity.md`](../../../docs/workflows/workflow-financial-integrity.md)
+
 ## Output
 
 Validate a `FinancialAuditRequest` and run `uv run astock financial-audit <request.json>`. Produce `FinancialIntegrityEvidencePack`; missing, future, conflicting, weakly sourced, or insufficient model inputs must produce `status=NEEDS_INFO`, explicit evidence gaps, and manual tasks rather than fabricated numbers.

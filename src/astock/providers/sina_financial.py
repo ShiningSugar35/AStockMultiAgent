@@ -11,6 +11,36 @@ from astock.providers.financial_base import (
 )
 from astock.schemas import Market
 
+_SINA_LIVE_FIELD_ALIASES = {
+    "BALANCE_SHEET": {
+        "TOTASSET": "total_assets",
+        "TOTLIAB": "total_liabilities",
+        "RIGHAGGR": "total_equity",
+        "ACCORECE": "accounts_receivable",
+        "INVE": "inventory",
+        "PREP": "prepayments",
+        "OTHERRECETOT": "other_receivables",
+        "OTHERRECE": "other_receivables",
+        "TOTSHARE": "shares_outstanding",
+    },
+    "INCOME_STATEMENT": {
+        "NETPROFIT": "net_profit_income",
+        "BIZINCO": "revenue",
+        "BIZCOST": "operating_cost",
+    },
+    "CASH_FLOW_STATEMENT": {
+        "INICASHBALA": "cash_beginning",
+        "FINALCASHBALA": "cash_ending",
+        "MANANETR": "net_cash_operating",
+        "INVNETCASHFLOW": "net_cash_investing",
+        "FINNETCFLOW": "net_cash_financing",
+        "CHGEXCHGCHGS": "exchange_effect",
+        "NETPROFIT": "net_profit_cash_flow",
+    },
+}
+
+_SINA_SHARE_FIELDS = {"TOTSHARE"}
+
 
 class SinaFinancialProvider(FinancialProviderBase):
     provider_id = "sina-financial"
@@ -42,7 +72,7 @@ class SinaFinancialProvider(FinancialProviderBase):
             )
             tables = {
                 statement: _normalize_sina(
-                    _sina_rows(responses[statement]), company_id, period_end
+                    _sina_rows(responses[statement], statement), company_id, period_end
                 )
                 for statement in self._SOURCE_NAMES
             }
@@ -87,7 +117,7 @@ class SinaFinancialProvider(FinancialProviderBase):
             captured.append(snapshot)
             try:
                 tables[statement] = _normalize_sina(
-                    _sina_rows(payload), company_id, period_end
+                    _sina_rows(payload, statement), company_id, period_end
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 raise FinancialRawCaptureError(
@@ -108,35 +138,95 @@ class SinaFinancialProvider(FinancialProviderBase):
         )
 
 
-def _sina_rows(payload: dict[str, object]) -> list[dict[str, object]]:
+def _sina_rows(
+    payload: dict[str, object], statement: str
+) -> list[dict[str, object]]:
     result = payload.get("result")
     if not isinstance(result, dict):
         raise ValueError("Sina financial result is malformed")
+    status = result.get("status")
+    if isinstance(status, dict) and status.get("code") not in {0, "0", None}:
+        raise ValueError("Sina financial query failed")
     data = result.get("data")
     if isinstance(data, dict):
-        data = data.get("data") or data.get("report_list")
+        report_list = data.get("report_list")
+        if isinstance(report_list, dict):
+            rows: list[dict[str, object]] = []
+            for report_date, report in report_list.items():
+                if not isinstance(report, dict):
+                    raise ValueError("Sina financial report entry is malformed")
+                scope = _sina_scope(report.get("rType"))
+                currency = report.get("rCurrency")
+                items = report.get("data")
+                if scope is None or currency != "CNY" or not isinstance(items, list):
+                    continue
+                row: dict[str, object] = {
+                    "report_date": _normalize_sina_report_date(str(report_date)),
+                    "statement_scope": scope,
+                    "currency": "CNY",
+                }
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    source_field = str(item.get("item_field") or "")
+                    alias = _SINA_LIVE_FIELD_ALIASES.get(statement, {}).get(source_field)
+                    if alias is None:
+                        continue
+                    value = item.get("item_value")
+                    if value in {None, ""}:
+                        continue
+                    row[alias] = _sina_live_value(source_field, value)
+                rows.append(row)
+            return rows
+        data = data.get("data") or report_list
     if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
         raise ValueError("Sina financial rows are malformed")
     return [dict(row) for row in data if isinstance(row, dict)]
+
+
+def _sina_scope(value: object) -> str | None:
+    text = str(value or "").strip()
+    if text.startswith("合并"):
+        return "CONSOLIDATED"
+    if text.startswith("母公司") or text.startswith("母企"):
+        return "PARENT_COMPANY"
+    return None
+
+
+def _normalize_sina_report_date(value: str) -> str:
+    digits = "".join(character for character in value if character.isdigit())
+    if len(digits) != 8:
+        raise ValueError("Sina report date is malformed")
+    return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+
+
+def _sina_live_value(source_field: str, value: object) -> object:
+    if source_field in _SINA_SHARE_FIELDS:
+        return value
+    try:
+        from decimal import Decimal
+
+        return str(Decimal(str(value)) / Decimal("10000"))
+    except Exception as exc:
+        raise ValueError("Sina financial value is malformed") from exc
 
 
 def _normalize_sina(
     rows: list[dict[str, object]], company_id: str, period_end: date
 ) -> list[dict[str, object]]:
     normalized = []
-    required = {"symbol", "report_date", "statement_scope", "currency"}
+    required = {"report_date", "statement_scope", "currency"}
     for row in rows:
         if not required <= row.keys():
             raise ValueError("Sina financial row lacks native identity fields")
-        if (
-            str(row["symbol"]) != company_id
-            or str(row["report_date"])[:10] != period_end.isoformat()
-        ):
+        if "symbol" in row and str(row["symbol"]) != company_id:
+            continue
+        if str(row["report_date"])[:10] != period_end.isoformat():
             continue
         normalized.append(
             {
                 **row,
-                "company_id": str(row["symbol"]),
+                "company_id": company_id,
                 "period_end": str(row["report_date"])[:10],
                 "scope": str(row["statement_scope"]),
                 "currency": str(row["currency"]),

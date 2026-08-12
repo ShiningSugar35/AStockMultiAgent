@@ -5,11 +5,13 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time as _time
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -62,6 +64,9 @@ class _OfficialActionCandidate:
     available_to_system_at: datetime
 
 
+_T = TypeVar("_T")
+
+
 class MarketReferenceService:
     def __init__(
         self,
@@ -73,13 +78,36 @@ class MarketReferenceService:
         self.state = state
         self.objects = objects
         self.parquet = parquet
-        self.baostock = BaoStockReferenceProvider(
-            objects, state, fixture_root / "baostock"
-        )
-        self.eastmoney = EastMoneyReferenceProvider(
-            objects, state, fixture_root / "eastmoney"
-        )
+        self.baostock = BaoStockReferenceProvider(objects, state, fixture_root / "baostock")
+        self.eastmoney = EastMoneyReferenceProvider(objects, state, fixture_root / "eastmoney")
         self.fixture_root = fixture_root.resolve()
+
+    def _retry_reference_call(
+        self,
+        action: Callable[[], _T],
+        *,
+        live: bool,
+        max_attempts: int = 2,
+    ) -> _T:
+        last_error: AStockError | None = None
+        for attempt in range(max_attempts):
+            try:
+                return action()
+            except AStockError as exc:
+                last_error = exc
+                if not live or not exc.retryable or attempt + 1 >= max_attempts:
+                    raise
+                _time.sleep(0.25 * (2**attempt))
+        assert last_error is not None
+        raise last_error
+
+    def _baostock_circuit_open(self, *, live: bool) -> bool:
+        if not live:
+            return False
+        latest = self.state.latest_snapshot_for_source(self.baostock.provider_id)
+        if latest is None or latest.fetch_status is not FetchStatus.FETCH_FAILED:
+            return False
+        return latest.fetched_at >= datetime.now(UTC) - timedelta(minutes=30)
 
     def sync_instruments(
         self, market: Market | None = None, *, live: bool = False
@@ -90,19 +118,24 @@ class MarketReferenceService:
         records: list[InstrumentRecord] = []
         reasons: list[str] = []
         bao_failed = False
-        try:
-            envelope, snapshot = self.baostock.fetch("instrument.master", request, live=live)
-        except BaoStockCaptureError as exc:
-            snapshot = exc.snapshot
+        if self._baostock_circuit_open(live=live):
             bao_failed = True
-            reasons.append(exc.failure_code)
+            reasons.append("BAOSTOCK_CIRCUIT_OPEN")
+        else:
+            try:
+                envelope, snapshot = self.baostock.fetch("instrument.master", request, live=live)
+            except BaoStockCaptureError as exc:
+                snapshot = exc.snapshot
+                bao_failed = True
+                reasons.append(exc.failure_code)
         if envelope is not None and envelope.complete:
+            assert snapshot is not None
             try:
                 records = _parse_baostock_instruments(envelope, snapshot.snapshot_id, market)
             except (KeyError, ValueError, ValidationError):
                 bao_failed = True
                 reasons.append("BAOSTOCK_MALFORMED_INSTRUMENT_MASTER")
-        else:
+        elif not bao_failed:
             bao_failed = True
             if "BAOSTOCK_RAW_ENVELOPE_INVALID" not in reasons:
                 reasons.append("BAOSTOCK_INCOMPLETE")
@@ -115,7 +148,10 @@ class MarketReferenceService:
         east_failed = False
         if not records:
             try:
-                payload, backup_snapshot = self.eastmoney.fetch_master(market, live=live)
+                payload, backup_snapshot = self._retry_reference_call(
+                    lambda: self.eastmoney.fetch_master(market, live=live),
+                    live=live,
+                )
                 records = _parse_eastmoney_instruments(
                     payload,
                     backup_snapshot.snapshot_id,
@@ -148,6 +184,115 @@ class MarketReferenceService:
             ),
             reasons=reasons,
             failed=not records and bao_failed and east_failed,
+        )
+
+    def sync_instrument_identity(
+        self,
+        symbol: str,
+        market: Market,
+        *,
+        live: bool = False,
+    ) -> ReferenceSyncReport:
+        if market in {Market.INDEX}:
+            raise ValueError("instrument identity requires an equity market")
+        request = {"market": market.value}
+        envelope = None
+        snapshot = None
+        records: list[InstrumentRecord] = []
+        reasons: list[str] = []
+        snapshot_ids: list[str] = []
+        available_at = datetime.now(UTC)
+        if self._baostock_circuit_open(live=live):
+            reasons.append("BAOSTOCK_CIRCUIT_OPEN")
+        else:
+            try:
+                envelope, snapshot = self.baostock.fetch("instrument.master", request, live=live)
+                snapshot_ids.append(snapshot.snapshot_id)
+                available_at = snapshot.available_to_system_at
+                if envelope.complete:
+                    parsed = _parse_baostock_instruments(envelope, snapshot.snapshot_id, market)
+                    records = [
+                        item
+                        for item in parsed
+                        if item.symbol == symbol
+                        and item.market is market
+                        and item.instrument_type is InstrumentType.STOCK
+                    ]
+                    if len(records) != 1:
+                        records = []
+                        reasons.append("BAOSTOCK_TARGET_IDENTITY_NOT_FOUND")
+                else:
+                    reasons.append("BAOSTOCK_INCOMPLETE")
+            except BaoStockCaptureError as exc:
+                snapshot_ids.append(exc.snapshot.snapshot_id)
+                available_at = exc.snapshot.available_to_system_at
+                reasons.append(exc.failure_code)
+            except (KeyError, ValueError, ValidationError):
+                records = []
+                reasons.append("BAOSTOCK_MALFORMED_INSTRUMENT_MASTER")
+
+        provider_id = self.baostock.provider_id
+        if not records:
+            page = 1
+            total: int | None = None
+            while page <= 50:
+                try:
+                    payload, backup_snapshot = self._retry_reference_call(
+                        lambda current_page=page: self.eastmoney.fetch_master_page(
+                            market, current_page, live=live
+                        ),
+                        live=live,
+                    )
+                    snapshot_ids.append(backup_snapshot.snapshot_id)
+                    available_at = max(available_at, backup_snapshot.available_to_system_at)
+                    parsed = _parse_eastmoney_instruments(
+                        payload,
+                        backup_snapshot.snapshot_id,
+                        backup_snapshot.available_to_system_at,
+                        market,
+                    )
+                    matched = [
+                        item
+                        for item in parsed
+                        if item.symbol == symbol
+                        and item.market is market
+                        and item.instrument_type is InstrumentType.STOCK
+                    ]
+                    if len(matched) == 1:
+                        records = matched
+                        provider_id = self.eastmoney.provider_id
+                        reasons.append("EASTMONEY_FALLBACK_USED")
+                        break
+                    data = payload.get("data")
+                    if isinstance(data, dict):
+                        raw_total = data.get("total")
+                        if isinstance(raw_total, int):
+                            total = raw_total
+                        raw_diff = data.get("diff")
+                        row_count = len(raw_diff) if isinstance(raw_diff, (list, dict)) else 0
+                    else:
+                        row_count = 0
+                    if row_count == 0 or (total is not None and page * row_count >= total):
+                        break
+                    page += 1
+                except (AStockError, KeyError, OSError, ValueError, ValidationError):
+                    reasons.append("EASTMONEY_FALLBACK_FAILED")
+                    break
+        if not records and "EASTMONEY_FALLBACK_FAILED" not in reasons:
+            reasons.append("TARGET_INSTRUMENT_IDENTITY_NOT_FOUND")
+        return self._release(
+            command="sync-instrument-identity",
+            dataset_kind=ReferenceDatasetKind.INSTRUMENT_MASTER,
+            scope_key=f"{market.value}:{symbol}",
+            provider_id=provider_id,
+            raw_snapshot_ids=list(dict.fromkeys(snapshot_ids)),
+            records=records,
+            requested_start=None,
+            requested_end=None,
+            available_at=available_at,
+            complete=len(records) == 1,
+            reasons=list(dict.fromkeys(reasons)),
+            failed=not records,
         )
 
     def sync_calendar(
@@ -235,15 +380,20 @@ class MarketReferenceService:
         records: list[DailyBarObservation] = []
         reasons: list[str] = []
         bao_failed = False
-        try:
-            envelope, snapshot = self.baostock.fetch(
-                "market.daily_unadjusted", request, live=live
-            )
-        except BaoStockCaptureError as exc:
-            snapshot = exc.snapshot
+        if self._baostock_circuit_open(live=live):
             bao_failed = True
-            reasons.append(exc.failure_code)
+            reasons.append("BAOSTOCK_CIRCUIT_OPEN")
+        else:
+            try:
+                envelope, snapshot = self.baostock.fetch(
+                    "market.daily_unadjusted", request, live=live
+                )
+            except BaoStockCaptureError as exc:
+                snapshot = exc.snapshot
+                bao_failed = True
+                reasons.append(exc.failure_code)
         if envelope is not None and envelope.complete:
+            assert snapshot is not None
             try:
                 records = _parse_baostock_daily(
                     envelope, snapshot.snapshot_id, symbol, market, start, end
@@ -251,7 +401,7 @@ class MarketReferenceService:
             except (KeyError, ValueError, ValidationError):
                 bao_failed = True
                 reasons.append("BAOSTOCK_MALFORMED_DAILY")
-        else:
+        elif not bao_failed:
             bao_failed = True
             if "BAOSTOCK_RAW_ENVELOPE_INVALID" not in reasons:
                 reasons.append("BAOSTOCK_INCOMPLETE")
@@ -263,8 +413,11 @@ class MarketReferenceService:
         east_failed = False
         if not records:
             try:
-                payload, backup_snapshot = self.eastmoney.fetch_daily(
-                    symbol, market, start.isoformat(), end.isoformat(), live=live
+                payload, backup_snapshot = self._retry_reference_call(
+                    lambda: self.eastmoney.fetch_daily(
+                        symbol, market, start.isoformat(), end.isoformat(), live=live
+                    ),
+                    live=live,
                 )
                 records = _parse_eastmoney_daily(
                     payload,
@@ -316,80 +469,105 @@ class MarketReferenceService:
             "start": start.isoformat(),
             "end": end.isoformat(),
         }
-        try:
-            envelope, hint_snapshot = self.baostock.fetch(
-                "corporate_actions.structured_hint", request, live=live
-            )
-        except BaoStockCaptureError as exc:
-            return self._release(
-                command="sync-corporate-actions",
-                dataset_kind=ReferenceDatasetKind.CORPORATE_ACTION,
-                scope_key=f"{market.value}:{symbol}",
-                provider_id=self.baostock.provider_id,
-                raw_snapshot_ids=[exc.snapshot.snapshot_id],
-                records=[],
-                requested_start=start,
-                requested_end=end,
-                available_at=exc.snapshot.available_to_system_at,
-                complete=False,
-                reasons=[exc.failure_code],
-                failed=True,
-            )
+        envelope = None
+        hint_snapshot = None
+        records: list[CorporateActionObservation] = []
         reasons: list[str] = []
-        try:
-            records = _parse_baostock_actions(
-                envelope, hint_snapshot.snapshot_id, symbol, market
-            )
-            records = [
-                item
-                for item in records
-                if (item.announcement_date is None or start <= item.announcement_date <= end)
-                and (item.ex_date is None or start <= item.ex_date <= end)
-            ]
-        except (KeyError, ValueError, ValidationError):
-            records = []
-            reasons.append("BAOSTOCK_MALFORMED_CORPORATE_ACTION_HINT")
-        snapshot_ids = [hint_snapshot.snapshot_id]
-        available_at = hint_snapshot.available_to_system_at
+        bao_failed = False
+        if self._baostock_circuit_open(live=live):
+            bao_failed = True
+            reasons.append("BAOSTOCK_CIRCUIT_OPEN")
+        else:
+            try:
+                envelope, hint_snapshot = self.baostock.fetch(
+                    "corporate_actions.structured_hint", request, live=live
+                )
+            except BaoStockCaptureError as exc:
+                hint_snapshot = exc.snapshot
+                bao_failed = True
+                reasons.append(exc.failure_code)
+        if envelope is not None:
+            assert hint_snapshot is not None
+            try:
+                records = _parse_baostock_actions(
+                    envelope, hint_snapshot.snapshot_id, symbol, market
+                )
+                records = [
+                    item
+                    for item in records
+                    if (item.announcement_date is None or start <= item.announcement_date <= end)
+                    and (item.ex_date is None or start <= item.ex_date <= end)
+                ]
+            except (KeyError, ValueError, ValidationError):
+                records = []
+                bao_failed = True
+                reasons.append("BAOSTOCK_MALFORMED_CORPORATE_ACTION_HINT")
+            if not envelope.complete:
+                bao_failed = True
+                reasons.append("BAOSTOCK_INCOMPLETE")
+        elif not bao_failed:
+            bao_failed = True
+            reasons.append("BAOSTOCK_INCOMPLETE")
 
+        snapshot_ids = [hint_snapshot.snapshot_id] if hint_snapshot is not None else []
+        available_at = (
+            hint_snapshot.available_to_system_at if hint_snapshot is not None else datetime.now(UTC)
+        )
+        official_lookup_succeeded = False
+        official_candidates: list[_OfficialActionCandidate] = []
         if market is Market.BJSE:
             reasons.append("OFFICIAL_EVIDENCE_UNAVAILABLE")
-        elif market in {Market.XSHG, Market.XSHE} and records:
+        elif market in {Market.XSHG, Market.XSHE}:
             try:
                 official_candidates, official_snapshot_ids, official_available = (
                     self._official_actions_live(symbol, market, start, end)
                     if live
                     else self._official_actions_recorded(symbol, market)
                 )
+                official_lookup_succeeded = True
                 snapshot_ids.extend(official_snapshot_ids)
                 available_at = max(available_at, official_available)
-                records, linked_count, match_reasons = _link_official_actions(
-                    records, official_candidates
-                )
-                reasons.extend(match_reasons)
-                if linked_count:
-                    reasons.append("TERMS_NOT_VERIFIED")
-                if linked_count == 0 and not official_candidates:
-                    reasons.append("OFFICIAL_DOCUMENT_NOT_FOUND")
+                if records:
+                    records, linked_count, match_reasons = _link_official_actions(
+                        records, official_candidates
+                    )
+                    reasons.extend(match_reasons)
+                    if linked_count:
+                        reasons.append("TERMS_NOT_VERIFIED")
+                    if linked_count == 0 and not official_candidates:
+                        reasons.append("OFFICIAL_DOCUMENT_NOT_FOUND")
+                elif official_candidates:
+                    reasons.extend(
+                        [
+                            "OFFICIAL_EVIDENCE_FALLBACK_USED",
+                            "STRUCTURED_TERMS_UNAVAILABLE",
+                        ]
+                    )
+                else:
+                    reasons.append("OFFICIAL_INDEX_CAPTURED_NO_MATCH")
             except (AStockError, OSError, ValueError):
                 reasons.append("OFFICIAL_EVIDENCE_LOOKUP_FAILED")
         elif market is Market.INDEX:
             reasons.append("CORPORATE_ACTION_NOT_APPLICABLE_TO_INDEX")
 
-        # Hints and linked PDFs stay non-ledger-ready until terms are parsed and verified.
+        provider_id = (
+            "cninfo-disclosures"
+            if official_lookup_succeeded and not records
+            else self.baostock.provider_id
+        )
         return self._release(
             command="sync-corporate-actions",
             dataset_kind=ReferenceDatasetKind.CORPORATE_ACTION,
             scope_key=f"{market.value}:{symbol}",
-            provider_id=self.baostock.provider_id,
+            provider_id=provider_id,
             raw_snapshot_ids=list(dict.fromkeys(snapshot_ids)),
             records=records,
             requested_start=start,
             requested_end=end,
             available_at=available_at,
             complete=False,
-            reasons=reasons,
-            failed=not records and not envelope.complete,
+            reasons=list(dict.fromkeys(reasons)),
+            failed=not records and bao_failed and not official_lookup_succeeded,
         )
 
     def _official_actions_recorded(
@@ -515,9 +693,7 @@ class MarketReferenceService:
         *,
         as_of: datetime | None = None,
     ) -> dict[str, Any]:
-        row = self.state.get_market_reference_release(
-            dataset_kind.value, scope_key, as_of=as_of
-        )
+        row = self.state.get_market_reference_release(dataset_kind.value, scope_key, as_of=as_of)
         if row is None:
             return {
                 "schema_version": "reference-status-v1",
@@ -568,9 +744,7 @@ class MarketReferenceService:
                     manifests[manifest.release_id] = manifest
             except (OSError, StorageError, ValueError, ValidationError):
                 corrupt.append(str(row["release_id"]))
-        graph_corrupt, reason_codes = self._audit_release_graph(
-            rows, manifests, legacy_release_ids
-        )
+        graph_corrupt, reason_codes = self._audit_release_graph(rows, manifests, legacy_release_ids)
         corrupt.extend(graph_corrupt)
         corrupt = list(dict.fromkeys(corrupt))
         return {
@@ -650,10 +824,7 @@ class MarketReferenceService:
                     reasons.append("LEGACY_UNVERIFIED_RELEASE")
                 else:
                     break
-                if (
-                    last_available is not None
-                    and available > last_available
-                ):
+                if last_available is not None and available > last_available:
                     reasons.append("RELEASE_AVAILABILITY_ORDER_INVALID")
                     corrupt.extend(release_ids)
                     break
@@ -739,9 +910,7 @@ class MarketReferenceService:
             or payload_available != row_available
             or row["raw_snapshot_ids_json"] != expected_raw_json
             or row["input_hashes_json"]
-            != json.dumps(
-                [*raw_snapshot_ids, str(row["content_hash"])], separators=(",", ":")
-            )
+            != json.dumps([*raw_snapshot_ids, str(row["content_hash"])], separators=(",", ":"))
             or str(row["release_id"]) != content_hash(release_identity)
         ):
             raise ValueError("legacy market-reference release chain mismatch")
@@ -808,11 +977,7 @@ class MarketReferenceService:
             else (
                 ReferenceCoverageStatus.PARTIAL
                 if records
-                else (
-                    ReferenceCoverageStatus.FAILED
-                    if failed
-                    else ReferenceCoverageStatus.EMPTY
-                )
+                else (ReferenceCoverageStatus.FAILED if failed else ReferenceCoverageStatus.EMPTY)
             )
         )
         coverage = ReferenceCoverage(
@@ -1015,16 +1180,25 @@ def _parse_eastmoney_instruments(
     ):
         raise ValueError("EastMoney instrument request provenance mismatch")
     data = payload["data"]
-    if not isinstance(data, dict) or not isinstance(data.get("diff"), list):
+    if not isinstance(data, dict):
+        raise ValueError("invalid EastMoney instrument payload")
+    raw_diff = data.get("diff")
+    if isinstance(raw_diff, list):
+        rows = raw_diff
+    elif isinstance(raw_diff, dict):
+        try:
+            keys = sorted(raw_diff, key=lambda value: int(str(value)))
+        except ValueError as exc:
+            raise ValueError("invalid EastMoney instrument payload") from exc
+        rows = [raw_diff[key] for key in keys]
+    else:
         raise ValueError("invalid EastMoney instrument payload")
     result: list[InstrumentRecord] = []
-    for item in data["diff"]:
+    for item in rows:
         if not isinstance(item, dict):
             raise ValueError("invalid EastMoney instrument row")
         # The endpoint/query board is the explicit market boundary; never infer BJSE by code.
-        market_value = item.get("market") or (
-            requested_market.value if requested_market else ""
-        )
+        market_value = item.get("market") or (requested_market.value if requested_market else "")
         market = Market(str(market_value))
         if requested_market is not None and market is not requested_market:
             continue
@@ -1148,9 +1322,7 @@ def _parse_baostock_actions(
         if market is not requested_market or symbol != requested_symbol:
             continue
         terms = {
-            key: row[index]
-            for key, index in fields.items()
-            if key != "code" and row[index] != ""
+            key: row[index] for key, index in fields.items() if key != "code" and row[index] != ""
         }
         cash = Decimal(terms.get("dividCashPsBeforeTax", "0") or "0")
         stock = Decimal(terms.get("dividStocksPs", "0") or "0")
@@ -1204,9 +1376,7 @@ def _link_official_actions(
     linked_count = 0
     reasons: list[str] = []
 
-    def matches(
-        item: CorporateActionObservation, candidate: _OfficialActionCandidate
-    ) -> bool:
+    def matches(item: CorporateActionObservation, candidate: _OfficialActionCandidate) -> bool:
         return (
             item.announcement_date == candidate.published_date
             and item.report_period == candidate.report_period
@@ -1218,20 +1388,14 @@ def _link_official_actions(
         for candidate in candidates
     }
     for item in records:
-        item_matches = [
-            candidate
-            for candidate in candidates
-            if matches(item, candidate)
-        ]
+        item_matches = [candidate for candidate in candidates if matches(item, candidate)]
         if (
             len(item_matches) != 1
             or candidate_match_counts.get(item_matches[0].announcement_id) != 1
         ):
             linked.append(item)
             reasons.append(
-                "OFFICIAL_MATCH_NOT_UNIQUE"
-                if item_matches
-                else "OFFICIAL_DOCUMENT_NOT_FOUND"
+                "OFFICIAL_MATCH_NOT_UNIQUE" if item_matches else "OFFICIAL_DOCUMENT_NOT_FOUND"
             )
             continue
         candidate = item_matches[0]
@@ -1383,9 +1547,8 @@ def _is_legacy_release_row(row: dict[str, Any]) -> bool:
         isinstance(marker, dict)
         and marker.get("legacy_0038") is True
         and row.get("pit_status") == ReferencePitStatus.UNVERIFIED.value
-        and row.get("manifest_schema_version") != DatasetReleaseManifest.model_fields[
-            "schema_version"
-        ].default
+        and row.get("manifest_schema_version")
+        != DatasetReleaseManifest.model_fields["schema_version"].default
     )
 
 

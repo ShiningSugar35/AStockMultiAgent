@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -14,8 +14,10 @@ from astock.candidates.cli_ext import register_candidate_input_commands
 from astock.market_data.storage import CanonicalMarketStore
 from astock.portfolio.cli import register_portfolio_commands
 from astock.portfolio.vnext_cli import register_portfolio_vnext_commands
+from astock.research.acquisition import CurrentResearchAcquisitionService
 from astock.research.institutional import InstitutionalResearchService
 from astock.research.knowledge_port import KnowledgeSkillProvider
+from astock.research.presentation import investor_view_from_acquisition, investor_view_from_run
 from astock.research.production_cli import register_research_production_commands
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
@@ -35,6 +37,7 @@ from astock.schemas.institutional_research import (
     MarketPriceAnchor,
     ValuationScenarioAssumption,
 )
+from astock.schemas.reference_data import Market
 from astock.schemas.research_runtime import (
     ResearchRunFrozenInputs,
     ResearchRunMode,
@@ -80,6 +83,10 @@ def register_research_runtime_commands(
             knowledge_provider=knowledge_provider_factory(state, objects),
         )
 
+    def current_acquisition() -> CurrentResearchAcquisitionService:
+        paths, state, objects = services()
+        return CurrentResearchAcquisitionService(paths, state, objects)
+
     def readiness() -> ResearchRuntimeReadinessService:
         paths, state, objects = services()
         return ResearchRuntimeReadinessService(
@@ -111,17 +118,20 @@ def register_research_runtime_commands(
     @app.command("research-plan")
     def research_plan(
         company_id: Annotated[str, typer.Argument()],
-        as_of: Annotated[str, typer.Option("--as-of")],
+        as_of: Annotated[str | None, typer.Option("--as-of")] = None,
         mode: Annotated[ResearchRunMode, typer.Option()] = ResearchRunMode.RECORDED_INPUT,
         institutional_research_required: Annotated[bool, typer.Option()] = False,
         fundamental_model_bundle_artifact_id: Annotated[str | None, typer.Option()] = None,
         institutional_decision_context_artifact_id: Annotated[str | None, typer.Option()] = None,
     ) -> None:
+        if as_of is None and mode is not ResearchRunMode.LIVE:
+            raise typer.BadParameter("--as-of is required for recorded or historical research")
+        resolved_as_of = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
         emit(
             runtime().plan(
                 ResearchRunRequest(
                     company_id=company_id,
-                    as_of=datetime.fromisoformat(as_of),
+                    as_of=resolved_as_of,
                     mode=mode,
                     institutional_research_required=institutional_research_required,
                     frozen_inputs=(
@@ -140,6 +150,42 @@ def register_research_runtime_commands(
                         else None
                     ),
                 )
+            )
+        )
+
+    @app.command("research-acquire-current")
+    def research_acquire_current(
+        company_id: Annotated[str, typer.Argument()],
+        market: Annotated[Market, typer.Option()],
+        lookback_days: Annotated[int, typer.Option(min=30, max=730)] = 120,
+    ) -> None:
+        """Acquire current public research inputs before freezing a decision timestamp."""
+
+        emit(current_acquisition().acquire(company_id, market, lookback_days=lookback_days))
+
+    @app.command("research-acquisition-investor-view")
+    def research_acquisition_investor_view(
+        report_id: Annotated[str, typer.Argument()],
+    ) -> None:
+        report = current_acquisition().get(report_id)
+        if report is None:
+            emit({"status": "NOT_FOUND"})
+            raise typer.Exit(code=2)
+        emit(investor_view_from_acquisition(report))
+
+    @app.command("research-investor-view")
+    def research_investor_view(
+        run_id: Annotated[str, typer.Argument()],
+        include_execution_readiness: Annotated[bool, typer.Option()] = False,
+    ) -> None:
+        report = runtime().status(run_id)
+        if report is None:
+            emit({"status": "NOT_RUN"})
+            raise typer.Exit(code=2)
+        emit(
+            investor_view_from_run(
+                report,
+                include_execution_readiness=include_execution_readiness,
             )
         )
 
@@ -241,18 +287,21 @@ def register_research_runtime_commands(
     @app.command("research-run-company")
     def research_run_company(
         company_id: Annotated[str, typer.Argument()],
-        as_of: Annotated[str, typer.Option("--as-of")],
+        as_of: Annotated[str | None, typer.Option("--as-of")] = None,
         mode: Annotated[ResearchRunMode, typer.Option()] = ResearchRunMode.RECORDED_INPUT,
         sync_reference_inputs: Annotated[bool, typer.Option()] = True,
         institutional_research_required: Annotated[bool, typer.Option()] = False,
         fundamental_model_bundle_artifact_id: Annotated[str | None, typer.Option()] = None,
         institutional_decision_context_artifact_id: Annotated[str | None, typer.Option()] = None,
     ) -> None:
+        if as_of is None and mode is not ResearchRunMode.LIVE:
+            raise typer.BadParameter("--as-of is required for recorded or historical research")
+        resolved_as_of = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
         emit(
             runtime().run(
                 ResearchRunRequest(
                     company_id=company_id,
-                    as_of=datetime.fromisoformat(as_of),
+                    as_of=resolved_as_of,
                     mode=mode,
                     sync_reference_inputs=sync_reference_inputs,
                     institutional_research_required=institutional_research_required,

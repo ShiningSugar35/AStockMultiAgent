@@ -12,6 +12,10 @@ description: Initialize, inspect, recover, or advance the deterministic paper-tr
 5. Preserve the old canonical and checkpoint when a provider or quality gate fails.
 6. Treat `shadow-status`, `shadow-audit`, `phase8-admission`, and `adaptive-research-status` as read-only analytical state. Shadow studies and their observations must never initialize, replay, repair, or mutate this account. Adaptive research has the same hard boundary.
 
+## Workflows
+
+- [`docs/workflows/workflow-paper-trading.md`](../../../docs/workflows/workflow-paper-trading.md)
+
 ## Output
 
 Produce deterministic `PortfolioNAV` and `ReplayCheckpoint` values plus an integrity report. Use validated paper-account commands for any state change.

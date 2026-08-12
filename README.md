@@ -183,6 +183,8 @@ uv run astock portfolio-construct portfolio-construction.json
 - `$paper-trading-recovery`：模拟盘恢复；
 - `$knowledge-ingest`：批准来源的知识采集。
 
+人类可见能力目录见 [`skills/README.md`](skills/README.md)；canonical Skill 仍位于 `.agents/skills/`，避免复制第二套 `SKILL.md`。跨 Skill 的完整任务链统一记录在 [`docs/workflows/README.md`](docs/workflows/README.md)，当前覆盖单股研究、候选发现、证据补全、财务审计、投委会/交易计划、组合、持仓、模拟盘、知识采集和前瞻评估。
+
 Agent 的默认低 token 工作方式是：先读最终压缩工件，再按 evidence locator 精确打开必要证据。不要让多个 Agent 重复读取同一批原文。
 
 ## 常用确定性命令
@@ -206,12 +208,16 @@ uv run astock research-seeds-promote-audit <SeedPromotionReport-artifact-id>
 uv run astock candidate-status --scan-id <scan-id>
 uv run astock candidate-audit <scan-id>
 
-# 单股研究
-uv run astock research-plan 600519 --as-of 2026-08-11T10:00:00+08:00
-uv run astock research-run-company 600519 --as-of 2026-08-11T10:00:00+08:00
+# 当前单股研究：先采集，再在采集结束时冻结 current decision snapshot
+uv run astock research-acquire-current 600519 --market XSHG
+uv run astock research-plan 600519 --mode LIVE
+uv run astock research-run-company 600519 --mode LIVE --institutional-research-required
 uv run astock research-status <research-run-id>
 uv run astock research-audit <research-run-id>
 uv run astock trade-plan-view <classified-protocol-artifact-id>
+
+# 历史/recorded 研究仍显式提供 --as-of，保持防未来数据边界
+uv run astock research-plan 600519 --as-of 2026-08-11T10:00:00+08:00
 
 # 组合
 uv run astock portfolio-paper-evaluate --account-id paper --live

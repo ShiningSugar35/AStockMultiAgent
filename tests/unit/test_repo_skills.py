@@ -153,3 +153,31 @@ def test_phase7_repo_skill_commands_exist_and_keep_shadow_isolated() -> None:
     assert "Do not write shadow-study results" in recovery
     assert "adaptive-research-status" in recovery
     assert "ledger-write command" in recovery
+
+
+
+def test_current_investor_skills_exhaust_automatic_fallback_before_manual_help() -> None:
+    orchestrator = (
+        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    company = (SKILLS_ROOT / "company-deep-research" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    investigation = (SKILLS_ROOT / "evidence-investigation" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    for body in (orchestrator, company):
+        assert "research-acquire-current" in body
+        assert "question timestamp" in body or "question-time" in body
+        assert "Web search" in body
+        assert "manual" in body.lower()
+        assert "provider error" in body.lower() or "provider failure" in body.lower()
+        assert "artifact" in body
+        assert "internal" in body.lower()
+    assert "Do **not** run `uv run astock probe` before every investment question" in orchestrator
+    assert "Only after local/API fallbacks **and** authoritative Web search are exhausted" in (
+        orchestrator
+    )
+    assert "automatically continue with Web search before asking the user" in investigation
+    assert "one consolidated checklist" in investigation

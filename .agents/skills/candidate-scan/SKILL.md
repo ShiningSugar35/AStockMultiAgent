@@ -23,6 +23,10 @@ description: Build an evidence-bounded A-share research candidate or observation
 - Watchlist membership is user intent only. Holding review contributes only new or invalidating evidence.
 - `RESEARCH_READY` requires at least MODERATE real evidence, PIT safety, non-failed quality and liquidity gates, and `TRADABLE` status.
 
+## Workflows
+
+- [`docs/workflows/workflow-candidate-discovery.md`](../../../docs/workflows/workflow-candidate-discovery.md)
+
 ## Output boundary
 
 The only durable outputs are `CandidateSignal`, `CandidateRecord`, `CandidateUniverseSnapshot`, `CandidateScanReport`, and `CandidateAuditReport`. `CandidateRecord` means “worth further research” or “observation only”; it is never paper eligibility or a trading instruction.

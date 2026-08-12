@@ -222,6 +222,14 @@ def _services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
     return paths, state, ObjectStore(paths.objects)
 
 
+def _read_only_services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
+    """Resolve an existing runtime without creating directories or applying migrations."""
+
+    paths = ProjectPaths.discover()
+    state = StateStore(paths.state_db, paths.root / "migrations")
+    return paths, state, ObjectStore(paths.objects)
+
+
 def _knowledge_sources(paths: ProjectPaths) -> KnowledgeSourceRegistry:
     return load_knowledge_sources(paths.root / "configs" / "knowledge_sources.yaml")
 
@@ -485,7 +493,23 @@ def initialize(
 def probe() -> None:
     """Report local deterministic capabilities without calling the network."""
 
-    paths, state, objects = _services()
+    paths, state, objects = _read_only_services()
+    state_health = state.quick_read_only_health()
+    if state_health["status"] != "OK":
+        _emit(
+            {
+                "version": __version__,
+                "python": platform.python_version(),
+                "python_supported": sys.version_info[:2] == (3, 12),
+                "project_root": str(paths.root),
+                "runtime_root": str(paths.runtime),
+                "state_health": state_health,
+                "state_integrity": "NOT_RUN",
+                "full_integrity_check_run": False,
+                "status": "NEEDS_INIT",
+            }
+        )
+        return
     providers = [EastMoney5mProvider(objects, state), Sina5mProvider(objects, state)]
     shadow = _shadow_service(paths, state, objects)
     adaptive = AdaptiveResearchStatusService(shadow).status()
@@ -495,7 +519,9 @@ def probe() -> None:
             "python": platform.python_version(),
             "python_supported": sys.version_info[:2] == (3, 12),
             "project_root": str(paths.root),
-            "state_integrity": state.integrity_check(),
+            "state_health": state_health,
+            "state_integrity": "NOT_RUN",
+            "full_integrity_check_run": False,
             "modes": {
                 "CODEX_INTERACTIVE_MODE": "AVAILABLE",
                 "DETERMINISTIC_MODE": "AVAILABLE",
@@ -910,6 +936,24 @@ def reference_audit() -> None:
     result = _market_reference_service(paths, state, objects).audit()
     _emit(result)
     if result["status"] != "PASS":
+        raise typer.Exit(code=2)
+
+
+@app.command("state-integrity-audit")
+def state_integrity_audit() -> None:
+    """Run the explicit, potentially slow full SQLite integrity scan in read-only mode."""
+
+    paths, state, _ = _read_only_services()
+    result = state.read_only_integrity_check()
+    _emit(
+        {
+            "status": "PASS" if result == "ok" else "FAIL",
+            "database": str(paths.state_db),
+            "integrity_check": result,
+            "read_only": True,
+        }
+    )
+    if result != "ok":
         raise typer.Exit(code=2)
 
 

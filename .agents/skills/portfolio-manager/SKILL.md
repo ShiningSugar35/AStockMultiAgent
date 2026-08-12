@@ -15,6 +15,10 @@ description: Evaluate portfolio risk, compare constrained allocation methods, an
 8. Run `uv run astock portfolio-audit <PortfolioAnalysisReport_or_PortfolioConstructionReport_artifact_id>` before using a durable report in a final answer. Open only the compressed report and exact referenced artifacts; do not reread every company document.
 9. When the user asks “which stocks should I buy as a portfolio?”, summarize the single-stock committee outcomes first, then the portfolio interaction: why the names diversify or overlap, which risk dominates, what cash remains, and why the default allocation differs from the alternative methods.
 
+## Workflows
+
+- [`docs/workflows/workflow-portfolio-construction.md`](../../../docs/workflows/workflow-portfolio-construction.md)
+
 ## Output
 
 For portfolio review, return a plain-language risk diagnosis plus the immutable `PortfolioAnalysisReport` identity. For construction, return the admitted/rejected company list, constrained equal-weight default, three comparison proposals, cash residual, binding constraints, model-risk warnings, and the immutable `PortfolioConstructionReport` identity. Explain percentages as portfolio weights, not certainty or expected return.

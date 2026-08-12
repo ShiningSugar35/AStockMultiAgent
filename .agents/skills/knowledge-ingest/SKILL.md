@@ -17,6 +17,10 @@ description: Ingest an approved local document or allowlisted author's accessibl
    `MERGE_WITH_BOTH`; failed, low-confidence, no-text, unknown, or incomplete context stays
    `NEEDS_REVIEW`.
 
+## Workflows
+
+- [`docs/workflows/workflow-knowledge-ingest.md`](../../../docs/workflows/workflow-knowledge-ingest.md)
+
 ## Output
 
 Produce `AuthorCollectionCoverageReport` for every author/content type. Later distillation must produce separate candidate-selection and position-lifecycle manifests with source snapshot IDs.

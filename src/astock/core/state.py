@@ -138,6 +138,64 @@ class StateStore:
             row = connection.execute("PRAGMA integrity_check").fetchone()
         return str(row[0]) if row else "unknown"
 
+    def quick_read_only_health(self) -> dict[str, object]:
+        """Return bounded SQLite health metadata without migrations or a full DB scan."""
+
+        if not self.path.is_file():
+            return {
+                "status": "NOT_INITIALIZED",
+                "database_exists": False,
+                "latest_migration": None,
+                "migration_count": 0,
+                "full_integrity_check_run": False,
+            }
+        uri = f"file:{self.path.as_posix()}?mode=ro"
+        try:
+            with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
+                connection.row_factory = sqlite3.Row
+                connection.execute("SELECT 1").fetchone()
+                table_exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migration'"
+                ).fetchone()
+                if not table_exists:
+                    return {
+                        "status": "UNINITIALIZED_SCHEMA",
+                        "database_exists": True,
+                        "latest_migration": None,
+                        "migration_count": 0,
+                        "full_integrity_check_run": False,
+                    }
+                row = connection.execute(
+                    "SELECT COUNT(*) AS migration_count, MAX(version) AS latest_migration "
+                    "FROM schema_migration"
+                ).fetchone()
+                return {
+                    "status": "OK",
+                    "database_exists": True,
+                    "latest_migration": str(row["latest_migration"]) if row else None,
+                    "migration_count": int(row["migration_count"]) if row else 0,
+                    "full_integrity_check_run": False,
+                }
+        except sqlite3.Error as exc:
+            return {
+                "status": "UNAVAILABLE",
+                "database_exists": True,
+                "latest_migration": None,
+                "migration_count": 0,
+                "full_integrity_check_run": False,
+                "error_class": type(exc).__name__,
+            }
+
+    def read_only_integrity_check(self) -> str:
+        """Run the expensive SQLite integrity check without mutating journal/schema state."""
+
+        if not self.path.is_file():
+            return "not_initialized"
+        uri = f"file:{self.path.as_posix()}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=30)) as connection:
+            row = connection.execute("PRAGMA integrity_check").fetchone()
+        return str(row[0]) if row else "unknown"
+
     def create_job(self, job_type: str, input_hash: str, *, priority: int = 0) -> str:
         job_id = uuid4().hex
         now = utc_now_text()
@@ -606,6 +664,15 @@ class StateStore:
                 "rights_status": row["rights_status"],
             }
         )
+
+    def latest_snapshot_for_source(self, source_id: str) -> SourceSnapshot | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT snapshot_id FROM source_snapshot_index WHERE source_id=? "
+                "ORDER BY fetched_at DESC,snapshot_id DESC LIMIT 1",
+                (source_id,),
+            ).fetchone()
+        return self.get_snapshot(str(row["snapshot_id"])) if row is not None else None
 
     def record_source_decision(self, decision: SourceAccessDecision) -> None:
         with self.transaction() as connection:

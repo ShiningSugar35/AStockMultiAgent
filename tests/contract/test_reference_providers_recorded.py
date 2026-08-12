@@ -124,6 +124,54 @@ def test_baostock_login_exception_still_logs_out_and_snapshots(
     assert objects.verify(snapshot.object_sha256)
 
 
+
+def test_baostock_sdk_console_chatter_cannot_corrupt_structured_cli_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class Result:
+        error_code = "0"
+        error_msg = "success"
+        fields = ["code", "code_name", "ipoDate", "outDate", "type", "status"]
+
+        @staticmethod
+        def next() -> bool:
+            print("sdk-next-noise")
+            return False
+
+    class NoisySdk:
+        @staticmethod
+        def login() -> object:
+            print("sdk-login-noise")
+            return type("Login", (), {"error_code": "0", "error_msg": "success"})()
+
+        @staticmethod
+        def query_stock_basic(*, code: str) -> Result:
+            assert code == ""
+            print("sdk-query-noise")
+            return Result()
+
+        @staticmethod
+        def logout() -> None:
+            print("sdk-logout-noise")
+
+    state = _state(tmp_path)
+    provider = BaoStockReferenceProvider(
+        ObjectStore(tmp_path / "objects"), state, FIXTURES / "baostock"
+    )
+    monkeypatch.setattr(
+        baostock_module.importlib, "import_module", lambda _name: NoisySdk
+    )
+
+    envelope, _ = provider.fetch("instrument.master", {}, live=True)
+    captured = capsys.readouterr()
+
+    assert envelope.complete is True
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_baostock_heartbeat_renews_during_blocking_sdk_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

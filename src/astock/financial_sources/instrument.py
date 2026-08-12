@@ -55,9 +55,15 @@ class FinancialInstrumentResolver:
             raise ValueError("financial sources require an explicit stock exchange")
         row = self.state.get_market_reference_release(
             ReferenceDatasetKind.INSTRUMENT_MASTER.value,
-            market.value,
+            f"{market.value}:{company_id}",
             as_of=as_of,
         )
+        if row is None:
+            row = self.state.get_market_reference_release(
+                ReferenceDatasetKind.INSTRUMENT_MASTER.value,
+                market.value,
+                as_of=as_of,
+            )
         if row is None:
             row = self.state.get_market_reference_release(
                 ReferenceDatasetKind.INSTRUMENT_MASTER.value,

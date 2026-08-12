@@ -5,11 +5,15 @@ from __future__ import annotations
 import importlib
 import json
 import re
+import socket
 import threading
 import time as monotonic_time
 from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime, timedelta
+from io import StringIO
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from uuid import uuid4
 
@@ -214,9 +218,18 @@ class BaoStockReferenceProvider:
                 bs = importlib.import_module("baostock")
             except Exception as exc:
                 raise _SdkCaptureFailure("IMPORT_FAILED", _exception_class(exc)) from exc
+            if (
+                isinstance(bs, ModuleType)
+                and getattr(bs, "__name__", "") == "baostock"
+                and not _baostock_tcp_reachable()
+            ):
+                raise _SdkCaptureFailure(
+                    "NETWORK_PRECHECK_FAILED",
+                    "provider endpoint unreachable",
+                )
             try:
                 login_attempted = True
-                login = bs.login()
+                login = _quiet_sdk_call(bs.login)
                 login_code = str(login.error_code)
                 login_message = _safe_message(login.error_msg)
             except Exception as exc:
@@ -230,7 +243,7 @@ class BaoStockReferenceProvider:
                     if not renew():
                         raise _SdkCaptureFailure("LEASE_LOST", "provider lease was lost")
                     try:
-                        result = query()
+                        result = _quiet_sdk_call(query)
                     except Exception as exc:
                         raise _SdkCaptureFailure("QUERY_EXCEPTION", _exception_class(exc)) from exc
                     try:
@@ -254,7 +267,7 @@ class BaoStockReferenceProvider:
                         if not renew():
                             raise _SdkCaptureFailure("LEASE_LOST", "provider lease was lost")
                         try:
-                            has_next = bool(result.next())
+                            has_next = bool(_quiet_sdk_call(result.next))
                         except Exception as exc:
                             raise _SdkCaptureFailure(
                                 "NEXT_EXCEPTION", _exception_class(exc)
@@ -262,7 +275,7 @@ class BaoStockReferenceProvider:
                         if not has_next:
                             break
                         try:
-                            row = [str(item) for item in result.get_row_data()]
+                            row = [str(item) for item in _quiet_sdk_call(result.get_row_data)]
                         except Exception as exc:
                             raise _SdkCaptureFailure(
                                 "GET_ROW_EXCEPTION", _exception_class(exc)
@@ -288,7 +301,7 @@ class BaoStockReferenceProvider:
         finally:
             if bs is not None and login_attempted:
                 try:
-                    bs.logout()
+                    _quiet_sdk_call(bs.logout)
                 except Exception as exc:
                     complete = False
                     result_code = "LOGOUT_FAILED"
@@ -314,6 +327,28 @@ class BaoStockReferenceProvider:
             "row_contexts": row_contexts,
             "complete": complete,
         }
+
+
+def _baostock_tcp_reachable(timeout_seconds: float = 2.0) -> bool:
+    """Bound the known BaoStock SDK connect failure before entering its unbounded socket path."""
+
+    try:
+        constants = importlib.import_module("baostock.common.contants")
+        host = str(constants.BAOSTOCK_SERVER_IP)
+        port = int(constants.BAOSTOCK_SERVER_PORT)
+        with socket.create_connection((host, port), timeout=timeout_seconds):
+            return True
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+def _quiet_sdk_call(action: Callable[[], Any]) -> Any:
+    """Prevent third-party SDK console chatter from corrupting structured CLI output."""
+
+    stdout = StringIO()
+    stderr = StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        return action()
 
 
 class _SdkCaptureFailure(Exception):

@@ -53,6 +53,40 @@ class EastMoneyReferenceProvider(HttpProviderBase):
         payload["_astock_request"] = {"market": market.value if market else "ALL"}
         return payload, snapshot
 
+    def fetch_master_page(
+        self,
+        market: Market,
+        page: int,
+        *,
+        page_size: int = 100,
+        live: bool = False,
+    ) -> tuple[dict[str, object], SourceSnapshot]:
+        if page < 1 or page_size < 1 or page_size > 500:
+            raise ValueError("invalid EastMoney master page request")
+        if live:
+            response, _ = self._get(
+                self.master_endpoint,
+                params={
+                    "pn": page,
+                    "pz": page_size,
+                    "fs": _market_filter(market),
+                    "fields": "f12,f13,f14,f17,f18,f20,f21",
+                },
+            )
+        else:
+            if page != 1:
+                raise ValueError("recorded EastMoney master contains one frozen page")
+            response = self._recorded_response("instrument_master.json", self.master_endpoint)
+        snapshot = self._persist_stable_response(response)
+        payload = _decode_json(response.content)
+        payload["_astock_request"] = {
+            "market": market.value,
+            "page": page,
+            "page_size": page_size,
+            "purpose": "INSTRUMENT_IDENTITY",
+        }
+        return payload, snapshot
+
     def fetch_seed_snapshot(
         self,
         market: Market,

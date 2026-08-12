@@ -108,8 +108,7 @@ def wilson_interval(
         z
         * (
             (
-                proportion * (Decimal("1") - proportion) / n
-                + z_squared / (Decimal("4") * n * n)
+                proportion * (Decimal("1") - proportion) / n + z_squared / (Decimal("4") * n * n)
             ).sqrt()
         )
         / denominator
@@ -166,12 +165,144 @@ def maximum_drawdown_from_pnl(
     return min(Decimal("1"), max(Decimal("0"), drawdown))
 
 
+def deterministic_cluster_bootstrap(
+    values: list[Decimal],
+    cluster_ids: list[str],
+    *,
+    seed: str,
+    replicates: int,
+    confidence_level: Decimal,
+    metric: str,
+    created_at: datetime,
+) -> tuple[ShadowMetricInterval, Decimal | None]:
+    """Bootstrap whole dependence clusters rather than pretending every row is independent."""
+
+    if len(values) != len(cluster_ids):
+        raise ValueError("cluster bootstrap values and cluster ids must have equal length")
+    if not values:
+        return ShadowMetricInterval(metric=metric, sample_count=0, created_at=created_at), None
+    if replicates < 1:
+        raise ValueError("cluster bootstrap requires positive replicates")
+    grouped: dict[str, list[Decimal]] = {}
+    for value, cluster_id in zip(values, cluster_ids, strict=True):
+        if not cluster_id:
+            raise ValueError("cluster bootstrap ids cannot be blank")
+        grouped.setdefault(cluster_id, []).append(value)
+    cluster_keys = sorted(grouped)
+    estimates: list[Decimal] = []
+    for replicate in range(replicates):
+        sampled: list[Decimal] = []
+        for draw in range(len(cluster_keys)):
+            digest = sha256(f"{seed}:{replicate}:{draw}".encode()).digest()
+            selected = cluster_keys[int.from_bytes(digest[:8], "big") % len(cluster_keys)]
+            sampled.extend(grouped[selected])
+        estimate = mean(sampled)
+        assert estimate is not None
+        estimates.append(estimate)
+    alpha = Decimal("1") - confidence_level
+    estimate = mean(values)
+    assert estimate is not None
+    lower = min(percentile(estimates, alpha / Decimal("2")), estimate)
+    upper = max(percentile(estimates, Decimal("1") - alpha / Decimal("2")), estimate)
+    non_positive = sum(value <= 0 for value in estimates)
+    p_value = Decimal(non_positive + 1) / Decimal(replicates + 1)
+    return (
+        ShadowMetricInterval(
+            metric=metric,
+            sample_count=len(grouped),
+            estimate=estimate,
+            lower=lower,
+            upper=upper,
+            created_at=created_at,
+        ),
+        p_value,
+    )
+
+
+def deflated_sharpe_probability(
+    returns: list[float],
+    *,
+    selection_candidate_count: int,
+) -> float | None:
+    """Diagnostic DSR-style probability; never a production admission badge."""
+
+    if selection_candidate_count <= 1:
+        return None
+    if len(returns) < 8:
+        return None
+    n = len(returns)
+    average = sum(returns) / n
+    variance = sum((value - average) ** 2 for value in returns) / (n - 1)
+    if variance <= 1e-18:
+        return None
+    standard_deviation = variance**0.5
+    sharpe = average / standard_deviation
+    centered = [(value - average) / standard_deviation for value in returns]
+    skew = sum(value**3 for value in centered) / n
+    kurtosis = sum(value**4 for value in centered) / n
+    normal = NormalDist()
+    trials = float(selection_candidate_count)
+    euler_gamma = 0.5772156649015329
+    z_one = normal.inv_cdf(max(1e-12, min(1 - 1e-12, 1.0 - 1.0 / trials)))
+    z_two = normal.inv_cdf(max(1e-12, min(1 - 1e-12, 1.0 - 1.0 / (trials * 2.718281828459045))))
+    expected_max = (1.0 - euler_gamma) * z_one + euler_gamma * z_two
+    sampling_variance = (1.0 - skew * sharpe + ((kurtosis - 1.0) / 4.0) * sharpe * sharpe) / max(
+        n - 1, 1
+    )
+    if sampling_variance <= 1e-18:
+        return None
+    z_score = (sharpe - expected_max) / sampling_variance**0.5
+    return max(0.0, min(1.0, normal.cdf(z_score)))
+
+
+def time_fold_probability_of_backtest_overfitting(
+    strategy_returns: list[list[float]],
+    *,
+    fold_count: int = 5,
+) -> float | None:
+    """Time-ordered PBO diagnostic for repeated strategy/parameter selection."""
+
+    if len(strategy_returns) <= 1:
+        return None
+    lengths = {len(values) for values in strategy_returns}
+    if len(lengths) != 1:
+        raise ValueError("PBO strategy return series must have equal length")
+    observation_count = next(iter(lengths), 0)
+    if observation_count < fold_count * 2 or fold_count < 2:
+        return None
+    boundaries = [round(index * observation_count / fold_count) for index in range(fold_count + 1)]
+    overfit = 0
+    evaluated = 0
+    for fold in range(fold_count):
+        start, end = boundaries[fold], boundaries[fold + 1]
+        train_scores: list[float] = []
+        test_scores: list[float] = []
+        for values in strategy_returns:
+            test = values[start:end]
+            train = values[:start] + values[end:]
+            if not train or not test:
+                break
+            train_scores.append(sum(train) / len(train))
+            test_scores.append(sum(test) / len(test))
+        if len(train_scores) != len(strategy_returns):
+            continue
+        winner = max(range(len(train_scores)), key=lambda index: (train_scores[index], -index))
+        ordered_test = sorted(test_scores)
+        median_test = ordered_test[len(ordered_test) // 2]
+        overfit += int(test_scores[winner] < median_test)
+        evaluated += 1
+    return overfit / evaluated if evaluated else None
+
+
 __all__ = [
+    "deflated_sharpe_probability",
     "deterministic_block_bootstrap",
+    "deterministic_cluster_bootstrap",
     "holm_adjust",
     "maximum_drawdown",
     "maximum_drawdown_from_pnl",
     "mean",
     "percentile",
+    "time_fold_probability_of_backtest_overfitting",
     "wilson_interval",
 ]

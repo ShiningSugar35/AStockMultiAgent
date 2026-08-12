@@ -50,6 +50,7 @@ class StateStore:
 
     def migrate(self) -> list[str]:
         applied_now: list[str] = []
+        phase6_reconciliation: tuple[str, str] | None = None
         for migration in sorted(self.migrations_dir.glob("*.sql")):
             match = _MIGRATION_PATTERN.match(migration.name)
             if match is None:
@@ -61,20 +62,45 @@ class StateStore:
                 table_exists = connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migration'"
                 ).fetchone()
+                row = None
                 if table_exists:
                     row = connection.execute(
                         "SELECT checksum FROM schema_migration WHERE version=?", (version,)
                     ).fetchone()
-                    if row is not None:
-                        if row["checksum"] != checksum:
-                            if row["checksum"] in _legacy_format_checksums(sql):
-                                connection.execute(
-                                    "UPDATE schema_migration SET checksum=? WHERE version=?",
-                                    (checksum, version),
-                                )
-                            else:
-                                raise RuntimeError(f"Migration checksum changed: {migration.name}")
-                        continue
+                if version == "0047" and phase6_reconciliation is not None:
+                    was_applied = row is not None
+                    _complete_phase6_migration_identity_reconciliation(
+                        connection,
+                        migration_name=migration.name,
+                        migrations_dir=self.migrations_dir,
+                        recorded_0044_checksum=phase6_reconciliation[0],
+                        current_0044_checksum=phase6_reconciliation[1],
+                        recorded_0047_checksum=(str(row["checksum"]) if row is not None else None),
+                        current_0047_checksum=checksum,
+                    )
+                    if not was_applied:
+                        applied_now.append(version)
+                    phase6_reconciliation = None
+                    continue
+                if row is not None:
+                    if row["checksum"] != checksum:
+                        if row["checksum"] in _legacy_format_checksums(sql):
+                            connection.execute(
+                                "UPDATE schema_migration SET checksum=? WHERE version=?",
+                                (checksum, version),
+                            )
+                        elif _can_reconcile_phase6_legacy_0044(
+                            connection,
+                            version=version,
+                            migration_name=migration.name,
+                            recorded_checksum=str(row["checksum"]),
+                            current_checksum=checksum,
+                            migrations_dir=self.migrations_dir,
+                        ):
+                            phase6_reconciliation = (str(row["checksum"]), checksum)
+                        else:
+                            raise RuntimeError(f"Migration checksum changed: {migration.name}")
+                    continue
                 applied_at = utc_now_text().replace("'", "''")
                 script = (
                     "BEGIN IMMEDIATE;\n"
@@ -90,6 +116,8 @@ class StateStore:
                         connection.rollback()
                     raise
                 applied_now.append(version)
+        if phase6_reconciliation is not None:
+            raise RuntimeError("Phase 6 migration recovery 0047 was not available")
         return applied_now
 
     @contextmanager
@@ -1105,3 +1133,144 @@ def _legacy_format_checksums(sql: str) -> set[str]:
         f"{normalized.replace(chr(10), chr(13) + chr(10))}\r\n",
     }
     return {sha256_bytes(value.encode("utf-8")) for value in variants}
+
+
+def _can_reconcile_phase6_legacy_0044(
+    connection: sqlite3.Connection,
+    *,
+    version: str,
+    migration_name: str,
+    recorded_checksum: str,
+    current_checksum: str,
+    migrations_dir: Path,
+) -> bool:
+    if version != "0044" or migration_name != "0044_phase6_decision_close.sql":
+        return False
+    legacy = migrations_dir / "compat" / "0044_phase6_decision_close_legacy.sql"
+    current = migrations_dir / "0044_phase6_decision_close.sql"
+    recovery = migrations_dir / "0047_phase6_migration_identity_recovery.sql"
+    if not legacy.is_file() or not current.is_file() or not recovery.is_file():
+        return False
+    if recorded_checksum != _migration_checksum(legacy.read_text(encoding="utf-8")):
+        return False
+    if current_checksum != _migration_checksum(current.read_text(encoding="utf-8")):
+        return False
+    return _phase6_legacy_0044_schema_is_materialized(connection)
+
+
+def _phase6_legacy_0044_schema_is_materialized(connection: sqlite3.Connection) -> bool:
+    return (
+        _sqlite_table_columns(connection, "committee_trade_protocol_index")
+        == (
+            "protocol_id",
+            "decision_id",
+            "company_id",
+            "verdict",
+            "protocol_status",
+            "strategy_id",
+            "effective_from",
+            "requires_user_confirmation",
+            "broker_execution_allowed",
+            "paper_simulation_allowed",
+            "ledger_write_allowed",
+            "object_hash",
+            "input_hash",
+            "created_at",
+        )
+        and _sqlite_table_columns(connection, "committee_trade_protocol_index_legacy")
+        == (
+            "protocol_id",
+            "decision_id",
+            "company_id",
+            "verdict",
+            "protocol_status",
+            "strategy_id",
+            "effective_from",
+            "requires_user_confirmation",
+            "broker_execution_allowed",
+            "ledger_write_allowed",
+            "object_hash",
+            "input_hash",
+            "created_at",
+        )
+        and _sqlite_table_columns(connection, "paper_confirmation_key_binding")
+        == (
+            "confirmation_id",
+            "key_id",
+            "public_key_object_hash",
+            "created_at",
+        )
+        and bool(_sqlite_table_columns(connection, "paper_execution_request_index"))
+        and bool(_sqlite_table_columns(connection, "phase6_run_index"))
+    )
+
+
+def _complete_phase6_migration_identity_reconciliation(
+    connection: sqlite3.Connection,
+    *,
+    migration_name: str,
+    migrations_dir: Path,
+    recorded_0044_checksum: str,
+    current_0044_checksum: str,
+    recorded_0047_checksum: str | None,
+    current_0047_checksum: str,
+) -> None:
+    if migration_name != "0047_phase6_migration_identity_recovery.sql":
+        raise RuntimeError("Phase 6 migration identity recovery file changed")
+    legacy = migrations_dir / "compat" / "0044_phase6_decision_close_legacy.sql"
+    current_0044 = migrations_dir / "0044_phase6_decision_close.sql"
+    current_0047 = migrations_dir / "0047_phase6_migration_identity_recovery.sql"
+    if not legacy.is_file() or not current_0044.is_file() or not current_0047.is_file():
+        raise RuntimeError("Phase 6 migration identity recovery files are incomplete")
+    if recorded_0044_checksum != _migration_checksum(legacy.read_text(encoding="utf-8")):
+        raise RuntimeError("Legacy Phase 6 migration checksum is not recognized")
+    if current_0044_checksum != _migration_checksum(current_0044.read_text(encoding="utf-8")):
+        raise RuntimeError("Current Phase 6 migration checksum changed during reconciliation")
+    if current_0047_checksum != _migration_checksum(current_0047.read_text(encoding="utf-8")):
+        raise RuntimeError("Current Phase 6 recovery checksum changed during reconciliation")
+    if recorded_0047_checksum is not None and recorded_0047_checksum != current_0047_checksum:
+        raise RuntimeError(
+            "Migration checksum changed: 0047_phase6_migration_identity_recovery.sql"
+        )
+    if not _phase6_legacy_0044_schema_is_materialized(connection):
+        raise RuntimeError(
+            "Legacy Phase 6 migration schema does not match the audited 0044 contract"
+        )
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if recorded_0047_checksum is None:
+            connection.execute(
+                "INSERT INTO committee_trade_protocol_index_legacy("
+                "protocol_id,decision_id,company_id,verdict,protocol_status,strategy_id,"
+                "effective_from,requires_user_confirmation,broker_execution_allowed,"
+                "ledger_write_allowed,object_hash,input_hash,created_at) "
+                "SELECT protocol_id,decision_id,company_id,verdict,protocol_status,strategy_id,"
+                "effective_from,requires_user_confirmation,broker_execution_allowed,"
+                "ledger_write_allowed,object_hash,input_hash,created_at "
+                "FROM committee_trade_protocol_index "
+                "WHERE paper_simulation_allowed=0 AND ledger_write_allowed=0"
+            )
+            connection.execute(
+                "DELETE FROM committee_trade_protocol_index "
+                "WHERE paper_simulation_allowed=0 AND ledger_write_allowed=0"
+            )
+            connection.execute(
+                "INSERT INTO schema_migration(version,checksum,applied_at) VALUES(?,?,?)",
+                ("0047", current_0047_checksum, utc_now_text()),
+            )
+        connection.execute(
+            "UPDATE schema_migration SET checksum=? WHERE version='0044'",
+            (current_0044_checksum,),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _sqlite_table_columns(connection: sqlite3.Connection, table_name: str) -> tuple[str, ...]:
+    if not re.fullmatch(r"[a-z0-9_]+", table_name):
+        raise ValueError("unsafe SQLite table name")
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return tuple(str(row["name"]) for row in rows)

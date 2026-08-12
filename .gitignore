@@ -37,6 +37,8 @@ browser-profile/
 *.pdf
 *.doc
 *.docx
+*.xls
+*.xlsx
 sources/private/
 
 # Editors and operating system files
@@ -46,7 +48,10 @@ sources/private/
 Thumbs.db
 desktop.ini
 
-# Logs and temporary files
+# Logs, AI bridge state, and temporary files
+.ai-bridge/
+bash.cmd
+tmp/
 *.log
 *.tmp
 *.bak

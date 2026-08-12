@@ -129,6 +129,7 @@ def test_phase7_repo_skill_commands_exist_and_keep_shadow_isolated() -> None:
         "shadow-independence-key",
         "shadow-assign",
         "market-regime-classify",
+        "shadow-forward-market-freeze",
         "shadow-observation-record",
         "shadow-evaluate",
         "shadow-status",

@@ -54,6 +54,11 @@ from astock.schemas import (
     TradeProtocol,
     TradeProtocolOutcome,
 )
+from astock.schemas.institutional_research import (
+    FundamentalModelBundle,
+    InstitutionalArtifactStatus,
+    InstitutionalDecisionContext,
+)
 from astock.schemas.research_runtime import (
     ClassifiedTradeProtocol,
     ResearchPaperDecision,
@@ -77,6 +82,7 @@ _SERENITY_SKILL_IDS = {
     "GrowthProbabilitySkill",
     "GrowthValuationLens",
     "IndustryBottleneckSkill",
+    "JuglarCycleStageSkill",
     "SerenityRecordedSkill",
 }
 _ZHIHU_SKILL_IDS = {"ZhihuExpertRecordedSkill", "ZhihuExpertSkill"}
@@ -176,6 +182,19 @@ class ResearchRunService:
                 {"FINANCIAL_INTEGRITY_ARTIFACT_REQUIRED"},
             ),
             (
+                ResearchRunStage.FUNDAMENTAL_MODEL,
+                {
+                    "FUNDAMENTAL_MODEL_BUNDLE_REQUIRED",
+                    "FUNDAMENTAL_MODEL_COMPANY_MISMATCH",
+                    "FUNDAMENTAL_MODEL_AS_OF_MISMATCH",
+                    "FUNDAMENTAL_MODEL_NOT_READY",
+                    "INSTITUTIONAL_DECISION_CONTEXT_REQUIRED",
+                    "INSTITUTIONAL_DECISION_CONTEXT_COMPANY_MISMATCH",
+                    "INSTITUTIONAL_DECISION_CONTEXT_AS_OF_MISMATCH",
+                    "INSTITUTIONAL_DECISION_CONTEXT_MODEL_MISMATCH",
+                },
+            ),
+            (
                 ResearchRunStage.BASE_CASE,
                 {"BASE_CASE_ARTIFACT_OR_DRAFT_REQUIRED"},
             ),
@@ -229,9 +248,7 @@ class ResearchRunService:
         manifest = resolved.manifest.model_copy(update={"created_at": request.as_of})
         manifest_payload = manifest.model_dump(mode="json")
         manifest_ref = self.objects.put_json(manifest_payload)
-        manifest_identity = sha256_bytes(
-            canonical_json_bytes(_semantic(manifest_payload))
-        )
+        manifest_identity = sha256_bytes(canonical_json_bytes(_semantic(manifest_payload)))
         manifest_artifact_id = f"ResearchRunInputManifest:{manifest_identity}"
         manifest_input_hashes = sorted(
             {
@@ -459,6 +476,107 @@ class ResearchRunService:
             duration_ms=self._elapsed(stage_started),
             cache_hit=True,
         )
+
+        fundamental_artifact = (
+            frozen_inputs.fundamental_model_bundle_artifact_id if frozen_inputs else None
+        )
+        if fundamental_artifact is not None:
+            stage_started = perf_counter()
+            fundamental = self._load_model(
+                fundamental_artifact,
+                "FundamentalModelBundle",
+                FundamentalModelBundle,
+            )
+            if (
+                fundamental.company_id != request.company_id
+                or fundamental.as_of != request.as_of
+                or fundamental.status is not InstitutionalArtifactStatus.READY
+            ):
+                reasons = ["FUNDAMENTAL_MODEL_NOT_READY"]
+                add_checkpoint(
+                    ResearchRunStage.FUNDAMENTAL_MODEL,
+                    artifact_ids=[fundamental_artifact],
+                    duration_ms=self._elapsed(stage_started),
+                    reason_codes=reasons,
+                    status=ResearchRunStatus.NEEDS_INFO,
+                )
+                return finish(
+                    ResearchRunStatus.NEEDS_INFO,
+                    ResearchRunStage.FUNDAMENTAL_MODEL,
+                    reasons,
+                )
+            outputs["fundamental_model"] = self._ref(fundamental_artifact)
+        elif request.institutional_research_required:
+            reasons = ["FUNDAMENTAL_MODEL_BUNDLE_REQUIRED"]
+            add_checkpoint(
+                ResearchRunStage.FUNDAMENTAL_MODEL,
+                duration_ms=0,
+                reason_codes=reasons,
+                status=ResearchRunStatus.NEEDS_INFO,
+            )
+            return finish(
+                ResearchRunStatus.NEEDS_INFO,
+                ResearchRunStage.FUNDAMENTAL_MODEL,
+                reasons,
+            )
+
+        decision_context_artifact = (
+            frozen_inputs.institutional_decision_context_artifact_id if frozen_inputs else None
+        )
+        if decision_context_artifact is not None:
+            decision_context = self._load_model(
+                decision_context_artifact,
+                "InstitutionalDecisionContext",
+                InstitutionalDecisionContext,
+            )
+            if (
+                decision_context.company_id != request.company_id
+                or decision_context.as_of != request.as_of
+                or fundamental_artifact is None
+                or decision_context.fundamental_model_bundle_artifact_id != fundamental_artifact
+            ):
+                reasons = ["INSTITUTIONAL_DECISION_CONTEXT_NOT_READY"]
+                add_checkpoint(
+                    ResearchRunStage.FUNDAMENTAL_MODEL,
+                    artifact_ids=[decision_context_artifact],
+                    duration_ms=self._elapsed(stage_started),
+                    reason_codes=reasons,
+                    status=ResearchRunStatus.NEEDS_INFO,
+                )
+                return finish(
+                    ResearchRunStatus.NEEDS_INFO,
+                    ResearchRunStage.FUNDAMENTAL_MODEL,
+                    reasons,
+                )
+            outputs["institutional_decision_context"] = self._ref(decision_context_artifact)
+        elif request.institutional_research_required:
+            reasons = ["INSTITUTIONAL_DECISION_CONTEXT_REQUIRED"]
+            add_checkpoint(
+                ResearchRunStage.FUNDAMENTAL_MODEL,
+                artifact_ids=[fundamental_artifact] if fundamental_artifact else [],
+                duration_ms=self._elapsed(stage_started),
+                reason_codes=reasons,
+                status=ResearchRunStatus.NEEDS_INFO,
+            )
+            return finish(
+                ResearchRunStatus.NEEDS_INFO,
+                ResearchRunStage.FUNDAMENTAL_MODEL,
+                reasons,
+            )
+        institutional_artifacts = [
+            artifact_id
+            for artifact_id in (fundamental_artifact, decision_context_artifact)
+            if artifact_id is not None
+        ]
+        if institutional_artifacts:
+            add_checkpoint(
+                ResearchRunStage.FUNDAMENTAL_MODEL,
+                artifact_ids=institutional_artifacts,
+                duration_ms=self._elapsed(stage_started),
+                cache_hit=all(
+                    artifact_id in previous_artifacts for artifact_id in institutional_artifacts
+                ),
+            )
 
         stage_started = perf_counter()
         base_artifact = frozen_inputs.base_case_artifact_id if frozen_inputs else None
@@ -715,8 +833,10 @@ class ResearchRunService:
             "selection_result_hash": selection.result_hash,
             "selected_skills": selection.skills,
             "context_bytes": selection.context_bytes,
-            "provider_latency_ms": selection.latency_ms,
-            "provider_cache_hit": selection.cache_hit,
+            # KnowledgeSkillDelta is a semantic artifact. Runtime telemetry belongs in
+            # ResearchRunPerformanceSummary/checkpoints and must not change its object hash.
+            "provider_latency_ms": 0,
+            "provider_cache_hit": False,
             "created_at": request.created_at,
         }
         delta_data["estimated_" + "tokens"] = knowledge_estimated_tokens
@@ -784,6 +904,8 @@ class ResearchRunService:
             *delta_artifacts,
             memo_artifact,
             financial_artifact,
+            *([fundamental_artifact] if fundamental_artifact is not None else []),
+            *([decision_context_artifact] if decision_context_artifact is not None else []),
             knowledge_artifact,
         ]
         if any(item is None for item in committee_input_ids):

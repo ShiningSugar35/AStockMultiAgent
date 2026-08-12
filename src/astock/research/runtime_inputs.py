@@ -10,6 +10,11 @@ from astock.financial_integrity.repository import FinancialIntegrityRepository
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.repository import ResearchRepository
 from astock.research.trading_classification import TradingClassificationService
+from astock.schemas.institutional_research import (
+    FundamentalModelBundle,
+    InstitutionalArtifactStatus,
+    InstitutionalDecisionContext,
+)
 from astock.schemas.knowledge_completion import KnowledgeSkillQuery
 from astock.schemas.research_runtime import (
     ResearchRunFrozenInputs,
@@ -24,6 +29,7 @@ _SERENITY_SKILL_IDS = {
     "GrowthProbabilitySkill",
     "GrowthValuationLens",
     "IndustryBottleneckSkill",
+    "JuglarCycleStageSkill",
     "SerenityRecordedSkill",
 }
 _ZHIHU_SKILL_IDS = {"ZhihuExpertRecordedSkill", "ZhihuExpertSkill"}
@@ -112,6 +118,64 @@ class ResearchRunInputResolver:
         )
         if financial_artifact is None:
             missing.add("FINANCIAL_AUDIT_REQUIRED")
+
+        fundamental_artifact = existing.fundamental_model_bundle_artifact_id
+        if (
+            fundamental_artifact is None
+            and request.institutional_research_required
+            and request.auto_resolve_inputs
+        ):
+            fundamental_artifact = self._latest_ready_fundamental_model(
+                request.company_id,
+                request.as_of,
+            )
+        if fundamental_artifact is not None:
+            self._bind_or_missing(
+                bindings,
+                "fundamental_model",
+                fundamental_artifact,
+                "FUNDAMENTAL_MODEL_BUNDLE_REQUIRED",
+                missing,
+            )
+            if "FUNDAMENTAL_MODEL_BUNDLE_REQUIRED" not in missing:
+                self._validate_fundamental_model(
+                    fundamental_artifact,
+                    request.company_id,
+                    request.as_of,
+                    missing,
+                )
+        elif request.institutional_research_required:
+            missing.add("FUNDAMENTAL_MODEL_BUNDLE_REQUIRED")
+
+        decision_context_artifact = existing.institutional_decision_context_artifact_id
+        if (
+            decision_context_artifact is None
+            and request.institutional_research_required
+            and request.auto_resolve_inputs
+        ):
+            decision_context_artifact = self._latest_ready_decision_context(
+                request.company_id,
+                request.as_of,
+                fundamental_artifact,
+            )
+        if decision_context_artifact is not None:
+            self._bind_or_missing(
+                bindings,
+                "institutional_decision_context",
+                decision_context_artifact,
+                "INSTITUTIONAL_DECISION_CONTEXT_REQUIRED",
+                missing,
+            )
+            if "INSTITUTIONAL_DECISION_CONTEXT_REQUIRED" not in missing:
+                self._validate_decision_context(
+                    decision_context_artifact,
+                    request.company_id,
+                    request.as_of,
+                    fundamental_artifact,
+                    missing,
+                )
+        elif request.institutional_research_required:
+            missing.add("INSTITUTIONAL_DECISION_CONTEXT_REQUIRED")
 
         base_artifact = existing.base_case_artifact_id
         if base_artifact is None and request.auto_resolve_inputs and frozen_evidence is not None:
@@ -275,6 +339,8 @@ class ResearchRunInputResolver:
             zhihu_delta_artifact_id=zhihu_artifact,
             research_memo_artifact_id=memo_artifact,
             financial_integrity_artifact_id=financial_artifact,
+            fundamental_model_bundle_artifact_id=fundamental_artifact,
+            institutional_decision_context_artifact_id=decision_context_artifact,
             decision_pack_artifact_id=decision_artifact,
             committee_protocol_artifact_id=committee_protocol_artifact,
             created_at=request.created_at,
@@ -299,6 +365,119 @@ class ResearchRunInputResolver:
             trading_classification_artifact_id=classification_artifact,
             manifest=manifest,
         )
+
+    def _latest_ready_fundamental_model(self, company_id: str, as_of) -> str | None:
+        checkpoint = self.state.get_checkpoint("institutional-fundamental-model", company_id)
+        if checkpoint is None:
+            return None
+        artifact_id = str(checkpoint["cursor"].get("artifact_id", ""))
+        if not artifact_id:
+            return None
+        record = self.state.artifact_record(artifact_id)
+        if record is None or str(record["type"]) != "FundamentalModelBundle":
+            return None
+        object_hash = str(record["object_hash"])
+        if not self.objects.verify(object_hash):
+            return None
+        bundle = FundamentalModelBundle.model_validate_json(self.objects.get_bytes(object_hash))
+        if (
+            bundle.company_id != company_id
+            or bundle.as_of != as_of
+            or bundle.status is not InstitutionalArtifactStatus.READY
+        ):
+            return None
+        return artifact_id
+
+    def _latest_ready_decision_context(
+        self,
+        company_id: str,
+        as_of,
+        fundamental_artifact_id: str | None,
+    ) -> str | None:
+        checkpoint = self.state.get_checkpoint("institutional-decision-context", company_id)
+        if checkpoint is None:
+            return None
+        artifact_id = str(checkpoint["cursor"].get("artifact_id", ""))
+        if not artifact_id:
+            return None
+        record = self.state.artifact_record(artifact_id)
+        if record is None or str(record["type"]) != "InstitutionalDecisionContext":
+            return None
+        object_hash = str(record["object_hash"])
+        if not self.objects.verify(object_hash):
+            return None
+        context = InstitutionalDecisionContext.model_validate_json(
+            self.objects.get_bytes(object_hash)
+        )
+        if (
+            context.company_id != company_id
+            or context.as_of != as_of
+            or (
+                fundamental_artifact_id is not None
+                and context.fundamental_model_bundle_artifact_id != fundamental_artifact_id
+            )
+        ):
+            return None
+        return artifact_id
+
+    def _validate_decision_context(
+        self,
+        artifact_id: str,
+        company_id: str,
+        as_of,
+        fundamental_artifact_id: str | None,
+        missing: set[str],
+    ) -> None:
+        record = self.state.artifact_record(artifact_id)
+        if record is None or str(record["type"]) != "InstitutionalDecisionContext":
+            missing.add("INSTITUTIONAL_DECISION_CONTEXT_REQUIRED")
+            return
+        object_hash = str(record["object_hash"])
+        if not self.objects.verify(object_hash):
+            missing.add("INSTITUTIONAL_DECISION_CONTEXT_REQUIRED")
+            return
+        try:
+            context = InstitutionalDecisionContext.model_validate_json(
+                self.objects.get_bytes(object_hash)
+            )
+        except (OSError, TypeError, ValueError):
+            missing.add("INSTITUTIONAL_DECISION_CONTEXT_REQUIRED")
+            return
+        if context.company_id != company_id:
+            missing.add("INSTITUTIONAL_DECISION_CONTEXT_COMPANY_MISMATCH")
+        if context.as_of != as_of:
+            missing.add("INSTITUTIONAL_DECISION_CONTEXT_AS_OF_MISMATCH")
+        if fundamental_artifact_id is None:
+            missing.add("FUNDAMENTAL_MODEL_BUNDLE_REQUIRED")
+        elif context.fundamental_model_bundle_artifact_id != fundamental_artifact_id:
+            missing.add("INSTITUTIONAL_DECISION_CONTEXT_MODEL_MISMATCH")
+
+    def _validate_fundamental_model(
+        self,
+        artifact_id: str,
+        company_id: str,
+        as_of,
+        missing: set[str],
+    ) -> None:
+        record = self.state.artifact_record(artifact_id)
+        if record is None or str(record["type"]) != "FundamentalModelBundle":
+            missing.add("FUNDAMENTAL_MODEL_BUNDLE_REQUIRED")
+            return
+        object_hash = str(record["object_hash"])
+        if not self.objects.verify(object_hash):
+            missing.add("FUNDAMENTAL_MODEL_BUNDLE_REQUIRED")
+            return
+        try:
+            bundle = FundamentalModelBundle.model_validate_json(self.objects.get_bytes(object_hash))
+        except (OSError, TypeError, ValueError):
+            missing.add("FUNDAMENTAL_MODEL_BUNDLE_REQUIRED")
+            return
+        if bundle.company_id != company_id:
+            missing.add("FUNDAMENTAL_MODEL_COMPANY_MISMATCH")
+        if bundle.as_of != as_of:
+            missing.add("FUNDAMENTAL_MODEL_AS_OF_MISMATCH")
+        if bundle.status is not InstitutionalArtifactStatus.READY:
+            missing.add("FUNDAMENTAL_MODEL_NOT_READY")
 
     def _bind_or_missing(
         self,

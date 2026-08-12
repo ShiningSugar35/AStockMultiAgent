@@ -19,6 +19,7 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | Research Seeds → Candidate 自动 Promotion | 已实现 | `research-seeds`、`research-seeds-promote`、`candidate-audit` |
 | 候选研究池 | 已实现 | Promotion 自动组装严格 `CandidateInputRelease`；`candidate-input-run` 保留为手工/诊断入口 |
 | 单公司 Research Runtime | 已实现 | `research-plan`、`research-run-company`、`research-audit` |
+| Institutional Fundamental Research | 已实现 | `institutional-research-schema/finalize`、`fundamental-model-audit`、`institutional-decision-context-freeze` |
 | Serenity typed specialists | 已实现 / v4 上游审计 | `research-skills-v3`：6 个 Serenity 方法 + 独立 Hourly Swing；含 Juglar 周期阶段 |
 | Knowledge Skill composite registry | 已发布 | `KnowledgeSkillProvider`，653 admitted Skills |
 | 投资委员会 | 已实现 | `committee-*`；委员会只消费冻结工件 |
@@ -42,7 +43,10 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 
 ```text
 官方证据
-→ 财务可信度
+→ 财务可信度 / Evidence Sufficiency
+→ IndustryProfile / CompanyEconomics
+→ DriverTree → Bull/Base/Bear Forecast → Valuation / Market-Implied Expectations
+→ FundamentalModelBundle / InstitutionalDecisionContext
 → BaseCase
 → Serenity / Knowledge Skill Delta
 → 反方和证据缺口
@@ -58,7 +62,9 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 uv run astock research-plan 300750 --as-of 2026-08-11T10:00:00+08:00
 ```
 
-只补齐计划中真正缺失的冻结工件，不重复读取整个资料库。当前 Serenity 方法注册表为 `research-skills-v3`：在原 Industry Bottleneck、Event-to-Alpha、Growth Probability、Growth Valuation、Daily Trend Health 基础上新增 `JuglarCycleStageSkill`，用于固定资产投资周期的需求/ASP/利润率/Capex/库存/产能/客户行为/资本市场反应八维证据、五阶段概率、反证和迁移信号；它只形成 SpecialistDelta，不直接给目标价或仓位。
+只补齐计划中真正缺失的冻结工件，不重复读取整个资料库。新当前公司意见默认先运行 `institutional-research-schema`，构建并 audit `FundamentalModelBundle`，再冻结 `InstitutionalDecisionContext`；随后 `research-run-company` 以 `institutional_research_required=true` 消费 exact bundle/context。Forecast、DCF/reverse-DCF 和 sensitivity 都由 Python 复算，模型只能给 evidence-bound assumption。要计算 expected return 或市场隐含预期时，价格必须通过 `MarketPriceAnchor` 绑定注册 artifact/hash 与 PIT 时间；裸价格不会进入计算。
+
+当前 Serenity 方法注册表为 `research-skills-v3`：在原 Industry Bottleneck、Event-to-Alpha、Growth Probability、Growth Valuation、Daily Trend Health 基础上新增 `JuglarCycleStageSkill`，用于固定资产投资周期的需求/ASP/利润率/Capex/库存/产能/客户行为/资本市场反应八维证据、五阶段概率、反证和迁移信号；它只形成 SpecialistDelta，不直接给目标价或仓位。Serenity Growth/Valuation 只提供增量方法上下文，canonical `ForecastPack / ValuationPack` 是数值基本面预测与估值的唯一主账本，避免并行假设集。
 
 ### “这只股票能不能买？什么位置进？预期卖到哪？”
 

@@ -13,11 +13,19 @@ from astock.research.runtime import ResearchRunService
 from astock.research.trade_view import TradePlanViewService
 from astock.research.trading_classification import TradingClassificationService
 from astock.schemas import (
+    DecisionPack,
     FetchStatus,
     Market,
     OrderSide,
     PaperTradingClassification,
     SourceSnapshot,
+)
+from astock.schemas.institutional_research import (
+    EvidenceBoundStatement,
+    FundamentalModelBundle,
+    InstitutionalArtifactStatus,
+    InstitutionalDecisionContext,
+    InstitutionalDecisionContextDraft,
 )
 from astock.schemas.knowledge_completion import (
     KnowledgeProviderMode,
@@ -180,12 +188,102 @@ def _classification(
         daily_release_id=release_ids["daily"],
         resolver_version="recorded-runtime-resolver-v1",
         corporate_action_baseline_artifact_id=baseline_artifact,
-        source_artifact_ids=sorted(
-            [baseline_artifact, rulebook_artifact, *reference_artifacts]
-        ),
+        source_artifact_ids=sorted([baseline_artifact, rulebook_artifact, *reference_artifacts]),
         created_at=as_of,
     )
     return classification_service.freeze(draft).artifact_id
+
+
+def _institutional_context(
+    state: StateStore,
+    objects: ObjectStore,
+    *,
+    as_of,
+) -> tuple[str, str, str, str]:
+    component_specs = {
+        "EvidenceSufficiencyReport:recorded-institutional": "EvidenceSufficiencyReport",
+        "IndustryProfile:recorded-institutional": "IndustryProfile",
+        "CompanyEconomicsProfile:recorded-institutional": "CompanyEconomicsProfile",
+        "DriverTree:recorded-institutional": "DriverTree",
+        "ForecastPack:recorded-institutional": "ForecastPack",
+        "ValuationPack:recorded-institutional": "ValuationPack",
+    }
+    hashes = {
+        artifact_id: _register_artifact(
+            state,
+            objects,
+            artifact_id=artifact_id,
+            artifact_type=artifact_type,
+            payload={"recorded": True, "company_id": "300750", "as_of": as_of.isoformat()},
+        )
+        for artifact_id, artifact_type in component_specs.items()
+    }
+    ids = list(component_specs)
+    bundle = FundamentalModelBundle(
+        bundle_id="recorded-institutional-bundle",
+        company_id="300750",
+        as_of=as_of,
+        status=InstitutionalArtifactStatus.READY,
+        evidence_sufficiency_artifact_id=ids[0],
+        industry_profile_artifact_id=ids[1],
+        company_economics_artifact_id=ids[2],
+        driver_tree_artifact_id=ids[3],
+        forecast_pack_artifact_id=ids[4],
+        valuation_pack_artifact_id=ids[5],
+        artifact_object_hashes=hashes,
+        blocking_codes=[],
+        warning_codes=["RECORDED_RUNTIME_TEST_BUNDLE"],
+        evidence_ids=["evidence:institutional"],
+        claim_ids=["claim:institutional"],
+        created_at=as_of,
+    )
+    bundle_ref = objects.put_json(bundle.model_dump(mode="json"))
+    bundle_artifact = f"FundamentalModelBundle:{bundle.bundle_id}"
+    state.register_artifact(
+        artifact_id=bundle_artifact,
+        artifact_type="FundamentalModelBundle",
+        schema_version=bundle.schema_version,
+        object_hash=bundle_ref.sha256,
+        input_hashes=sorted(hashes.values()),
+    )
+    statement = EvidenceBoundStatement(
+        statement="Recorded institutional investment thesis",
+        claim_ids=["claim:institutional"],
+        evidence_ids=["evidence:institutional"],
+        created_at=as_of,
+    )
+    context = InstitutionalDecisionContext(
+        context_id="recorded-institutional-context",
+        company_id="300750",
+        as_of=as_of,
+        fundamental_model_bundle_artifact_id=bundle_artifact,
+        fundamental_model_bundle_object_hash=bundle_ref.sha256,
+        draft=InstitutionalDecisionContextDraft(
+            decision_question="What must be true for the recorded institutional case to work?",
+            decision_horizon_end=(as_of + timedelta(days=365)).date(),
+            investment_thesis=statement,
+            variant_perception=statement,
+            key_driver_ids=["driver:margin", "driver:price", "driver:units"],
+            competing_hypotheses=[statement],
+            portfolio_context="position sizing remains downstream in the portfolio layer",
+            created_at=as_of,
+        ),
+        claim_ids=["claim:institutional"],
+        evidence_ids=["evidence:institutional"],
+        source_artifact_ids=[bundle_artifact],
+        source_object_hashes=[bundle_ref.sha256],
+        created_at=as_of,
+    )
+    context_ref = objects.put_json(context.model_dump(mode="json"))
+    context_artifact = f"InstitutionalDecisionContext:{context.context_id}"
+    state.register_artifact(
+        artifact_id=context_artifact,
+        artifact_type="InstitutionalDecisionContext",
+        schema_version=context.schema_version,
+        object_hash=context_ref.sha256,
+        input_hashes=[bundle_ref.sha256],
+    )
+    return bundle_artifact, context_artifact, bundle_ref.sha256, context_ref.sha256
 
 
 def test_recorded_inputs_drive_generic_runtime_to_classified_protocol(tmp_path: Path) -> None:
@@ -258,6 +356,13 @@ def test_recorded_inputs_drive_generic_runtime_to_classified_protocol(tmp_path: 
         knowledge_provider=provider,
     )
 
+    missing_institutional = service.run(
+        request.model_copy(update={"institutional_research_required": True})
+    )
+    assert missing_institutional.status is ResearchRunStatus.NEEDS_INFO
+    assert missing_institutional.current_stage.value == "FUNDAMENTAL_MODEL"
+    assert "FUNDAMENTAL_MODEL_BUNDLE_REQUIRED" in missing_institutional.needs_info_codes
+
     result = service.run(request)
 
     assert result.status is ResearchRunStatus.COMPLETE
@@ -280,6 +385,40 @@ def test_recorded_inputs_drive_generic_runtime_to_classified_protocol(tmp_path: 
     assert final_protocol.paper_simulation_allowed
     assert not final_protocol.broker_execution_allowed
     assert service.audit(result.run_id).status == "PASS"
+
+    assert request.frozen_inputs is not None
+    bundle_artifact, context_artifact, bundle_hash, context_hash = _institutional_context(
+        state,
+        objects,
+        as_of=as_of,
+    )
+    institutional_result = service.run(
+        request.model_copy(
+            update={
+                "institutional_research_required": True,
+                "frozen_inputs": request.frozen_inputs.model_copy(
+                    update={
+                        "fundamental_model_bundle_artifact_id": bundle_artifact,
+                        "institutional_decision_context_artifact_id": context_artifact,
+                    }
+                ),
+            }
+        )
+    )
+    assert institutional_result.status is ResearchRunStatus.COMPLETE
+    assert set(institutional_result.output_artifacts) >= {
+        "fundamental_model",
+        "institutional_decision_context",
+        "decision_pack",
+        "trade_protocol",
+    }
+    institutional_decision_ref = institutional_result.output_artifacts["decision_pack"]
+    institutional_decision = DecisionPack.model_validate_json(
+        objects.get_bytes(institutional_decision_ref.object_hash)
+    )
+    assert bundle_hash in institutional_decision.frozen_input_hashes
+    assert context_hash in institutional_decision.frozen_input_hashes
+    assert service.audit(institutional_result.run_id).status == "PASS"
 
     trade_view = TradePlanViewService(state, objects, service.reference).build(
         final_ref.artifact_id,
@@ -323,12 +462,9 @@ def test_recorded_inputs_drive_generic_runtime_to_classified_protocol(tmp_path: 
     )
     assert preparation.execution_request.trade_protocol_id == final_ref.artifact_id
     assert (
-        preparation.execution_request.trading_classification_artifact_id
-        == classification_artifact
+        preparation.execution_request.trading_classification_artifact_id == classification_artifact
     )
     assert preparation.execution_request.schema_version == "paper-execution-request-v3"
     assert preparation.execution_request.requires_user_confirmation
-    paper_audit = PaperExecutionService(state, objects).audit(
-        preparation.execution_request_id
-    )
+    paper_audit = PaperExecutionService(state, objects).audit(preparation.execution_request_id)
     assert paper_audit["status"] == "PASS"

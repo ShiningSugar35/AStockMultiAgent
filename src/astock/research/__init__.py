@@ -28,6 +28,7 @@ from astock.research.formal_preparation import (
     ResearchPreparationExecution,
     ResearchPreparationRejectedError,
 )
+from astock.research.institutional import InstitutionalResearchService
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.lifecycle import (
     HoldingReviewExecution,
@@ -73,6 +74,7 @@ __all__ = [
     "ResearchPreparationRejectedError",
     "ResearchCoreService",
     "ResearchDiagnosticsService",
+    "InstitutionalResearchService",
     "ResearchMemoExecution",
     "ResearchRequestExecution",
     "ResearchRequestService",

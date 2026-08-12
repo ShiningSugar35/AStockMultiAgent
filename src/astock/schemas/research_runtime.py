@@ -35,6 +35,7 @@ class ResearchRunStage(StrEnum):
     INPUT_RESOLUTION = "INPUT_RESOLUTION"
     EVIDENCE = "EVIDENCE"
     FINANCIAL_INTEGRITY = "FINANCIAL_INTEGRITY"
+    FUNDAMENTAL_MODEL = "FUNDAMENTAL_MODEL"
     BASE_CASE = "BASE_CASE"
     SERENITY_DELTA = "SERENITY_DELTA"
     KNOWLEDGE_SKILL_DELTA = "KNOWLEDGE_SKILL_DELTA"
@@ -405,6 +406,8 @@ class ResearchRunFrozenInputs(AStockModel):
     zhihu_delta_artifact_id: str | None = None
     research_memo_artifact_id: str | None = None
     financial_integrity_artifact_id: str | None = None
+    fundamental_model_bundle_artifact_id: str | None = None
+    institutional_decision_context_artifact_id: str | None = None
     decision_pack_artifact_id: str | None = None
     committee_protocol_artifact_id: str | None = None
 
@@ -414,6 +417,11 @@ class ResearchRunFrozenInputs(AStockModel):
             self.committee_protocol_artifact_id is None
         ):
             raise ValueError("frozen committee decision and protocol must be provided together")
+        if (
+            self.institutional_decision_context_artifact_id is not None
+            and self.fundamental_model_bundle_artifact_id is None
+        ):
+            raise ValueError("institutional decision context requires a fundamental model bundle")
         return self
 
 
@@ -436,6 +444,7 @@ class ResearchRunRequest(AStockModel):
     committee_assessment: CommitteeAssessment | None = None
     counter_case: CounterCaseDraft | None = None
     trading_classification_artifact_id: str | None = None
+    institutional_research_required: bool = False
     auto_resolve_inputs: bool = True
     sync_reference_inputs: bool = True
     paper_ledger_write_allowed: Literal[False] = False

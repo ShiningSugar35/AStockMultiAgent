@@ -574,6 +574,33 @@ FinancialIntegrityEvidencePack
 
 严重审计意见、监管立案、三表重大勾稽失败可硬阻断；单一 Beneish 超阈值只能作为线索。
 
+## 6.5 机构级基本面模型层
+
+新当前公司研究在进入专家 Delta 和投资委员会前，先构建一套共享、确定性、可审计的机构级基本面模型。它不是新增一组人格 Agent，而是把所有 Agent 共用的经济驱动、预测和估值主账本固定下来：
+
+```text
+FrozenEvidencePack
+→ EvidenceSufficiencyReport
+→ IndustryProfile / CompanyEconomicsProfile
+→ DriverTree
+→ Bull / Base / Bear ForecastPack
+→ ValuationPack / Market-Implied Expectations
+→ FundamentalModelBundle
+→ InstitutionalDecisionContext
+→ BaseCase / Specialist Delta / ResearchMemo
+→ Investment Committee
+```
+
+设计约束：
+
+- Evidence Sufficiency 以 material claim 为单位区分事实、管理层主张、行业估计、解释、因果主张、预测和估值假设；authority、directness、independence、freshness、scope、extraction 与 PIT 分开记录，不压成一个伪精确总分。重复转载属于同一 independence group，不能增加独立证据数。
+- IndustryProfile 与 CompanyEconomicsProfile 是 canonical artifacts；没有认证行业 taxonomy 时只能标 `PROVISIONAL_TAXONOMY`。
+- DriverTree 是可复算 DAG。Bull/Base/Bear assumptions 绑定 claim/evidence 或明确 provenance，最终 Forecast 数值必须由 Python 计算，不由 LLM 直接填写。
+- Valuation 与 Forecast 共用同一 driver assumptions。FCFF DCF、reverse DCF、mid-cycle normalized、archetype-specific 方法和 sensitivity 均为确定性计算；Serenity Growth/Valuation 只能提供增量研究视角，不能维护第二套平行数值账本。
+- `MarketPriceAnchor` 将 current price 与已注册 source artifact/object hash、observed_at、available_to_system_at 一起冻结。没有 PIT price anchor 时仍可输出内在价值区间，但不计算 expected return 或市场隐含预期。
+- `FundamentalModelBundle` 绑定六个组件 exact artifact/hash；`InstitutionalDecisionContext` 只压缩 decision horizon、investment thesis、variant perception、3–5 key drivers、competing hypotheses 和 portfolio context，避免把完整 EvidencePack 再塞给委员会。
+- Bundle/DecisionContext 是委员会共享 PRIMARY 输入，不是新投票成员。委员会 conviction/risk cap 不能直接等于最终组合权重；实际组合配置仍由 Portfolio layer 在相关性、风险贡献、流动性和总敞口约束下决定。
+
 ---
 
 # 七、专家投研体系

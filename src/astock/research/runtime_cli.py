@@ -13,12 +13,28 @@ from astock.adaptive.service import AdaptiveResearchStatusService
 from astock.candidates.cli_ext import register_candidate_input_commands
 from astock.market_data.storage import CanonicalMarketStore
 from astock.portfolio.cli import register_portfolio_commands
+from astock.research.institutional import InstitutionalResearchService
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
 from astock.research.trade_view import TradePlanViewService
 from astock.research.trading_classification import TradingClassificationService
+from astock.schemas.institutional_research import (
+    CompanyEconomicsDraft,
+    DriverTreeDraft,
+    EvidenceSufficiencyRequest,
+    ForecastScenarioInput,
+    FundamentalModelBundle,
+    IndustryProfileDraft,
+    InstitutionalDecisionContext,
+    InstitutionalDecisionContextBuildRequest,
+    InstitutionalDecisionContextDraft,
+    InstitutionalResearchFinalizeRequest,
+    MarketPriceAnchor,
+    ValuationScenarioAssumption,
+)
 from astock.schemas.research_runtime import (
+    ResearchRunFrozenInputs,
     ResearchRunMode,
     ResearchRunRequest,
     TradingClassificationDraft,
@@ -26,7 +42,6 @@ from astock.schemas.research_runtime import (
 from astock.shadow.config import load_shadow_evaluation_policy
 from astock.shadow.formal_study import ensure_default_formal_study
 from astock.shadow.service import ShadowEvaluationService
-from astock.shadow.status import write_phase7_status
 from astock.shadow.storage import ParquetShadowStore
 
 
@@ -73,6 +88,10 @@ def register_research_runtime_commands(
         research_runtime = runtime()
         return TradePlanViewService(state, objects, research_runtime.reference)
 
+    def institutional() -> InstitutionalResearchService:
+        _, state, objects = services()
+        return InstitutionalResearchService(state, objects)
+
     def shadow() -> tuple[Any, ShadowEvaluationService]:
         paths, state, objects = services()
         return paths, ShadowEvaluationService(
@@ -88,6 +107,9 @@ def register_research_runtime_commands(
         company_id: Annotated[str, typer.Argument()],
         as_of: Annotated[str, typer.Option("--as-of")],
         mode: Annotated[ResearchRunMode, typer.Option()] = ResearchRunMode.RECORDED_INPUT,
+        institutional_research_required: Annotated[bool, typer.Option()] = False,
+        fundamental_model_bundle_artifact_id: Annotated[str | None, typer.Option()] = None,
+        institutional_decision_context_artifact_id: Annotated[str | None, typer.Option()] = None,
     ) -> None:
         emit(
             runtime().plan(
@@ -95,6 +117,22 @@ def register_research_runtime_commands(
                     company_id=company_id,
                     as_of=datetime.fromisoformat(as_of),
                     mode=mode,
+                    institutional_research_required=institutional_research_required,
+                    frozen_inputs=(
+                        ResearchRunFrozenInputs(
+                            fundamental_model_bundle_artifact_id=(
+                                fundamental_model_bundle_artifact_id
+                            ),
+                            institutional_decision_context_artifact_id=(
+                                institutional_decision_context_artifact_id
+                            ),
+                        )
+                        if (
+                            fundamental_model_bundle_artifact_id
+                            or institutional_decision_context_artifact_id
+                        )
+                        else None
+                    ),
                 )
             )
         )
@@ -103,20 +141,21 @@ def register_research_runtime_commands(
     def phase7_study_ensure(
         candidate_set_id: Annotated[str, typer.Option()] = "phase7-forward-live-v1",
     ) -> None:
-        paths, service = shadow()
+        _, service = shadow()
         study, reused = ensure_default_formal_study(
             service,
             now=datetime.now().astimezone(),
             candidate_set_id=candidate_set_id,
         )
-        status_path = write_phase7_status(service, paths.root / "phase7_status.md")
+        status = service.status(study.study_id)
         emit(
             {
                 "status": study.evidence_status,
                 "study_id": study.study_id,
                 "reused_existing": reused,
-                "formal_event_count": service.status(study.study_id).formal_forward_event_count,
-                "phase7_status_document": status_path,
+                "formal_event_count": status.formal_forward_event_count,
+                "assignment_count": status.assignment_count,
+                "observation_count": status.observation_count,
             }
         )
 
@@ -126,6 +165,63 @@ def register_research_runtime_commands(
     ) -> None:
         _, service = shadow()
         emit(AdaptiveResearchStatusService(service).status(study_id))
+
+    @app.command("institutional-research-schema")
+    def institutional_research_schema() -> None:
+        emit(
+            {
+                "EvidenceSufficiencyRequest": EvidenceSufficiencyRequest.model_json_schema(),
+                "IndustryProfileDraft": IndustryProfileDraft.model_json_schema(),
+                "CompanyEconomicsDraft": CompanyEconomicsDraft.model_json_schema(),
+                "DriverTreeDraft": DriverTreeDraft.model_json_schema(),
+                "ForecastScenarioInput": ForecastScenarioInput.model_json_schema(),
+                "ValuationScenarioAssumption": ValuationScenarioAssumption.model_json_schema(),
+                "MarketPriceAnchor": MarketPriceAnchor.model_json_schema(),
+                "InstitutionalResearchFinalizeRequest": (
+                    InstitutionalResearchFinalizeRequest.model_json_schema()
+                ),
+                "FundamentalModelBundle": FundamentalModelBundle.model_json_schema(),
+                "InstitutionalDecisionContextDraft": (
+                    InstitutionalDecisionContextDraft.model_json_schema()
+                ),
+                "InstitutionalDecisionContextBuildRequest": (
+                    InstitutionalDecisionContextBuildRequest.model_json_schema()
+                ),
+                "InstitutionalDecisionContext": InstitutionalDecisionContext.model_json_schema(),
+            }
+        )
+
+    @app.command("institutional-research-finalize")
+    def institutional_research_finalize(
+        request_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        request = InstitutionalResearchFinalizeRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(institutional().finalize(request))
+
+    @app.command("institutional-decision-context-freeze")
+    def institutional_decision_context_freeze(
+        request_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        request = InstitutionalDecisionContextBuildRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(institutional().build_decision_context(request))
+
+    @app.command("fundamental-model-status")
+    def fundamental_model_status(company_id: Annotated[str, typer.Argument()]) -> None:
+        emit(institutional().status(company_id))
+
+    @app.command("fundamental-model-audit")
+    def fundamental_model_audit(artifact_id: Annotated[str, typer.Argument()]) -> None:
+        emit(institutional().audit(artifact_id))
 
     @app.command("research-run-plan")
     def research_run_plan(
@@ -142,6 +238,9 @@ def register_research_runtime_commands(
         as_of: Annotated[str, typer.Option("--as-of")],
         mode: Annotated[ResearchRunMode, typer.Option()] = ResearchRunMode.RECORDED_INPUT,
         sync_reference_inputs: Annotated[bool, typer.Option()] = True,
+        institutional_research_required: Annotated[bool, typer.Option()] = False,
+        fundamental_model_bundle_artifact_id: Annotated[str | None, typer.Option()] = None,
+        institutional_decision_context_artifact_id: Annotated[str | None, typer.Option()] = None,
     ) -> None:
         emit(
             runtime().run(
@@ -150,6 +249,22 @@ def register_research_runtime_commands(
                     as_of=datetime.fromisoformat(as_of),
                     mode=mode,
                     sync_reference_inputs=sync_reference_inputs,
+                    institutional_research_required=institutional_research_required,
+                    frozen_inputs=(
+                        ResearchRunFrozenInputs(
+                            fundamental_model_bundle_artifact_id=(
+                                fundamental_model_bundle_artifact_id
+                            ),
+                            institutional_decision_context_artifact_id=(
+                                institutional_decision_context_artifact_id
+                            ),
+                        )
+                        if (
+                            fundamental_model_bundle_artifact_id
+                            or institutional_decision_context_artifact_id
+                        )
+                        else None
+                    ),
                 )
             )
         )

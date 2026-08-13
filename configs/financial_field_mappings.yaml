@@ -1,110 +1,92 @@
-schema_version: financial-field-mappings-v1
+schema_version: financial-field-mappings-v2
 fields:
   TOTAL_ASSETS:
     statement_type: BALANCE_SHEET
     official_label: 资产总计
-    eastmoney_field: TOTAL_ASSETS
-    sina_field: total_assets
+    provider_fields: {eastmoney-financial: TOTAL_ASSETS, sina-financial: total_assets}
     unit: TEN_THOUSAND_CNY
   TOTAL_LIABILITIES:
     statement_type: BALANCE_SHEET
     official_label: 负债合计
-    eastmoney_field: TOTAL_LIABILITIES
-    sina_field: total_liabilities
+    provider_fields: {eastmoney-financial: TOTAL_LIABILITIES, sina-financial: total_liabilities}
     unit: TEN_THOUSAND_CNY
   TOTAL_EQUITY:
     statement_type: BALANCE_SHEET
     official_label: 所有者权益合计
-    eastmoney_field: TOTAL_EQUITY
-    sina_field: total_equity
+    provider_fields: {eastmoney-financial: TOTAL_EQUITY, sina-financial: total_equity}
     unit: TEN_THOUSAND_CNY
   ACCOUNTS_RECEIVABLE:
     statement_type: BALANCE_SHEET
     official_label: 应收账款
-    eastmoney_field: ACCOUNTS_RECEIVABLE
-    sina_field: accounts_receivable
+    provider_fields: {eastmoney-financial: ACCOUNTS_RECEIVABLE, sina-financial: accounts_receivable}
     unit: TEN_THOUSAND_CNY
   INVENTORY:
     statement_type: BALANCE_SHEET
     official_label: 存货
-    eastmoney_field: INVENTORY
-    sina_field: inventory
+    provider_fields: {eastmoney-financial: INVENTORY, sina-financial: inventory}
     unit: TEN_THOUSAND_CNY
   PREPAYMENTS:
     statement_type: BALANCE_SHEET
     official_label: 预付款项
-    eastmoney_field: PREPAYMENTS
-    sina_field: prepayments
+    provider_fields: {eastmoney-financial: PREPAYMENTS, sina-financial: prepayments}
     unit: TEN_THOUSAND_CNY
   OTHER_RECEIVABLES:
     statement_type: BALANCE_SHEET
     official_label: 其他应收款
-    eastmoney_field: OTHER_RECEIVABLES
-    sina_field: other_receivables
+    provider_fields: {eastmoney-financial: OTHER_RECEIVABLES, sina-financial: other_receivables}
     unit: TEN_THOUSAND_CNY
   CASH_BEGINNING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 期初现金及现金等价物余额
-    eastmoney_field: CASH_BEGINNING
-    sina_field: cash_beginning
+    provider_fields: {eastmoney-financial: CASH_BEGINNING, sina-financial: cash_beginning}
     unit: TEN_THOUSAND_CNY
   CASH_ENDING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 期末现金及现金等价物余额
-    eastmoney_field: CASH_ENDING
-    sina_field: cash_ending
+    provider_fields: {eastmoney-financial: CASH_ENDING, sina-financial: cash_ending}
     unit: TEN_THOUSAND_CNY
   NET_CASH_OPERATING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 经营活动产生的现金流量净额
-    eastmoney_field: NET_CASH_OPERATING
-    sina_field: net_cash_operating
+    provider_fields: {eastmoney-financial: NET_CASH_OPERATING, sina-financial: net_cash_operating}
     unit: TEN_THOUSAND_CNY
   NET_CASH_INVESTING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 投资活动产生的现金流量净额
-    eastmoney_field: NET_CASH_INVESTING
-    sina_field: net_cash_investing
+    provider_fields: {eastmoney-financial: NET_CASH_INVESTING, sina-financial: net_cash_investing}
     unit: TEN_THOUSAND_CNY
   NET_CASH_FINANCING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 筹资活动产生的现金流量净额
-    eastmoney_field: NET_CASH_FINANCING
-    sina_field: net_cash_financing
+    provider_fields: {eastmoney-financial: NET_CASH_FINANCING, sina-financial: net_cash_financing}
     unit: TEN_THOUSAND_CNY
   EXCHANGE_EFFECT:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 汇率变动对现金及现金等价物的影响
-    eastmoney_field: EXCHANGE_EFFECT
-    sina_field: exchange_effect
+    provider_fields: {eastmoney-financial: EXCHANGE_EFFECT, sina-financial: exchange_effect}
     unit: TEN_THOUSAND_CNY
   NET_PROFIT_CASH_FLOW:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 净利润
-    eastmoney_field: NET_PROFIT_CASH_FLOW
-    sina_field: net_profit_cash_flow
+    provider_fields: {eastmoney-financial: NET_PROFIT_CASH_FLOW, sina-financial: net_profit_cash_flow}
     unit: TEN_THOUSAND_CNY
   NET_PROFIT_INCOME:
     statement_type: INCOME_STATEMENT
     official_label: 净利润
-    eastmoney_field: NET_PROFIT_INCOME
-    sina_field: net_profit_income
+    provider_fields: {eastmoney-financial: NET_PROFIT_INCOME, sina-financial: net_profit_income}
     unit: TEN_THOUSAND_CNY
   REVENUE:
     statement_type: INCOME_STATEMENT
     official_label: 营业收入
-    eastmoney_field: REVENUE
-    sina_field: revenue
+    provider_fields: {eastmoney-financial: REVENUE, sina-financial: revenue}
     unit: TEN_THOUSAND_CNY
   OPERATING_COST:
     statement_type: INCOME_STATEMENT
     official_label: 营业成本
-    eastmoney_field: OPERATING_COST
-    sina_field: operating_cost
+    provider_fields: {eastmoney-financial: OPERATING_COST, sina-financial: operating_cost}
     unit: TEN_THOUSAND_CNY
   SHARES_OUTSTANDING:
     statement_type: BALANCE_SHEET
     official_label: 期末普通股股份总数
-    eastmoney_field: SHARES_OUTSTANDING
-    sina_field: shares_outstanding
+    provider_fields: {eastmoney-financial: SHARES_OUTSTANDING, sina-financial: shares_outstanding}
     unit: SHARES

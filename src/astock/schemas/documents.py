@@ -88,7 +88,7 @@ class DisclosureAnnouncement(AStockModel):
     adjunct_path: str
     source_url: str
     document_type: DocumentType
-    org_id: str
+    org_id: str | None = None
 
 
 class DisclosureSearchBatch(AStockModel):

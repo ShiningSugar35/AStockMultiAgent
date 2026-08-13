@@ -186,6 +186,14 @@ uv run astock portfolio-construct portfolio-construction.json
 
 Agent 的默认低 token 工作方式是：先读最终压缩工件，再按 evidence locator 精确打开必要证据。不要让多个 Agent 重复读取同一批原文。
 
+## Adaptive Edge / Deterministic Core
+
+系统现在把“灵活”限定在可审计边界内：Provider/endpoint、transport、dialect、Current Research capability graph、Specialist 预算和 Portfolio allocator 都由版本化 policy/registry/plugin 描述；外部 Agent 可以提交 ResearchPlanner / ProviderRecovery / SchemaRepair proposal，但只能先形成 `PROPOSED` artifact，再由 Python deterministic validator 决定能否进入 `VALIDATED`。核心的官方事实认证、PIT、数学/会计、ObjectStore 不可变、模拟账本人工确认和 broker 禁用不会交给模型自由判断。
+
+Schema drift 采用 raw-first：未知结构先保存原始 SourceSnapshot，再允许 Agent 提出 candidate mapping；只有多样本、官方交叉验证和仓库真实 contract test 全部通过后，才允许显式批准生成 `ADMITTED` candidate dialect。Candidate 不会自动覆盖 active dialect，也不会直接写正式事实，并支持 artifact audit 与 rollback。
+
+正常股票咨询仍默认是投资者模式，不展示上述内部协议；这些能力只通过开发诊断命令或显式系统调试请求暴露。
+
 ## 常用确定性命令
 
 ```powershell
@@ -214,6 +222,21 @@ uv run astock research-run-company 600519 --mode LIVE --institutional-research-r
 uv run astock research-status <research-run-id>
 uv run astock research-audit <research-run-id>
 uv run astock trade-plan-view <classified-protocol-artifact-id>
+
+# Adaptive Edge / developer diagnostics (read-only first)
+uv run astock research-capability-status 600519 --market XSHG
+uv run astock provider-dialect-status
+uv run astock adaptive-edge-status
+uv run astock adaptive-edge-schema
+
+# Agent proposal validation; these only freeze/validate internal artifacts, not facts/orders
+uv run astock adaptive-plan-validate planner-proposal.json
+uv run astock adaptive-recovery-validate recovery-proposal.json
+uv run astock adaptive-schema-repair-validate schema-repair-proposal.json
+# Candidate dialect admission requires explicit approval and still does not mutate active dialect
+uv run astock adaptive-schema-repair-admit <validation-id> --approve
+uv run astock adaptive-artifact-audit <artifact-id>
+uv run astock adaptive-dialect-rollback <candidate-release-id>
 
 # 历史/recorded 研究仍显式提供 --as-of，保持防未来数据边界
 uv run astock research-plan 600519 --as-of 2026-08-11T10:00:00+08:00

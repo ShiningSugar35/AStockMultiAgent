@@ -1,0 +1,70 @@
+schema_version: provider-dialects-v1
+providers:
+  sina-financial:
+    dialect_version: sina-finance-report-2026-v1
+    endpoint: https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022
+    response_shape: sina-report-list-v1
+    transport_profile: financial-public-v1
+    response_paths:
+      report_list: result.data.report_list
+      report_dates: result.data.report_date
+      status: result.status.code
+    statement_sources:
+      BALANCE_SHEET: fzb
+      INCOME_STATEMENT: lrb
+      CASH_FLOW_STATEMENT: llb
+    field_aliases:
+      BALANCE_SHEET:
+        TOTASSET: total_assets
+        TOTLIAB: total_liabilities
+        RIGHAGGR: total_equity
+        ACCORECE: accounts_receivable
+        INVE: inventory
+        PREP: prepayments
+        OTHERRECETOT: other_receivables
+        OTHERRECE: other_receivables
+        TOTSHARE: shares_outstanding
+      INCOME_STATEMENT:
+        NETPROFIT: net_profit_income
+        BIZINCO: revenue
+        BIZCOST: operating_cost
+      CASH_FLOW_STATEMENT:
+        INICASHBALA: cash_beginning
+        FINALCASHBALA: cash_ending
+        MANANETR: net_cash_operating
+        INVNETCASHFLOW: net_cash_investing
+        FINNETCFLOW: net_cash_financing
+        CHGEXCHGCHGS: exchange_effect
+        NETPROFIT: net_profit_cash_flow
+    share_fields: [TOTSHARE]
+    scope_prefixes:
+      CONSOLIDATED: [合并]
+      PARENT_COMPANY: [母公司, 母企]
+    currency_field: rCurrency
+    allowed_currencies: [CNY]
+    report_type_field: rType
+    report_items_key: data
+    item_field_key: item_field
+    item_value_key: item_value
+    native_monetary_unit: CNY
+    monetary_scale_to_internal: "0.0001"
+  eastmoney-financial:
+    dialect_version: eastmoney-financial-datacenter-2026-v1
+    endpoint: https://datacenter-web.eastmoney.com/api/data/v1/get
+    response_shape: eastmoney-data-list-v1
+    transport_profile: financial-public-v1
+    response_paths:
+      rows: result.data
+      success: success
+    statement_sources:
+      BALANCE_SHEET: RPT_DMSK_FN_BALANCE
+      INCOME_STATEMENT: RPT_DMSK_FN_INCOME
+      CASH_FLOW_STATEMENT: RPT_DMSK_FN_CASHFLOW
+    field_aliases: {}
+    share_fields: []
+    identity_fields: [SECURITY_CODE, REPORT_DATE]
+    scope_field: STATEMENT_SCOPE
+    currency_field: CURRENCY
+    allowed_currencies: [CNY]
+    native_monetary_unit: TEN_THOUSAND_CNY
+    monetary_scale_to_internal: "1"

@@ -12,6 +12,7 @@ from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.providers.runtime import build_provider_http_client
 from astock.schemas import (
     BarRequest,
     DataProviderCapability,
@@ -41,14 +42,7 @@ class HttpProviderBase:
     ) -> None:
         self.object_store = object_store
         self.state = state
-        self.client = client or httpx.Client(
-            timeout=timeout_seconds,
-            follow_redirects=True,
-            headers={
-                "User-Agent": "AStockResearch/0.1 (+local low-frequency research)",
-                "Accept": "application/json,text/plain,*/*",
-            },
-        )
+        self.client = client or build_provider_http_client(self.provider_id)
 
     def _get(self, url: str, *, params: dict[str, str | int]) -> tuple[httpx.Response, int]:
         started = time.perf_counter()

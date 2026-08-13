@@ -1,0 +1,7 @@
+schema_version: portfolio-allocators-v1
+default_method: EQUAL_WEIGHT_CONSTRAINED
+enabled_methods:
+  - EQUAL_WEIGHT_CONSTRAINED
+  - INVERSE_VOLATILITY
+  - HIERARCHICAL_RISK
+  - SHRINKAGE_MIN_VARIANCE

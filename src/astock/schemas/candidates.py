@@ -448,7 +448,7 @@ class CandidateScanRequest(AStockModel):
     input_release_id: str = Field(min_length=1)
     input_release_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     as_of: AwareDatetime
-    rules_version: Literal["candidate-scan-v1"] = "candidate-scan-v1"
+    rules_version: str = Field(default="candidate-scan-v1", min_length=1)
     formal_historical: bool = True
     live: bool = False
 
@@ -481,7 +481,7 @@ class CandidateRecord(AStockModel):
     previous_version_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     scan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_release_id: str = Field(min_length=1)
-    rules_version: Literal["candidate-scan-v1"] = "candidate-scan-v1"
+    rules_version: str = Field(default="candidate-scan-v1", min_length=1)
     company_id: str = Field(min_length=1)
     instrument_id: str = Field(min_length=1)
     as_of: AwareDatetime
@@ -526,7 +526,7 @@ class CandidateUniverseSnapshot(AStockModel):
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     scan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_release_id: str = Field(min_length=1)
-    rules_version: Literal["candidate-scan-v1"] = "candidate-scan-v1"
+    rules_version: str = Field(default="candidate-scan-v1", min_length=1)
     as_of: AwareDatetime
     members: list[CandidateUniverseMember]
     semantic_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -552,7 +552,7 @@ class CandidateSignalManifest(AStockModel):
     signal_manifest_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     scan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_release_id: str = Field(min_length=1)
-    rules_version: Literal["candidate-scan-v1"] = "candidate-scan-v1"
+    rules_version: str = Field(default="candidate-scan-v1", min_length=1)
     signal_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     descriptor: CandidateFileDescriptor
     signal_ids: list[str]
@@ -564,7 +564,7 @@ class CandidateScanReport(AStockModel):
     request_id: str = Field(min_length=1)
     request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_release_id: str = Field(min_length=1)
-    rules_version: Literal["candidate-scan-v1"] = "candidate-scan-v1"
+    rules_version: str = Field(default="candidate-scan-v1", min_length=1)
     as_of: AwareDatetime
     status: CandidateScanStatus
     checkpoint_step: CandidateCheckpointStep

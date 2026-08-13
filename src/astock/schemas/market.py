@@ -95,6 +95,7 @@ class RateLimitState(StrEnum):
 class BarRequest(AStockModel):
     symbol: str = Field(min_length=1, max_length=32)
     market: Market
+    exchange: Market | None = None
     instrument_type: InstrumentType = InstrumentType.STOCK
     frequency: Frequency = Frequency.M5
     requested_start: AwareDatetime
@@ -106,6 +107,13 @@ class BarRequest(AStockModel):
     def validate_range(self) -> BarRequest:
         if self.requested_end < self.requested_start:
             raise ValueError("requested_end must not precede requested_start")
+        if self.market is Market.INDEX:
+            if self.instrument_type is not InstrumentType.INDEX:
+                raise ValueError("INDEX market requests require INDEX instrument_type")
+            if self.exchange not in {None, Market.XSHG, Market.XSHE}:
+                raise ValueError("index exchange must be XSHG/XSHE when explicitly known")
+        elif self.exchange is not None and self.exchange is not self.market:
+            raise ValueError("stock request exchange must match market")
         return self
 
 
@@ -135,6 +143,13 @@ class TransportCapability(AStockModel):
     requested_capabilities: list[str]
     available: bool
     reason: str
+    officiality: str = "UNKNOWN"
+    health_status: str = "UNKNOWN"
+    freshness_score: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
+    latency_ms: int = Field(default=0, ge=0)
+    cost_efficiency_score: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
+    auth_ease_score: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
+    retryable_failure: bool = False
 
 
 class SourceAccessRequest(AStockModel):

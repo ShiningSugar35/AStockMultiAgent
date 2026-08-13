@@ -189,9 +189,9 @@ class AdaptiveSkillStability(AStockModel):
     harmful_market_states: list[MarketRegime]
     paired_net_return_delta: ShadowMetricInterval
     holm_adjusted_p_value: Decimal | None = Field(default=None, ge=0, le=1)
-    required_independent_decision_count: Literal[100] = 100
-    required_walk_forward_fold_count: Literal[3] = 3
-    required_market_state_count: Literal[5] = 5
+    required_independent_decision_count: int = Field(ge=1)
+    required_walk_forward_fold_count: int = Field(ge=1)
+    required_market_state_count: int = Field(ge=1)
     minimum_positive_fold_ratio: Decimal = Field(ge=0, le=1)
     stability_status: AdaptiveSkillStabilityStatus
     reason_codes: list[str] = Field(min_length=1)

@@ -529,7 +529,7 @@ class ResearchSkillManifest(AStockModel):
 class ResearchSkillRegistry(AStockModel):
     registry_version: str = Field(min_length=1)
     open_source_audit_manifest_files: list[str] = Field(default_factory=list)
-    max_specialists: int = Field(ge=1, le=3)
+    max_specialists: int = Field(ge=1, le=32)
     coverage_confidence_caps: dict[SpecialistCoverageStatus, float]
     skills: list[ResearchSkillManifest] = Field(min_length=1)
 
@@ -572,6 +572,7 @@ class SpecialistRouteRequest(AStockModel):
     available_inputs: list[str]
     available_frequencies: list[str]
     explicit_skill_ids: list[str] = Field(default_factory=list)
+    specialist_budget: int | None = Field(default=None, ge=1, le=32)
 
     @model_validator(mode="after")
     def validate_route_scope(self) -> SpecialistRouteRequest:
@@ -625,7 +626,7 @@ class SpecialistRoutePlan(AStockModel):
     excluded_skill_reasons: dict[str, list[str]]
     coverage_status: SpecialistCoverageStatus
     confidence_cap: float = Field(ge=0, le=1)
-    max_specialists: int = Field(ge=1, le=3)
+    max_specialists: int = Field(ge=1, le=32)
     degradation_codes: list[str]
 
     @model_validator(mode="after")

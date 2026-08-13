@@ -5,15 +5,19 @@ from __future__ import annotations
 from astock.schemas import BarRequest, Market
 
 
-def baostock_code(symbol: str, market: Market) -> str:
+def baostock_code(
+    symbol: str, market: Market, *, exchange: Market | None = None
+) -> str:
     prefixes = {Market.XSHG: "sh", Market.XSHE: "sz", Market.BJSE: "bj"}
-    if market is Market.INDEX:
-        prefix = "sz" if symbol.startswith("399") else "sh"
-    else:
-        try:
-            prefix = prefixes[market]
-        except KeyError as exc:  # pragma: no cover - defensive enum boundary
-            raise ValueError(f"Unsupported BaoStock market: {market}") from exc
+    effective_market = (
+        exchange or _legacy_index_exchange_hint(symbol)
+        if market is Market.INDEX
+        else market
+    )
+    try:
+        prefix = prefixes[effective_market]
+    except KeyError as exc:  # pragma: no cover - defensive enum boundary
+        raise ValueError(f"Unsupported BaoStock market: {market}") from exc
     return f"{prefix}.{symbol}"
 
 
@@ -46,7 +50,8 @@ def eastmoney_secid(request: BarRequest) -> str:
     elif request.market in {Market.XSHE, Market.BJSE}:
         prefix = "0"
     elif request.market == Market.INDEX:
-        prefix = "0" if request.symbol.startswith("399") else "1"
+        index_exchange = request.exchange or _legacy_index_exchange_hint(request.symbol)
+        prefix = "0" if index_exchange is Market.XSHE else "1"
     else:  # pragma: no cover - enum makes this defensive only
         raise ValueError(f"Unsupported market: {request.market}")
     return f"{prefix}.{request.symbol}"
@@ -60,7 +65,14 @@ def sina_symbol(request: BarRequest) -> str:
     elif request.market == Market.BJSE:
         prefix = "bj"
     elif request.market == Market.INDEX:
-        prefix = "sz" if request.symbol.startswith("399") else "sh"
+        index_exchange = request.exchange or _legacy_index_exchange_hint(request.symbol)
+        prefix = "sz" if index_exchange is Market.XSHE else "sh"
     else:  # pragma: no cover
         raise ValueError(f"Unsupported market: {request.market}")
     return f"{prefix}{request.symbol}"
+
+
+def _legacy_index_exchange_hint(symbol: str) -> Market:
+    """Provider request hint only; never promote this heuristic to formal instrument identity."""
+
+    return Market.XSHE if symbol.startswith("399") else Market.XSHG

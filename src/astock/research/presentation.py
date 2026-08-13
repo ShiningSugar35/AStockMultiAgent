@@ -4,31 +4,34 @@ from __future__ import annotations
 
 import re
 
+from astock.research.internal_vocabulary import internal_vocabulary_terms
 from astock.schemas.research_acquisition import (
     CurrentResearchAcquisitionReport,
     CurrentResearchAcquisitionStatus,
     InvestorAnswerAudit,
+    InvestorGapCategory,
     InvestorResearchState,
     InvestorResearchView,
 )
 from astock.schemas.research_runtime import ResearchRunReport, ResearchRunStatus
 
-_GAP_MESSAGES: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("EVIDENCE", "CLAIM"), "有些会影响投资判断的关键事实还需要从公司公告或正式报告进一步核实。"),
-    (("FINANCIAL",), "最新一期财务数据还需要和公司正式披露逐项核对。"),
-    (
-        ("FUNDAMENTAL_MODEL", "INSTITUTIONAL"),
-        "目前还缺少足够可靠的依据来把未来盈利和合理估值区间算得足够稳健。",
+_GAP_MESSAGES: dict[InvestorGapCategory, str] = {
+    InvestorGapCategory.EVIDENCE: (
+        "有些会影响投资判断的关键事实还需要从公司公告或正式报告进一步核实。"
     ),
-    (("BASE_CASE",), "核心投资逻辑、反方情形和关键假设还需要进一步收敛。"),
-    (("SPECIALIST",), "个别会影响结论的专项问题仍需补充证据。"),
-    (("KNOWLEDGE",), "现有材料还不足以覆盖一个关键判断维度。"),
-    (("COMMITTEE",), "现有证据还不足以支持明确的买入时点结论。"),
-    (
-        ("TRADING_CLASSIFICATION", "CLASSIFICATION"),
-        "如果要给出具体买入价、止损或卖出条件，还需要核实最新交易条件。",
+    InvestorGapCategory.FINANCIAL: "最新一期财务数据还需要和公司正式披露逐项核对。",
+    InvestorGapCategory.FUNDAMENTAL_MODEL: (
+        "目前还缺少足够可靠的依据来把未来盈利和合理估值区间算得足够稳健。"
     ),
-)
+    InvestorGapCategory.BASE_CASE: "核心投资逻辑、反方情形和关键假设还需要进一步收敛。",
+    InvestorGapCategory.SPECIALIST: "个别会影响结论的专项问题仍需补充证据。",
+    InvestorGapCategory.KNOWLEDGE: "现有材料还不足以覆盖一个关键判断维度。",
+    InvestorGapCategory.COMMITTEE: "现有证据还不足以支持明确的买入时点结论。",
+    InvestorGapCategory.EXECUTION_READINESS: (
+        "如果要给出具体买入价、止损或卖出条件，还需要核实最新交易条件。"
+    ),
+    InvestorGapCategory.GENERAL: "还有一项会影响投资判断的材料尚未完成核实。",
+}
 
 _ANSWER_POLICY_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -126,12 +129,14 @@ def investor_view_from_run(
         )
 
     messages: list[str] = []
-    for code in report.needs_info_codes:
-        if not include_execution_readiness and any(
-            token in code for token in ("TRADING_CLASSIFICATION", "CLASSIFICATION")
+    categories = report.investor_gap_categories or [InvestorGapCategory.GENERAL]
+    for category in categories:
+        if (
+            category is InvestorGapCategory.EXECUTION_READINESS
+            and not include_execution_readiness
         ):
             continue
-        message = _message_for_code(code)
+        message = _GAP_MESSAGES[category]
         if message not in messages:
             messages.append(message)
     if not messages:
@@ -195,6 +200,9 @@ def audit_investor_answer(text: str) -> InvestorAnswerAudit:
     for code, patterns in _ANSWER_POLICY_PATTERNS:
         if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
             finding_codes.add(code)
+    lowered = text.lower()
+    if any(term in lowered for term in internal_vocabulary_terms()):
+        finding_codes.add("DYNAMIC_INTERNAL_VOCABULARY_EXPOSED")
     ordered = sorted(finding_codes)
     developer_meta = "DEVELOPER_META_EXPOSED" in finding_codes
     implementation = bool(finding_codes - {"DEVELOPER_META_EXPOSED", "EMPTY_INVESTOR_ANSWER"})
@@ -204,13 +212,6 @@ def audit_investor_answer(text: str) -> InvestorAnswerAudit:
         internal_implementation_exposed=implementation,
         developer_meta_exposed=developer_meta,
     )
-
-
-def _message_for_code(code: str) -> str:
-    for tokens, message in _GAP_MESSAGES:
-        if any(token in code for token in tokens):
-            return message
-    return "还有一项会影响投资判断的材料尚未完成核实。"
 
 
 __all__ = [

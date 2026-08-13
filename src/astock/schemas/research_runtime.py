@@ -20,6 +20,7 @@ from astock.schemas.research import (
     SpecialistEvidenceRequest,
     SpecialistMetricInput,
 )
+from astock.schemas.research_acquisition import InvestorGapCategory
 from astock.schemas.runs import ContextBudgetReport
 from astock.schemas.serenity_v2 import SerenityMethodContractV2
 
@@ -580,6 +581,7 @@ class ResearchRunReport(AStockModel):
     checkpoints: list[ResearchRunCheckpoint]
     output_artifacts: dict[str, RuntimeArtifactReference]
     needs_info_codes: list[str]
+    investor_gap_categories: list[InvestorGapCategory] = Field(default_factory=list)
     trade_protocol_outcome: str | None = None
     performance: ResearchRunPerformanceSummary
     paper_ledger_write_count: Literal[0] = 0
@@ -589,6 +591,8 @@ class ResearchRunReport(AStockModel):
     def validate_report(self) -> ResearchRunReport:
         if self.needs_info_codes != sorted(set(self.needs_info_codes)):
             raise ValueError("research run needs-info codes must be sorted and unique")
+        if self.investor_gap_categories != list(dict.fromkeys(self.investor_gap_categories)):
+            raise ValueError("investor gap categories must be unique and ordered")
         if self.status is ResearchRunStatus.COMPLETE and self.needs_info_codes:
             raise ValueError("complete research run cannot carry NEEDS_INFO codes")
         if self.status is ResearchRunStatus.NEEDS_INFO and not self.needs_info_codes:

@@ -2603,7 +2603,7 @@ def research_specialist_route(
         typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
     ],
 ) -> None:
-    """Select at most three specialists using explicit deterministic rules."""
+    """Select specialists within the active versioned resource-policy budget."""
 
     paths, state, objects = _services()
     try:

@@ -20,13 +20,10 @@ Primary skill: `$portfolio-manager`.
    - Evaluate concentration, correlations, beta/factor exposure where available, drawdown, ES/CVaR/CDaR, liquidity, implementation cost and stress scenarios.
    - Group/industry constraints are only as authoritative as their taxonomy provenance; caller-supplied tags must remain labelled as such.
 
-4. **Construct four comparable proposals**
-   - Run `portfolio-construct` and preserve:
-     1. `EQUAL_WEIGHT_CONSTRAINED` — default robust baseline;
-     2. `INVERSE_VOLATILITY`;
-     3. `HIERARCHICAL_RISK`;
-     4. `SHRINKAGE_MIN_VARIANCE` — Ledoit-Wolf + long-only minimum variance.
-   - Apply hard single-name/total exposure/group constraints before optimizing.
+4. **Construct policy-enabled comparable proposals**
+   - Run `portfolio-construct`. Allocator availability and default method come only from versioned `portfolio-allocators` policy + `PortfolioAllocatorRegistry`; `PortfolioService` must not maintain a second method switch.
+   - Current active policy enables four plugins: `EQUAL_WEIGHT_CONSTRAINED` (default robust baseline), `INVERSE_VOLATILITY`, `HIERARCHICAL_RISK`, and `SHRINKAGE_MIN_VARIANCE` (Ledoit-Wolf + long-only minimum variance). Adding another allocator requires a registered deterministic plugin and policy version, not editing `_proposals()`.
+   - Apply hard single-name/total exposure/group constraints after plugin score generation and before publishing a proposal.
    - Unallocatable capital remains cash.
 
 5. **Do not optimize on uncalibrated expected returns**
@@ -43,7 +40,7 @@ Primary skill: `$portfolio-manager`.
 
 ## Output
 
-Show current risk first, then the four allocation proposals, why they differ, binding constraints, cash residual and the recommended **comparison baseline**. Do not present an optimizer output as an automatic trade authorization.
+Show current risk first, then every allocation proposal enabled by the active allocator policy, why they differ, binding constraints, cash residual and the configured **comparison baseline**. Do not present an optimizer output as an automatic trade authorization.
 
 ## Stop conditions
 

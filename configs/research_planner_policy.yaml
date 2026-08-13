@@ -1,0 +1,28 @@
+schema_version: research-planner-policy-v1
+mandatory_modules:
+  - EVIDENCE
+  - PIT
+  - FINANCIAL_INTEGRITY
+  - FUNDAMENTAL_MODEL
+module_order:
+  - EVIDENCE
+  - PIT
+  - FINANCIAL_INTEGRITY
+  - FUNDAMENTAL_MODEL
+  - BASE_CASE
+  - SPECIALISTS
+  - KNOWLEDGE
+  - COMMITTEE
+  - TRADING_CLASSIFICATION
+module_dependencies:
+  EVIDENCE: []
+  PIT: [EVIDENCE]
+  FINANCIAL_INTEGRITY: [EVIDENCE, PIT]
+  FUNDAMENTAL_MODEL: [FINANCIAL_INTEGRITY]
+  BASE_CASE: [FUNDAMENTAL_MODEL]
+  SPECIALISTS: [BASE_CASE]
+  KNOWLEDGE: [BASE_CASE]
+  COMMITTEE: [BASE_CASE]
+  TRADING_CLASSIFICATION: [COMMITTEE]
+paper_ledger_write_allowed: false
+broker_execution_allowed: false

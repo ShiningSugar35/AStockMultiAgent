@@ -16,11 +16,12 @@ Workflow 是跨 Skill 的**用户任务编排层**。它不替代 `.agents/skill
 | [Paper Trading](workflow-paper-trading.md) | “模拟盘恢复、回放、状态是否正常？” | `$paper-trading-recovery` | paper status / replay checkpoint / NAV |
 | [Knowledge Ingest](workflow-knowledge-ingest.md) | “把这个作者/书籍方法沉淀进知识库” | `$knowledge-ingest` | coverage / immutable source / reviewed Skills |
 | [Prospective Evaluation](workflow-prospective-evaluation.md) | “怎么积累前瞻样本、判断系统是否真的有效？” | `$astock-research-orchestrator` | Phase 7/11/12 prospective evidence |
+| [Adaptive Edge Diagnostics](workflow-adaptive-edge.md) | “provider/schema/规划为什么失败，Agent 能否自动适配？” | `$astock-research-orchestrator` / `$evidence-investigation` | Validated plan / recovery validation / candidate dialect |
 
 ## 通用编排原则
 
 1. **先复用，后抓取**：先查已冻结且 audit 通过的工件，再做增量采集。
-2. **本地/API → fallback provider → 权威 Web → 人工最后**：普通 provider 失败不能直接等价为 `NEEDS_INFO`；能自动解决的必须继续自动解决。
+2. **Policy-driven 自动路由，Manual 最后**：SourceAccessRouter 按 officiality/capability/health/freshness/latency/cost/auth/retryability 评分；强官方能力优先 `PRIMARY_OFFICIAL`。普通 provider 失败不能直接等价为 `NEEDS_INFO`，Agent 可提出 Recovery proposal，但只能由 allowlisted deterministic validator 执行。
 3. **并行只用于无依赖步骤**：身份确认后，行情、公司行动、年度财务、最新中期财务等可并发；Committee、TradingClassification 等依赖上游冻结输入的阶段必须串行。
 4. **当前咨询与历史评估分开**：current live research 在采集结束时冻结统一 decision snapshot；历史 replay、backtest、Phase 7 prospective evaluation 保留严格 source-availability/PIT 防未来数据边界。
 5. **研究充分性与执行资格分开**：长期基本面研究可以在执行层数据不完整时继续；模拟订单/精确交易计划仍需完整的 Committee + TradingClassification/执行门禁。

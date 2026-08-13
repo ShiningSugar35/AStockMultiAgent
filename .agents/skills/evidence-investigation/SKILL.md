@@ -6,8 +6,8 @@ description: Resolve a specific, decision-relevant evidence gap using audited lo
 # 证据调查
 
 1. Do not start with `uv run astock probe` unless debugging provider capability itself. State one bounded claim/conflict and why it matters to the investment decision. For committee gaps, inspect `uv run astock committee-task-status <task_id>` and investigate only the named issue.
-2. Reuse valid existing snapshots first. Then spend the bounded automatic-recovery budget diagnosing deterministic local/API failures: classify transport/schema/data-quality faults, retry only transient errors, switch to a configured backup or a more reliable endpoint for the same capability, and preserve the failure internally. A preferred-provider failure is never a terminal research state by itself.
-3. If deterministic sources remain insufficient, automatically continue with Web search before asking the user. Preferred order: exchange / CNINFO / issuer IR / regulator official sources, then reputable professional/public sources for corroboration. Prefer sources that do not require account creation, API keys, cookies, or user interaction. Current-investment investigations share the 1800-second automatic resolution budget defined by the orchestrator.
+2. Reuse valid existing snapshots first. Then use the active recovery/source policy to diagnose transport/schema/data-quality faults and rank automated paths by capability/officiality/health/freshness/latency/cost/auth/retryability. Retry only transient errors. If adaptive provider recovery is useful, create `ProviderRecoveryProposal` but execute only `adaptive-recovery-validate`-approved registered paths. If the problem is unknown schema drift, preserve raw SourceSnapshot first and route through Schema Repair; AI mapping never writes formal facts or active dialect directly.
+3. If automated sources remain insufficient, automatically continue with authoritative Web search before asking the user. Strong official sources retain hard priority; Manual remains last. Prefer sources that do not require account creation, API keys, cookies, or user interaction. Current-investment investigations use the automatic resolution budget from active `current-research-policy` (currently 1800 seconds).
 4. Cross-check material contested facts with independent authoritative sources where practical. Distinguish statutory facts, issuer statements, secondary structured hints, and inference. Do not turn absence of a search result into refutation.
 5. Where a repository capture/import command exists, save the authoritative raw material immutably and cite an exact page/section/DOM/snapshot. If the external source cannot yet enter a formal repository artifact, it may support a clearly labelled provisional user explanation but cannot silently satisfy a formal frozen-evidence gate.
 6. Only when local/API fallback and authoritative Web search are both exhausted may manual intervention be requested. Aggregate every remaining request into a single `ManualInvestigationTask`-style checklist; never interrupt the user repeatedly for separate source gaps.
@@ -16,6 +16,7 @@ description: Resolve a specific, decision-relevant evidence gap using audited lo
 ## Workflows
 
 - [`docs/workflows/workflow-evidence-recovery.md`](../../../docs/workflows/workflow-evidence-recovery.md)
+- [`docs/workflows/workflow-adaptive-edge.md`](../../../docs/workflows/workflow-adaptive-edge.md)
 
 ## Output
 

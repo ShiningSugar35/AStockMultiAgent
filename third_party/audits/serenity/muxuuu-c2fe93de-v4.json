@@ -101,7 +101,7 @@
     },
     {
       "path": "src/astock/schemas/research.py",
-      "sha256": "43c052e2a10c34bac492b71d9b91dc0b0f1e020d891602ec57e0288b6a5af1b0",
+      "sha256": "fc0343fec518873f2e5e741f773258302b8a655b318aca2b3df8393c6460c2ea",
       "purpose": "research Skill and SpecialistDelta contracts"
     },
     {
@@ -111,7 +111,7 @@
     },
     {
       "path": "src/astock/research/skills.py",
-      "sha256": "2b963d4c00c2983091501a266c08300cdbf095ffb362a90451798ecbb4749198",
+      "sha256": "d616a0eae122b89ea659f36a6bfcb392412abd298fffb35682dc0fde33ab7dd8",
       "purpose": "routing and evidence-grade conservation"
     },
     {
@@ -120,7 +120,7 @@
       "purpose": "deterministic report-only specialist diagnostics"
     }
   ],
-  "local_adaptation_sha256": "6257d26289f37fbcbd73354bd874b50d7db9a06cdaf0281242ed1f9e863ea960",
+  "local_adaptation_sha256": "39951ed3050f67f854573127b0c3441abcdf7739ff3eab14daaac3ed8fde05ba",
   "normal_runtime_network_required": false,
   "source_vendored": false,
   "upgrade_policy": "A new upstream commit or local contract version requires a new audit_id and manifest; prior audit manifests and artifacts remain immutable."

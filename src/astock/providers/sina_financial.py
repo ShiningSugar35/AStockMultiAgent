@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
+from astock.providers.dialects import ProviderDialect
 from astock.providers.financial_base import (
     FinancialProviderBase,
     FinancialProviderPayload,
@@ -11,50 +13,10 @@ from astock.providers.financial_base import (
 )
 from astock.schemas import Market, SourceSnapshot
 
-_SINA_LIVE_FIELD_ALIASES = {
-    "BALANCE_SHEET": {
-        "TOTASSET": "total_assets",
-        "TOTLIAB": "total_liabilities",
-        "RIGHAGGR": "total_equity",
-        "ACCORECE": "accounts_receivable",
-        "INVE": "inventory",
-        "PREP": "prepayments",
-        "OTHERRECETOT": "other_receivables",
-        "OTHERRECE": "other_receivables",
-        "TOTSHARE": "shares_outstanding",
-    },
-    "INCOME_STATEMENT": {
-        "NETPROFIT": "net_profit_income",
-        "BIZINCO": "revenue",
-        "BIZCOST": "operating_cost",
-    },
-    "CASH_FLOW_STATEMENT": {
-        "INICASHBALA": "cash_beginning",
-        "FINALCASHBALA": "cash_ending",
-        "MANANETR": "net_cash_operating",
-        "INVNETCASHFLOW": "net_cash_investing",
-        "FINNETCFLOW": "net_cash_financing",
-        "CHGEXCHGCHGS": "exchange_effect",
-        "NETPROFIT": "net_profit_cash_flow",
-    },
-}
-
-_SINA_SHARE_FIELDS = {"TOTSHARE"}
-
 
 class SinaFinancialProvider(FinancialProviderBase):
     provider_id = "sina-financial"
     fixture_name = "sina_000001_2025.json"
-    endpoint = (
-        "https://quotes.sina.cn/cn/api/openapi.php/"
-        "CompanyFinanceService.getFinanceReport2022"
-    )
-    _SOURCE_NAMES = {
-        "BALANCE_SHEET": "fzb",
-        "INCOME_STATEMENT": "lrb",
-        "CASH_FLOW_STATEMENT": "llb",
-    }
-
     def discover_report_periods(
         self,
         company_id: str,
@@ -66,11 +28,17 @@ class SinaFinancialProvider(FinancialProviderBase):
 
         if not live:
             payload, snapshot = self._recorded_json(company_id, market, "period-discovery")
-            responses = _recorded_responses(payload, "sina-financial-raw-fixture-v1")
+            responses = _recorded_responses(
+                payload,
+                "sina-financial-raw-fixture-v1",
+                set(self.dialect.statement_sources),
+            )
             dates = sorted(
                 {
                     date.fromisoformat(str(row["report_date"])[:10])
-                    for row in _sina_rows(responses["BALANCE_SHEET"], "BALANCE_SHEET")
+                    for row in _sina_rows(
+                        responses["BALANCE_SHEET"], "BALANCE_SHEET", self.dialect
+                    )
                     if row.get("report_date")
                 },
                 reverse=True,
@@ -78,10 +46,10 @@ class SinaFinancialProvider(FinancialProviderBase):
             return dates, snapshot
         paper_code = f"{_market_prefix(market)}{company_id}"
         payload, snapshot = self._capture_json(
-            self.endpoint,
+            self.dialect.endpoint,
             params={
                 "paperCode": paper_code,
-                "source": "fzb",
+                "source": self.dialect.source_for("BALANCE_SHEET"),
                 "type": 0,
                 "page": 1,
                 "num": 100,
@@ -92,7 +60,9 @@ class SinaFinancialProvider(FinancialProviderBase):
                 "purpose": "REPORT_PERIOD_DISCOVERY",
             },
         )
-        return _sina_report_dates(payload), snapshot
+        if self.dialect.response_shape != "sina-report-list-v1":
+            raise FinancialRawCaptureError("FINANCIAL_DIALECT_UNRECOGNIZED", [snapshot])
+        return _sina_report_dates(payload, self.dialect), snapshot
 
     def fetch(
         self,
@@ -107,13 +77,17 @@ class SinaFinancialProvider(FinancialProviderBase):
                 company_id, market, period_end.isoformat()
             )
             responses = _recorded_responses(
-                payload, "sina-financial-raw-fixture-v1"
+                payload,
+                "sina-financial-raw-fixture-v1",
+                set(self.dialect.statement_sources),
             )
             tables = {
                 statement: _normalize_sina(
-                    _sina_rows(responses[statement], statement), company_id, period_end
+                    _sina_rows(responses[statement], statement, self.dialect),
+                    company_id,
+                    period_end,
                 )
-                for statement in self._SOURCE_NAMES
+                for statement in self.dialect.statement_sources
             }
             return FinancialProviderPayload(
                 self.provider_id,
@@ -131,10 +105,10 @@ class SinaFinancialProvider(FinancialProviderBase):
         snapshots = {}
         captured = []
         paper_code = f"{_market_prefix(market)}{company_id}"
-        for statement, source in self._SOURCE_NAMES.items():
+        for statement, source in self.dialect.statement_sources.items():
             try:
                 payload, snapshot = self._capture_json(
-                    self.endpoint,
+                    self.dialect.endpoint,
                     params={
                         "paperCode": paper_code,
                         "source": source,
@@ -154,9 +128,19 @@ class SinaFinancialProvider(FinancialProviderBase):
                     exc.failure_code, [*captured, *exc.snapshots]
                 ) from exc
             captured.append(snapshot)
+            if self.dialect.response_shape != "sina-report-list-v1":
+                raise FinancialRawCaptureError(
+                    "FINANCIAL_DIALECT_UNRECOGNIZED", list(captured)
+                )
+            try:
+                self.dialect.value_at(payload, "report_list")
+            except ValueError as exc:
+                raise FinancialRawCaptureError(
+                    "FINANCIAL_DIALECT_UNRECOGNIZED", list(captured)
+                ) from exc
             try:
                 tables[statement] = _normalize_sina(
-                    _sina_rows(payload, statement), company_id, period_end
+                    _sina_rows(payload, statement, self.dialect), company_id, period_end
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 raise FinancialRawCaptureError(
@@ -178,43 +162,63 @@ class SinaFinancialProvider(FinancialProviderBase):
 
 
 def _sina_rows(
-    payload: dict[str, object], statement: str
+    payload: dict[str, object], statement: str, dialect: ProviderDialect
 ) -> list[dict[str, object]]:
     result = payload.get("result")
     if not isinstance(result, dict):
         raise ValueError("Sina financial result is malformed")
-    status = result.get("status")
-    if isinstance(status, dict) and status.get("code") not in {0, "0", None}:
+    try:
+        status = dialect.value_at(payload, "status")
+    except ValueError:
+        status = None
+    if status not in {0, "0", None}:
         raise ValueError("Sina financial query failed")
     data = result.get("data")
     if isinstance(data, dict):
-        report_list = data.get("report_list")
+        try:
+            report_list = dialect.value_at(payload, "report_list")
+        except ValueError:
+            report_list = data.get("report_list")
         if isinstance(report_list, dict):
             rows: list[dict[str, object]] = []
             for report_date, report in report_list.items():
                 if not isinstance(report, dict):
                     raise ValueError("Sina financial report entry is malformed")
-                scope = _sina_scope(report.get("rType"))
-                currency = report.get("rCurrency")
-                items = report.get("data")
-                if scope is None or currency != "CNY" or not isinstance(items, list):
+                if not all(
+                    (
+                        dialect.report_type_field,
+                        dialect.currency_field,
+                        dialect.report_items_key,
+                        dialect.item_field_key,
+                        dialect.item_value_key,
+                    )
+                ):
+                    raise ValueError("Sina dialect lacks report field contracts")
+                scope = dialect.scope_from(report.get(str(dialect.report_type_field)))
+                currency = report.get(str(dialect.currency_field))
+                items = report.get(str(dialect.report_items_key))
+                if (
+                    scope is None
+                    or str(currency) not in dialect.allowed_currencies
+                    or not isinstance(items, list)
+                ):
                     continue
                 row: dict[str, object] = {
                     "report_date": _normalize_sina_report_date(str(report_date)),
                     "statement_scope": scope,
-                    "currency": "CNY",
+                    "currency": str(currency),
                 }
                 for item in items:
                     if not isinstance(item, dict):
                         continue
-                    source_field = str(item.get("item_field") or "")
-                    alias = _SINA_LIVE_FIELD_ALIASES.get(statement, {}).get(source_field)
+                    source_field = str(item.get(str(dialect.item_field_key)) or "")
+                    alias = dialect.alias_for(statement, source_field)
                     if alias is None:
                         continue
-                    value = item.get("item_value")
+                    value = item.get(str(dialect.item_value_key))
                     if value in {None, ""}:
                         continue
-                    row[alias] = _sina_live_value(source_field, value)
+                    row[alias] = _sina_live_value(source_field, value, dialect)
                 rows.append(row)
             return rows
         data = data.get("data") or report_list
@@ -223,18 +227,18 @@ def _sina_rows(
     return [dict(row) for row in data if isinstance(row, dict)]
 
 
-def _sina_report_dates(payload: dict[str, object]) -> list[date]:
-    result = payload.get("result")
-    if not isinstance(result, dict):
-        raise ValueError("Sina financial result is malformed")
-    status = result.get("status")
-    if isinstance(status, dict) and status.get("code") not in {0, "0", None}:
+def _sina_report_dates(payload: dict[str, object], dialect: ProviderDialect) -> list[date]:
+    try:
+        status = dialect.value_at(payload, "status")
+        values = dialect.value_at(payload, "report_dates")
+    except ValueError as exc:
+        raise ValueError("Sina financial report-date dialect is unrecognized") from exc
+    if status not in {0, "0", None}:
         raise ValueError("Sina financial query failed")
-    data = result.get("data")
-    if not isinstance(data, dict) or not isinstance(data.get("report_date"), list):
+    if not isinstance(values, list):
         raise ValueError("Sina financial report-date index is malformed")
     dates: list[date] = []
-    for item in data["report_date"]:
+    for item in values:
         if not isinstance(item, dict):
             continue
         raw = item.get("date_value")
@@ -244,15 +248,6 @@ def _sina_report_dates(payload: dict[str, object]) -> list[date]:
     return sorted(set(dates), reverse=True)
 
 
-def _sina_scope(value: object) -> str | None:
-    text = str(value or "").strip()
-    if text.startswith("合并"):
-        return "CONSOLIDATED"
-    if text.startswith("母公司") or text.startswith("母企"):
-        return "PARENT_COMPANY"
-    return None
-
-
 def _normalize_sina_report_date(value: str) -> str:
     digits = "".join(character for character in value if character.isdigit())
     if len(digits) != 8:
@@ -260,13 +255,19 @@ def _normalize_sina_report_date(value: str) -> str:
     return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
 
 
-def _sina_live_value(source_field: str, value: object) -> object:
-    if source_field in _SINA_SHARE_FIELDS:
+def _sina_live_value(
+    source_field: str, value: object, dialect: ProviderDialect
+) -> object:
+    if source_field in dialect.share_fields:
         return value
     try:
-        from decimal import Decimal
-
-        return str(Decimal(str(value)) / Decimal("10000"))
+        raw_value = Decimal(str(value))
+        scaled = raw_value * dialect.monetary_scale_to_internal
+        exponent = raw_value.as_tuple().exponent
+        source_places = max(0, -exponent) if isinstance(exponent, int) else 0
+        if source_places:
+            scaled = scaled.quantize(Decimal(1).scaleb(-source_places))
+        return format(scaled, "f")
     except Exception as exc:
         raise ValueError("Sina financial value is malformed") from exc
 
@@ -296,14 +297,12 @@ def _normalize_sina(
 
 
 def _recorded_responses(
-    payload: dict[str, object], expected_schema: str
+    payload: dict[str, object], expected_schema: str, expected_statements: set[str]
 ) -> dict[str, dict[str, object]]:
     if payload.get("schema_version") != expected_schema:
         raise ValueError("Sina recorded financial schema is invalid")
     responses = payload.get("responses")
-    if not isinstance(responses, dict) or set(responses) != set(
-        SinaFinancialProvider._SOURCE_NAMES
-    ):
+    if not isinstance(responses, dict) or set(responses) != expected_statements:
         raise ValueError("Sina recorded responses are incomplete")
     if any(not isinstance(value, dict) for value in responses.values()):
         raise ValueError("Sina recorded response must be an object")

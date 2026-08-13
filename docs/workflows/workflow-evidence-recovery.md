@@ -17,10 +17,12 @@ Primary skill: `$evidence-investigation`.
    - A valid existing source is preferred to duplicate collection.
 
 3. **Diagnose, repair and fallback deterministically**
-   - Current-investment recovery shares the 1800-second automatic budget from the orchestrator.
+   - Current-investment recovery uses the active Current Research policy's automatic budget (currently 1800 seconds), not a second Workflow constant.
    - Diagnose whether the failure is transport, rate-limit/access, provider schema drift, request-binding drift, or data-quality failure; preserve that detail internally.
-   - Retry only retryable transient errors with bounded attempts/circuit breaking. Prefer a more reliable endpoint for the same exact capability before falling back to a broad/bulk endpoint.
-   - Move to configured backup providers when the preferred source still cannot safely answer the question. Do not interpret a provider failure as evidence against the underlying fact.
+   - SourceAccessRouter ranks automated options by officiality/capability/health/freshness/latency/cost/auth/retryability; strong official evidence retains hard priority and Manual remains last.
+   - Retry only retryable transient errors with bounded attempts/circuit breaking. If adaptive provider recovery is needed, Agent may submit `ProviderRecoveryProposal`, but only `adaptive-recovery-validate` may approve registered, capability-compatible, health-eligible paths.
+   - Unknown provider schema must remain raw-first. Preserve the SourceSnapshot, then use the Schema Repair path in `workflow-adaptive-edge.md`; AI mapping cannot directly enter formal facts or mutate the active dialect.
+   - Do not interpret a provider failure as evidence against the underlying fact.
 
 4. **Authoritative Web fallback**
    - If local/provider paths remain insufficient, automatically search the Web.

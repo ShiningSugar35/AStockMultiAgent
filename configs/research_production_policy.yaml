@@ -1,0 +1,17 @@
+schema_version: research-production-policy-v2
+policy_id: research-production-v2
+policy_version: research-production-v2
+default_specialist_budget: 3
+minimum_specialist_budget: 2
+hard_max_specialists: 4
+role_by_kind:
+  INDUSTRY_BOTTLENECK: FUNDAMENTAL_SPECIALIST
+  EVENT_TO_ALPHA: FUNDAMENTAL_SPECIALIST
+  GROWTH_PROBABILITY: SHARED_HYPOTHESIS
+  GROWTH_VALUATION: CANONICAL_VALUATION
+  DAILY_TREND_HEALTH: MARKET_TRADE_CONTEXT
+  JUGLAR_CYCLE_STAGE: FUNDAMENTAL_SPECIALIST
+  HOURLY_SWING: MARKET_TRADE_CONTEXT
+  RESEARCH_MEMO: COMPOSER
+automatic_skill_modification_allowed: false
+online_weight_learning_allowed: false

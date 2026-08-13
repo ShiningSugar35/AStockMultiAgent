@@ -14,18 +14,21 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
 
 2. **Current acquisition first**
    - Run `uv run astock research-acquire-current <company_id> --market <market>`.
-   - This is the current-investment acquisition layer, not a historical replay.
-   - The user's question timestamp is not the research cutoff; the current decision snapshot is frozen after acquisition.
+   - The command reads the active `current-research-policy`; default/min/max lookback, core/optional capabilities, dependency stages, worker count and automatic-resolution budget are policy facts, not CLI/Python constants.
+   - For a bounded non-default question, an Agent may first submit a `ResearchPlannerProposal` through `adaptive-plan-validate`, then pass the frozen `ValidatedResearchPlan` with `--planner-plan-artifact-id`. The planner can add/skip optional work but cannot remove active core capabilities.
+   - This is the current-investment acquisition layer, not a historical replay. The user's question timestamp is not the research cutoff; the current decision snapshot is frozen after acquisition.
 
 3. **Parallel acquisition where safe**
-   - After/alongside bounded identity resolution, acquire current daily market data, corporate-action evidence, latest annual financial hints and the **latest actually disclosed** interim/quarterly period; do not guess the latest report solely from the calendar month.
-   - A preferred-provider failure must not stop independent downstream collection. Diagnose transport/schema/data-quality failure classes internally and switch to a more reliable provider or endpoint for the same capability.
-   - Retry only retryable transient network failures; use bounded retry/circuit breaking rather than indefinite waiting.
+   - Execute the frozen `CurrentResearchSchedule` stage-by-stage; only same-stage tasks run in parallel.
+   - Acquire current daily market data, optional corporate-action evidence, latest annual financial hints and the **latest actually disclosed** interim/quarterly period according to the schedule; do not guess the latest report solely from the calendar month.
+   - Provider candidates come from capability registry + active provider health/route policy. A preferred-provider failure must not stop independent downstream collection; UNAVAILABLE/CORRUPT live providers are skipped.
+   - Retry only retryable transient failures; use bounded retry/circuit breaking rather than indefinite waiting.
 
 4. **Resolve unresolved capabilities automatically**
-   - Use an automatic resolution budget of up to 1800 seconds for the current user request before considering manual help.
-   - Route each unresolved bounded question to `$evidence-investigation`: local/API diagnostics → provider/endpoint fallback → exchange/CNINFO/issuer IR/regulator Web research → reputable public corroboration.
-   - Prefer sources requiring no API registration or user interaction and cross-check material facts across independent authoritative sources where practical.
+   - Use the active Current Research policy's automatic resolution budget (currently 1800 seconds) before considering manual help.
+   - `SourceAccessRouter` is policy-driven rather than a fixed API→Browser chain: officiality, capability match, health, freshness, latency, cost/auth friction and retryability are scored, while strong official evidence retains hard priority and Manual remains last.
+   - If a provider path needs adaptive recovery, Agent may propose a `ProviderRecoveryProposal`; only `adaptive-recovery-validate` may admit allowlisted capability-compatible paths.
+   - Route unresolved bounded evidence questions to `$evidence-investigation` and cross-check material facts across independent authoritative sources where practical.
    - Only after automatic provider and authoritative Web paths are exhausted may the user be asked for help, and all remaining actions must be consolidated into one checklist.
 
 5. **Plan and formalize the research chain**

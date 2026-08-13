@@ -1,14 +1,42 @@
-config_version: market-reference-v1
-default_provider: baostock-reference
-fallback_provider: eastmoney-reference
-sdk_version: "0.8.9"
+config_version: market-reference-v2
+retry:
+  max_attempts: 2
+  backoff_seconds: 0.25
+identity_search_max_pages: 50
+circuit_breakers:
+  baostock-reference:
+    cooldown_seconds: 1800
+routes:
+  instrument.master:
+    - {provider_id: baostock-reference, operation: baostock-master}
+    - {provider_id: eastmoney-reference, operation: eastmoney-master}
+  instrument.identity:
+    - {provider_id: baostock-reference, operation: baostock-identity}
+    - {provider_id: eastmoney-reference, operation: eastmoney-exact}
+    - {provider_id: sina-reference, operation: sina-exact}
+    - {provider_id: eastmoney-reference, operation: eastmoney-paginated-master}
+  market.calendar:
+    - {provider_id: baostock-reference, operation: baostock-calendar}
+  market.daily_unadjusted:
+    - {provider_id: baostock-reference, operation: baostock-daily}
+    - {provider_id: eastmoney-reference, operation: eastmoney-daily}
+    - {provider_id: sina-reference, operation: sina-daily}
+  corporate_actions.structured_hint:
+    - {provider_id: baostock-reference, operation: baostock-corporate-hint}
+  corporate_actions.official_evidence:
+    - {provider_id: cninfo-disclosures, operation: cninfo-official}
+official_market_coverage:
+  corporate_actions.official_evidence:
+    XSHG: AVAILABLE
+    XSHE: AVAILABLE
+    BJSE: UNAVAILABLE
+  financial.official_report:
+    XSHG: AVAILABLE
+    XSHE: AVAILABLE
+    BJSE: UNAVAILABLE
 daily_adjustment_mode: NONE
 daily_timestamp_semantics: SHANGHAI_SESSION_CLOSE
 volume_unit: SHARE
 amount_unit: CNY
 markets: [XSHG, XSHE, BJSE, INDEX]
-corporate_actions:
-  structured_hint_provider: baostock-reference
-  official_evidence_provider: cninfo-disclosures
-  bjse_status: OFFICIAL_EVIDENCE_UNAVAILABLE
-  automatic_ledger_write: false
+automatic_ledger_write: false

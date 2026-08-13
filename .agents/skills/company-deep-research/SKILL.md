@@ -5,8 +5,8 @@ description: Build a cited current or historical deep A-share company research c
 
 # 公司深度研究
 
-1. Resolve the company to one six-digit A-share identity. For a **current** opinion, do not begin with `probe` or a question-time cutoff. Run `uv run astock research-acquire-current <company_id> --market <market>` first. For historical/recorded research only, use an explicit `research-plan <company_id> --as-of <timestamp>`.
-2. The current acquisition layer must exhaust deterministic local/provider fallback before escalating. Treat unresolved capabilities as automatic work for up to the current 1800-second recovery budget: diagnose the fault, retry only transient failures, switch provider or a more reliable endpoint, then automatically use authoritative Web search (exchange/CNINFO/issuer IR/regulator first, then other high-quality public sources). Prefer sources with no account/API-key requirement and cross-check material facts where practical. Do not ask the user to do a lookup the Agent can do itself.
+1. Resolve the company to one six-digit A-share identity. For a **current** opinion, do not begin with `probe` or a question-time cutoff. Run `uv run astock research-acquire-current <company_id> --market <market>` first; its lookback/capability/stage/worker/recovery settings come from active policy. If the user asks a bounded non-default question, a validated ResearchPlanner artifact may tailor optional work, but deterministic validation always restores core acquisition and mandatory research gates. For historical/recorded research only, use an explicit `research-plan <company_id> --as-of <timestamp>`.
+2. The current acquisition layer must exhaust policy-driven automated recovery before escalating. Use the active policy budget (currently 1800 seconds), SourceAccessRouter scoring and provider health; retry only transient failures. If needed, use a `ProviderRecoveryProposal` only through deterministic validation. Unknown schema drift is raw-first and may generate a SchemaRepair proposal, but never direct formal facts or active-dialect mutation. Then automatically use authoritative Web research where provider capabilities remain insufficient. Do not ask the user to do a lookup the Agent can do itself.
 3. If authoritative Web research still cannot close every decision-relevant gap, collect all truly unavoidable manual requirements and ask the user **once**. A provider failure is not itself an investment conclusion. Provider names, exceptions, retry paths, reason codes, artifact identities and command logs are developer diagnostics only and must not enter the investor response.
 4. Reuse audited Evidence/Financial/BaseCase/Specialist/Memo artifacts when their company/source lineage remains applicable. For current research, the acquisition-ending decision timestamp replaces the user's question timestamp as the common current snapshot. Historical and prospective paths still enforce exact source availability and no-future-data rules.
 5. Run `$financial-integrity-audit` before treating cheap valuation as opportunity. Secondary structured providers are locating/cross-check hints; material financial facts must ultimately return to official reports or other authoritative evidence. A working backup source may continue the research even if the preferred provider is down.
@@ -21,6 +21,7 @@ description: Build a cited current or historical deep A-share company research c
 
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 - [`docs/workflows/workflow-committee-trade-plan.md`](../../../docs/workflows/workflow-committee-trade-plan.md)
+- [`docs/workflows/workflow-adaptive-edge.md`](../../../docs/workflows/workflow-adaptive-edge.md)
 
 ## Output
 

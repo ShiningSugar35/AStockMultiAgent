@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import sqrt
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -17,6 +18,11 @@ from astock.core.state import StateStore
 from astock.market_data.reference import MarketReferenceService
 from astock.paper_trading.ledger import LedgerService
 from astock.paper_trading.operation import MarketReferencePaperVerifier
+from astock.portfolio.allocators import (
+    PortfolioAllocatorRegistry,
+    default_portfolio_allocator_registry,
+    load_portfolio_allocator_policy,
+)
 from astock.portfolio.analytics import (
     AlignedPortfolioData,
     align_return_histories,
@@ -28,7 +34,6 @@ from astock.portfolio.analytics import (
 from astock.schemas.committee import CommitteeRuleConfig, TradeProtocolOutcome
 from astock.schemas.market import Market
 from astock.schemas.portfolio import (
-    PortfolioAllocationMethod,
     PortfolioAllocationProposal,
     PortfolioAnalysisReport,
     PortfolioAnalysisRequest,
@@ -70,6 +75,9 @@ class PortfolioService:
         objects: ObjectStore,
         reference: MarketReferenceService,
         committee_rules: CommitteeRuleConfig,
+        *,
+        allocator_registry: PortfolioAllocatorRegistry | None = None,
+        allocator_policy_path: Path | None = None,
     ) -> None:
         self.state = state
         self.objects = objects
@@ -77,6 +85,16 @@ class PortfolioService:
         self.committee_rules = committee_rules
         self.verifier = MarketReferencePaperVerifier(reference)
         self.ledger = LedgerService(state, objects)
+        self.allocator_registry = allocator_registry or default_portfolio_allocator_registry()
+        policy_path = allocator_policy_path or (
+            Path(__file__).resolve().parents[3] / "configs" / "portfolio_allocators.yaml"
+        )
+        self.allocator_policy = load_portfolio_allocator_policy(policy_path)
+        missing_methods = set(self.allocator_policy.enabled_methods) - set(
+            self.allocator_registry.methods()
+        )
+        if missing_methods:
+            raise ValueError(f"portfolio allocator plugins are missing: {sorted(missing_methods)}")
 
     def analyze(self, request: PortfolioAnalysisRequest) -> PortfolioAnalysisReport:
         request_artifact, request_hash = self._freeze_input(
@@ -804,40 +822,15 @@ class PortfolioService:
         groups: dict[str, str],
         target: float,
     ) -> list[PortfolioAllocationProposal]:
-        n = len(aligned.company_ids)
-        volatility = np.sqrt(np.maximum(np.diag(aligned.covariance), 1e-12))
-        raw_by_method = {
-            PortfolioAllocationMethod.EQUAL_WEIGHT_CONSTRAINED: np.ones(n, dtype=float),
-            PortfolioAllocationMethod.INVERSE_VOLATILITY: 1.0 / volatility,
-            PortfolioAllocationMethod.HIERARCHICAL_RISK: self._hierarchical_weights(aligned),
-            PortfolioAllocationMethod.SHRINKAGE_MIN_VARIANCE: self._minimum_variance_weights(
-                aligned.covariance
-            ),
-        }
-        model_codes = {
-            PortfolioAllocationMethod.EQUAL_WEIGHT_CONSTRAINED: [
-                "NAIVE_DIVERSIFICATION_BENCHMARK",
-                "NO_EXPECTED_RETURN_ESTIMATE",
-            ],
-            PortfolioAllocationMethod.INVERSE_VOLATILITY: [
-                "NO_EXPECTED_RETURN_ESTIMATE",
-                "VOLATILITY_ESTIMATION_RISK",
-            ],
-            PortfolioAllocationMethod.HIERARCHICAL_RISK: [
-                "CORRELATION_CLUSTER_ESTIMATION_RISK",
-                "NO_EXPECTED_RETURN_ESTIMATE",
-            ],
-            PortfolioAllocationMethod.SHRINKAGE_MIN_VARIANCE: [
-                "COVARIANCE_ESTIMATION_RISK",
-                "LEDOIT_WOLF_SHRINKAGE",
-                "NO_EXPECTED_RETURN_ESTIMATE",
-            ],
-        }
         proposals: list[PortfolioAllocationProposal] = []
-        for method in PortfolioAllocationMethod:
+        for method in self.allocator_policy.enabled_methods:
+            plugin = self.allocator_registry.get(method)
+            raw_scores = plugin.build_scores(aligned)
+            if raw_scores.shape != (len(aligned.company_ids),):
+                raise ValueError(f"portfolio allocator returned an invalid score vector: {method}")
             weights, binding = self._constrain_scores(
                 aligned.company_ids,
-                raw_by_method[method],
+                raw_scores,
                 groups,
                 target=target,
             )
@@ -862,7 +855,7 @@ class PortfolioService:
                     max_group_weight=max(group_weights.values(), default=0.0),
                     binding_constraint_codes=sorted(binding),
                     model_risk_codes=sorted(
-                        {*model_codes[method], "RISK_GROUP_IS_CALLER_SUPPLIED"}
+                        {*plugin.model_risk_codes, "RISK_GROUP_IS_CALLER_SUPPLIED"}
                     ),
                 )
             )

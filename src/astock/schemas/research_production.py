@@ -50,9 +50,9 @@ class ResearchProductionPolicy(AStockModel):
     schema_version: str = "research-production-policy-v1"
     policy_id: str = "research-production-v1"
     policy_version: str = "research-production-v1"
-    default_specialist_budget: int = Field(default=3, ge=2, le=3)
-    minimum_specialist_budget: int = Field(default=2, ge=1, le=3)
-    hard_max_specialists: int = Field(default=4, ge=3, le=4)
+    default_specialist_budget: int = Field(default=3, ge=1, le=32)
+    minimum_specialist_budget: int = Field(default=2, ge=1, le=32)
+    hard_max_specialists: int = Field(default=4, ge=1, le=32)
     role_by_kind: dict[ResearchSkillKind, ProductionSkillRole]
     automatic_skill_modification_allowed: Literal[False] = False
     online_weight_learning_allowed: Literal[False] = False
@@ -212,7 +212,7 @@ class ResearchProductionRoutePlan(AStockModel):
     market_trade_context_modules: list[ProductionRouteMatch]
     composers: list[ProductionRouteMatch]
     excluded: dict[str, list[str]]
-    hard_max_specialists: int = Field(ge=3, le=4)
+    hard_max_specialists: int = Field(ge=1, le=32)
     embedding_recall_used: bool
     finding_codes: list[str]
     automatic_skill_modification_allowed: Literal[False] = False

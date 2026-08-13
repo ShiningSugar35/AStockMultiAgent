@@ -212,9 +212,9 @@ def test_as_of_excludes_late_pdf_and_preserves_revision_chain(tmp_path: Path) ->
 
 def test_explicit_as_of_filters_late_primary_provider(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
-    primary = service.sina.fetch("000001", Market.XSHE, PERIOD_END)
+    primary = service.providers["sina-financial"].fetch("000001", Market.XSHE, PERIOD_END)
     late = _payload_at(service, primary, CORRECTION_AS_OF)
-    monkeypatch.setattr(service.sina, "fetch", lambda *args, **kwargs: late)
+    monkeypatch.setattr(service.providers["sina-financial"], "fetch", lambda *args, **kwargs: late)
     report = service.sync(
         "000001",
         Market.XSHE,
@@ -230,10 +230,14 @@ def test_explicit_as_of_filters_late_primary_provider(tmp_path: Path, monkeypatc
 
 def test_live_default_cutoff_includes_completed_capture(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
-    primary = service.sina.fetch("000001", Market.XSHE, PERIOD_END)
+    primary = service.providers["sina-financial"].fetch("000001", Market.XSHE, PERIOD_END)
     capture_finished = datetime.now(UTC) + timedelta(seconds=1)
     completed = _payload_at(service, primary, capture_finished)
-    monkeypatch.setattr(service.sina, "fetch", lambda *args, **kwargs: completed)
+    monkeypatch.setattr(
+        service.providers["sina-financial"],
+        "fetch",
+        lambda *args, **kwargs: completed,
+    )
     original_get = service.official.get
     observed_cutoffs: list[datetime] = []
 
@@ -290,7 +294,7 @@ def test_instrument_market_binding_and_official_index_lineage(tmp_path: Path) ->
     assert manifest.official_index_snapshot_id != manifest.official_snapshot_id
 
 
-def test_bjse_live_path_is_explicitly_blocked(tmp_path: Path) -> None:
+def test_market_without_official_financial_coverage_is_blocked_by_config(tmp_path: Path) -> None:
     service = _service(tmp_path, Market.BJSE)
     report = service.sync(
         "920015",
@@ -300,7 +304,7 @@ def test_bjse_live_path_is_explicitly_blocked(tmp_path: Path) -> None:
         live=True,
     )
     assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
-    assert report.reason_codes == ["BJSE_OFFICIAL_FINANCIAL_REPORT_BLOCKED"]
+    assert report.reason_codes == ["OFFICIAL_FINANCIAL_REPORT_UNAVAILABLE_FOR_MARKET"]
 
 
 def test_common_first_and_third_quarter_titles_are_exactly_recognized() -> None:
@@ -521,7 +525,7 @@ def test_cross_check_and_fallback_remain_secondary_hints(tmp_path: Path, monkeyp
     def fail_primary(*args, **kwargs):
         raise FinancialRawCaptureError("RECORDED_FAILURE", [])
 
-    monkeypatch.setattr(fallback.sina, "fetch", fail_primary)
+    monkeypatch.setattr(fallback.providers["sina-financial"], "fetch", fail_primary)
     fallback_report = fallback.sync(
         "000001",
         Market.XSHE,
@@ -538,7 +542,7 @@ def test_recorded_provider_uses_raw_native_envelope_and_request_identity(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
-    first = service.eastmoney.fetch("000001", Market.XSHE, PERIOD_END)
+    first = service.providers["eastmoney-financial"].fetch("000001", Market.XSHE, PERIOD_END)
     raw = service.objects.get_bytes(first.snapshots[0].object_sha256)
     payload = json.loads(raw)
     assert set(payload) == {
@@ -552,7 +556,7 @@ def test_recorded_provider_uses_raw_native_envelope_and_request_identity(
         "INCOME_STATEMENT",
         "CASH_FLOW_STATEMENT",
     }
-    second = service.eastmoney.fetch("000002", Market.XSHE, PERIOD_END)
+    second = service.providers["eastmoney-financial"].fetch("000002", Market.XSHE, PERIOD_END)
     assert second.snapshots[0].object_sha256 == first.snapshots[0].object_sha256
     assert second.snapshots[0].snapshot_id != first.snapshots[0].snapshot_id
     assert second.request_company_id == "000002"
@@ -578,7 +582,7 @@ def test_live_normalization_failure_reports_persisted_raw_snapshot(
         }
         raw = canonical_json_bytes(payload)
         observed_at = datetime.now(UTC)
-        snapshot = service.eastmoney._persist(
+        snapshot = service.providers["eastmoney-financial"]._persist(
             raw,
             source_url=url,
             content_type="application/json",
@@ -591,8 +595,12 @@ def test_live_normalization_failure_reports_persisted_raw_snapshot(
     def fail_backup(*args, **kwargs):
         raise FinancialRawCaptureError("RECORDED_FAILURE", [])
 
-    monkeypatch.setattr(service.eastmoney, "_capture_json", malformed_capture)
-    monkeypatch.setattr(service.sina, "fetch", fail_backup)
+    monkeypatch.setattr(
+        service.providers["eastmoney-financial"],
+        "_capture_json",
+        malformed_capture,
+    )
+    monkeypatch.setattr(service.providers["sina-financial"], "fetch", fail_backup)
     report = service.sync(
         "000001",
         Market.XSHE,
@@ -611,7 +619,7 @@ def test_observation_identity_includes_request_and_instrument_lineage(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
-    payload = service.eastmoney.fetch("000001", Market.XSHE, PERIOD_END)
+    payload = service.providers["eastmoney-financial"].fetch("000001", Market.XSHE, PERIOD_END)
     binding = service.instruments.resolve(
         "000001", Market.XSHE, as_of=ORIGINAL_AS_OF
     )

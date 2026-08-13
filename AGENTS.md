@@ -29,7 +29,7 @@
 ## 数据与证据
 
 - 禁止未来函数。所有输入必须带可得时间、来源和版本。
-- 来源访问固定为：官方/已验证本地/API → 同能力备用 provider/更合适的公开端点 → MCP/Browser 权威 Web → Manual Task。单个 provider 失败不是终止条件；Manual 永远最后。
+- 来源访问由版本化 `source-access-policy` 评分：官方性、capability match、recent health、freshness、transport、latency、cost/auth friction 与 retryability 共同决定自动路径；对强官方能力，只要存在可用 `PRIMARY_OFFICIAL`，低权威快源不得反超。Manual 永远最后，单个 provider 失败不是终止条件。
 - 上一层已满足时，不通过下一层重复抓取同一内容。
 - 投资结论必须引用 evidence_id/source_snapshot_id，或明确标记为推断/缺口。
 - 社区内容只能作线索；关键事实必须回到公告、交易所、财报等更强来源。
@@ -41,12 +41,21 @@
 - Serenity 当前活动方法注册表为 `research-skills-v3`。muxuuu/haskaomni 上游代码只经版本化 v4 audit 编译成 typed Specialist contracts；`JuglarCycleStageSkill` 是当前新增的固定资产周期方法。任何 Serenity/scorecard/Juglar 输出都只是 evidence-bound Delta 或 report-only metric，不得直接产生交易权重、目标价、仓位或订单。
 - 新当前公司研究默认要求 Phase 9 机构级基本面层：`EvidenceSufficiencyReport → IndustryProfile / CompanyEconomicsProfile → DriverTree → ForecastPack → ValuationPack → FundamentalModelBundle → InstitutionalDecisionContext`。Forecast/Valuation 数值由 Python 确定性复算；Serenity Growth/Valuation 不得维护第二套平行数值账本。expected return / market-implied expectations 只能使用绑定注册 artifact/hash 且满足 PIT 的 `MarketPriceAnchor`。Bundle/DecisionContext 作为 Committee 共享 PRIMARY 冻结输入，不新增投票席位或权重；历史 Phase 6 recorded 链只作兼容。
 
+## Adaptive Edge / Deterministic Core
+
+- 外围适应层可以动态变化：Provider/endpoint 选择、TransportProfile、ProviderDialect、Current Research capability schedule、ResearchPlanner、ProviderRecovery、SchemaRepair、Portfolio allocator plugin 与 Specialist 预算都必须通过版本化 config/registry/policy 描述，不得在业务 Service 中复制第二份阈值或 provider 顺序。
+- Agent 只能提交 `PROPOSED` proposal；Python deterministic validator 决定是否形成 `VALIDATED` artifact。Planner 必须自动补回 active policy 的 core acquisition 与 Evidence/PIT/Financial Integrity/Fundamental 等 mandatory gate；Agent 不得删除硬门。
+- Provider Recovery 只能使用 registry allowlist 中声明目标 capability 且 health/transport 合法的 adapter，Manual-last 不可被 proposal 改写。
+- Schema Repair 必须 raw-first：至少满足 active policy 的多样本 SourceSnapshot、官方 artifact type 与仓库真实 contract test，才能从 PROPOSED 进入 VALIDATED；之后还需显式批准才可生成 ADMITTED candidate dialect。Candidate release 不自动修改 active dialect/config、不写正式事实，可 audit/rollback。
+- Deterministic Core 继续永久强制：官方事实认证、PIT/未来函数、会计与数学恒等式、不可变 ObjectStore、账本平衡、模拟盘人工确认、`paper_ledger_write_allowed=false` 的研究链、`broker_execution_allowed=false`。AI 不得通过 prompt、proposal、Skill 或 fallback 绕过这些边界。
+- `CurrentResearchSchedule / ValidatedResearchPlan / ProviderRecoveryValidation / SchemaRepairValidation / ProviderDialectCandidateRelease` 等内部 artifact 只在 DEVELOPER_MODE 可见；INVESTOR_MODE 继续只输出自然语言投资判断，并由动态 internal vocabulary audit 拦截内部术语。
+
 ## 行情与模拟盘
 
 - 默认回放使用未复权原始 5m；东方财富为主源，新浪为备用/交叉验证源。
 - 1m 不在默认链。缺失数据不得静默插值或虚构。
 - 复权研究序列由原始价格与版本化公司行为派生；复权价不得当作真实成交价。
-- 免费 reference：BaoStock 0.8.9 保留为可用时的批量/低频来源，并受 2 秒 TCP preflight + 30 分钟熔断保护；当前单证券身份优先使用东方财富精确证券端点，必要时才退到全市场分页。日线使用可用 provider + bounded retry/fallback；原始响应先入 ObjectStore，未复权日线在上海收盘前不可见。
+- 免费 reference 的 provider/operation 顺序只能读取 `market-reference-v2` route；业务代码不得另写 BaoStock/EastMoney/Sina 固定顺序。BaoStock 可用时仍保留批量/低频能力并受 active preflight/circuit policy 保护；live route 会结合 provider health 跳过 UNAVAILABLE/CORRUPT。原始响应先入 ObjectStore，未复权日线在上海收盘前不可见。
 - 公司行动结构化结果只作线索；精确官方文档和条款核验完成前不得写模拟账本。
 - Repo Skill 不得直接修改账本，只能调用已校验的 `astock` 命令。
 
@@ -76,7 +85,7 @@ Phase 5 论证链入口包括：`knowledge-semantic-plan`、`knowledge-semantic-
 
 Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`provider-status`、`sync-instruments`、`sync-calendar`、`sync-daily`、`sync-corporate-actions`、`reference-status` 和 `reference-audit`。Provider 默认使用 recorded 探针；live 必须显式开启。当前单股投资咨询优先使用 `research-acquire-current <company_id> --market <market>`：先建立目标证券精确身份，再对行情、公司行动和年度/最新中期财务做 bounded fallback/并行采集，采集结束后才冻结当前决策快照；不得用用户提问的瞬间截断同一轮几分钟内新取得的公开数据。若本地/API 仍缺资料，Agent 必须继续按交易所/CNINFO/发行人 IR/监管机构优先做权威 Web 检索，自动渠道全部耗尽后才一次性请求人工协助。历史回放、正式前瞻研究和 backtest 仍保留严格 source-availability/PIT 边界。广泛荐股探索先使用 `research-seeds --live`：它只合并已有 Candidate、市场流动性/规模 Seeds 和由当前已发布大 V Skills 动态推导的 Expert Domain Seeds，不产生 CandidateRecord 或推荐权；随后优先使用 `research-seeds-promote <ResearchSeedReport-artifact-id> --live` 自动冻结 bounded instrument proof、reference/质量/官方公司行动/公告/财务输入并运行 Candidate Scan。`candidate-input-schema`、`candidate-input-stage`、`candidate-input-run` 只保留为手工/诊断 fallback。候选仍只表示研究优先级，不得输出交易方向、目标价、订单或持仓。
 
-财务来源稳定入口包括：`sync-financial`、`financial-source-status` 和 `financial-source-audit`。Sina 当前作为结构化主定位源，因为 live 响应显式给出合并口径和 CNY；东方财富财务作为备用/交叉线索，其当前 live schema 缺少源生 scope/currency 时必须降级而不是猜值。两者都只是 `SECONDARY_STRUCTURED`；最终仍由 CNINFO/交易所/发行人正式报告精确证明表名、合并口径、期间列、科目、数值和单位。Current Acquisition 先发现**实际已经披露**的最新 report period，不再按固定月份猜 Q1/H1/Q3。机构级基本面入口包括 `institutional-research-schema`、`institutional-research-finalize`、`institutional-decision-context-freeze`、`fundamental-model-status`、`fundamental-model-audit`。Research Runtime 稳定入口包括 `research-plan`、`research-run-company`、`research-status`、`research-audit`、`research-recover`、`trade-plan-view`；LIVE 当前研究允许省略 `--as-of` 并在命令实际执行时冻结时间，recorded/historical 必须显式提供。正常投资者回复使用 `research-acquisition-investor-view` / `research-investor-view` 的自然语言边界，并由 `research-investor-answer-audit` 阻止后台术语泄露；执行条件只在用户明确询问具体买卖规则时解释。组合入口包括 `portfolio-paper-evaluate`、`portfolio-evaluate`、`portfolio-construct`、`portfolio-status`、`portfolio-audit`。模拟下单 prepare/确认链已验收，但任何账本写入仍要求独立人工确认，真实券商执行始终不存在。
+财务来源稳定入口包括：`sync-financial`、`financial-source-status` 和 `financial-source-audit`。结构化财务来源顺序只读取 `financial-sources-v2.provider_order`；当前配置中 Sina 优先、EastMoney 备用/交叉，但业务 Service 不得复制这两个名字。任一 live schema 缺少源生 scope/currency 时必须降级而不是猜值；结构化源均只是 `SECONDARY_STRUCTURED`，最终仍由 CNINFO/交易所/发行人正式报告精确证明表名、合并口径、期间列、科目、数值和单位。Current Acquisition 先发现**实际已经披露**的最新 report period，不再按固定月份猜 Q1/H1/Q3。机构级基本面入口包括 `institutional-research-schema`、`institutional-research-finalize`、`institutional-decision-context-freeze`、`fundamental-model-status`、`fundamental-model-audit`。Research Runtime 稳定入口包括 `research-plan`、`research-run-company`、`research-status`、`research-audit`、`research-recover`、`trade-plan-view`；LIVE 当前研究允许省略 `--as-of` 并在命令实际执行时冻结时间，recorded/historical 必须显式提供。开发诊断入口新增 `research-capability-status`、`provider-dialect-status`、`adaptive-edge-status`、`adaptive-edge-schema`；Agent proposal 的受控入口为 `adaptive-plan-validate`、`adaptive-recovery-validate`、`adaptive-schema-repair-validate`，candidate dialect 准入必须显式 `adaptive-schema-repair-admit --approve`，并可用 `adaptive-artifact-audit` / `adaptive-dialect-rollback` 审计和回滚。这些命令属于 DEVELOPER_MODE，正常投资者回复仍使用 `research-acquisition-investor-view` / `research-investor-view` 的自然语言边界，并由 `research-investor-answer-audit` 阻止后台术语泄露；执行条件只在用户明确询问具体买卖规则时解释。组合入口包括 `portfolio-paper-evaluate`、`portfolio-evaluate`、`portfolio-construct`、`portfolio-status`、`portfolio-audit`。模拟下单 prepare/确认链已验收，但任何账本写入仍要求独立人工确认，真实券商执行始终不存在。
 
 ## 开发约定
 

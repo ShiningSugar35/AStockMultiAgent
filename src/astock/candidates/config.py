@@ -28,7 +28,12 @@ def load_candidate_scan_config(path: Path) -> CandidateScanConfig:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ValueError("Candidate scan configuration is invalid") from exc
-    if not isinstance(raw, dict) or raw.get("schema_version") != "candidate-scan-v1":
+    if not isinstance(raw, dict):
+        raise ValueError("Unsupported candidate scan configuration")
+    rules_version = str(raw.get("schema_version") or "")
+    if not rules_version.startswith("candidate-scan-v") or not rules_version.removeprefix(
+        "candidate-scan-v"
+    ).isdigit():
         raise ValueError("Unsupported candidate scan configuration")
     events = raw.get("canonical_announcement_events")
     pit_statuses = raw.get("formal_historical_pit_statuses")
@@ -37,7 +42,7 @@ def load_candidate_scan_config(path: Path) -> CandidateScanConfig:
     if not isinstance(pit_statuses, list) or not pit_statuses:
         raise ValueError("Formal historical PIT status list is empty")
     config = CandidateScanConfig(
-        rules_version="candidate-scan-v1",
+        rules_version=str(raw["schema_version"]),
         minimum_trading_days=int(raw["minimum_trading_days"]),
         minimum_median_turnover_cny=Decimal(str(raw["minimum_median_turnover_cny"])),
         minimum_nonzero_turnover_ratio=Decimal(str(raw["minimum_nonzero_turnover_ratio"])),
@@ -48,16 +53,16 @@ def load_candidate_scan_config(path: Path) -> CandidateScanConfig:
             CandidatePitStatus(str(item)) for item in pit_statuses
         ),
     )
-    if config.minimum_trading_days != 20:
-        raise ValueError("candidate-scan-v1 requires exactly 20 valid trading days")
-    if config.minimum_median_turnover_cny != Decimal("20000000"):
-        raise ValueError("candidate-scan-v1 turnover threshold is frozen")
-    if config.minimum_nonzero_turnover_ratio != Decimal("0.90"):
-        raise ValueError("candidate-scan-v1 nonzero ratio is frozen")
-    if config.minimum_absolute_price_change != Decimal("0.15"):
-        raise ValueError("candidate-scan-v1 price threshold is frozen")
-    if config.minimum_volume_ratio != Decimal("1.50"):
-        raise ValueError("candidate-scan-v1 volume threshold is frozen")
+    if config.minimum_trading_days < 5 or config.minimum_trading_days > 252:
+        raise ValueError("candidate scan trading-day window must be in 5..252")
+    if config.minimum_median_turnover_cny < 0:
+        raise ValueError("candidate scan turnover threshold cannot be negative")
+    if not Decimal("0") <= config.minimum_nonzero_turnover_ratio <= Decimal("1"):
+        raise ValueError("candidate scan nonzero ratio must be within 0..1")
+    if config.minimum_absolute_price_change < 0:
+        raise ValueError("candidate scan price-change threshold cannot be negative")
+    if config.minimum_volume_ratio <= 0:
+        raise ValueError("candidate scan volume ratio must be positive")
     if config.formal_historical_pit_statuses != {
         CandidatePitStatus.CERTIFIED,
         CandidatePitStatus.DOCUMENT_RECONSTRUCTED,

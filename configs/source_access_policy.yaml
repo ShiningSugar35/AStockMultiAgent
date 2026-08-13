@@ -1,0 +1,28 @@
+schema_version: source-access-policy-v1
+manual_last: true
+strong_official_capability_tokens: [official, financial, disclosure, corporate_action, identity]
+weights:
+  officiality: 100
+  health: 35
+  freshness: 20
+  transport: 15
+  latency: 10
+  cost_efficiency: 8
+  auth_ease: 5
+  retryable_recovery: 3
+transport_scores:
+  API: 4
+  MCP: 3
+  BROWSER: 2
+  MANUAL: 0
+officiality_scores:
+  PRIMARY_OFFICIAL: 3
+  SECONDARY_STRUCTURED: 1
+  UNKNOWN: 0
+health_scores:
+  HEALTHY: 3
+  NOT_PROBED: 2
+  DEGRADED: 1
+  UNAVAILABLE: 0
+  CORRUPT: 0
+  UNKNOWN: 1

@@ -5,12 +5,16 @@ from __future__ import annotations
 from collections import defaultdict
 from contextlib import closing
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.research.repository import ResearchRepository
+from astock.research.resource_policy import load_specialist_resource_policy
 from astock.research.skills import ResearchSkillService
 from astock.schemas.research import (
     ResearchCostClass,
@@ -51,18 +55,51 @@ _COST_POINTS = {ResearchCostClass.LOW: 1, ResearchCostClass.MEDIUM: 2}
 
 
 def default_research_production_policy(
-    *, created_at: datetime | None = None
+    *,
+    created_at: datetime | None = None,
+    project_root: Path | None = None,
 ) -> ResearchProductionPolicy:
+    root = project_root or Path(__file__).resolve().parents[3]
+    path = root / "configs" / "research_production_policy.yaml"
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"Invalid research production policy: {path}") from exc
+    if not isinstance(raw, dict) or raw.get("schema_version") != "research-production-policy-v2":
+        raise ValueError("Unsupported research production policy")
+    raw_roles = raw.get("role_by_kind")
+    if not isinstance(raw_roles, dict) or set(raw_roles) != {
+        item.value for item in ResearchSkillKind
+    }:
+        raise ValueError("research production policy must classify every Skill kind")
+    minimum = int(raw["minimum_specialist_budget"])
+    default = int(raw["default_specialist_budget"])
+    hard_max = int(raw["hard_max_specialists"])
+    resource_policy = load_specialist_resource_policy(
+        root / "configs" / "specialist_resource_policy.yaml"
+    )
+    if not (
+        resource_policy.minimum_budget
+        <= minimum
+        <= default
+        <= hard_max
+        <= resource_policy.maximum_budget
+    ):
+        raise ValueError("research production specialist budgets exceed active resource policy")
+    if raw.get("automatic_skill_modification_allowed") is not False:
+        raise ValueError("research production policy cannot modify Skills automatically")
+    if raw.get("online_weight_learning_allowed") is not False:
+        raise ValueError("research production policy cannot enable online weight learning")
     return ResearchProductionPolicy(
+        schema_version=str(raw["schema_version"]),
+        policy_id=str(raw["policy_id"]),
+        policy_version=str(raw["policy_version"]),
+        default_specialist_budget=default,
+        minimum_specialist_budget=minimum,
+        hard_max_specialists=hard_max,
         role_by_kind={
-            ResearchSkillKind.INDUSTRY_BOTTLENECK: ProductionSkillRole.FUNDAMENTAL_SPECIALIST,
-            ResearchSkillKind.EVENT_TO_ALPHA: ProductionSkillRole.FUNDAMENTAL_SPECIALIST,
-            ResearchSkillKind.GROWTH_PROBABILITY: ProductionSkillRole.SHARED_HYPOTHESIS,
-            ResearchSkillKind.GROWTH_VALUATION: ProductionSkillRole.CANONICAL_VALUATION,
-            ResearchSkillKind.DAILY_TREND_HEALTH: ProductionSkillRole.MARKET_TRADE_CONTEXT,
-            ResearchSkillKind.JUGLAR_CYCLE_STAGE: ProductionSkillRole.FUNDAMENTAL_SPECIALIST,
-            ResearchSkillKind.HOURLY_SWING: ProductionSkillRole.MARKET_TRADE_CONTEXT,
-            ResearchSkillKind.RESEARCH_MEMO: ProductionSkillRole.COMPOSER,
+            ResearchSkillKind(str(kind)): ProductionSkillRole(str(role))
+            for kind, role in raw_roles.items()
         },
         created_at=created_at or datetime.now(UTC),
     )

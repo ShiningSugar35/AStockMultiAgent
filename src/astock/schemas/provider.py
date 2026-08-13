@@ -48,11 +48,17 @@ class _StrictModel(BaseModel):
 
 class ProviderDefinition(_StrictModel):
     provider_id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    adapter_class: str = Field(min_length=3)
     capabilities: list[str] = Field(min_length=1)
     transport: ProviderTransport
     officiality: ProviderOfficiality
     live_supported: bool
     timeout_seconds: float = Field(gt=0, le=120)
+    priority: int = Field(default=100, ge=0, le=10000)
+    transport_profile: str | None = None
+    fixture_subdir: str | None = None
+    probe_operation: str = Field(min_length=1)
+    probe_target: dict[str, str | int] = Field(default_factory=dict)
     recorded_fixture: str = Field(min_length=1)
 
     @field_validator("capabilities")
@@ -72,6 +78,24 @@ class ProviderDefinition(_StrictModel):
             raise ValueError("recorded_fixture must be project-relative")
         if ".." in normalized.split("/"):
             raise ValueError("recorded_fixture may not traverse parent directories")
+        return normalized
+
+    @field_validator("adapter_class")
+    @classmethod
+    def _safe_adapter_class(cls, value: str) -> str:
+        module, separator, class_name = value.rpartition(":")
+        if not separator or not module.startswith("astock.") or not class_name.isidentifier():
+            raise ValueError("adapter_class must be astock.module:ClassName")
+        return value
+
+    @field_validator("fixture_subdir")
+    @classmethod
+    def _safe_fixture_subdir(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.replace("\\", "/").strip("/")
+        if not normalized or ".." in normalized.split("/"):
+            raise ValueError("fixture_subdir must stay inside the configured fixture root")
         return normalized
 
 

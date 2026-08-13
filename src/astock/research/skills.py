@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.evidence.repository import EvidenceRepository
 from astock.research.repository import ResearchRepository
+from astock.research.resource_policy import (
+    SpecialistResourcePolicy,
+    load_specialist_resource_policy,
+)
 from astock.schemas import (
     CitedResearchFinding,
     EvidenceConflict,
@@ -80,12 +85,17 @@ class ResearchSkillService:
         state: StateStore,
         object_store: ObjectStore,
         registry: ResearchSkillRegistry,
+        *,
+        resource_policy: SpecialistResourcePolicy | None = None,
     ) -> None:
         self.state = state
         self.object_store = object_store
         self.configured_registry = registry
         self.repository = ResearchRepository(state, object_store)
         self.evidence_repository = EvidenceRepository(state)
+        self.resource_policy = resource_policy or load_specialist_resource_policy(
+            Path(__file__).resolve().parents[3] / "configs" / "specialist_resource_policy.yaml"
+        )
 
     def register_registry(self) -> SkillRegistryExecution:
         config_hash = content_hash(self.configured_registry)
@@ -123,8 +133,9 @@ class ResearchSkillService:
         base_case = self.repository.get_base_case(request.base_case_id)
         if base_case is None:
             raise ValueError(f"unknown BaseCase for specialist routing: {request.base_case_id}")
-        if len(request.explicit_skill_ids) > registry.max_specialists:
-            raise ValueError("explicit specialist request exceeds the maximum of three")
+        effective_budget = self.resource_policy.resolve(request.specialist_budget)
+        if len(request.explicit_skill_ids) > effective_budget:
+            raise ValueError("explicit specialist request exceeds the active resource budget")
 
         manifest_by_id = {item.skill_id: item for item in registry.skills}
         unknown = sorted(set(request.explicit_skill_ids) - set(manifest_by_id))
@@ -189,8 +200,8 @@ class ResearchSkillService:
             if conflict is not None:
                 excluded[manifest.skill_id] = [f"INCOMPATIBLE_WITH:{conflict}"]
                 continue
-            if len(selected) >= registry.max_specialists:
-                excluded[manifest.skill_id] = ["ROUTE_CAPPED_AT_THREE"]
+            if len(selected) >= effective_budget:
+                excluded[manifest.skill_id] = ["ROUTE_CAPPED_AT_RESOURCE_BUDGET"]
                 capped = True
                 continue
             selected.append(match)
@@ -200,7 +211,7 @@ class ResearchSkillService:
         if unavailable:
             degradation_codes.add("REQUIRED_SPECIALIST_INPUT_UNAVAILABLE")
         if capped:
-            degradation_codes.add("ROUTE_CAPPED_AT_THREE")
+            degradation_codes.add("ROUTE_CAPPED_AT_RESOURCE_BUDGET")
         if base_case.coverage_status is not ResearchCoverageStatus.COMPLETE:
             degradation_codes.add("BASE_CASE_COVERAGE_INCOMPLETE")
         if not selected:
@@ -224,7 +235,7 @@ class ResearchSkillService:
             excluded_skill_reasons=dict(sorted(excluded.items())),
             coverage_status=coverage_status,
             confidence_cap=confidence_cap,
-            max_specialists=registry.max_specialists,
+            max_specialists=effective_budget,
             degradation_codes=sorted(degradation_codes),
         )
         object_ref = self.object_store.put_json(plan.model_dump(mode="json"))

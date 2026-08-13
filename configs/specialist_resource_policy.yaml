@@ -1,0 +1,4 @@
+schema_version: specialist-resource-policy-v1
+minimum_budget: 1
+default_budget: 3
+maximum_budget: 8

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import httpx
@@ -12,6 +12,8 @@ import httpx
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.providers.dialects import ProviderDialect, load_provider_dialects
+from astock.providers.runtime import build_provider_http_client
 from astock.schemas import FetchStatus, Market, SourceSnapshot
 
 
@@ -51,18 +53,33 @@ class FinancialProviderBase:
         fixture_root: Path,
         *,
         client: httpx.Client | None = None,
+        dialect: ProviderDialect | None = None,
     ) -> None:
         self.objects = objects
         self.state = state
         self.fixture_root = fixture_root.resolve()
-        self.client = client or httpx.Client(
-            timeout=20,
-            follow_redirects=True,
-            headers={
-                "User-Agent": "AStockResearch/financial-source-v1",
-                "Accept": "application/json,text/plain,*/*",
-            },
-        )
+        if dialect is None:
+            dialects = load_provider_dialects(
+                Path(__file__).resolve().parents[3] / "configs" / "provider_dialects.yaml"
+            )
+            try:
+                dialect = dialects[self.provider_id]
+            except KeyError as exc:
+                raise ValueError(f"No provider dialect configured for {self.provider_id}") from exc
+        if dialect.provider_id != self.provider_id:
+            raise ValueError("Financial provider dialect identity mismatch")
+        self.dialect = dialect
+        self.client = client or build_provider_http_client(self.provider_id)
+
+    def fetch(
+        self,
+        company_id: str,
+        market: Market,
+        period_end: date,
+        *,
+        live: bool = False,
+    ) -> FinancialProviderPayload:
+        raise NotImplementedError
 
     def _recorded_json(
         self,

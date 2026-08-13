@@ -443,10 +443,10 @@ def test_specialist_router_is_deterministic_capped_and_explicitly_degraded(
     assert first == repeated
     assert len(first.plan.selected) == 3
     assert first.plan.coverage_status is SpecialistCoverageStatus.PARTIAL
-    assert "ROUTE_CAPPED_AT_THREE" in first.plan.degradation_codes
+    assert "ROUTE_CAPPED_AT_RESOURCE_BUDGET" in first.plan.degradation_codes
     assert "CONSENSUS_UNAVAILABLE" in first.plan.degradation_codes
     assert any(
-        "ROUTE_CAPPED_AT_THREE" in reasons
+        "ROUTE_CAPPED_AT_RESOURCE_BUDGET" in reasons
         for reasons in first.plan.excluded_skill_reasons.values()
     )
     assert all(item.skill_id != "ResearchMemoComposer" for item in first.plan.selected)
@@ -455,12 +455,40 @@ def test_specialist_router_is_deterministic_capped_and_explicitly_degraded(
     ]
 
 
+def test_specialist_router_accepts_policy_bounded_budget_above_default(
+    tmp_path: Path,
+    state,
+) -> None:
+    skills, base_case, _ = _specialist_fixture(tmp_path, state, suffix="route-budget-four")
+    plan = skills.route(
+        SpecialistRouteRequest(
+            base_case_id=base_case.base_case_id,
+            thesis_tags=["growth", "valuation", "industry", "event", "trend"],
+            industry_tags=["semiconductor"],
+            event_tags=["policy"],
+            horizon="medium",
+            available_inputs=[
+                "financial_evidence",
+                "valuation_inputs",
+                "industry_evidence",
+                "event_evidence",
+                "daily_market_quality",
+            ],
+            available_frequencies=["1d"],
+            specialist_budget=4,
+        )
+    ).plan
+
+    assert plan.max_specialists == 4
+    assert len(plan.selected) == 4
+
+
 def test_specialist_router_rejects_explicit_overflow_and_reports_missing_hourly_data(
     tmp_path: Path,
     state,
 ) -> None:
     skills, base_case, _ = _specialist_fixture(tmp_path, state, suffix="route-gaps")
-    with pytest.raises(ValueError, match="maximum of three"):
+    with pytest.raises(ValueError, match="active resource budget"):
         skills.route(
             SpecialistRouteRequest(
                 base_case_id=base_case.base_case_id,

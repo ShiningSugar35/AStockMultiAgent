@@ -156,7 +156,8 @@ def test_phase7_repo_skill_commands_exist_and_keep_shadow_isolated() -> None:
 
 
 
-def test_current_investor_skills_exhaust_automatic_fallback_before_manual_help() -> None:
+def test_current_investor_skills_exhaust_policy_driven_automatic_fallback_before_manual_help(
+) -> None:
     orchestrator = (
         SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
     ).read_text(encoding="utf-8")
@@ -170,20 +171,22 @@ def test_current_investor_skills_exhaust_automatic_fallback_before_manual_help()
     for body in (orchestrator, company):
         assert "research-acquire-current" in body
         assert "question timestamp" in body or "question-time" in body
-        assert "Web search" in body
+        assert "authoritative Web" in body
         assert "manual" in body.lower()
-        assert "provider error" in body.lower() or "provider failure" in body.lower()
+        assert "ProviderRecoveryProposal" in body
+        assert "SchemaRepair" in body or "Schema Repair" in body
         assert "artifact" in body
         assert "internal" in body.lower()
     assert "Do **not** run `uv run astock probe` before every investment question" in orchestrator
-    assert "1800-second automatic resolution budget" in orchestrator
+    assert "current-research-policy" in orchestrator
     assert (
-        "Only after local/API/provider fallbacks **and** authoritative Web search are exhausted"
+        "Only after allowlisted automated/provider paths **and** authoritative Web "
+        "search are exhausted"
         in orchestrator
     )
     assert "research-investor-answer-audit" in orchestrator
     assert "never become the investor answer" in orchestrator
-    assert "1800-second recovery budget" in company
-    assert "1800-second automatic resolution budget" in investigation
-    assert "Web search before asking the user" in investigation
-    assert "one consolidated checklist" in investigation
+    assert "active policy budget" in company
+    assert "current-research-policy" in investigation
+    assert "authoritative Web search before asking the user" in investigation
+    assert "single `ManualInvestigationTask`-style checklist" in investigation

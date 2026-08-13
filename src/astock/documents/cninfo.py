@@ -16,6 +16,8 @@ from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents.identity import OfficialIdentityResolver
+from astock.providers.runtime import build_provider_http_client
 from astock.schemas import (
     DisclosureAnnouncement,
     DisclosureCategory,
@@ -61,57 +63,30 @@ class CninfoDisclosureProvider:
         self.object_store = object_store
         self.state = state
         self.maximum_pdf_bytes = maximum_pdf_bytes
-        self.client = client or httpx.Client(
-            timeout=timeout_seconds,
-            follow_redirects=True,
-            headers={
-                "User-Agent": "AStockResearch/0.2 (+local low-frequency research)",
-                "Accept": "application/json,application/pdf,*/*",
-                "Referer": "https://www.cninfo.com.cn/new/commonUrl?url=disclosure/list/notice",
-                "Origin": "https://www.cninfo.com.cn",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-        )
+        self.client = client or build_provider_http_client(self.provider_id)
+        self.identity_resolver = OfficialIdentityResolver(state, self.provider_id)
 
     def search(self, request: DisclosureSearchRequest) -> DisclosureSearchBatch:
-        response, latency_ms = self._request(
-            "POST",
-            self.search_endpoint,
-            data={
-                "pageNum": str(request.page_number),
-                "pageSize": str(request.page_size),
-                "column": _column_for_exchange(request.exchange),
-                "tabName": "fulltext",
-                "plate": "",
-                "stock": f"{request.symbol},{cninfo_org_id(request.symbol, request.exchange)}",
-                "searchkey": request.keyword,
-                "secid": "",
-                "category": _CATEGORY_CODES[request.category],
-                "trade": "",
-                "seDate": f"{request.start_date.isoformat()}~{request.end_date.isoformat()}",
-                "sortName": "",
-                "sortType": "",
-                "isHLtitle": "true",
-            },
-        )
-        snapshot = self._persist_response(response, source_id=f"{self.provider_id}:index")
         resolution_snapshot_ids: list[str] = []
-        if _announcement_count(response.content) == 0:
-            resolved_org_id, discovery_snapshot, discovery_latency = self._discover_org_id(request)
-            latency_ms += discovery_latency
-            resolution_snapshot_ids.extend(
-                [snapshot.snapshot_id, discovery_snapshot.snapshot_id]
+        latency_ms = 0
+        resolved_org_id: str | None = None
+        try:
+            resolution, discovery_latency = self.identity_resolver.resolve(
+                request.symbol,
+                request.exchange,
+                lambda: self._discover_org_id(request),
             )
-            if resolved_org_id is not None and resolved_org_id != cninfo_org_id(
-                request.symbol, request.exchange
-            ):
-                response, retry_latency = self._request_with_org_id(
-                    request, resolved_org_id
-                )
-                latency_ms += retry_latency
-                snapshot = self._persist_response(
-                    response, source_id=f"{self.provider_id}:index"
-                )
+            latency_ms += discovery_latency
+            resolved_org_id = resolution.external_id
+            if resolution.discovery_snapshot_id:
+                resolution_snapshot_ids.append(resolution.discovery_snapshot_id)
+        except (ProviderError, OSError, ValueError):
+            # Discovery is preferred, but a legacy id remains a bounded request hint.
+            resolved_org_id = None
+        request_org_id = resolved_org_id or cninfo_org_id(request.symbol, request.exchange)
+        response, request_latency = self._request_with_org_id(request, request_org_id)
+        latency_ms += request_latency
+        snapshot = self._persist_response(response, source_id=f"{self.provider_id}:index")
         try:
             payload = json.loads(response.content)
             raw_announcements = payload.get("announcements") or []
@@ -369,7 +344,7 @@ class CninfoDisclosureProvider:
             adjunct_path=adjunct_path,
             source_url=source_url,
             document_type=_DOCUMENT_TYPES[request.category],
-            org_id=str(item.get("orgId") or cninfo_org_id(request.symbol, request.exchange)),
+            org_id=str(item["orgId"]) if item.get("orgId") else None,
         )
 
     @staticmethod

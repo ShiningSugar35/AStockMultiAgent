@@ -59,6 +59,7 @@ from astock.schemas.institutional_research import (
     InstitutionalArtifactStatus,
     InstitutionalDecisionContext,
 )
+from astock.schemas.research_acquisition import InvestorGapCategory
 from astock.schemas.research_runtime import (
     ClassifiedTradeProtocol,
     ResearchPaperDecision,
@@ -86,6 +87,18 @@ _SERENITY_SKILL_IDS = {
     "SerenityRecordedSkill",
 }
 _ZHIHU_SKILL_IDS = {"ZhihuExpertRecordedSkill", "ZhihuExpertSkill"}
+_INVESTOR_GAP_BY_STAGE = {
+    ResearchRunStage.INPUT_RESOLUTION: InvestorGapCategory.EVIDENCE,
+    ResearchRunStage.EVIDENCE: InvestorGapCategory.EVIDENCE,
+    ResearchRunStage.FINANCIAL_INTEGRITY: InvestorGapCategory.FINANCIAL,
+    ResearchRunStage.FUNDAMENTAL_MODEL: InvestorGapCategory.FUNDAMENTAL_MODEL,
+    ResearchRunStage.BASE_CASE: InvestorGapCategory.BASE_CASE,
+    ResearchRunStage.SERENITY_DELTA: InvestorGapCategory.SPECIALIST,
+    ResearchRunStage.KNOWLEDGE_SKILL_DELTA: InvestorGapCategory.KNOWLEDGE,
+    ResearchRunStage.COMMITTEE: InvestorGapCategory.COMMITTEE,
+    ResearchRunStage.TRADING_CLASSIFICATION: InvestorGapCategory.EXECUTION_READINESS,
+    ResearchRunStage.TRADE_PROTOCOL: InvestorGapCategory.EXECUTION_READINESS,
+}
 
 
 def _semantic(value: object) -> object:
@@ -1329,6 +1342,11 @@ class ResearchRunService:
             checkpoints=checkpoints,
             output_artifacts=dict(sorted(outputs.items())),
             needs_info_codes=sorted(set(reasons)),
+            investor_gap_categories=(
+                []
+                if status is ResearchRunStatus.COMPLETE
+                else [_INVESTOR_GAP_BY_STAGE.get(stage, InvestorGapCategory.GENERAL)]
+            ),
             trade_protocol_outcome=trade_outcome,
             performance=performance,
             created_at=datetime.now(UTC),

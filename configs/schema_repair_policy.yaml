@@ -1,0 +1,10 @@
+schema_version: schema-repair-policy-v1
+minimum_raw_samples: 2
+allowed_official_artifact_types:
+  - FinancialSourceReleaseManifest
+  - DownloadedDocument
+  - DatasetReleaseManifest
+  - FrozenEvidencePack
+require_explicit_approval_for_admission: true
+formal_fact_write_allowed: false
+active_runtime_mutation_allowed: false

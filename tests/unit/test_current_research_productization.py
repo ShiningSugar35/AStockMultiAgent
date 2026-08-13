@@ -19,6 +19,7 @@ from astock.market_data.reference import (
     _parse_sina_daily,
 )
 from astock.market_data.reference_storage import ReferenceParquetStore
+from astock.providers.dialects import load_provider_dialects
 from astock.providers.sina_financial import _normalize_sina, _sina_report_dates, _sina_rows
 from astock.research.acquisition import CurrentResearchAcquisitionService
 from astock.research.presentation import audit_investor_answer, investor_view_from_run
@@ -28,6 +29,7 @@ from astock.schemas.research_acquisition import (
     AcquisitionAttempt,
     AcquisitionAttemptStatus,
     AcquisitionCapability,
+    InvestorGapCategory,
 )
 from astock.schemas.research_runtime import (
     ResearchRunMode,
@@ -539,7 +541,10 @@ def test_sina_current_dict_shape_preserves_native_scope_currency_and_converts_yu
         }
     }
 
-    rows = _sina_rows(payload, "BALANCE_SHEET")
+    dialect = load_provider_dialects(PROJECT_ROOT / "configs" / "provider_dialects.yaml")[
+        "sina-financial"
+    ]
+    rows = _sina_rows(payload, "BALANCE_SHEET", dialect)
     normalized = _normalize_sina(rows, "600938", date(2025, 12, 31))
 
     assert normalized == [
@@ -570,7 +575,10 @@ def test_sina_report_period_index_discovers_early_disclosed_half_year() -> None:
         }
     }
 
-    assert _sina_report_dates(payload) == [
+    dialect = load_provider_dialects(PROJECT_ROOT / "configs" / "provider_dialects.yaml")[
+        "sina-financial"
+    ]
+    assert _sina_report_dates(payload, dialect) == [
         date(2026, 6, 30),
         date(2026, 3, 31),
         date(2025, 12, 31),
@@ -588,6 +596,7 @@ def test_current_period_discovery_uses_actual_disclosed_period_not_month_guess(
     service = CurrentResearchAcquisitionService(paths, state, ObjectStore(paths.objects))
 
     class PeriodProvider:
+        provider_id = "period-index-provider"
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
@@ -597,12 +606,26 @@ def test_current_period_discovery_uses_actual_disclosed_period_not_month_guess(
                 SimpleNamespace(snapshot_id="period-index"),
             )
 
-    monkeypatch.setattr("astock.research.acquisition.SinaFinancialProvider", PeriodProvider)
+    class PeriodFactory:
+        def definitions_for_capability(self, capability: str):
+            assert capability == "financial.report_period_index"
+            return [SimpleNamespace(provider_id="period-index-provider")]
 
-    specs = service._discover_financial_periods(
+        def create(self, provider_id: str):
+            assert provider_id == "period-index-provider"
+            return PeriodProvider()
+
+    fake_financial = SimpleNamespace(
+        provider_factory=PeriodFactory(),
+        providers={"period-index-provider": PeriodProvider()},
+    )
+    monkeypatch.setattr(service, "_financial_service", lambda: fake_financial)
+
+    specs, reasons = service._discover_financial_periods(
         "600989", Market.XSHG, date(2026, 8, 13)
     )
 
+    assert reasons == ["REPORT_PERIOD_INDEX_USED:period-index-provider"]
     assert specs == [
         (
             AcquisitionCapability.FINANCIAL_ANNUAL,
@@ -631,7 +654,7 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
     monkeypatch.setattr(
         service,
         "_discover_financial_periods",
-        lambda *_args: [
+        lambda *_args: ([
             (
                 AcquisitionCapability.FINANCIAL_ANNUAL,
                 date(2025, 12, 31),
@@ -642,7 +665,7 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
                 date(2026, 6, 30),
                 FinancialPeriodType.SEMIANNUAL,
             ),
-        ],
+        ], []),
     )
 
     def fake_reference(capability: AcquisitionCapability, _action: object) -> AcquisitionAttempt:
@@ -712,8 +735,14 @@ def test_financial_secondary_hints_prefer_source_with_native_scope_currency(
                 },
             )
 
-    monkeypatch.setattr("astock.research.acquisition.EastMoneyFinancialProvider", FailingEastMoney)
-    monkeypatch.setattr("astock.research.acquisition.SinaFinancialProvider", WorkingSina)
+    fake_financial = SimpleNamespace(
+        config=SimpleNamespace(provider_order=("sina-financial", "eastmoney-financial")),
+        providers={
+            "sina-financial": WorkingSina(),
+            "eastmoney-financial": FailingEastMoney(),
+        },
+    )
+    monkeypatch.setattr(service, "_financial_service", lambda: fake_financial)
 
     attempt = service._financial_attempt(
         AcquisitionCapability.FINANCIAL_ANNUAL,
@@ -749,6 +778,7 @@ def test_investor_view_hides_internal_codes_and_execution_gap_by_default() -> No
             "EVIDENCE_PACK_REQUIRED",
             "TRADING_CLASSIFICATION_REQUIRED",
         ],
+        investor_gap_categories=[InvestorGapCategory.EVIDENCE],
         performance=ResearchRunPerformanceSummary(
             wall_time_ms=1,
             knowledge_top_k_latency_ms=0,

@@ -12,13 +12,17 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
-from astock.providers.eastmoney_financial import EastMoneyFinancialProvider
-from astock.providers.sina_financial import SinaFinancialProvider
+from astock.research.policy import (
+    CapabilityGraph,
+    load_default_current_research_policy,
+    load_default_provider_registry,
+)
 from astock.schemas import (
     FinancialPeriodType,
     FinancialSourceReleaseStatus,
     ReferenceCoverageStatus,
 )
+from astock.schemas.adaptation import ValidatedResearchPlan
 from astock.schemas.documents import DisclosureExchange
 from astock.schemas.reference_data import Market, ReferenceSyncReport
 from astock.schemas.research_acquisition import (
@@ -27,7 +31,6 @@ from astock.schemas.research_acquisition import (
     AcquisitionCapability,
     CurrentResearchAcquisitionReport,
     CurrentResearchAcquisitionStatus,
-    ExternalAuthority,
     ExternalResearchNeed,
 )
 from astock.settings import ProjectPaths
@@ -48,71 +51,112 @@ class CurrentResearchAcquisitionService:
         self.state = state
         self.objects = objects
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.policy = load_default_current_research_policy(paths.root)
+        self.provider_registry = load_default_provider_registry(paths.root)
+        self.capability_graph = CapabilityGraph(self.policy, self.provider_registry, state)
 
     def acquire(
         self,
         company_id: str,
         market: Market,
         *,
-        lookback_days: int = 120,
+        lookback_days: int | None = None,
+        planner_plan_artifact_id: str | None = None,
     ) -> CurrentResearchAcquisitionReport:
         if market not in {Market.XSHG, Market.XSHE, Market.BJSE}:
             raise ValueError("current company research requires a stock exchange")
-        if lookback_days < 30 or lookback_days > 730:
-            raise ValueError("current research lookback must be 30..730 days")
         started_at = self.clock()
-        current_date = started_at.date()
-        start = current_date - timedelta(days=lookback_days)
-
-        identity = self._reference_attempt(
-            AcquisitionCapability.INSTRUMENT_IDENTITY,
-            lambda: self._market_service().sync_instrument_identity(
-                company_id, market, live=True
-            ),
-        )
-        attempts = [identity]
-
-        stage_two: dict[AcquisitionCapability, Callable[[], AcquisitionAttempt]] = {
-            AcquisitionCapability.DAILY_MARKET: lambda: self._reference_attempt(
-                AcquisitionCapability.DAILY_MARKET,
-                lambda: self._market_service().sync_daily(
-                    company_id,
-                    market,
-                    start,
-                    current_date,
-                    live=True,
-                ),
-            ),
-            AcquisitionCapability.CORPORATE_ACTIONS: lambda: self._reference_attempt(
-                AcquisitionCapability.CORPORATE_ACTIONS,
-                lambda: self._market_service().sync_corporate_actions(
-                    company_id,
-                    market,
-                    start,
-                    current_date,
-                    live=True,
-                ),
-            ),
-        }
-        financial_specs = self._discover_financial_periods(company_id, market, current_date)
-        identity_verified = identity.status is AcquisitionAttemptStatus.SUCCEEDED
-        for capability, period_end, period_type in financial_specs:
-            stage_two[capability] = lambda c=capability, p=period_end, t=period_type: (
-                self._financial_attempt(
-                    c, company_id, market, p, t, identity_verified=identity_verified
-                )
+        planner_plan: ValidatedResearchPlan | None = None
+        planner_plan_hash: str | None = None
+        if planner_plan_artifact_id is not None:
+            planner_plan, planner_plan_hash = self._load_planner_plan(
+                planner_plan_artifact_id, company_id, market
             )
-        attempts.extend(self._run_parallel(stage_two, max_workers=4))
+        resolved_lookback = lookback_days or self.policy.default_lookback_days
+        if not (
+            self.policy.minimum_lookback_days
+            <= resolved_lookback
+            <= self.policy.maximum_lookback_days
+        ):
+            raise ValueError("current research lookback is outside active policy bounds")
+        schedule = self.capability_graph.build(
+            company_id,
+            market,
+            lookback_days=resolved_lookback,
+            planned_at=started_at,
+            capability_filter=(
+                set(planner_plan.acquisition_capabilities)
+                if planner_plan is not None
+                else None
+            ),
+            planner_plan_artifact_id=planner_plan_artifact_id,
+        )
+        schedule_ref = self.objects.put_json(schedule.model_dump(mode="json"))
+        self.state.register_artifact(
+            artifact_id=schedule.schedule_id,
+            artifact_type="CurrentResearchSchedule",
+            schema_version=schedule.schema_version,
+            object_hash=schedule_ref.sha256,
+            input_hashes=[
+                schedule.policy_hash,
+                *([planner_plan_hash] if planner_plan_hash is not None else []),
+            ],
+        )
+        current_date = started_at.date()
+        start = current_date - timedelta(days=resolved_lookback)
+
+        financial_specs, period_discovery_reasons = self._discover_financial_periods(
+            company_id, market, current_date
+        )
+        financial_by_capability = {
+            capability: (period_end, period_type)
+            for capability, period_end, period_type in financial_specs
+        }
+        attempts: list[AcquisitionAttempt] = []
+        attempt_by_capability: dict[AcquisitionCapability, AcquisitionAttempt] = {}
+        for stage in sorted({step.stage for step in schedule.steps}):
+            tasks: dict[AcquisitionCapability, Callable[[], AcquisitionAttempt]] = {}
+            for step in schedule.steps:
+                if step.stage != stage:
+                    continue
+                identity_attempt = attempt_by_capability.get(
+                    AcquisitionCapability.INSTRUMENT_IDENTITY
+                )
+                identity_verified = (
+                    identity_attempt is not None
+                    and identity_attempt.status is AcquisitionAttemptStatus.SUCCEEDED
+                )
+                tasks[step.capability] = self._task_for_capability(
+                    step.capability,
+                    company_id,
+                    market,
+                    start,
+                    current_date,
+                    financial_by_capability,
+                    identity_verified=identity_verified,
+                )
+            stage_results = self._run_parallel(tasks, max_workers=schedule.max_workers)
+            if period_discovery_reasons:
+                stage_results = [
+                    item.model_copy(
+                        update={
+                            "internal_reason_codes": sorted(
+                                set(item.internal_reason_codes) | set(period_discovery_reasons)
+                            )
+                        }
+                    )
+                    if item.capability in financial_by_capability
+                    else item
+                    for item in stage_results
+                ]
+            attempts.extend(stage_results)
+            attempt_by_capability.update({item.capability: item for item in stage_results})
 
         attempts = sorted(attempts, key=lambda item: item.capability.value)
         external_needs = self._external_needs(company_id, market, attempts)
-        core = {
-            AcquisitionCapability.INSTRUMENT_IDENTITY,
-            AcquisitionCapability.DAILY_MARKET,
-            AcquisitionCapability.FINANCIAL_ANNUAL,
-            AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
-        }
-        core_attempts = [item for item in attempts if item.capability in core]
+        core_attempts = [
+            item for item in attempts if item.capability in self.policy.core_capabilities
+        ]
         if external_needs:
             status = CurrentResearchAcquisitionStatus.NEEDS_EXTERNAL_RESEARCH
         elif all(item.status is AcquisitionAttemptStatus.SUCCEEDED for item in core_attempts):
@@ -129,6 +173,10 @@ class CurrentResearchAcquisitionService:
             "market": market.value,
             "started_at": started_at.isoformat(),
             "decision_as_of": decision_as_of.isoformat(),
+            "policy_version": schedule.policy_version,
+            "policy_hash": schedule.policy_hash,
+            "schedule_artifact_id": schedule.schedule_id,
+            "planner_plan_artifact_id": planner_plan_artifact_id,
             "attempts": [item.model_dump(mode="json", exclude={"created_at"}) for item in attempts],
             "external_needs": [
                 item.model_dump(mode="json", exclude={"created_at"}) for item in external_needs
@@ -143,13 +191,18 @@ class CurrentResearchAcquisitionService:
             started_at=started_at,
             decision_as_of=decision_as_of,
             status=status,
+            policy_version=schedule.policy_version,
+            policy_hash=schedule.policy_hash,
+            schedule_artifact_id=schedule.schedule_id,
+            planner_plan_artifact_id=planner_plan_artifact_id,
+            automatic_resolution_budget_seconds=schedule.automatic_resolution_budget_seconds,
             attempts=attempts,
             external_research_needs=external_needs,
             manual_actions=[],
             created_at=decision_as_of,
         )
         ref = self.objects.put_json(report.model_dump(mode="json"))
-        input_hashes = self._snapshot_object_hashes(attempts)
+        input_hashes = [schedule_ref.sha256, *self._snapshot_object_hashes(attempts)]
         self.state.register_artifact(
             artifact_id=report_id,
             artifact_type="CurrentResearchAcquisitionReport",
@@ -182,6 +235,23 @@ class CurrentResearchAcquisitionService:
             self.objects.get_bytes(object_hash)
         )
 
+    def _load_planner_plan(
+        self,
+        artifact_id: str,
+        company_id: str,
+        market: Market,
+    ) -> tuple[ValidatedResearchPlan, str]:
+        record = self.state.artifact_record(artifact_id)
+        if record is None or str(record["type"]) != "ValidatedResearchPlan":
+            raise ValueError("current acquisition requires a frozen validated research plan")
+        object_hash = str(record["object_hash"])
+        if not self.objects.verify(object_hash):
+            raise ValueError("validated research plan object is unavailable or corrupt")
+        plan = ValidatedResearchPlan.model_validate_json(self.objects.get_bytes(object_hash))
+        if plan.company_id != company_id or plan.market is not market:
+            raise ValueError("validated research plan targets another instrument")
+        return plan, object_hash
+
     def _market_service(self) -> MarketReferenceService:
         return MarketReferenceService(
             self.state,
@@ -203,46 +273,136 @@ class CurrentResearchAcquisitionService:
         company_id: str,
         market: Market,
         current: date,
-    ) -> list[tuple[AcquisitionCapability, date, FinancialPeriodType]]:
+    ) -> tuple[
+        list[tuple[AcquisitionCapability, date, FinancialPeriodType]],
+        list[str],
+    ]:
         fallback = _current_financial_periods(current)
-        provider = SinaFinancialProvider(
-            self.objects,
-            self.state,
-            self.paths.root / "tests" / "fixtures" / "financial_sources",
+        financial = self._financial_service()
+        definitions = financial.provider_factory.definitions_for_capability(
+            "financial.report_period_index"
         )
-        try:
-            dates, _ = provider.discover_report_periods(company_id, market, live=True)
-        except Exception:
-            return fallback
-        eligible = sorted({item for item in dates if item <= current}, reverse=True)
-        annual_candidates = [item for item in eligible if item.month == 12]
-        if not annual_candidates:
-            return fallback
-        annual_date = annual_candidates[0]
-        annual = (
+        reasons: list[str] = []
+        for definition in definitions:
+            provider = financial.providers.get(definition.provider_id)
+            if provider is None:
+                candidate = financial.provider_factory.create(definition.provider_id)
+                provider = candidate if hasattr(candidate, "discover_report_periods") else None
+            discover = getattr(provider, "discover_report_periods", None)
+            if not callable(discover):
+                reasons.append(
+                    f"REPORT_PERIOD_INDEX_UNAVAILABLE:{definition.provider_id}"
+                )
+                continue
+            try:
+                discovery_result = discover(company_id, market, live=True)
+                if not isinstance(discovery_result, tuple) or len(discovery_result) != 2:
+                    raise ValueError("report-period provider returned an invalid contract")
+                dates = discovery_result[0]
+                if not isinstance(dates, list) or any(not isinstance(item, date) for item in dates):
+                    raise ValueError("report-period provider returned invalid dates")
+            except Exception as exc:
+                reasons.extend(
+                    [
+                        f"REPORT_PERIOD_INDEX_FAILED:{definition.provider_id}",
+                        f"EXCEPTION:{type(exc).__name__}",
+                    ]
+                )
+                continue
+            eligible = sorted({item for item in dates if item <= current}, reverse=True)
+            annual_candidates = [item for item in eligible if item.month == 12]
+            if not annual_candidates:
+                reasons.append(
+                    f"REPORT_PERIOD_INDEX_NO_ANNUAL:{definition.provider_id}"
+                )
+                continue
+            annual_date = annual_candidates[0]
+            annual = (
+                AcquisitionCapability.FINANCIAL_ANNUAL,
+                annual_date,
+                FinancialPeriodType.ANNUAL,
+            )
+            interim_candidates = [
+                item
+                for item in eligible
+                if item > annual_date and item.month in {3, 6, 9}
+            ]
+            if not interim_candidates:
+                return [annual, fallback[1]], [
+                    *reasons,
+                    f"REPORT_PERIOD_INDEX_USED:{definition.provider_id}",
+                    "CONSERVATIVE_INTERIM_CALENDAR_FALLBACK",
+                ]
+            interim_date = interim_candidates[0]
+            interim_type = (
+                FinancialPeriodType.SEMIANNUAL
+                if interim_date.month == 6
+                else FinancialPeriodType.QUARTERLY
+            )
+            interim = (
+                AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+                interim_date,
+                interim_type,
+            )
+            return [annual, interim], [
+                *reasons,
+                f"REPORT_PERIOD_INDEX_USED:{definition.provider_id}",
+            ]
+        return fallback, [*reasons, "CONSERVATIVE_REPORT_CALENDAR_FALLBACK"]
+
+    def _task_for_capability(
+        self,
+        capability: AcquisitionCapability,
+        company_id: str,
+        market: Market,
+        start: date,
+        current_date: date,
+        financial_by_capability: dict[
+            AcquisitionCapability, tuple[date, FinancialPeriodType]
+        ],
+        *,
+        identity_verified: bool,
+    ) -> Callable[[], AcquisitionAttempt]:
+        if capability is AcquisitionCapability.INSTRUMENT_IDENTITY:
+            return lambda: self._reference_attempt(
+                capability,
+                lambda: self._market_service().sync_instrument_identity(
+                    company_id, market, live=True
+                ),
+            )
+        if capability is AcquisitionCapability.DAILY_MARKET:
+            return lambda: self._reference_attempt(
+                capability,
+                lambda: self._market_service().sync_daily(
+                    company_id, market, start, current_date, live=True
+                ),
+            )
+        if capability is AcquisitionCapability.CORPORATE_ACTIONS:
+            return lambda: self._reference_attempt(
+                capability,
+                lambda: self._market_service().sync_corporate_actions(
+                    company_id, market, start, current_date, live=True
+                ),
+            )
+        if capability in {
             AcquisitionCapability.FINANCIAL_ANNUAL,
-            annual_date,
-            FinancialPeriodType.ANNUAL,
-        )
-        interim_candidates = [
-            item
-            for item in eligible
-            if item > annual_date and item.month in {3, 6, 9}
-        ]
-        if not interim_candidates:
-            return [annual, fallback[1]]
-        interim_date = interim_candidates[0]
-        interim_type = (
-            FinancialPeriodType.SEMIANNUAL
-            if interim_date.month == 6
-            else FinancialPeriodType.QUARTERLY
-        )
-        interim = (
             AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
-            interim_date,
-            interim_type,
-        )
-        return [annual, interim]
+        }:
+            try:
+                period_end, period_type = financial_by_capability[capability]
+            except KeyError as exc:
+                raise ValueError(
+                    f"financial capability has no period specification: {capability}"
+                ) from exc
+            return lambda: self._financial_attempt(
+                capability,
+                company_id,
+                market,
+                period_end,
+                period_type,
+                identity_verified=identity_verified,
+            )
+        raise ValueError(f"unsupported acquisition capability executor: {capability}")
 
     def _run_parallel(
         self,
@@ -380,17 +540,10 @@ class CurrentResearchAcquisitionService:
         period_end: date,
     ) -> AcquisitionAttempt:
         started = perf_counter()
+        financial = self._financial_service()
         providers = [
-            SinaFinancialProvider(
-                self.objects,
-                self.state,
-                self.paths.root / "tests" / "fixtures" / "financial_sources",
-            ),
-            EastMoneyFinancialProvider(
-                self.objects,
-                self.state,
-                self.paths.root / "tests" / "fixtures" / "financial_sources",
-            ),
+            financial.providers[provider_id]
+            for provider_id in financial.config.provider_order
         ]
         provider_path: list[str] = []
         snapshot_ids: list[str] = []
@@ -456,57 +609,25 @@ class CurrentResearchAcquisitionService:
     ) -> list[ExternalResearchNeed]:
         by_capability = {item.capability: item for item in attempts}
         needs: list[ExternalResearchNeed] = []
-        identity = by_capability[AcquisitionCapability.INSTRUMENT_IDENTITY]
-        if identity.status is not AcquisitionAttemptStatus.SUCCEEDED:
-            needs.append(
-                ExternalResearchNeed(
-                    capability=AcquisitionCapability.INSTRUMENT_IDENTITY,
-                    research_question=(
-                        f"从交易所官方页面确认 {company_id} 的证券身份、市场和当前上市状态。"
-                    ),
-                    preferred_authorities=[
-                        ExternalAuthority.EXCHANGE_OFFICIAL,
-                        ExternalAuthority.ISSUER_IR,
-                    ],
-                )
-            )
-        daily = by_capability[AcquisitionCapability.DAILY_MARKET]
-        if daily.status is AcquisitionAttemptStatus.FAILED:
-            needs.append(
-                ExternalResearchNeed(
-                    capability=AcquisitionCapability.DAILY_MARKET,
-                    research_question=f"取得 {company_id} 当前及近期未复权日线价格。",
-                    preferred_authorities=[
-                        ExternalAuthority.EXCHANGE_OFFICIAL,
-                        ExternalAuthority.PUBLIC_MARKET_DATA,
-                    ],
-                )
-            )
-        for capability in (
-            AcquisitionCapability.FINANCIAL_ANNUAL,
-            AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+        for capability_policy in sorted(
+            self.policy.capabilities.values(), key=lambda item: item.capability.value
         ):
-            attempt = by_capability[capability]
-            if attempt.status is not AcquisitionAttemptStatus.SUCCEEDED:
-                description = (
-                    "最新年度报告"
-                    if capability is AcquisitionCapability.FINANCIAL_ANNUAL
-                    else "最新已披露季度/中期报告"
+            attempt = by_capability.get(capability_policy.capability)
+            status = (
+                attempt.status if attempt is not None else AcquisitionAttemptStatus.FAILED
+            )
+            if status not in capability_policy.external_on:
+                continue
+            needs.append(
+                ExternalResearchNeed(
+                    capability=capability_policy.capability,
+                    research_question=capability_policy.research_question.format(
+                        company_id=company_id,
+                        market=market.value,
+                    ),
+                    preferred_authorities=list(capability_policy.preferred_authorities),
                 )
-                needs.append(
-                    ExternalResearchNeed(
-                        capability=capability,
-                        research_question=(
-                            f"从发行人官网、交易所或法定披露平台取得 {company_id} 的{description}，"
-                            "用于核对关键财务事实。"
-                        ),
-                        preferred_authorities=[
-                            ExternalAuthority.ISSUER_IR,
-                            ExternalAuthority.EXCHANGE_OFFICIAL,
-                            ExternalAuthority.CNINFO_OFFICIAL,
-                        ],
-                    )
-                )
+            )
         return needs
 
 

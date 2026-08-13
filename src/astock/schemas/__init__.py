@@ -1,5 +1,19 @@
 """Public schema surface for durable artifacts and local services."""
 
+from astock.schemas.adaptation import (
+    AdaptiveArtifactAudit,
+    AdaptiveProposalStatus,
+    ProviderDialectCandidateRelease,
+    ProviderDialectRollbackRecord,
+    ProviderFailureDiagnostic,
+    ProviderRecoveryProposal,
+    ProviderRecoveryValidation,
+    ResearchModule,
+    ResearchPlannerProposal,
+    SchemaRepairProposal,
+    SchemaRepairValidation,
+    ValidatedResearchPlan,
+)
 from astock.schemas.adaptive import (
     AdaptiveResearchCapabilityStatus,
     AdaptiveResearchNextStage,
@@ -1092,6 +1106,18 @@ __all__ = [
     "ReplayExecutionReport",
     "ReplayFeeSchedule",
     "ReplayQuality",
+    "AdaptiveArtifactAudit",
+    "AdaptiveProposalStatus",
+    "ProviderDialectCandidateRelease",
+    "ProviderDialectRollbackRecord",
+    "ProviderFailureDiagnostic",
+    "ProviderRecoveryProposal",
+    "ProviderRecoveryValidation",
+    "ResearchModule",
+    "ResearchPlannerProposal",
+    "SchemaRepairProposal",
+    "SchemaRepairValidation",
+    "ValidatedResearchPlan",
     "ResearchCoreConfig",
     "ResearchCostClass",
     "ResearchCoverageStatus",

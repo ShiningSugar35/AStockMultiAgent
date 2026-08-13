@@ -130,6 +130,7 @@ class PaperPriceLimitRule:
 @dataclass(frozen=True, slots=True)
 class PaperTradingRuleBook:
     rule_version: str
+    effective_from: date
     price_limit_rules: tuple[PaperPriceLimitRule, ...]
     board_rules: tuple[PaperBoardRule, ...] = ()
 
@@ -165,7 +166,7 @@ class PaperTradingRuleBook:
             and rule.risk_status == risk_status
             and rule.effective_from <= trade_date
         ]
-        if len(matches) != 1 or trade_date.isoformat() < "2026-07-06":
+        if len(matches) != 1 or trade_date < self.effective_from:
             raise _needs_info("No exact effective-dated price-limit rule is frozen")
         return matches[0].rate_bps
 
@@ -209,9 +210,10 @@ def load_paper_trading_rules(path: Path) -> PaperTradingRuleBook:
             )
         )
     return PaperTradingRuleBook(
-        str(raw["rule_version"]),
-        tuple(rules),
-        tuple(board_rules),
+        rule_version=str(raw["rule_version"]),
+        effective_from=datetime.fromisoformat(str(raw["effective_from"])).date(),
+        price_limit_rules=tuple(rules),
+        board_rules=tuple(board_rules),
     )
 
 
@@ -652,7 +654,11 @@ class PaperOperationService:
         self.fee_schedule = fee_schedule
         self.clock = clock or (lambda: datetime.now(UTC))
         self.trusted_confirmation_keys = dict(trusted_confirmation_keys or {})
-        self.trading_rules = trading_rules or PaperTradingRuleBook("UNCONFIGURED", ())
+        self.trading_rules = trading_rules or PaperTradingRuleBook(
+            rule_version="UNCONFIGURED",
+            effective_from=date.max,
+            price_limit_rules=(),
+        )
 
     def execute(
         self,

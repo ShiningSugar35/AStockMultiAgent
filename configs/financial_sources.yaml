@@ -1,15 +1,7 @@
-schema_version: financial-sources-v1
-primary_provider: sina-financial
-backup_provider: eastmoney-financial
-providers:
-  eastmoney-financial:
-    officiality: SECONDARY_STRUCTURED
-    recorded_fixture: tests/fixtures/financial_sources/eastmoney_000001_2025.json
-    endpoint: https://datacenter-web.eastmoney.com/api/data/v1/get
-  sina-financial:
-    officiality: SECONDARY_STRUCTURED
-    recorded_fixture: tests/fixtures/financial_sources/sina_000001_2025.json
-    endpoint: https://money.finance.sina.com.cn/corp/go.php
+schema_version: financial-sources-v2
+provider_order:
+  - sina-financial
+  - eastmoney-financial
 official_reports_fixture: tests/fixtures/financial_sources/cninfo_reports_000001.json
 required_statements:
   - BALANCE_SHEET
@@ -22,3 +14,7 @@ allowed_official_publishers:
   - 上海证券交易所
   - 深圳证券交易所
   - 北京证券交易所
+official_market_coverage:
+  XSHG: AVAILABLE
+  XSHE: AVAILABLE
+  BJSE: UNAVAILABLE

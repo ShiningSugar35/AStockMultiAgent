@@ -34,8 +34,10 @@ from astock.financial_sources.repository import (
 )
 from astock.financial_sources.storage import FinancialSourceParquetStore
 from astock.pit import PointInTimeRepository, PointInTimeService
-from astock.providers import EastMoneyFinancialProvider, SinaFinancialProvider
+from astock.providers import ProviderFactory, load_provider_registry, load_transport_profiles
+from astock.providers.dialects import load_provider_dialects
 from astock.providers.financial_base import (
+    FinancialProviderBase,
     FinancialProviderPayload,
     FinancialRawCaptureError,
 )
@@ -77,16 +79,27 @@ class FinancialSourceService:
         self.mappings = load_financial_field_mappings(
             self.root / "configs" / "financial_field_mappings.yaml"
         )
-        self.eastmoney = EastMoneyFinancialProvider(
+        self.provider_registry = load_provider_registry(
+            self.root / "configs" / "provider_registry.yaml"
+        )
+        self.provider_factory = ProviderFactory(
+            self.provider_registry,
+            load_transport_profiles(self.root / "configs" / "transport_profiles.yaml"),
             objects,
             state,
-            self.config.provider_fixtures["eastmoney-financial"].parent,
+            self.root / "tests" / "fixtures",
+            dialects=load_provider_dialects(
+                self.root / "configs" / "provider_dialects.yaml"
+            ),
         )
-        self.sina = SinaFinancialProvider(
-            objects,
-            state,
-            self.config.provider_fixtures["sina-financial"].parent,
-        )
+        self.providers: dict[str, FinancialProviderBase] = {}
+        for provider_id in self.config.provider_order:
+            provider = self.provider_factory.create(provider_id)
+            if not isinstance(provider, FinancialProviderBase):
+                raise ValueError(f"Financial provider adapter type mismatch: {provider_id}")
+            self.providers[provider_id] = provider
+
+
         self.official = OfficialFinancialReportService(
             state, objects, self.config.official_reports_fixture
         )
@@ -167,61 +180,29 @@ class FinancialSourceService:
         explicit_as_of: bool,
     ) -> FinancialSourceSyncReport:
         binding = self.instruments.resolve(company_id, market, as_of=as_of)
-        if live and market is Market.BJSE:
+        official_coverage = self.config.official_market_coverage.get(market, "UNAVAILABLE")
+        if live and official_coverage == "UNAVAILABLE":
             return self._empty_report(
                 company_id,
                 period_end,
                 period_type,
-                [self.config.primary_provider, self.config.backup_provider],
+                list(self.config.provider_order),
                 [],
                 FinancialSourceReleaseStatus.NEEDS_INFO,
-                ["BJSE_OFFICIAL_FINANCIAL_REPORT_BLOCKED"],
+                ["OFFICIAL_FINANCIAL_REPORT_UNAVAILABLE_FOR_MARKET"],
                 [],
             )
-        providers = {
-            self.eastmoney.provider_id: self.eastmoney,
-            self.sina.provider_id: self.sina,
-        }
-        primary_provider = providers[self.config.primary_provider]
-        backup_provider = providers[self.config.backup_provider]
         reasons: list[str] = []
         payloads: list[FinancialProviderPayload] = []
         captured_snapshots = []
-        primary_failed = False
-        try:
-            primary = primary_provider.fetch(company_id, market, period_end, live=live)
-            captured_snapshots.extend(primary.snapshots)
-            primary_observations, primary_reasons = _parse_provider(
-                primary,
-                self.mappings,
-                company_id,
-                period_end,
-                period_type,
-                binding,
-                as_of=as_of if explicit_as_of else None,
-            )
-            reasons.extend(primary_reasons)
-            primary_failed = _critical_missing(primary_observations)
-            if primary_failed:
-                reasons.append(
-                    f"{_provider_reason_token(primary.provider_id)}_CRITICAL_PERIOD_OR_TABLE_MISSING"
-                )
-            else:
-                payloads.append(primary)
-        except (FinancialRawCaptureError, KeyError, TypeError, ValueError, ValidationError) as exc:
-            primary_failed = True
-            if isinstance(exc, FinancialRawCaptureError):
-                captured_snapshots.extend(exc.snapshots)
-            reasons.append(
-                f"{_provider_reason_token(primary_provider.provider_id)}_FINANCIAL_FAILED"
-            )
-
-        if primary_failed or cross_check:
+        first_success_index: int | None = None
+        for index, provider_id in enumerate(self.config.provider_order):
+            provider = self.providers[provider_id]
             try:
-                backup = backup_provider.fetch(company_id, market, period_end, live=live)
-                captured_snapshots.extend(backup.snapshots)
-                backup_observations, backup_reasons = _parse_provider(
-                    backup,
+                payload = provider.fetch(company_id, market, period_end, live=live)
+                captured_snapshots.extend(payload.snapshots)
+                parsed, parsed_reasons = _parse_provider(
+                    payload,
                     self.mappings,
                     company_id,
                     period_end,
@@ -229,17 +210,21 @@ class FinancialSourceService:
                     binding,
                     as_of=as_of if explicit_as_of else None,
                 )
-                reasons.extend(backup_reasons)
-                if _critical_missing(backup_observations):
+                reasons.extend(parsed_reasons)
+                if _critical_missing(parsed):
                     reasons.append(
-                        f"{_provider_reason_token(backup.provider_id)}_CRITICAL_PERIOD_OR_TABLE_MISSING"
+                        f"{_provider_reason_token(provider_id)}_CRITICAL_PERIOD_OR_TABLE_MISSING"
                     )
+                    continue
+                payloads.append(payload)
+                if first_success_index is None:
+                    first_success_index = index
+                    if index > 0:
+                        reasons.append(f"{_provider_reason_token(provider_id)}_FALLBACK_USED")
                 else:
-                    payloads.append(backup)
-                    suffix = "FALLBACK_USED" if primary_failed else "CROSS_CHECK_USED"
-                    reasons.append(
-                        f"{_provider_reason_token(backup.provider_id)}_{suffix}"
-                    )
+                    reasons.append(f"{_provider_reason_token(provider_id)}_CROSS_CHECK_USED")
+                if not cross_check:
+                    break
             except (
                 FinancialRawCaptureError,
                 KeyError,
@@ -249,9 +234,7 @@ class FinancialSourceService:
             ) as exc:
                 if isinstance(exc, FinancialRawCaptureError):
                     captured_snapshots.extend(exc.snapshots)
-                reasons.append(
-                    f"{_provider_reason_token(backup_provider.provider_id)}_FINANCIAL_FAILED"
-                )
+                reasons.append(f"{_provider_reason_token(provider_id)}_FINANCIAL_FAILED")
 
         observations: list[FinancialSourceObservation] = []
         for payload in payloads:
@@ -286,7 +269,7 @@ class FinancialSourceService:
                 company_id,
                 period_end,
                 period_type,
-                provider_ids or [self.config.primary_provider, self.config.backup_provider],
+                provider_ids or list(self.config.provider_order),
                 list(
                     dict.fromkeys(
                         snapshot.snapshot_id for snapshot in captured_snapshots
@@ -310,8 +293,8 @@ class FinancialSourceService:
             allow_live_capture_after_cutoff=live and not explicit_as_of,
         )
         if official is None:
-            if live and market is Market.BJSE:
-                reasons.append("BJSE_OFFICIAL_FINANCIAL_REPORT_BLOCKED")
+            if live and official_coverage != "AVAILABLE":
+                reasons.append("OFFICIAL_FINANCIAL_REPORT_COVERAGE_INSUFFICIENT")
             else:
                 reasons.append("OFFICIAL_REPORT_NOT_AVAILABLE_AT_AS_OF")
                 if live:

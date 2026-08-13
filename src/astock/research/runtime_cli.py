@@ -12,21 +12,40 @@ import typer
 from astock.adaptive.service import AdaptiveResearchStatusService
 from astock.candidates.cli_ext import register_candidate_input_commands
 from astock.market_data.storage import CanonicalMarketStore
+from astock.portfolio.allocators import load_portfolio_allocator_policy
 from astock.portfolio.cli import register_portfolio_commands
 from astock.portfolio.vnext_cli import register_portfolio_vnext_commands
+from astock.providers.dialects import load_provider_dialects
+from astock.providers.runtime import load_transport_profiles
 from astock.research.acquisition import CurrentResearchAcquisitionService
+from astock.research.adaptation import (
+    AdaptiveEdgeService,
+    load_research_planner_policy,
+    load_schema_repair_policy,
+)
 from astock.research.institutional import InstitutionalResearchService
 from astock.research.knowledge_port import KnowledgeSkillProvider
+from astock.research.policy import CapabilityGraph, load_default_current_research_policy
 from astock.research.presentation import (
     audit_investor_answer,
     investor_view_from_acquisition,
     investor_view_from_run,
 )
 from astock.research.production_cli import register_research_production_commands
+from astock.research.resource_policy import load_specialist_resource_policy
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
 from astock.research.trade_view import TradePlanViewService
 from astock.research.trading_classification import TradingClassificationService
+from astock.schemas.adaptation import (
+    ProviderDialectCandidateRelease,
+    ProviderRecoveryProposal,
+    ProviderRecoveryValidation,
+    ResearchPlannerProposal,
+    SchemaRepairProposal,
+    SchemaRepairValidation,
+    ValidatedResearchPlan,
+)
 from astock.schemas.institutional_research import (
     CompanyEconomicsDraft,
     DriverTreeDraft,
@@ -109,6 +128,10 @@ def register_research_runtime_commands(
         _, state, objects = services()
         return InstitutionalResearchService(state, objects)
 
+    def adaptive_edge() -> AdaptiveEdgeService:
+        paths, state, objects = services()
+        return AdaptiveEdgeService(state, objects, paths.root)
+
     def shadow() -> tuple[Any, ShadowEvaluationService]:
         paths, state, objects = services()
         return paths, ShadowEvaluationService(
@@ -161,11 +184,19 @@ def register_research_runtime_commands(
     def research_acquire_current(
         company_id: Annotated[str, typer.Argument()],
         market: Annotated[Market, typer.Option()],
-        lookback_days: Annotated[int, typer.Option(min=30, max=730)] = 120,
+        lookback_days: Annotated[int | None, typer.Option()] = None,
+        planner_plan_artifact_id: Annotated[str | None, typer.Option()] = None,
     ) -> None:
         """Acquire current public research inputs before freezing a decision timestamp."""
 
-        emit(current_acquisition().acquire(company_id, market, lookback_days=lookback_days))
+        emit(
+            current_acquisition().acquire(
+                company_id,
+                market,
+                lookback_days=lookback_days,
+                planner_plan_artifact_id=planner_plan_artifact_id,
+            )
+        )
 
     @app.command("research-acquisition-investor-view")
     def research_acquisition_investor_view(
@@ -206,6 +237,177 @@ def register_research_runtime_commands(
         emit(audit)
         if audit.status == "FAIL":
             raise typer.Exit(code=3)
+
+    @app.command("research-capability-status")
+    def research_capability_status(
+        company_id: Annotated[str, typer.Argument()],
+        market: Annotated[Market, typer.Option()],
+        lookback_days: Annotated[int | None, typer.Option()] = None,
+    ) -> None:
+        """Read-only view of the active current-research capability schedule."""
+
+        paths, state, _ = services()
+        policy = load_default_current_research_policy(paths.root)
+        resolved_lookback = lookback_days or policy.default_lookback_days
+        schedule = CapabilityGraph(
+            policy,
+            current_acquisition().provider_registry,
+            state,
+        ).build(
+            company_id,
+            market,
+            lookback_days=resolved_lookback,
+            planned_at=datetime.now(UTC),
+        )
+        emit(schedule)
+
+    @app.command("provider-dialect-status")
+    def provider_dialect_status() -> None:
+        """Read-only provider capability, health, transport, and dialect diagnostics."""
+
+        paths, state, _ = services()
+        registry = current_acquisition().provider_registry
+        dialects = load_provider_dialects(paths.root / "configs" / "provider_dialects.yaml")
+        profiles = load_transport_profiles(paths.root / "configs" / "transport_profiles.yaml")
+        providers: list[dict[str, Any]] = []
+        for definition in sorted(registry.providers, key=lambda item: item.provider_id):
+            health, _ = state.get_provider_probe_health_snapshot(definition.provider_id)
+            dialect = dialects.get(definition.provider_id)
+            providers.append(
+                {
+                    "provider_id": definition.provider_id,
+                    "capabilities": definition.capabilities,
+                    "officiality": definition.officiality,
+                    "transport": definition.transport,
+                    "transport_profile": definition.transport_profile,
+                    "health_status": health.get("status") if health else "NOT_PROBED",
+                    "dialect_version": dialect.dialect_version if dialect else None,
+                    "response_shape": dialect.response_shape if dialect else None,
+                }
+            )
+        emit(
+            {
+                "registry_version": registry.registry_version,
+                "transport_profiles": sorted(profiles),
+                "providers": providers,
+            }
+        )
+
+    @app.command("adaptive-edge-status")
+    def adaptive_edge_status() -> None:
+        """Read-only policies and hard safety boundaries for Agent-native adaptation."""
+
+        paths, _, _ = services()
+        current_policy = load_default_current_research_policy(paths.root)
+        planner_policy = load_research_planner_policy(
+            paths.root / "configs" / "research_planner_policy.yaml"
+        )
+        repair_policy = load_schema_repair_policy(
+            paths.root / "configs" / "schema_repair_policy.yaml"
+        )
+        resource_policy = load_specialist_resource_policy(
+            paths.root / "configs" / "specialist_resource_policy.yaml"
+        )
+        allocator_policy = load_portfolio_allocator_policy(
+            paths.root / "configs" / "portfolio_allocators.yaml"
+        )
+        emit(
+            {
+                "current_research_policy": current_policy.policy_version,
+                "planner_policy": planner_policy.policy_version,
+                "mandatory_modules": planner_policy.mandatory_modules,
+                "schema_repair_policy": repair_policy.policy_version,
+                "schema_repair_minimum_raw_samples": repair_policy.minimum_raw_samples,
+                "specialist_resource_policy": resource_policy.policy_version,
+                "specialist_default_budget": resource_policy.default_budget,
+                "specialist_maximum_budget": resource_policy.maximum_budget,
+                "portfolio_allocator_policy": allocator_policy.policy_version,
+                "portfolio_default_method": allocator_policy.default_method,
+                "paper_ledger_write_allowed": False,
+                "broker_execution_allowed": False,
+                "manual_last": current_policy.manual_last,
+            }
+        )
+
+    @app.command("adaptive-edge-schema")
+    def adaptive_edge_schema() -> None:
+        """Read-only JSON schemas for planner, recovery, and schema-repair proposals."""
+
+        emit(
+            {
+                "ResearchPlannerProposal": ResearchPlannerProposal.model_json_schema(),
+                "ValidatedResearchPlan": ValidatedResearchPlan.model_json_schema(),
+                "ProviderRecoveryProposal": ProviderRecoveryProposal.model_json_schema(),
+                "ProviderRecoveryValidation": ProviderRecoveryValidation.model_json_schema(),
+                "SchemaRepairProposal": SchemaRepairProposal.model_json_schema(),
+                "SchemaRepairValidation": SchemaRepairValidation.model_json_schema(),
+                "ProviderDialectCandidateRelease": (
+                    ProviderDialectCandidateRelease.model_json_schema()
+                ),
+            }
+        )
+
+    @app.command("adaptive-plan-validate")
+    def adaptive_plan_validate(
+        request_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        proposal = ResearchPlannerProposal.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(adaptive_edge().validate_research_plan(proposal))
+
+    @app.command("adaptive-recovery-validate")
+    def adaptive_recovery_validate(
+        request_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        proposal = ProviderRecoveryProposal.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(adaptive_edge().validate_recovery(proposal))
+
+    @app.command("adaptive-schema-repair-validate")
+    def adaptive_schema_repair_validate(
+        request_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        proposal = SchemaRepairProposal.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(adaptive_edge().validate_schema_repair(proposal))
+
+    @app.command("adaptive-schema-repair-admit")
+    def adaptive_schema_repair_admit(
+        validation_id: Annotated[str, typer.Argument()],
+        approve: Annotated[bool, typer.Option("--approve")] = False,
+    ) -> None:
+        if not approve:
+            raise typer.BadParameter("--approve is required for candidate dialect admission")
+        emit(
+            adaptive_edge().admit_schema_repair(
+                validation_id,
+                explicit_approval=True,
+            )
+        )
+
+    @app.command("adaptive-artifact-audit")
+    def adaptive_artifact_audit(
+        artifact_id: Annotated[str, typer.Argument()],
+    ) -> None:
+        emit(adaptive_edge().audit_artifact(artifact_id))
+
+    @app.command("adaptive-dialect-rollback")
+    def adaptive_dialect_rollback(
+        release_id: Annotated[str, typer.Argument()],
+    ) -> None:
+        emit(adaptive_edge().rollback_dialect_candidate(release_id))
 
     @app.command("phase7-study-ensure")
     def phase7_study_ensure(

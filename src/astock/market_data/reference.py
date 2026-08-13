@@ -21,9 +21,16 @@ from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import CninfoDisclosureProvider
+from astock.market_data.reference_config import (
+    MarketReferenceConfig,
+    ReferenceRouteStep,
+    load_market_reference_config,
+)
 from astock.market_data.reference_storage import ReferenceParquetStore
 from astock.providers.baostock import BaoStockCaptureError, BaoStockReferenceProvider
+from astock.providers.config import load_provider_registry
 from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
+from astock.providers.runtime import ProviderFactory, load_transport_profiles
 from astock.providers.sina_reference import SinaReferenceProvider
 from astock.providers.symbols import market_from_baostock_code
 from astock.schemas import (
@@ -50,8 +57,24 @@ from astock.schemas import (
     TradingSession,
     VolumeUnit,
 )
+from astock.schemas.provider import ProviderHealthStatus
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
+_EARLIEST_UTC = datetime.min.replace(tzinfo=UTC)
+_ROUTE_FAILURE_CODES = {
+    "eastmoney-exact": "EASTMONEY_EXACT_IDENTITY_FAILED",
+    "sina-exact": "SINA_EXACT_IDENTITY_FAILED",
+    "eastmoney-paginated-master": "EASTMONEY_FALLBACK_FAILED",
+    "eastmoney-daily": "EASTMONEY_FALLBACK_FAILED",
+    "sina-daily": "SINA_FALLBACK_FAILED",
+}
+_ROUTE_FALLBACK_CODES = {
+    "eastmoney-exact": "EASTMONEY_FALLBACK_USED",
+    "sina-exact": "SINA_FALLBACK_USED",
+    "eastmoney-paginated-master": "EASTMONEY_FALLBACK_USED",
+    "eastmoney-daily": "EASTMONEY_FALLBACK_USED",
+    "sina-daily": "SINA_FALLBACK_USED",
+}
 
 
 @dataclass(frozen=True)
@@ -79,27 +102,53 @@ class MarketReferenceService:
         self.state = state
         self.objects = objects
         self.parquet = parquet
-        self.baostock = BaoStockReferenceProvider(objects, state, fixture_root / "baostock")
-        self.eastmoney = EastMoneyReferenceProvider(objects, state, fixture_root / "eastmoney")
-        self.sina = SinaReferenceProvider(objects, state, fixture_root / "sina")
         self.fixture_root = fixture_root.resolve()
+        self.project_root = Path(__file__).resolve().parents[3]
+        self.provider_registry = load_provider_registry(
+            self.project_root / "configs" / "provider_registry.yaml"
+        )
+        self.transport_profiles = load_transport_profiles(
+            self.project_root / "configs" / "transport_profiles.yaml"
+        )
+        self.provider_factory = ProviderFactory(
+            self.provider_registry,
+            self.transport_profiles,
+            objects,
+            state,
+            self.project_root / "tests" / "fixtures",
+            fixture_scope=self.fixture_root,
+        )
+        self.config: MarketReferenceConfig = load_market_reference_config(
+            self.project_root / "configs" / "market_reference.yaml",
+            self.provider_registry,
+        )
+        self.baostock = self._provider("baostock-reference", BaoStockReferenceProvider)
+        self.eastmoney = self._provider("eastmoney-reference", EastMoneyReferenceProvider)
+        self.sina = self._provider("sina-reference", SinaReferenceProvider)
+
+    def _provider(self, provider_id: str, expected_type: type[_T]) -> _T:
+        provider = self.provider_factory.create(provider_id)
+        if not isinstance(provider, expected_type):
+            raise ValueError(f"Provider adapter type mismatch: {provider_id}")
+        return provider
 
     def _retry_reference_call(
         self,
         action: Callable[[], _T],
         *,
         live: bool,
-        max_attempts: int = 2,
+        max_attempts: int | None = None,
     ) -> _T:
+        attempts = max_attempts or self.config.retry_max_attempts
         last_error: AStockError | None = None
-        for attempt in range(max_attempts):
+        for attempt in range(attempts):
             try:
                 return action()
             except AStockError as exc:
                 last_error = exc
-                if not live or not exc.retryable or attempt + 1 >= max_attempts:
+                if not live or not exc.retryable or attempt + 1 >= attempts:
                     raise
-                _time.sleep(0.25 * (2**attempt))
+                _time.sleep(self.config.retry_backoff_seconds * (2**attempt))
         assert last_error is not None
         raise last_error
 
@@ -109,9 +158,352 @@ class MarketReferenceService:
         latest = self.state.latest_snapshot_for_source(self.baostock.provider_id)
         if latest is None or latest.fetch_status is not FetchStatus.FETCH_FAILED:
             return False
-        return latest.fetched_at >= datetime.now(UTC) - timedelta(minutes=30)
+        cooldown = self.config.circuit_breaker_cooldown_seconds.get(
+            self.baostock.provider_id, 0
+        )
+        return cooldown > 0 and latest.fetched_at >= datetime.now(UTC) - timedelta(
+            seconds=cooldown
+        )
+
+    def _route_provider(
+        self, step: ReferenceRouteStep, *, live: bool = False
+    ) -> object:
+        if self._route_provider_blocked(step, live=live):
+            raise ValueError(f"provider blocked by health status: {step.provider_id}")
+        return self.provider_factory.create(step.provider_id)
+
+    def _route_provider_blocked(self, step: ReferenceRouteStep, *, live: bool) -> bool:
+        if not live:
+            return False
+        row, _head = self.state.get_provider_probe_health_snapshot(step.provider_id)
+        if row is None or not row.get("status"):
+            return False
+        try:
+            status = ProviderHealthStatus(str(row["status"]))
+        except ValueError:
+            return True
+        return status in {ProviderHealthStatus.UNAVAILABLE, ProviderHealthStatus.CORRUPT}
+
+    def _run_identity_route_step(
+        self,
+        step: ReferenceRouteStep,
+        symbol: str,
+        market: Market,
+        *,
+        live: bool,
+    ) -> tuple[list[InstrumentRecord], list[str], datetime, list[str]]:
+        provider = self._route_provider(step, live=live)
+        if step.operation == "baostock-identity":
+            if self._baostock_circuit_open(live=live):
+                return [], [], _EARLIEST_UTC, ["BAOSTOCK_CIRCUIT_OPEN"]
+            if not isinstance(provider, BaoStockReferenceProvider):
+                raise ValueError("baostock-identity requires a BaoStock adapter")
+            envelope, snapshot = provider.fetch(
+                "instrument.master",
+                {"symbol": symbol, "market": market.value},
+                live=live,
+            )
+            if not envelope.complete:
+                return [], [snapshot.snapshot_id], snapshot.available_to_system_at, [
+                    "BAOSTOCK_INCOMPLETE"
+                ]
+            parsed = _parse_baostock_instruments(envelope, snapshot.snapshot_id, market)
+            records = [
+                item
+                for item in parsed
+                if item.symbol == symbol
+                and item.market is market
+                and item.instrument_type is InstrumentType.STOCK
+            ]
+            return (
+                records if len(records) == 1 else [],
+                [snapshot.snapshot_id],
+                snapshot.available_to_system_at,
+                [] if len(records) == 1 else ["BAOSTOCK_TARGET_IDENTITY_NOT_FOUND"],
+            )
+        if step.operation == "eastmoney-exact":
+            if not isinstance(provider, EastMoneyReferenceProvider):
+                raise ValueError("eastmoney-exact requires an EastMoney reference adapter")
+            payload, snapshot = self._retry_reference_call(
+                lambda: provider.fetch_identity(symbol, market, live=live),
+                live=live,
+            )
+            record = _parse_eastmoney_identity(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+                symbol,
+                market,
+            )
+            return [record], [snapshot.snapshot_id], snapshot.available_to_system_at, []
+        if step.operation == "sina-exact":
+            if not isinstance(provider, SinaReferenceProvider):
+                raise ValueError("sina-exact requires a Sina reference adapter")
+            payload, snapshot = self._retry_reference_call(
+                lambda: provider.fetch_identity(symbol, market, live=live),
+                live=live,
+            )
+            record = _parse_sina_identity(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+                symbol,
+                market,
+            )
+            return [record], [snapshot.snapshot_id], snapshot.available_to_system_at, []
+        if step.operation == "eastmoney-paginated-master":
+            if not isinstance(provider, EastMoneyReferenceProvider):
+                raise ValueError("paginated master requires an EastMoney reference adapter")
+            snapshot_ids: list[str] = []
+            available_at = _EARLIEST_UTC
+            total: int | None = None
+            for page in range(1, self.config.identity_search_max_pages + 1):
+                payload, snapshot = self._retry_reference_call(
+                    lambda current_page=page: provider.fetch_master_page(
+                        market, current_page, live=live
+                    ),
+                    live=live,
+                )
+                snapshot_ids.append(snapshot.snapshot_id)
+                available_at = max(available_at, snapshot.available_to_system_at)
+                parsed = _parse_eastmoney_instruments(
+                    payload,
+                    snapshot.snapshot_id,
+                    snapshot.available_to_system_at,
+                    market,
+                )
+                matched = [
+                    item
+                    for item in parsed
+                    if item.symbol == symbol
+                    and item.market is market
+                    and item.instrument_type is InstrumentType.STOCK
+                ]
+                if len(matched) == 1:
+                    return matched, snapshot_ids, available_at, []
+                data = payload.get("data")
+                if not isinstance(data, dict):
+                    break
+                raw_total = data.get("total")
+                if isinstance(raw_total, int):
+                    total = raw_total
+                raw_diff = data.get("diff")
+                row_count = len(raw_diff) if isinstance(raw_diff, (list, dict)) else 0
+                if row_count == 0 or (total is not None and page * row_count >= total):
+                    break
+            return [], snapshot_ids, available_at, []
+        raise ValueError(f"Unsupported identity route operation: {step.operation}")
+
+    def _run_daily_route_step(
+        self,
+        step: ReferenceRouteStep,
+        symbol: str,
+        market: Market,
+        start: date,
+        end: date,
+        *,
+        live: bool,
+    ) -> tuple[list[DailyBarObservation], list[str], datetime, list[str], bool]:
+        provider = self._route_provider(step, live=live)
+        if step.operation == "baostock-daily":
+            if self._baostock_circuit_open(live=live):
+                return [], [], _EARLIEST_UTC, ["BAOSTOCK_CIRCUIT_OPEN"], False
+            if not isinstance(provider, BaoStockReferenceProvider):
+                raise ValueError("baostock-daily requires a BaoStock adapter")
+            envelope, snapshot = provider.fetch(
+                "market.daily_unadjusted",
+                {
+                    "symbol": symbol,
+                    "market": market.value,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "adjustflag": "3",
+                },
+                live=live,
+            )
+            if not envelope.complete:
+                return [], [snapshot.snapshot_id], snapshot.available_to_system_at, [
+                    "BAOSTOCK_INCOMPLETE"
+                ], False
+            records = _parse_baostock_daily(
+                envelope, snapshot.snapshot_id, symbol, market, start, end
+            )
+            return records, [snapshot.snapshot_id], snapshot.available_to_system_at, [], True
+        if step.operation == "eastmoney-daily":
+            if not isinstance(provider, EastMoneyReferenceProvider):
+                raise ValueError("eastmoney-daily requires an EastMoney reference adapter")
+            payload, snapshot = self._retry_reference_call(
+                lambda: provider.fetch_daily(
+                    symbol, market, start.isoformat(), end.isoformat(), live=live
+                ),
+                live=live,
+            )
+            records = _parse_eastmoney_daily(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+                symbol,
+                market,
+                start,
+                end,
+            )
+            return records, [snapshot.snapshot_id], snapshot.available_to_system_at, [], False
+        if step.operation == "sina-daily":
+            if not isinstance(provider, SinaReferenceProvider):
+                raise ValueError("sina-daily requires a Sina reference adapter")
+            payload, snapshot = self._retry_reference_call(
+                lambda: provider.fetch_daily(
+                    symbol, market, start.isoformat(), end.isoformat(), live=live
+                ),
+                live=live,
+            )
+            records = _parse_sina_daily(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+                symbol,
+                market,
+                start,
+                end,
+            )
+            reasons = [] if records else ["SINA_NO_REQUESTED_DAILY_ROWS"]
+            return records, [snapshot.snapshot_id], snapshot.available_to_system_at, reasons, False
+        raise ValueError(f"Unsupported daily route operation: {step.operation}")
+
+    def _run_master_route_step(
+        self,
+        step: ReferenceRouteStep,
+        market: Market | None,
+        *,
+        live: bool,
+    ) -> tuple[list[InstrumentRecord], list[str], datetime, list[str], bool]:
+        provider = self._route_provider(step, live=live)
+        if step.operation == "baostock-master":
+            if self._baostock_circuit_open(live=live):
+                return [], [], _EARLIEST_UTC, ["BAOSTOCK_CIRCUIT_OPEN"], False
+            if not isinstance(provider, BaoStockReferenceProvider):
+                raise ValueError("baostock-master requires a BaoStock adapter")
+            request = {"market": market.value} if market else {}
+            envelope, snapshot = provider.fetch("instrument.master", request, live=live)
+            if not envelope.complete:
+                return [], [snapshot.snapshot_id], snapshot.available_to_system_at, [
+                    "BAOSTOCK_INCOMPLETE"
+                ], False
+            records = _parse_baostock_instruments(envelope, snapshot.snapshot_id, market)
+            return records, [snapshot.snapshot_id], snapshot.available_to_system_at, [], True
+        if step.operation == "eastmoney-master":
+            if not isinstance(provider, EastMoneyReferenceProvider):
+                raise ValueError("eastmoney-master requires an EastMoney reference adapter")
+            payload, snapshot = self._retry_reference_call(
+                lambda: provider.fetch_master(market, live=live),
+                live=live,
+            )
+            records = _parse_eastmoney_instruments(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+                market,
+            )
+            return records, [snapshot.snapshot_id], snapshot.available_to_system_at, [], False
+        raise ValueError(f"Unsupported master route operation: {step.operation}")
+
+    def _run_calendar_route_step(
+        self,
+        step: ReferenceRouteStep,
+        exchange: Market,
+        start: date,
+        end: date,
+        *,
+        live: bool,
+    ) -> tuple[list[TradingSession], list[str], datetime, list[str], bool]:
+        provider = self._route_provider(step, live=live)
+        if step.operation != "baostock-calendar" or not isinstance(
+            provider, BaoStockReferenceProvider
+        ):
+            raise ValueError(f"Unsupported calendar route operation: {step.operation}")
+        envelope, snapshot = provider.fetch(
+            "market.calendar",
+            {
+                "exchange": exchange.value,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            },
+            live=live,
+        )
+        records = _parse_baostock_calendar(
+            envelope,
+            snapshot.snapshot_id,
+            exchange,
+            snapshot.available_to_system_at,
+            start,
+            end,
+        )
+        expected_dates = (end - start).days + 1
+        complete = envelope.complete and len(records) == expected_dates
+        reasons = [] if complete else ["CALENDAR_RANGE_INCOMPLETE"]
+        return records, [snapshot.snapshot_id], snapshot.available_to_system_at, reasons, complete
 
     def sync_instruments(
+        self, market: Market | None = None, *, live: bool = False
+    ) -> ReferenceSyncReport:
+        route = self.config.route("instrument.master")
+        records: list[InstrumentRecord] = []
+        reasons: list[str] = []
+        snapshot_ids: list[str] = []
+        available_at = _EARLIEST_UTC
+        provider_id = route[0].provider_id
+        complete = False
+        for step_index, step in enumerate(route):
+            provider_id = step.provider_id
+            try:
+                step_records, step_snapshots, step_available, step_reasons, step_complete = (
+                    self._run_master_route_step(step, market, live=live)
+                )
+            except (
+                AStockError,
+                BaoStockCaptureError,
+                KeyError,
+                OSError,
+                ValueError,
+                ValidationError,
+            ) as exc:
+                snapshot = getattr(exc, "snapshot", None)
+                if snapshot is not None:
+                    snapshot_ids.append(snapshot.snapshot_id)
+                    available_at = max(available_at, snapshot.available_to_system_at)
+                failure_code = getattr(exc, "failure_code", None)
+                reasons.append(
+                    str(failure_code)
+                    if failure_code
+                    else f"{step.operation.upper().replace('-', '_')}_FAILED"
+                )
+                continue
+            snapshot_ids.extend(step_snapshots)
+            available_at = max(available_at, step_available)
+            reasons.extend(step_reasons)
+            if step_records:
+                records = step_records
+                complete = step_complete
+                if step_index > 0:
+                    reasons.append("EASTMONEY_FALLBACK_USED")
+                break
+        scope = market.value if market else "ALL"
+        return self._release(
+            command="sync-instruments",
+            dataset_kind=ReferenceDatasetKind.INSTRUMENT_MASTER,
+            scope_key=scope,
+            provider_id=provider_id,
+            raw_snapshot_ids=list(dict.fromkeys(snapshot_ids)),
+            records=records,
+            requested_start=None,
+            requested_end=None,
+            available_at=available_at,
+            complete=complete,
+            reasons=list(dict.fromkeys(reasons)),
+            failed=not records,
+        )
+
+    def _legacy_sync_instruments(
         self, market: Market | None = None, *, live: bool = False
     ) -> ReferenceSyncReport:
         request = {"market": market.value} if market else {}
@@ -189,6 +581,79 @@ class MarketReferenceService:
         )
 
     def sync_instrument_identity(
+        self,
+        symbol: str,
+        market: Market,
+        *,
+        live: bool = False,
+    ) -> ReferenceSyncReport:
+        if market is Market.INDEX:
+            raise ValueError("instrument identity requires an equity market")
+        route = self.config.route("instrument.identity")
+        records: list[InstrumentRecord] = []
+        reasons: list[str] = []
+        snapshot_ids: list[str] = []
+        available_at = _EARLIEST_UTC
+        provider_id = route[0].provider_id
+        for step_index, step in enumerate(route):
+            provider_id = step.provider_id
+            try:
+                step_records, step_snapshots, step_available, step_reasons = (
+                    self._run_identity_route_step(step, symbol, market, live=live)
+                )
+            except (
+                AStockError,
+                BaoStockCaptureError,
+                KeyError,
+                OSError,
+                ValueError,
+                ValidationError,
+            ) as exc:
+                snapshot = getattr(exc, "snapshot", None)
+                if snapshot is not None:
+                    snapshot_ids.append(snapshot.snapshot_id)
+                    available_at = max(available_at, snapshot.available_to_system_at)
+                failure_code = getattr(exc, "failure_code", None)
+                reasons.append(
+                    str(failure_code)
+                    if failure_code
+                    else _ROUTE_FAILURE_CODES.get(
+                        step.operation,
+                        f"{step.operation.upper().replace('-', '_')}_FAILED",
+                    )
+                )
+                continue
+            snapshot_ids.extend(step_snapshots)
+            available_at = max(available_at, step_available)
+            reasons.extend(step_reasons)
+            if step_records:
+                records = step_records
+                if step_index > 0:
+                    reasons.append(
+                        _ROUTE_FALLBACK_CODES.get(
+                            step.operation,
+                            f"{step.provider_id.upper().replace('-', '_')}_FALLBACK_USED",
+                        )
+                    )
+                break
+        if not records:
+            reasons.append("TARGET_INSTRUMENT_IDENTITY_NOT_FOUND")
+        return self._release(
+            command="sync-instrument-identity",
+            dataset_kind=ReferenceDatasetKind.INSTRUMENT_MASTER,
+            scope_key=f"{market.value}:{symbol}",
+            provider_id=provider_id,
+            raw_snapshot_ids=list(dict.fromkeys(snapshot_ids)),
+            records=records,
+            requested_start=None,
+            requested_end=None,
+            available_at=available_at,
+            complete=len(records) == 1,
+            reasons=list(dict.fromkeys(reasons)),
+            failed=not records,
+        )
+
+    def _legacy_sync_instrument_identity(
         self,
         symbol: str,
         market: Market,
@@ -348,6 +813,64 @@ class MarketReferenceService:
     ) -> ReferenceSyncReport:
         if exchange is Market.INDEX:
             raise ValueError("INDEX is not an exchange calendar")
+        route = self.config.route("market.calendar")
+        reasons: list[str] = []
+        snapshot_ids: list[str] = []
+        records: list[TradingSession] = []
+        available_at = _EARLIEST_UTC
+        provider_id = route[0].provider_id
+        complete = False
+        for step in route:
+            provider_id = step.provider_id
+            try:
+                records, step_snapshots, available_at, reasons, complete = (
+                    self._run_calendar_route_step(step, exchange, start, end, live=live)
+                )
+                snapshot_ids.extend(step_snapshots)
+                if records:
+                    break
+            except (
+                AStockError,
+                BaoStockCaptureError,
+                KeyError,
+                ValueError,
+                ValidationError,
+            ) as exc:
+                snapshot = getattr(exc, "snapshot", None)
+                if snapshot is not None:
+                    snapshot_ids.append(snapshot.snapshot_id)
+                    available_at = max(available_at, snapshot.available_to_system_at)
+                failure_code = getattr(exc, "failure_code", None)
+                reasons.append(
+                    str(failure_code)
+                    if failure_code
+                    else f"{step.operation.upper().replace('-', '_')}_FAILED"
+                )
+        return self._release(
+            command="sync-calendar",
+            dataset_kind=ReferenceDatasetKind.TRADING_CALENDAR,
+            scope_key=exchange.value,
+            provider_id=provider_id,
+            raw_snapshot_ids=list(dict.fromkeys(snapshot_ids)),
+            records=records,
+            requested_start=start,
+            requested_end=end,
+            available_at=available_at,
+            complete=complete,
+            reasons=list(dict.fromkeys(reasons)),
+            failed=not records,
+        )
+
+    def _legacy_sync_calendar(
+        self,
+        exchange: Market,
+        start: date,
+        end: date,
+        *,
+        live: bool = False,
+    ) -> ReferenceSyncReport:
+        if exchange is Market.INDEX:
+            raise ValueError("INDEX is not an exchange calendar")
         request = {
             "exchange": exchange.value,
             "start": start.isoformat(),
@@ -403,6 +926,85 @@ class MarketReferenceService:
         )
 
     def sync_daily(
+        self,
+        symbol: str,
+        market: Market,
+        start: date,
+        end: date,
+        *,
+        live: bool = False,
+    ) -> ReferenceSyncReport:
+        route = self.config.route("market.daily_unadjusted")
+        records: list[DailyBarObservation] = []
+        reasons: list[str] = []
+        snapshot_ids: list[str] = []
+        available_at = _EARLIEST_UTC
+        provider_id = route[0].provider_id
+        complete = False
+        for step_index, step in enumerate(route):
+            provider_id = step.provider_id
+            try:
+                (
+                    step_records,
+                    step_snapshots,
+                    step_available,
+                    step_reasons,
+                    step_complete,
+                ) = self._run_daily_route_step(
+                    step, symbol, market, start, end, live=live
+                )
+            except (
+                AStockError,
+                BaoStockCaptureError,
+                KeyError,
+                OSError,
+                ValueError,
+                ValidationError,
+            ) as exc:
+                snapshot = getattr(exc, "snapshot", None)
+                if snapshot is not None:
+                    snapshot_ids.append(snapshot.snapshot_id)
+                    available_at = max(available_at, snapshot.available_to_system_at)
+                failure_code = getattr(exc, "failure_code", None)
+                reasons.append(
+                    str(failure_code)
+                    if failure_code
+                    else _ROUTE_FAILURE_CODES.get(
+                        step.operation,
+                        f"{step.operation.upper().replace('-', '_')}_FAILED",
+                    )
+                )
+                continue
+            snapshot_ids.extend(step_snapshots)
+            available_at = max(available_at, step_available)
+            reasons.extend(step_reasons)
+            if step_records:
+                records = step_records
+                complete = step_complete
+                if step_index > 0:
+                    reasons.append(
+                        _ROUTE_FALLBACK_CODES.get(
+                            step.operation,
+                            f"{step.provider_id.upper().replace('-', '_')}_FALLBACK_USED",
+                        )
+                    )
+                break
+        return self._release(
+            command="sync-daily",
+            dataset_kind=ReferenceDatasetKind.DAILY_UNADJUSTED,
+            scope_key=f"{market.value}:{symbol}",
+            provider_id=provider_id,
+            raw_snapshot_ids=list(dict.fromkeys(snapshot_ids)),
+            records=records,
+            requested_start=start,
+            requested_end=end,
+            available_at=available_at,
+            complete=complete,
+            reasons=list(dict.fromkeys(reasons)),
+            failed=not records,
+        )
+
+    def _legacy_sync_daily(
         self,
         symbol: str,
         market: Market,
@@ -541,6 +1143,10 @@ class MarketReferenceService:
             "start": start.isoformat(),
             "end": end.isoformat(),
         }
+        hint_step = self.config.route("corporate_actions.structured_hint")[0]
+        hint_provider = self._route_provider(hint_step, live=live)
+        if not isinstance(hint_provider, BaoStockReferenceProvider):
+            raise ValueError("structured corporate-action route requires a BaoStock adapter")
         envelope = None
         hint_snapshot = None
         records: list[CorporateActionObservation] = []
@@ -551,7 +1157,7 @@ class MarketReferenceService:
             reasons.append("BAOSTOCK_CIRCUIT_OPEN")
         else:
             try:
-                envelope, hint_snapshot = self.baostock.fetch(
+                envelope, hint_snapshot = hint_provider.fetch(
                     "corporate_actions.structured_hint", request, live=live
                 )
             except BaoStockCaptureError as exc:
@@ -587,12 +1193,19 @@ class MarketReferenceService:
         )
         official_lookup_succeeded = False
         official_candidates: list[_OfficialActionCandidate] = []
-        if market is Market.BJSE:
+        official_step = self.config.route("corporate_actions.official_evidence")[0]
+        if market is Market.INDEX:
+            reasons.append("CORPORATE_ACTION_NOT_APPLICABLE_TO_INDEX")
+        elif self.config.official_coverage(
+            "corporate_actions.official_evidence", market
+        ) != "AVAILABLE":
             reasons.append("OFFICIAL_EVIDENCE_UNAVAILABLE")
-        elif market in {Market.XSHG, Market.XSHE}:
+        else:
             try:
                 official_candidates, official_snapshot_ids, official_available = (
-                    self._official_actions_live(symbol, market, start, end)
+                    self._official_actions_live(
+                        official_step, symbol, market, start, end
+                    )
                     if live
                     else self._official_actions_recorded(symbol, market)
                 )
@@ -619,13 +1232,11 @@ class MarketReferenceService:
                     reasons.append("OFFICIAL_INDEX_CAPTURED_NO_MATCH")
             except (AStockError, OSError, ValueError):
                 reasons.append("OFFICIAL_EVIDENCE_LOOKUP_FAILED")
-        elif market is Market.INDEX:
-            reasons.append("CORPORATE_ACTION_NOT_APPLICABLE_TO_INDEX")
 
         provider_id = (
-            "cninfo-disclosures"
+            official_step.provider_id
             if official_lookup_succeeded and not records
-            else self.baostock.provider_id
+            else hint_step.provider_id
         )
         return self._release(
             command="sync-corporate-actions",
@@ -706,10 +1317,17 @@ class MarketReferenceService:
         return candidates, list(dict.fromkeys(snapshot_ids)), available
 
     def _official_actions_live(
-        self, symbol: str, market: Market, start: date, end: date
+        self,
+        step: ReferenceRouteStep,
+        symbol: str,
+        market: Market,
+        start: date,
+        end: date,
     ) -> tuple[list[_OfficialActionCandidate], list[str], datetime]:
         exchange = DisclosureExchange.SSE if market is Market.XSHG else DisclosureExchange.SZSE
-        provider = CninfoDisclosureProvider(self.objects, self.state)
+        provider = self._route_provider(step, live=True)
+        if not isinstance(provider, CninfoDisclosureProvider):
+            raise ValueError("official corporate-action route requires a CNINFO adapter")
         batch = provider.search(
             DisclosureSearchRequest(
                 symbol=symbol,

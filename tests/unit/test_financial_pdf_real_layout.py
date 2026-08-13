@@ -27,8 +27,10 @@ def _mapping(
         field_code=field_code,
         statement_type=statement_type,
         official_label=label,
-        eastmoney_field=field_code.value,
-        sina_field=field_code.value.lower(),
+        provider_fields={
+            "eastmoney-financial": field_code.value,
+            "sina-financial": field_code.value.lower(),
+        },
         unit=FinancialUnit.TEN_THOUSAND_CNY,
     )
 

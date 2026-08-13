@@ -1,0 +1,48 @@
+schema_version: current-research-policy-v1
+default_lookback_days: 120
+minimum_lookback_days: 30
+maximum_lookback_days: 730
+max_workers: 4
+automatic_resolution_budget_seconds: 1800
+manual_last: true
+capabilities:
+  INSTRUMENT_IDENTITY:
+    core: true
+    stage: 0
+    dependencies: []
+    provider_capabilities: [instrument.identity]
+    research_question: "从交易所官方页面确认 {company_id} 的证券身份、市场和当前上市状态。"
+    preferred_authorities: [EXCHANGE_OFFICIAL, ISSUER_IR]
+    external_on: [PARTIAL, FAILED]
+  DAILY_MARKET:
+    core: true
+    stage: 1
+    dependencies: [INSTRUMENT_IDENTITY]
+    provider_capabilities: [market.daily_unadjusted]
+    research_question: "取得 {company_id} 当前及近期未复权日线价格。"
+    preferred_authorities: [EXCHANGE_OFFICIAL, PUBLIC_MARKET_DATA]
+    external_on: [FAILED]
+  CORPORATE_ACTIONS:
+    core: false
+    stage: 1
+    dependencies: [INSTRUMENT_IDENTITY]
+    provider_capabilities: [corporate_actions.structured_hint, corporate_actions.official_evidence]
+    research_question: "核实 {company_id} 最近公司行动及其官方公告。"
+    preferred_authorities: [EXCHANGE_OFFICIAL, CNINFO_OFFICIAL, ISSUER_IR]
+    external_on: []
+  FINANCIAL_ANNUAL:
+    core: true
+    stage: 1
+    dependencies: [INSTRUMENT_IDENTITY]
+    provider_capabilities: [financial.balance_sheet.secondary, financial.income_statement.secondary, financial.cash_flow_statement.secondary]
+    research_question: "从发行人官网、交易所或法定披露平台取得 {company_id} 的最新年度报告并核对关键财务事实。"
+    preferred_authorities: [ISSUER_IR, EXCHANGE_OFFICIAL, CNINFO_OFFICIAL]
+    external_on: [PARTIAL, FAILED]
+  FINANCIAL_LATEST_INTERIM:
+    core: true
+    stage: 1
+    dependencies: [INSTRUMENT_IDENTITY]
+    provider_capabilities: [financial.balance_sheet.secondary, financial.income_statement.secondary, financial.cash_flow_statement.secondary]
+    research_question: "从发行人官网、交易所或法定披露平台取得 {company_id} 的最新已披露季度或中期报告并核对关键财务事实。"
+    preferred_authorities: [ISSUER_IR, EXCHANGE_OFFICIAL, CNINFO_OFFICIAL]
+    external_on: [PARTIAL, FAILED]

@@ -19,6 +19,7 @@ EXPECTED_WORKFLOWS = {
     "workflow-paper-trading.md",
     "workflow-knowledge-ingest.md",
     "workflow-prospective-evaluation.md",
+    "workflow-adaptive-edge.md",
 }
 
 
@@ -58,16 +59,21 @@ def test_every_repo_skill_links_to_existing_workflow_docs() -> None:
             assert (WORKFLOWS / name).is_file(), (skill_path.parent.name, name)
 
 
-def test_current_company_and_evidence_workflows_lock_provider_web_manual_order() -> None:
+def test_current_company_and_evidence_workflows_lock_policy_web_manual_order() -> None:
     current = (WORKFLOWS / "workflow-current-company-research.md").read_text(encoding="utf-8")
     evidence = (WORKFLOWS / "workflow-evidence-recovery.md").read_text(encoding="utf-8")
+    adaptive = (WORKFLOWS / "workflow-adaptive-edge.md").read_text(encoding="utf-8")
 
     assert "research-acquire-current" in current
     assert "question timestamp" in current
-    assert "1800 seconds" in current
+    assert "current-research-policy" in current
     assert "authoritative Web" in current
     assert "research-investor-answer-audit" in current
-    assert "automatic provider/endpoint/web paths" in current.casefold()
-    assert "1800-second automatic budget" in evidence
+    assert "SourceAccessRouter" in current
+    assert "active Current Research policy" in evidence
     assert "Authoritative Web fallback" in evidence
     assert "Manual intervention is last" in evidence
+    assert "ProviderRecoveryProposal" in evidence
+    assert "Schema Repair" in evidence
+    assert "Adaptive Edge / Deterministic Core" in adaptive
+    assert "Manual remains last" in adaptive

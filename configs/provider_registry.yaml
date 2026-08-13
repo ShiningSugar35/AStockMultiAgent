@@ -1,32 +1,49 @@
-registry_version: provider-registry-v3
+registry_version: provider-registry-v4
 capability_gaps:
   - corporate_actions.ledger_ready
   - model.inference
 providers:
   - provider_id: eastmoney-5m
+    adapter_class: astock.providers.eastmoney:EastMoney5mProvider
     capabilities: [market.raw_5m]
     transport: HTTP
+    transport_profile: eastmoney-browser-v1
     officiality: SECONDARY_STRUCTURED
     live_supported: true
-    timeout_seconds: 20
+    timeout_seconds: 12
+    priority: 100
+    probe_operation: market-bars
+    probe_target: {symbol: "600519", market: XSHG}
     recorded_fixture: tests/fixtures/providers/eastmoney-5m-success.json
   - provider_id: sina-5m
+    adapter_class: astock.providers.sina:Sina5mProvider
     capabilities: [market.raw_5m]
     transport: HTTP
+    transport_profile: public-json-v1
     officiality: SECONDARY_STRUCTURED
     live_supported: true
     timeout_seconds: 20
+    priority: 90
+    probe_operation: market-bars
+    probe_target: {symbol: "600519", market: XSHG}
     recorded_fixture: tests/fixtures/providers/sina-5m-success.json
   - provider_id: cninfo-disclosures
-    capabilities: [disclosures.search, disclosures.download, corporate_actions.official_evidence]
+    adapter_class: astock.documents.cninfo:CninfoDisclosureProvider
+    capabilities: [disclosures.search, disclosures.download, corporate_actions.official_evidence, official.identity]
     transport: HTTP
+    transport_profile: cninfo-official-v1
     officiality: PRIMARY_OFFICIAL
     live_supported: true
     timeout_seconds: 30
+    priority: 120
+    probe_operation: disclosure-search
+    probe_target: {symbol: "600519", exchange: SSE, category: ANNUAL_REPORT}
     recorded_fixture: tests/fixtures/providers/cninfo-disclosures-success.json
   - provider_id: baostock-reference
+    adapter_class: astock.providers.baostock:BaoStockReferenceProvider
     capabilities:
       - instrument.master
+      - instrument.identity
       - market.calendar
       - market.daily_unadjusted
       - corporate_actions.structured_hint
@@ -34,34 +51,73 @@ providers:
     officiality: SECONDARY_STRUCTURED
     live_supported: true
     timeout_seconds: 30
+    priority: 80
+    fixture_subdir: reference/baostock
+    probe_operation: reference-identity
+    probe_target: {symbol: "600519", market: XSHG}
     recorded_fixture: tests/fixtures/providers/baostock-reference-success.json
   - provider_id: eastmoney-reference
+    adapter_class: astock.providers.eastmoney_reference:EastMoneyReferenceProvider
     capabilities:
-      - instrument.master_backup
-      - market.daily_unadjusted_backup
+      - instrument.master
+      - instrument.identity
+      - market.daily_unadjusted
       - instrument.bjse_coverage
     transport: HTTP
+    transport_profile: eastmoney-browser-v1
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 12
+    priority: 100
+    fixture_subdir: reference/eastmoney
+    probe_operation: reference-identity
+    probe_target: {symbol: "600519", market: XSHG}
+    recorded_fixture: tests/fixtures/providers/eastmoney-reference-success.json
+  - provider_id: sina-reference
+    adapter_class: astock.providers.sina_reference:SinaReferenceProvider
+    capabilities:
+      - instrument.identity
+      - market.daily_unadjusted
+    transport: HTTP
+    transport_profile: public-json-v1
     officiality: SECONDARY_STRUCTURED
     live_supported: true
     timeout_seconds: 20
-    recorded_fixture: tests/fixtures/providers/eastmoney-reference-success.json
+    priority: 95
+    fixture_subdir: reference/sina
+    probe_operation: reference-identity
+    probe_target: {symbol: "600519", market: XSHG}
+    recorded_fixture: tests/fixtures/providers/sina-reference-success.json
   - provider_id: eastmoney-financial
+    adapter_class: astock.providers.eastmoney_financial:EastMoneyFinancialProvider
     capabilities:
       - financial.balance_sheet.secondary
       - financial.income_statement.secondary
       - financial.cash_flow_statement.secondary
     transport: HTTP
+    transport_profile: financial-public-v1
     officiality: SECONDARY_STRUCTURED
     live_supported: true
     timeout_seconds: 20
+    priority: 90
+    fixture_subdir: financial_sources
+    probe_operation: financial-period
+    probe_target: {symbol: "600519", market: XSHG, period_end: "2025-12-31"}
     recorded_fixture: tests/fixtures/providers/eastmoney-financial-success.json
   - provider_id: sina-financial
+    adapter_class: astock.providers.sina_financial:SinaFinancialProvider
     capabilities:
-      - financial.balance_sheet.secondary_backup
-      - financial.income_statement.secondary_backup
-      - financial.cash_flow_statement.secondary_backup
+      - financial.balance_sheet.secondary
+      - financial.income_statement.secondary
+      - financial.cash_flow_statement.secondary
+      - financial.report_period_index
     transport: HTTP
+    transport_profile: financial-public-v1
     officiality: SECONDARY_STRUCTURED
     live_supported: true
     timeout_seconds: 20
+    priority: 110
+    fixture_subdir: financial_sources
+    probe_operation: financial-period
+    probe_target: {symbol: "600519", market: XSHG, period_end: "2025-12-31"}
     recorded_fixture: tests/fixtures/providers/sina-financial-success.json

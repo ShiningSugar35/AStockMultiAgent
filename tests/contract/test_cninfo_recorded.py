@@ -47,8 +47,11 @@ def test_recorded_search_and_download_are_snapshotted(tmp_path: Path) -> None:
     def handler(http_request: httpx.Request) -> httpx.Response:
         if http_request.method == "POST":
             form = parse_qs(http_request.content.decode())
-            assert form["stock"] == ["000001,gssz0000001"]
-            assert form["category"] == ["category_ndbg_szsh;"]
+            if form.get("stock") is None:
+                assert form["searchkey"] == ["000001"]
+            else:
+                assert form["stock"] == ["000001,gssz0000001"]
+                assert form["category"] == ["category_ndbg_szsh;"]
             return httpx.Response(
                 200,
                 content=raw_index,
@@ -78,7 +81,7 @@ def test_recorded_search_and_download_are_snapshotted(tmp_path: Path) -> None:
     assert downloaded.document.rights_status == "PUBLIC_DISCLOSURE"
     assert objects.get_bytes(downloaded.snapshot.object_sha256) == PDF_BYTES
     with state.connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM source_snapshot_detail").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM source_snapshot_detail").fetchone()[0] == 3
 
 
 def test_zero_result_resolves_current_cninfo_org_id_and_retries_exact_query(
@@ -92,9 +95,6 @@ def test_zero_result_resolves_current_cninfo_org_id_and_retries_exact_query(
         category=DisclosureCategory.ANNUAL_REPORT,
         keyword="2025年年度报告",
     )
-    empty = json.dumps(
-        {"totalAnnouncement": 0, "totalpages": 0, "announcements": []}
-    ).encode()
     discovery = json.dumps(
         {
             "totalAnnouncement": 1,
@@ -124,9 +124,7 @@ def test_zero_result_resolves_current_cninfo_org_id_and_retries_exact_query(
     def handler(http_request: httpx.Request) -> httpx.Response:
         form = parse_qs(http_request.content.decode())
         calls.append(form)
-        if form.get("stock") == ["600989,gssh0600989"]:
-            body = empty
-        elif form.get("stock") == ["600989,9900019573"]:
+        if form.get("stock") == ["600989,9900019573"]:
             body = annual
         else:
             assert form.get("stock") is None
@@ -137,14 +135,22 @@ def test_zero_result_resolves_current_cninfo_org_id_and_retries_exact_query(
     cninfo, state, _ = provider(tmp_path, handler)
     batch = cninfo.search(request_600989)
 
-    assert len(calls) == 3
+    assert len(calls) == 2
     assert calls[0]["column"] == ["sse"]
+    assert calls[0].get("stock") is None
+    assert calls[1]["stock"] == ["600989,9900019573"]
     assert batch.total_count == 1
     assert batch.announcements[0].symbol == "600989"
     assert batch.announcements[0].org_id == "9900019573"
-    assert len(batch.resolution_snapshot_ids) == 2
+    assert len(batch.resolution_snapshot_ids) == 1
     with state.connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM source_snapshot_detail").fetchone()[0] == 3
+        assert connection.execute("SELECT COUNT(*) FROM source_snapshot_detail").fetchone()[0] == 2
+
+    calls.clear()
+    cached = cninfo.search(request_600989)
+    assert cached.total_count == 1
+    assert len(calls) == 1
+    assert calls[0]["stock"] == ["600989,9900019573"]
 
 
 def test_org_id_mapping_is_deterministic() -> None:

@@ -24,6 +24,7 @@ from astock.documents import CninfoDisclosureProvider
 from astock.market_data.reference_storage import ReferenceParquetStore
 from astock.providers.baostock import BaoStockCaptureError, BaoStockReferenceProvider
 from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
+from astock.providers.sina_reference import SinaReferenceProvider
 from astock.providers.symbols import market_from_baostock_code
 from astock.schemas import (
     AdjustmentMode,
@@ -80,6 +81,7 @@ class MarketReferenceService:
         self.parquet = parquet
         self.baostock = BaoStockReferenceProvider(objects, state, fixture_root / "baostock")
         self.eastmoney = EastMoneyReferenceProvider(objects, state, fixture_root / "eastmoney")
+        self.sina = SinaReferenceProvider(objects, state, fixture_root / "sina")
         self.fixture_root = fixture_root.resolve()
 
     def _retry_reference_call(
@@ -232,6 +234,47 @@ class MarketReferenceService:
                 reasons.append("BAOSTOCK_MALFORMED_INSTRUMENT_MASTER")
 
         provider_id = self.baostock.provider_id
+        if not records:
+            try:
+                payload, exact_snapshot = self._retry_reference_call(
+                    lambda: self.eastmoney.fetch_identity(symbol, market, live=live),
+                    live=live,
+                )
+                snapshot_ids.append(exact_snapshot.snapshot_id)
+                available_at = max(available_at, exact_snapshot.available_to_system_at)
+                exact = _parse_eastmoney_identity(
+                    payload,
+                    exact_snapshot.snapshot_id,
+                    exact_snapshot.available_to_system_at,
+                    symbol,
+                    market,
+                )
+                records = [exact]
+                provider_id = self.eastmoney.provider_id
+                reasons.append("EASTMONEY_FALLBACK_USED")
+            except (AStockError, KeyError, OSError, ValueError, ValidationError):
+                reasons.append("EASTMONEY_EXACT_IDENTITY_FAILED")
+        if not records:
+            try:
+                payload, sina_snapshot = self._retry_reference_call(
+                    lambda: self.sina.fetch_identity(symbol, market, live=live),
+                    live=live,
+                )
+                snapshot_ids.append(sina_snapshot.snapshot_id)
+                available_at = max(available_at, sina_snapshot.available_to_system_at)
+                records = [
+                    _parse_sina_identity(
+                        payload,
+                        sina_snapshot.snapshot_id,
+                        sina_snapshot.available_to_system_at,
+                        symbol,
+                        market,
+                    )
+                ]
+                provider_id = self.sina.provider_id
+                reasons.append("SINA_FALLBACK_USED")
+            except (AStockError, KeyError, OSError, ValueError, ValidationError):
+                reasons.append("SINA_EXACT_IDENTITY_FAILED")
         if not records:
             page = 1
             total: int | None = None
@@ -435,6 +478,35 @@ class MarketReferenceService:
             except (AStockError, KeyError, OSError, ValueError, ValidationError):
                 east_failed = True
                 reasons.append("EASTMONEY_FALLBACK_FAILED")
+        sina_failed = False
+        if not records:
+            try:
+                payload, sina_snapshot = self._retry_reference_call(
+                    lambda: self.sina.fetch_daily(
+                        symbol, market, start.isoformat(), end.isoformat(), live=live
+                    ),
+                    live=live,
+                )
+                records = _parse_sina_daily(
+                    payload,
+                    sina_snapshot.snapshot_id,
+                    sina_snapshot.available_to_system_at,
+                    symbol,
+                    market,
+                    start,
+                    end,
+                )
+                snapshot_ids.append(sina_snapshot.snapshot_id)
+                available_at = sina_snapshot.available_to_system_at
+                if records:
+                    provider_id = self.sina.provider_id
+                    reasons.append("SINA_FALLBACK_USED")
+                else:
+                    sina_failed = True
+                    reasons.append("SINA_NO_REQUESTED_DAILY_ROWS")
+            except (AStockError, KeyError, OSError, ValueError, ValidationError):
+                sina_failed = True
+                reasons.append("SINA_FALLBACK_FAILED")
         return self._release(
             command="sync-daily",
             dataset_kind=ReferenceDatasetKind.DAILY_UNADJUSTED,
@@ -451,7 +523,7 @@ class MarketReferenceService:
                 and provider_id == self.baostock.provider_id
             ),
             reasons=reasons,
-            failed=not records and bao_failed and east_failed,
+            failed=not records and bao_failed and east_failed and sina_failed,
         )
 
     def sync_corporate_actions(
@@ -1166,6 +1238,88 @@ def _parse_baostock_instruments(
     return result
 
 
+def _parse_sina_identity(
+    payload: dict[str, object],
+    snapshot_id: str,
+    available: datetime,
+    requested_symbol: str,
+    requested_market: Market,
+) -> InstrumentRecord:
+    request = payload.get("_astock_request")
+    if not isinstance(request, dict) or request.get("purpose") != "INSTRUMENT_IDENTITY_EXACT":
+        raise ValueError("Sina identity request provenance mismatch")
+    if request.get("market") != requested_market.value or request.get("symbol") != requested_symbol:
+        raise ValueError("Sina identity request boundary mismatch")
+    expected_provider_symbol = (
+        ("sh" if requested_market is Market.XSHG else "sz") + requested_symbol
+        if requested_market in {Market.XSHG, Market.XSHE}
+        else ("bj" + requested_symbol)
+    )
+    if payload.get("provider_symbol") != expected_provider_symbol:
+        raise ValueError("Sina identity payload crossed the explicit market boundary")
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise ValueError("Sina identity payload has no security name")
+    return InstrumentRecord(
+        created_at=available,
+        instrument_id=f"{requested_market.value}:{requested_symbol}",
+        market=requested_market,
+        symbol=requested_symbol,
+        name=name,
+        instrument_type=InstrumentType.STOCK,
+        tradable=True,
+        status_date=available.astimezone(_SHANGHAI).date(),
+        is_st=_is_st_name(name),
+        source_snapshot_id=snapshot_id,
+        available_to_system_at=available,
+    )
+
+
+def _parse_eastmoney_identity(
+    payload: dict[str, object],
+    snapshot_id: str,
+    available: datetime,
+    requested_symbol: str,
+    requested_market: Market,
+) -> InstrumentRecord:
+    if payload.get("rc") != 0:
+        raise ValueError("EastMoney identity request failed")
+    request = payload.get("_astock_request")
+    if not isinstance(request, dict) or request.get("purpose") != "INSTRUMENT_IDENTITY_EXACT":
+        raise ValueError("EastMoney identity request provenance mismatch")
+    if request.get("market") != requested_market.value or request.get("symbol") != requested_symbol:
+        raise ValueError("EastMoney identity request boundary mismatch")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("EastMoney identity payload is malformed")
+    symbol = str(data.get("f57") or "")
+    name = str(data.get("f58") or "").strip()
+    if symbol != requested_symbol or not name:
+        raise ValueError("EastMoney identity payload does not match requested security")
+    raw_listing = str(data.get("f189") or "").split(".", maxsplit=1)[0]
+    listing_date = None
+    if len(raw_listing) == 8 and raw_listing.isdigit():
+        listing_date = date(
+            int(raw_listing[:4]),
+            int(raw_listing[4:6]),
+            int(raw_listing[6:8]),
+        )
+    return InstrumentRecord(
+        created_at=available,
+        instrument_id=f"{requested_market.value}:{symbol}",
+        market=requested_market,
+        symbol=symbol,
+        name=name,
+        instrument_type=InstrumentType.STOCK,
+        tradable=True,
+        status_date=available.astimezone(_SHANGHAI).date(),
+        is_st=_is_st_name(name),
+        listing_date=listing_date,
+        source_snapshot_id=snapshot_id,
+        available_to_system_at=available,
+    )
+
+
 def _parse_eastmoney_instruments(
     payload: dict[str, object],
     snapshot_id: str,
@@ -1428,6 +1582,100 @@ def _official_action_type(title: str) -> str | None:
     if any(key in title for key in ("现金", "派息", "现金红利")):
         return "CASH_DIVIDEND_HINT"
     return None
+
+
+def _parse_sina_daily(
+    payload: dict[str, object],
+    snapshot_id: str,
+    available: datetime,
+    symbol: str,
+    market: Market,
+    start: date,
+    end: date,
+) -> list[DailyBarObservation]:
+    request = payload.get("_astock_request")
+    if (
+        not isinstance(request, dict)
+        or request.get("symbol") != symbol
+        or request.get("market") != market.value
+        or request.get("start") != start.isoformat()
+        or request.get("end") != end.isoformat()
+        or request.get("scale") != 240
+        or request.get("adjustment") != "NONE"
+        or request.get("volume_unit") != "SHARE"
+    ):
+        raise ValueError("Sina daily request provenance mismatch")
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise ValueError("Sina daily result is malformed")
+    status = result.get("status")
+    if isinstance(status, dict) and status.get("code") not in {0, "0", None}:
+        raise ValueError("Sina daily request failed")
+    rows = result.get("data")
+    if not isinstance(rows, list):
+        raise ValueError("Sina daily rows are malformed")
+    parsed_rows: list[tuple[date, dict[str, object]]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            raise ValueError("Sina daily row is malformed")
+        session = date.fromisoformat(str(raw.get("day")))
+        parsed_rows.append((session, raw))
+    parsed_rows.sort(key=lambda item: item[0])
+    if len({session for session, _ in parsed_rows}) != len(parsed_rows):
+        raise ValueError("Sina daily rows contain duplicate dates")
+
+    observations: list[DailyBarObservation] = []
+    previous: Decimal | None = None
+    for session, raw in parsed_rows:
+        close = Decimal(str(raw["close"]))
+        if session < start:
+            previous = close
+            continue
+        if session > end:
+            break
+        session_close = datetime.combine(session, time(15, 0), tzinfo=_SHANGHAI)
+        if available < session_close:
+            continue
+        open_ = Decimal(str(raw["open"]))
+        high = Decimal(str(raw["high"]))
+        low = Decimal(str(raw["low"]))
+        volume = Decimal(str(raw["volume"]))
+        identity = {
+            "provider": "sina-reference",
+            "market": market.value,
+            "symbol": symbol,
+            "date": session.isoformat(),
+            "open": str(open_),
+            "high": str(high),
+            "low": str(low),
+            "close": str(close),
+            "volume": str(volume),
+        }
+        observations.append(
+            DailyBarObservation(
+                created_at=available,
+                observation_id=content_hash(identity),
+                instrument_id=f"{market.value}:{symbol}",
+                market=market,
+                symbol=symbol,
+                session_date=session,
+                session_close_at=session_close,
+                open=open_,
+                high=high,
+                low=low,
+                close=close,
+                previous_close=previous,
+                volume=volume,
+                volume_unit=VolumeUnit.SHARE,
+                amount=None,
+                amount_unit=AmountUnit.UNKNOWN,
+                adjustment_mode=AdjustmentMode.NONE,
+                source_snapshot_id=snapshot_id,
+                available_to_system_at=available,
+            )
+        )
+        previous = close
+    return observations
 
 
 def _parse_eastmoney_daily(

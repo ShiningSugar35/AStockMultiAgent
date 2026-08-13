@@ -18,15 +18,15 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
    - The user's question timestamp is not the research cutoff; the current decision snapshot is frozen after acquisition.
 
 3. **Parallel acquisition where safe**
-   - After/alongside bounded identity resolution, acquire current daily market data, corporate-action evidence, latest annual financial hints and latest interim/quarterly financial hints.
-   - A preferred provider failure must not stop independent downstream collection.
-   - Retry only retryable transient network failures; use provider fallback rather than indefinite waiting.
+   - After/alongside bounded identity resolution, acquire current daily market data, corporate-action evidence, latest annual financial hints and the **latest actually disclosed** interim/quarterly period; do not guess the latest report solely from the calendar month.
+   - A preferred-provider failure must not stop independent downstream collection. Diagnose transport/schema/data-quality failure classes internally and switch to a more reliable provider or endpoint for the same capability.
+   - Retry only retryable transient network failures; use bounded retry/circuit breaking rather than indefinite waiting.
 
-4. **Escalate unresolved capabilities automatically**
-   - If the acquisition report contains `external_research_needs`, route each bounded question to `$evidence-investigation`.
-   - Search exchange / CNINFO / issuer IR / regulator first; then high-quality professional public sources for corroboration.
-   - Prefer sources requiring no API registration or user interaction.
-   - Only after local/API and authoritative Web fallback are exhausted may the user be asked for help, and all remaining actions must be consolidated into one checklist.
+4. **Resolve unresolved capabilities automatically**
+   - Use an automatic resolution budget of up to 1800 seconds for the current user request before considering manual help.
+   - Route each unresolved bounded question to `$evidence-investigation`: local/API diagnostics → provider/endpoint fallback → exchange/CNINFO/issuer IR/regulator Web research → reputable public corroboration.
+   - Prefer sources requiring no API registration or user interaction and cross-check material facts across independent authoritative sources where practical.
+   - Only after automatic provider and authoritative Web paths are exhausted may the user be asked for help, and all remaining actions must be consolidated into one checklist.
 
 5. **Plan and formalize the research chain**
    - For current live research use `uv run astock research-plan <company_id> --mode LIVE` or `uv run astock research-run-company <company_id> --mode LIVE --institutional-research-required` without a question-time `--as-of`.
@@ -47,14 +47,16 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
    - Missing TradingClassification/corporate-action execution detail may block a simulated executable protocol but does not by itself block a months/years fundamental assessment.
    - If the user asks for exact entry/exit/stop mechanics, continue through [Committee & Trade Plan](workflow-committee-trade-plan.md).
 
-9. **Render the investor answer**
-   - Prefer `research-acquisition-investor-view` / `research-investor-view` for state translation.
+9. **Render and audit the investor answer**
+   - INVESTOR_MODE is the default for a stock question even if repo-skill discovery or one tool call fails. Prefer `research-acquisition-investor-view` / `research-investor-view` for state translation.
    - Lead with: **结论 / 为什么 / 估值与赔率 / 催化 / 最大风险 / 什么情况会改变结论**.
-   - Keep reason codes, artifact IDs/hashes, provider stack traces, SQL and CLI logs in diagnostics unless the user explicitly asks to debug.
+   - Keep provider paths, internal Agents/committee stages, protocol/schema/class names, machine states, reason codes, artifact IDs/hashes, SQL/SQLite, CLI logs and developer meta commentary in diagnostics only.
+   - Before sending, apply `research-investor-answer-audit` semantics. A failed audit means **rewrite**, not “show the audit” and not “show the backend blockers”.
 
 ## Stop conditions
 
-- **Formal `NEEDS_INFO`**: only after available automatic provider/Web paths cannot close a decision-relevant formal gap.
-- **Provisional view allowed**: when official certification is incomplete but enough authoritative evidence exists for a clearly labelled research interpretation.
-- **No invented precision**: never fabricate BUY authority, target price, position weight, stop, or entry range to avoid an incomplete formal chain.
+- Automatic provider/endpoint/Web paths must be exhausted before requesting user material.
+- If authoritative evidence is sufficient for a useful research view but not for precise execution rules, give the research view and explain the investment-relevant uncertainty only.
+- Never fabricate BUY authority, target price, position weight, stop, or entry range to hide uncertainty.
+- Never turn a backend state into the headline of a normal investor answer.
 - **No real brokerage execution**.

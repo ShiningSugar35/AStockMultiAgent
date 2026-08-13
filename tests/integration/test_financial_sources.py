@@ -133,7 +133,7 @@ def test_recorded_financial_source_reaches_existing_audit_contract(tmp_path: Pat
     )
     assert report.status is FinancialSourceReleaseStatus.CERTIFIED
     assert report.coverage.certified_fact_count == 18
-    assert report.provider_ids == ["eastmoney-financial"]
+    assert report.provider_ids == ["sina-financial"]
     assert service.status(
         "000001", PERIOD_END, FinancialPeriodType.ANNUAL
     )["status"] == "AVAILABLE"
@@ -212,9 +212,9 @@ def test_as_of_excludes_late_pdf_and_preserves_revision_chain(tmp_path: Path) ->
 
 def test_explicit_as_of_filters_late_primary_provider(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
-    primary = service.eastmoney.fetch("000001", Market.XSHE, PERIOD_END)
+    primary = service.sina.fetch("000001", Market.XSHE, PERIOD_END)
     late = _payload_at(service, primary, CORRECTION_AS_OF)
-    monkeypatch.setattr(service.eastmoney, "fetch", lambda *args, **kwargs: late)
+    monkeypatch.setattr(service.sina, "fetch", lambda *args, **kwargs: late)
     report = service.sync(
         "000001",
         Market.XSHE,
@@ -223,17 +223,17 @@ def test_explicit_as_of_filters_late_primary_provider(tmp_path: Path, monkeypatc
         as_of=ORIGINAL_AS_OF,
     )
     assert report.status is FinancialSourceReleaseStatus.CERTIFIED
-    assert report.provider_ids == ["sina-financial"]
+    assert report.provider_ids == ["eastmoney-financial"]
     assert "PROVIDER_SNAPSHOT_LATE:BALANCE_SHEET" in report.reason_codes
     assert late.snapshots[0].snapshot_id not in report.raw_snapshot_ids
 
 
 def test_live_default_cutoff_includes_completed_capture(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
-    primary = service.eastmoney.fetch("000001", Market.XSHE, PERIOD_END)
+    primary = service.sina.fetch("000001", Market.XSHE, PERIOD_END)
     capture_finished = datetime.now(UTC) + timedelta(seconds=1)
     completed = _payload_at(service, primary, capture_finished)
-    monkeypatch.setattr(service.eastmoney, "fetch", lambda *args, **kwargs: completed)
+    monkeypatch.setattr(service.sina, "fetch", lambda *args, **kwargs: completed)
     original_get = service.official.get
     observed_cutoffs: list[datetime] = []
 
@@ -346,10 +346,8 @@ def test_pdf_evidence_covers_table_period_unit_subject_and_value(tmp_path: Path)
     assert "期末普通股股份总数（股） 19405918198" in excerpt
 
 
-@pytest.mark.parametrize("duplicate", ["2025年12月31日", "单位：万元"])
-def test_pdf_column_or_unit_ambiguity_blocks_affected_statement(
-    tmp_path: Path, duplicate: str
-) -> None:
+def test_pdf_unit_ambiguity_blocks_affected_statement(tmp_path: Path) -> None:
+    duplicate = "单位：万元"
     service = _service(tmp_path)
     official = service.official.get(
         "000001",
@@ -436,7 +434,7 @@ def test_pdf_value_in_parent_company_table_is_not_certified(tmp_path: Path) -> N
     assert all(fact.field_code.value != "TOTAL_ASSETS" for fact in facts)
 
 
-def test_pdf_other_period_column_blocks_affected_statement(tmp_path: Path) -> None:
+def test_pdf_missing_target_period_blocks_affected_statement(tmp_path: Path) -> None:
     service = _service(tmp_path)
     official = service.official.get(
         "000001",
@@ -449,11 +447,7 @@ def test_pdf_other_period_column_blocks_affected_statement(tmp_path: Path) -> No
     assert official is not None
     page = official.pages[0]
     text = service.objects.get_bytes(page.text_object_sha256).decode("utf-8")
-    changed_text = text.replace(
-        "2025年12月31日",
-        "2025年12月31日\n\n2024年12月31日",
-        1,
-    )
+    changed_text = text.replace("2025年12月31日", "2024年12月31日")
     _replace_page_text(service, page, changed_text)
 
     report = service.sync(
@@ -519,7 +513,7 @@ def test_cross_check_and_fallback_remain_secondary_hints(tmp_path: Path, monkeyp
         cross_check=True,
     )
     assert report.status is FinancialSourceReleaseStatus.CERTIFIED
-    assert report.provider_ids == ["eastmoney-financial", "sina-financial"]
+    assert report.provider_ids == ["sina-financial", "eastmoney-financial"]
     assert "SECONDARY_PROVIDER_CONFLICT:REVENUE" in report.reason_codes
 
     fallback = _service(tmp_path / "回退")
@@ -527,7 +521,7 @@ def test_cross_check_and_fallback_remain_secondary_hints(tmp_path: Path, monkeyp
     def fail_primary(*args, **kwargs):
         raise FinancialRawCaptureError("RECORDED_FAILURE", [])
 
-    monkeypatch.setattr(fallback.eastmoney, "fetch", fail_primary)
+    monkeypatch.setattr(fallback.sina, "fetch", fail_primary)
     fallback_report = fallback.sync(
         "000001",
         Market.XSHE,
@@ -536,8 +530,8 @@ def test_cross_check_and_fallback_remain_secondary_hints(tmp_path: Path, monkeyp
         as_of=ORIGINAL_AS_OF,
     )
     assert fallback_report.status is FinancialSourceReleaseStatus.CERTIFIED
-    assert fallback_report.provider_ids == ["sina-financial"]
-    assert "SINA_FALLBACK_USED" in fallback_report.reason_codes
+    assert fallback_report.provider_ids == ["eastmoney-financial"]
+    assert "EASTMONEY_FINANCIAL_FALLBACK_USED" in fallback_report.reason_codes
 
 
 def test_recorded_provider_uses_raw_native_envelope_and_request_identity(

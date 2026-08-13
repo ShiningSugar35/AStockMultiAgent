@@ -8,6 +8,7 @@ from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
 from astock.providers.probe import ProviderProbeService, RawProbeResponse
 from astock.providers.sina import Sina5mProvider
 from astock.providers.sina_financial import SinaFinancialProvider
+from astock.providers.sina_reference import SinaReferenceProvider
 
 __all__ = [
     "EastMoney5mProvider",
@@ -18,6 +19,7 @@ __all__ = [
     "RawProbeResponse",
     "Sina5mProvider",
     "SinaFinancialProvider",
+    "SinaReferenceProvider",
     "get_provider",
     "load_provider_registry",
 ]

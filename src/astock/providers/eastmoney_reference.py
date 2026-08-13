@@ -18,7 +18,18 @@ from astock.schemas import FetchStatus, Market, SourceSnapshot
 class EastMoneyReferenceProvider(HttpProviderBase):
     provider_id = "eastmoney-reference"
     master_endpoint = "https://push2.eastmoney.com/api/qt/clist/get"
+    identity_endpoint = "https://push2.eastmoney.com/api/qt/stock/get"
     daily_endpoint = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    _LIVE_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": "https://quote.eastmoney.com/",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
 
     def __init__(
         self,
@@ -28,6 +39,12 @@ class EastMoneyReferenceProvider(HttpProviderBase):
         *,
         client: httpx.Client | None = None,
     ) -> None:
+        if client is None:
+            client = httpx.Client(
+                timeout=12.0,
+                follow_redirects=True,
+                headers=self._LIVE_HEADERS,
+            )
         super().__init__(objects, state, client=client)
         self.fixture_root = fixture_root.resolve()
 
@@ -51,6 +68,34 @@ class EastMoneyReferenceProvider(HttpProviderBase):
         snapshot = self._persist_stable_response(response)
         payload = _decode_json(response.content)
         payload["_astock_request"] = {"market": market.value if market else "ALL"}
+        return payload, snapshot
+
+    def fetch_identity(
+        self,
+        symbol: str,
+        market: Market,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[str, object], SourceSnapshot]:
+        if live:
+            response, _ = self._get(
+                self.identity_endpoint,
+                params={
+                    "secid": _secid(symbol, market),
+                    "fields": "f57,f58,f84,f85,f116,f117,f127,f189",
+                },
+            )
+        else:
+            response = self._recorded_response(
+                "instrument_identity.json", self.identity_endpoint
+            )
+        snapshot = self._persist_stable_response(response)
+        payload = _decode_json(response.content)
+        payload["_astock_request"] = {
+            "market": market.value,
+            "symbol": symbol,
+            "purpose": "INSTRUMENT_IDENTITY_EXACT",
+        }
         return payload, snapshot
 
     def fetch_master_page(

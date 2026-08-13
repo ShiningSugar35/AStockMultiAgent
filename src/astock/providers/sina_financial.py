@@ -9,7 +9,7 @@ from astock.providers.financial_base import (
     FinancialProviderPayload,
     FinancialRawCaptureError,
 )
-from astock.schemas import Market
+from astock.schemas import Market, SourceSnapshot
 
 _SINA_LIVE_FIELD_ALIASES = {
     "BALANCE_SHEET": {
@@ -54,6 +54,45 @@ class SinaFinancialProvider(FinancialProviderBase):
         "INCOME_STATEMENT": "lrb",
         "CASH_FLOW_STATEMENT": "llb",
     }
+
+    def discover_report_periods(
+        self,
+        company_id: str,
+        market: Market,
+        *,
+        live: bool = False,
+    ) -> tuple[list[date], SourceSnapshot]:
+        """Return source-declared report dates instead of guessing a disclosure calendar."""
+
+        if not live:
+            payload, snapshot = self._recorded_json(company_id, market, "period-discovery")
+            responses = _recorded_responses(payload, "sina-financial-raw-fixture-v1")
+            dates = sorted(
+                {
+                    date.fromisoformat(str(row["report_date"])[:10])
+                    for row in _sina_rows(responses["BALANCE_SHEET"], "BALANCE_SHEET")
+                    if row.get("report_date")
+                },
+                reverse=True,
+            )
+            return dates, snapshot
+        paper_code = f"{_market_prefix(market)}{company_id}"
+        payload, snapshot = self._capture_json(
+            self.endpoint,
+            params={
+                "paperCode": paper_code,
+                "source": "fzb",
+                "type": 0,
+                "page": 1,
+                "num": 100,
+            },
+            request_context={
+                "company_id": company_id,
+                "market": market.value,
+                "purpose": "REPORT_PERIOD_DISCOVERY",
+            },
+        )
+        return _sina_report_dates(payload), snapshot
 
     def fetch(
         self,
@@ -182,6 +221,27 @@ def _sina_rows(
     if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
         raise ValueError("Sina financial rows are malformed")
     return [dict(row) for row in data if isinstance(row, dict)]
+
+
+def _sina_report_dates(payload: dict[str, object]) -> list[date]:
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise ValueError("Sina financial result is malformed")
+    status = result.get("status")
+    if isinstance(status, dict) and status.get("code") not in {0, "0", None}:
+        raise ValueError("Sina financial query failed")
+    data = result.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("report_date"), list):
+        raise ValueError("Sina financial report-date index is malformed")
+    dates: list[date] = []
+    for item in data["report_date"]:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("date_value")
+        if raw is None:
+            continue
+        dates.append(date.fromisoformat(_normalize_sina_report_date(str(raw))))
+    return sorted(set(dates), reverse=True)
 
 
 def _sina_scope(value: object) -> str | None:

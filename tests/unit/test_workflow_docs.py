@@ -64,9 +64,10 @@ def test_current_company_and_evidence_workflows_lock_provider_web_manual_order()
 
     assert "research-acquire-current" in current
     assert "question timestamp" in current
-    assert "external_research_needs" in current
+    assert "1800 seconds" in current
     assert "authoritative Web" in current
-    assert "Only after local/API" in current
-    assert "provider fallback" in evidence
+    assert "research-investor-answer-audit" in current
+    assert "automatic provider/endpoint/web paths" in current.casefold()
+    assert "1800-second automatic budget" in evidence
     assert "Authoritative Web fallback" in evidence
     assert "Manual intervention is last" in evidence

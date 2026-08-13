@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -78,6 +79,72 @@ def test_recorded_search_and_download_are_snapshotted(tmp_path: Path) -> None:
     assert objects.get_bytes(downloaded.snapshot.object_sha256) == PDF_BYTES
     with state.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_snapshot_detail").fetchone()[0] == 2
+
+
+def test_zero_result_resolves_current_cninfo_org_id_and_retries_exact_query(
+    tmp_path: Path,
+) -> None:
+    request_600989 = DisclosureSearchRequest(
+        symbol="600989",
+        exchange=DisclosureExchange.SSE,
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 8, 13),
+        category=DisclosureCategory.ANNUAL_REPORT,
+        keyword="2025年年度报告",
+    )
+    empty = json.dumps(
+        {"totalAnnouncement": 0, "totalpages": 0, "announcements": []}
+    ).encode()
+    discovery = json.dumps(
+        {
+            "totalAnnouncement": 1,
+            "totalpages": 1,
+            "announcements": [{"secCode": "600989", "orgId": "9900019573"}],
+        }
+    ).encode()
+    annual = json.dumps(
+        {
+            "totalAnnouncement": 1,
+            "totalpages": 1,
+            "announcements": [
+                {
+                    "secCode": "600989",
+                    "secName": "宝丰能源",
+                    "orgId": "9900019573",
+                    "announcementId": "annual-600989",
+                    "announcementTitle": "宁夏宝丰能源集团股份有限公司2025年年度报告",
+                    "announcementTime": 1773331200000,
+                    "adjunctUrl": "finalpage/2026-03-13/annual-600989.PDF",
+                }
+            ],
+        }
+    ).encode()
+    calls: list[dict[str, list[str]]] = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        form = parse_qs(http_request.content.decode())
+        calls.append(form)
+        if form.get("stock") == ["600989,gssh0600989"]:
+            body = empty
+        elif form.get("stock") == ["600989,9900019573"]:
+            body = annual
+        else:
+            assert form.get("stock") is None
+            assert form["searchkey"] == ["600989"]
+            body = discovery
+        return httpx.Response(200, content=body, request=http_request)
+
+    cninfo, state, _ = provider(tmp_path, handler)
+    batch = cninfo.search(request_600989)
+
+    assert len(calls) == 3
+    assert calls[0]["column"] == ["sse"]
+    assert batch.total_count == 1
+    assert batch.announcements[0].symbol == "600989"
+    assert batch.announcements[0].org_id == "9900019573"
+    assert len(batch.resolution_snapshot_ids) == 2
+    with state.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM source_snapshot_detail").fetchone()[0] == 3
 
 
 def test_org_id_mapping_is_deterministic() -> None:

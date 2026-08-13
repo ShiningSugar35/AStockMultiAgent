@@ -1,4 +1,4 @@
-"""Fail-closed exact native-PDF financial-number certification."""
+"""Fail-closed native-PDF financial-number certification for real issuer reports."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from astock.evidence import ClaimEvidenceService, EvidenceRepository
 from astock.financial_sources.config import FinancialFieldMapping
 from astock.financial_sources.official import OfficialFinancialReport
 from astock.schemas import (
+    DocumentPage,
     EvidenceGrade,
     FactStatus,
     FinancialFact,
@@ -38,16 +39,32 @@ _UNITS = {
     "百万元": FinancialUnit.MILLION_CNY,
     "亿元": FinancialUnit.HUNDRED_MILLION_CNY,
 }
+_UNIT_MULTIPLIERS = {
+    FinancialUnit.CNY: Decimal("1"),
+    FinancialUnit.THOUSAND_CNY: Decimal("1000"),
+    FinancialUnit.TEN_THOUSAND_CNY: Decimal("10000"),
+    FinancialUnit.MILLION_CNY: Decimal("1000000"),
+    FinancialUnit.HUNDRED_MILLION_CNY: Decimal("100000000"),
+    FinancialUnit.SHARES: Decimal("1"),
+}
 _TABLE_HEADING_RE = re.compile(
     r"(?m)^[ \t]*(?P<title>(?:合并|母公司|公司)?"
     r"(?:资产负债表|利润表|现金流量表))[ \t]*$"
 )
-_PERIOD_HEADER_RE = re.compile(
-    r"(?m)^[ \t]*(?:\d{4}年\d{1,2}月\d{1,2}日|\d{4}年度|"
-    r"\d{4}年1[-－—至]\d{1,2}月)[ \t]*$"
+_CURRENCY_TOKEN_RE = re.compile(r"币种\s*[:：]\s*人民币")
+_UNIT_TOKEN_RE = re.compile(r"单位\s*[:：]\s*(百万元|万元|千元|亿元|元)")
+_GENERIC_PERIOD_TOKEN_RE = re.compile(
+    r"\d{4}\s*年\s*(?:"
+    r"\d{1,2}\s*月\s*\d{1,2}\s*日|"
+    r"度|半\s*年\s*度|(?:第?[一三123])\s*季\s*度|"
+    r"1\s*[-－—至]\s*(?:3|6|9|12)\s*月"
+    r")"
 )
-_CURRENCY_HEADER_RE = re.compile(r"(?m)^[ \t]*币种：人民币[ \t]*$")
-_UNIT_HEADER_RE = re.compile(r"(?m)^[ \t]*单位：(百万元|万元|千元|亿元|元)[ \t]*$")
+_NUMBER_TOKEN_RE = re.compile(
+    r"(?<![\d.])(?:\([0-9][0-9,]*(?:\.[0-9]+)?\)|"
+    r"[−-]?[0-9][0-9,]*(?:\.[0-9]+)?)(?![\d.])"
+)
+_HEADER_SCAN_CHARS = 1800
 
 
 class FinancialPdfCertifier:
@@ -90,7 +107,10 @@ class FinancialPdfCertifier:
                 reasons.append(f"{code}:{mapping.field_code.value}")
                 continue
             page_id, char_start, char_end, value, unit = matches[0]
-            if hint.reported_value != value or hint.unit is not unit:
+            hint_value = hint.reported_value
+            if hint_value is None:
+                raise ValueError("financial certification hint unexpectedly lost its value")
+            if not _values_equivalent(hint_value, hint.unit, value, unit):
                 reasons.append(f"SECONDARY_VALUE_CONFLICT:{mapping.field_code.value}")
             evidence = self.evidence.create_page_evidence(
                 page_id=page_id,
@@ -142,87 +162,237 @@ class FinancialPdfCertifier:
         period_end: date,
         period_type: FinancialPeriodType,
     ) -> list[tuple[str, int, int, Decimal, FinancialUnit]]:
-        matches = []
-        for page in report.pages:
-            if page.extraction_method is not PageExtractionMethod.NATIVE_TEXT or page.ocr_applied:
-                continue
-            text = self.objects.get_bytes(page.text_object_sha256).decode("utf-8")
-            heading = _HEADINGS[mapping.statement_type]
-            region = _statement_region(text, heading)
-            if region is None:
-                continue
-            region_text, region_start, heading_end = region
-            period_column = _period_column(
-                period_end, period_type, mapping.statement_type
-            )
-            period_headers = list(_PERIOD_HEADER_RE.finditer(region_text))
-            target_periods = [
-                match
-                for match in period_headers
-                if match.group(0).strip() == period_column
-            ]
-            if len(period_headers) != 1 or len(target_periods) != 1:
-                continue
-            currency_headers = list(_CURRENCY_HEADER_RE.finditer(region_text))
-            unit_headers = list(_UNIT_HEADER_RE.finditer(region_text))
-            if len(currency_headers) != 1 or len(unit_headers) != 1:
-                continue
-            unit = _UNITS[unit_headers[0].group(1)]
-            label = (
-                f"{mapping.official_label}（股）"
-                if mapping.unit is FinancialUnit.SHARES
-                else mapping.official_label
-            )
-            line_pattern = re.compile(
-                rf"(?m)^{re.escape(label)}[ \t]+([^\r\n]+)$"
-            )
-            line_matches = list(line_pattern.finditer(region_text))
-            if len(line_matches) != 1:
-                continue
-            period_header = target_periods[0]
-            currency_header = currency_headers[0]
-            unit_header = unit_headers[0]
-            value_line = line_matches[0]
-            if not (
-                heading_end
-                <= period_header.start()
-                < currency_header.start()
-                < unit_header.start()
-                < value_line.start()
+        statement = _statement_segments(
+            report,
+            self.objects,
+            _HEADINGS[mapping.statement_type],
+        )
+        if statement is None:
+            return []
+        segments, heading_page_id, heading_start = statement
+        header_text = segments[0][1][segments[0][2] :][: _HEADER_SCAN_CHARS]
+        header = _statement_header_identity(
+            header_text,
+            period_end,
+            period_type,
+            mapping.statement_type,
+        )
+        if header is None:
+            return []
+        statement_unit, period_column_count = header
+        field_unit = (
+            FinancialUnit.SHARES
+            if mapping.unit is FinancialUnit.SHARES
+            else statement_unit
+        )
+        label_re = _field_label_pattern(mapping)
+        matches: list[tuple[str, int, int, Decimal, FinancialUnit]] = []
+        for page_id, text, segment_start, segment_end in segments:
+            segment_text = text[segment_start:segment_end]
+            for row_start, row_end, value in _logical_row_values(
+                segment_text,
+                label_re,
+                period_column_count,
             ):
-                continue
-            raw_value = value_line.group(1).strip()
-            parsed = _parse_decimal(raw_value)
-            if parsed is None:
-                continue
-            field_unit = FinancialUnit.SHARES if mapping.unit is FinancialUnit.SHARES else unit
-            matches.append(
-                (
-                    page.page_id,
-                    region_start,
-                    region_start + value_line.end(),
-                    parsed,
-                    field_unit,
+                absolute_start = segment_start + row_start
+                absolute_end = segment_start + row_end
+                evidence_start = (
+                    heading_start
+                    if page_id == heading_page_id and heading_start <= absolute_start
+                    else absolute_start
                 )
-            )
+                matches.append(
+                    (
+                        page_id,
+                        evidence_start,
+                        absolute_end,
+                        value,
+                        field_unit,
+                    )
+                )
         return matches
 
 
-def _statement_region(text: str, heading: str) -> tuple[str, int, int] | None:
-    headings = list(_TABLE_HEADING_RE.finditer(text))
-    targets = [match for match in headings if match.group("title") == heading]
+def _statement_segments(
+    report: OfficialFinancialReport,
+    objects: ObjectStore,
+    heading: str,
+) -> tuple[list[tuple[str, str, int, int]], str, int] | None:
+    pages = sorted(report.pages, key=lambda item: item.page_number)
+    native: list[tuple[DocumentPage, str, list[re.Match[str]]]] = []
+    targets: list[tuple[int, re.Match[str]]] = []
+    for page in pages:
+        if page.extraction_method is not PageExtractionMethod.NATIVE_TEXT or page.ocr_applied:
+            continue
+        text = objects.get_bytes(page.text_object_sha256).decode("utf-8")
+        headings = list(_TABLE_HEADING_RE.finditer(text))
+        native.append((page, text, headings))
+        for match in headings:
+            if match.group("title") == heading:
+                targets.append((len(native) - 1, match))
     if len(targets) != 1:
         return None
-    target = targets[0]
-    end = next(
-        (match.start() for match in headings if match.start() > target.start()),
-        len(text),
-    )
-    return text[target.start() : end], target.start(), target.end() - target.start()
+    start_index, target = targets[0]
+    segments: list[tuple[str, str, int, int]] = []
+    heading_page = native[start_index][0]
+    for index in range(start_index, len(native)):
+        page, text, headings = native[index]
+        if index == start_index:
+            segment_start = target.start()
+            later = [match.start() for match in headings if match.start() > target.start()]
+            segment_end = min(later) if later else len(text)
+            segments.append((page.page_id, text, segment_start, segment_end))
+            if later:
+                break
+            continue
+        if headings:
+            segments.append((page.page_id, text, 0, headings[0].start()))
+            break
+        segments.append((page.page_id, text, 0, len(text)))
+    return segments, heading_page.page_id, target.start()
+
+
+def _statement_header_identity(
+    header_text: str,
+    period_end: date,
+    period_type: FinancialPeriodType,
+    statement_type: FinancialStatementType,
+) -> tuple[FinancialUnit, int] | None:
+    currency = list(_CURRENCY_TOKEN_RE.finditer(header_text))
+    units = list(_UNIT_TOKEN_RE.finditer(header_text))
+    if len(currency) != 1 or len(units) != 1:
+        return None
+    period_patterns = _target_period_patterns(period_end, period_type, statement_type)
+    target_matches: list[re.Match[str]] = []
+    for pattern in period_patterns:
+        found = list(pattern.finditer(header_text))
+        if found:
+            target_matches = found
+            break
+    if not target_matches:
+        return None
+    period_column_count = 1
+    for target in target_matches:
+        line_start = header_text.rfind("\n", 0, target.start()) + 1
+        line_end = header_text.find("\n", target.end())
+        if line_end < 0:
+            line_end = len(header_text)
+        line = header_text[line_start:line_end]
+        period_column_count = max(
+            period_column_count,
+            len(_GENERIC_PERIOD_TOKEN_RE.findall(line)),
+        )
+    return _UNITS[units[0].group(1)], period_column_count
+
+
+def _target_period_patterns(
+    period_end: date,
+    period_type: FinancialPeriodType,
+    statement_type: FinancialStatementType,
+) -> list[re.Pattern[str]]:
+    year = period_end.year
+    if statement_type is FinancialStatementType.BALANCE_SHEET:
+        return [
+            re.compile(
+                rf"{year}\s*年\s*{period_end.month}\s*月\s*{period_end.day}\s*日"
+            )
+        ]
+    if period_type is FinancialPeriodType.ANNUAL:
+        return [re.compile(rf"{year}\s*年\s*度")]
+    if period_type is FinancialPeriodType.SEMIANNUAL:
+        return [
+            re.compile(rf"{year}\s*年\s*半\s*年\s*度"),
+            re.compile(rf"{year}\s*年\s*1\s*[-－—至]\s*6\s*月"),
+        ]
+    quarter = "1" if period_end.month == 3 else "3"
+    chinese = "一" if period_end.month == 3 else "三"
+    return [
+        re.compile(rf"{year}\s*年\s*(?:第\s*)?{chinese}\s*季\s*度"),
+        re.compile(rf"{year}\s*年\s*第?{quarter}\s*季\s*度"),
+        re.compile(rf"{year}\s*年\s*1\s*[-－—至]\s*{period_end.month}\s*月"),
+    ]
+
+
+def _label_pattern(label: str) -> re.Pattern[str]:
+    escaped = r"\s*".join(re.escape(character) for character in label)
+    return re.compile(rf"(?<![\u4e00-\u9fff]){escaped}(?![\u4e00-\u9fff])")
+
+
+def _field_label_pattern(mapping: FinancialFieldMapping) -> re.Pattern[str]:
+    if mapping.field_code is FinancialFieldCode.TOTAL_EQUITY:
+        return re.compile(
+            r"(?<![\u4e00-\u9fff])"
+            r"所\s*有\s*者\s*权\s*益"
+            r"(?:\s*[（(]\s*或\s*股\s*东\s*权"
+            r"[\s\d,().（）−\-]*"
+            r"益\s*[）)])?"
+            r"\s*合\s*计"
+            r"(?![\u4e00-\u9fff])"
+        )
+    if mapping.field_code is FinancialFieldCode.EXCHANGE_EFFECT:
+        return re.compile(
+            r"(?<![\u4e00-\u9fff])"
+            r"汇\s*率\s*变\s*动\s*对\s*现\s*金\s*及\s*现\s*金\s*等\s*价\s*物\s*的\s*影"
+            r"[\s\d,().（）−\-]*"
+            r"响(?![\u4e00-\u9fff])"
+        )
+    return _label_pattern(mapping.official_label)
+
+
+def _logical_row_values(
+    segment_text: str,
+    label_re: re.Pattern[str],
+    period_column_count: int,
+) -> list[tuple[int, int, Decimal]]:
+    lines = list(re.finditer(r"(?m)^.*(?:\n|$)", segment_text))
+    result: list[tuple[int, int, Decimal]] = []
+    for start_index, first_line in enumerate(lines):
+        first_line_end = first_line.end()
+        for size in (1, 2, 3):
+            end_index = start_index + size - 1
+            if end_index >= len(lines):
+                break
+            row_start = first_line.start()
+            row_end = lines[end_index].end()
+            window = segment_text[row_start:row_end]
+            label_match = label_re.search(window)
+            if label_match is None:
+                continue
+            first_relative_end = first_line_end - row_start
+            if label_match.start() >= first_relative_end:
+                continue
+            numeric = [
+                parsed
+                for token in _NUMBER_TOKEN_RE.findall(window)
+                if (parsed := _parse_decimal(token)) is not None
+            ]
+            if len(numeric) < period_column_count:
+                continue
+            result.append((row_start, row_end, numeric[-period_column_count]))
+            break
+    return result
+
+
+def _values_equivalent(
+    left: Decimal,
+    left_unit: FinancialUnit,
+    right: Decimal,
+    right_unit: FinancialUnit,
+) -> bool:
+    left_multiplier = _UNIT_MULTIPLIERS.get(left_unit)
+    right_multiplier = _UNIT_MULTIPLIERS.get(right_unit)
+    if left_multiplier is None or right_multiplier is None:
+        return left == right and left_unit is right_unit
+    return left * left_multiplier == right * right_multiplier
 
 
 def _parse_decimal(value: str) -> Decimal | None:
-    normalized = value.replace(",", "").replace(" ", "").replace("−", "-")
+    normalized = (
+        value.replace(",", "")
+        .replace(" ", "")
+        .replace("−", "-")
+        .replace("—", "-")
+    )
     if normalized in {"", "-", "--", "不适用"}:
         return None
     if normalized.startswith("(") and normalized.endswith(")"):
@@ -232,20 +402,6 @@ def _parse_decimal(value: str) -> Decimal | None:
     except InvalidOperation:
         return None
     return result if result.is_finite() else None
-
-
-def _period_column(
-    period_end: date,
-    period_type: FinancialPeriodType,
-    statement_type: FinancialStatementType,
-) -> str:
-    if statement_type is FinancialStatementType.BALANCE_SHEET:
-        return f"{period_end.year}年{period_end.month}月{period_end.day}日"
-    if period_type is FinancialPeriodType.ANNUAL:
-        return f"{period_end.year}年度"
-    if period_type is FinancialPeriodType.SEMIANNUAL:
-        return f"{period_end.year}年1-6月"
-    return f"{period_end.year}年1-{period_end.month}月"
 
 
 __all__ = ["FinancialPdfCertifier"]

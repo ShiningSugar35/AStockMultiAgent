@@ -16,11 +16,11 @@ Primary skill: `$evidence-investigation`.
    - Check registered snapshots/artifacts and their audit status before fetching again.
    - A valid existing source is preferred to duplicate collection.
 
-3. **Deterministic provider fallback**
-   - Try the configured local/API source.
-   - Retry only retryable transient errors with bounded attempts.
-   - Move to configured backup providers when the preferred provider fails or its schema cannot safely satisfy the requested capability.
-   - Do not interpret a provider failure as evidence against the underlying fact.
+3. **Diagnose, repair and fallback deterministically**
+   - Current-investment recovery shares the 1800-second automatic budget from the orchestrator.
+   - Diagnose whether the failure is transport, rate-limit/access, provider schema drift, request-binding drift, or data-quality failure; preserve that detail internally.
+   - Retry only retryable transient errors with bounded attempts/circuit breaking. Prefer a more reliable endpoint for the same exact capability before falling back to a broad/bulk endpoint.
+   - Move to configured backup providers when the preferred source still cannot safely answer the question. Do not interpret a provider failure as evidence against the underlying fact.
 
 4. **Authoritative Web fallback**
    - If local/provider paths remain insufficient, automatically search the Web.

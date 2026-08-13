@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,12 +13,16 @@ from astock.cli import app
 from astock.core.errors import FailureClass, ProviderError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.market_data.reference import MarketReferenceService, _parse_eastmoney_instruments
+from astock.market_data.reference import (
+    MarketReferenceService,
+    _parse_eastmoney_instruments,
+    _parse_sina_daily,
+)
 from astock.market_data.reference_storage import ReferenceParquetStore
-from astock.providers.sina_financial import _normalize_sina, _sina_rows
+from astock.providers.sina_financial import _normalize_sina, _sina_report_dates, _sina_rows
 from astock.research.acquisition import CurrentResearchAcquisitionService
-from astock.research.presentation import investor_view_from_run
-from astock.schemas import FetchStatus, SourceSnapshot
+from astock.research.presentation import audit_investor_answer, investor_view_from_run
+from astock.schemas import FetchStatus, FinancialPeriodType, SourceSnapshot
 from astock.schemas.reference_data import Market
 from astock.schemas.research_acquisition import (
     AcquisitionAttempt,
@@ -96,10 +101,10 @@ def _reference_service(tmp_path: Path) -> MarketReferenceService:
     )
 
 
-def _snapshot(name: str) -> SourceSnapshot:
+def _snapshot(name: str, source_id: str = "eastmoney-reference") -> SourceSnapshot:
     return SourceSnapshot(
         snapshot_id=f"snapshot:{name}",
-        source_id="eastmoney-reference",
+        source_id=source_id,
         object_sha256="a" * 64,
         fetched_at=NOW,
         available_to_system_at=NOW,
@@ -149,6 +154,113 @@ def test_reference_retry_is_bounded_and_only_for_retryable_errors(
     assert len(calls) == 1
 
 
+def test_exact_instrument_identity_prefers_single_security_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _reference_service(tmp_path)
+    monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+
+    def exact(symbol: str, market: Market, *, live: bool = False):
+        assert symbol == "600989"
+        assert market is Market.XSHG
+        assert live
+        return (
+            {
+                "rc": 0,
+                "_astock_request": {
+                    "market": "XSHG",
+                    "symbol": "600989",
+                    "purpose": "INSTRUMENT_IDENTITY_EXACT",
+                },
+                "data": {"f57": "600989", "f58": "宝丰能源", "f189": 20190516},
+            },
+            _snapshot("exact"),
+        )
+
+    monkeypatch.setattr(service.eastmoney, "fetch_identity", exact)
+    monkeypatch.setattr(
+        service.eastmoney,
+        "fetch_master_page",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("pagination must not run after exact identity succeeds")
+        ),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(service, "_release", lambda **kwargs: captured.update(kwargs) or kwargs)
+
+    service.sync_instrument_identity("600989", Market.XSHG, live=True)
+
+    records = captured["records"]
+    assert isinstance(records, list) and len(records) == 1
+    assert records[0].symbol == "600989"
+    assert records[0].name == "宝丰能源"
+    assert records[0].listing_date == date(2019, 5, 16)
+    assert captured["provider_id"] == "eastmoney-reference"
+    assert captured["complete"] is True
+
+
+def test_exact_instrument_identity_falls_back_to_sina_before_bulk_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _reference_service(tmp_path)
+    monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        service.eastmoney,
+        "fetch_identity",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProviderError(
+                "eastmoney exact unavailable",
+                failure_class=FailureClass.NETWORK,
+                retryable=False,
+            )
+        ),
+    )
+
+    def sina_exact(symbol: str, market: Market, *, live: bool = False):
+        assert symbol == "600989"
+        assert market is Market.XSHG
+        assert live
+        return (
+            {
+                "provider_symbol": "sh600989",
+                "name": "宝丰能源",
+                "_astock_request": {
+                    "market": "XSHG",
+                    "symbol": "600989",
+                    "provider_symbol": "sh600989",
+                    "purpose": "INSTRUMENT_IDENTITY_EXACT",
+                },
+            },
+            _snapshot("sina-exact", "sina-reference"),
+        )
+
+    monkeypatch.setattr(service.sina, "fetch_identity", sina_exact)
+    monkeypatch.setattr(
+        service.eastmoney,
+        "fetch_master_page",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bulk pagination must not run after Sina exact fallback")
+        ),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(service, "_release", lambda **kwargs: captured.update(kwargs) or kwargs)
+
+    service.sync_instrument_identity("600989", Market.XSHG, live=True)
+
+    records = captured["records"]
+    assert isinstance(records, list) and len(records) == 1
+    assert records[0].symbol == "600989"
+    assert records[0].name == "宝丰能源"
+    assert captured["provider_id"] == "sina-reference"
+    assert captured["complete"] is True
+    reasons = captured["reasons"]
+    assert isinstance(reasons, list)
+    assert "EASTMONEY_EXACT_IDENTITY_FAILED" in reasons
+    assert "SINA_FALLBACK_USED" in reasons
+
+
 def test_exact_instrument_identity_paginates_eastmoney_after_baostock_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -156,6 +268,28 @@ def test_exact_instrument_identity_paginates_eastmoney_after_baostock_failure(
     service = _reference_service(tmp_path)
     pages: list[int] = []
     monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        service.eastmoney,
+        "fetch_identity",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProviderError(
+                "exact unavailable",
+                failure_class=FailureClass.NETWORK,
+                retryable=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        service.sina,
+        "fetch_identity",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProviderError(
+                "sina exact unavailable",
+                failure_class=FailureClass.NETWORK,
+                retryable=False,
+            )
+        ),
+    )
 
     def page(market: Market, number: int, *, live: bool = False):
         assert market is Market.XSHG
@@ -228,6 +362,156 @@ def test_corporate_action_official_lookup_runs_even_when_baostock_is_unavailable
     assert "OFFICIAL_INDEX_CAPTURED_NO_MATCH" in reasons
 
 
+def test_daily_market_falls_back_to_sina_when_baostock_and_eastmoney_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _reference_service(tmp_path)
+    monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        service.eastmoney,
+        "fetch_daily",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProviderError(
+                "eastmoney unavailable",
+                failure_class=FailureClass.NETWORK,
+                retryable=False,
+            )
+        ),
+    )
+
+    def sina_daily(
+        symbol: str,
+        market: Market,
+        start: str,
+        end: str,
+        *,
+        live: bool = False,
+    ):
+        assert (symbol, market, start, end, live) == (
+            "600989",
+            Market.XSHG,
+            "2026-08-10",
+            "2026-08-12",
+            True,
+        )
+        return (
+            {
+                "result": {
+                    "status": {"code": 0},
+                    "data": [
+                        {
+                            "day": "2026-08-10",
+                            "open": "23.10",
+                            "high": "23.80",
+                            "low": "22.95",
+                            "close": "23.60",
+                            "volume": "21000000",
+                        },
+                        {
+                            "day": "2026-08-11",
+                            "open": "23.60",
+                            "high": "24.00",
+                            "low": "23.20",
+                            "close": "23.75",
+                            "volume": "18000000",
+                        },
+                        {
+                            "day": "2026-08-12",
+                            "open": "23.70",
+                            "high": "23.90",
+                            "low": "23.10",
+                            "close": "23.43",
+                            "volume": "19500000",
+                        },
+                    ],
+                },
+                "_astock_request": {
+                    "market": "XSHG",
+                    "symbol": "600989",
+                    "provider_symbol": "sh600989",
+                    "start": "2026-08-10",
+                    "end": "2026-08-12",
+                    "scale": 240,
+                    "adjustment": "NONE",
+                    "volume_unit": "SHARE",
+                },
+            },
+            _snapshot("sina-daily", "sina-reference"),
+        )
+
+    monkeypatch.setattr(service.sina, "fetch_daily", sina_daily)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(service, "_release", lambda **kwargs: captured.update(kwargs) or kwargs)
+
+    service.sync_daily(
+        "600989",
+        Market.XSHG,
+        date(2026, 8, 10),
+        date(2026, 8, 12),
+        live=True,
+    )
+
+    records = captured["records"]
+    assert isinstance(records, list) and len(records) == 3
+    assert records[-1].close == Decimal("23.43")
+    assert records[-1].amount is None
+    assert captured["provider_id"] == "sina-reference"
+    reasons = captured["reasons"]
+    assert isinstance(reasons, list)
+    assert "EASTMONEY_FALLBACK_FAILED" in reasons
+    assert "SINA_FALLBACK_USED" in reasons
+
+
+def test_sina_daily_drops_incomplete_current_session_before_shanghai_close() -> None:
+    available = datetime(2026, 8, 13, 3, 0, tzinfo=UTC)
+    payload: dict[str, object] = {
+        "result": {
+            "status": {"code": 0},
+            "data": [
+                {
+                    "day": "2026-08-12",
+                    "open": "23.70",
+                    "high": "23.90",
+                    "low": "23.10",
+                    "close": "23.43",
+                    "volume": "19500000",
+                },
+                {
+                    "day": "2026-08-13",
+                    "open": "23.60",
+                    "high": "23.64",
+                    "low": "23.06",
+                    "close": "23.10",
+                    "volume": "42961910",
+                },
+            ],
+        },
+        "_astock_request": {
+            "market": "XSHG",
+            "symbol": "600989",
+            "provider_symbol": "sh600989",
+            "start": "2026-08-12",
+            "end": "2026-08-13",
+            "scale": 240,
+            "adjustment": "NONE",
+            "volume_unit": "SHARE",
+        },
+    }
+
+    records = _parse_sina_daily(
+        payload,
+        "snapshot:sina",
+        available,
+        "600989",
+        Market.XSHG,
+        date(2026, 8, 12),
+        date(2026, 8, 13),
+    )
+
+    assert [record.session_date for record in records] == [date(2026, 8, 12)]
+
+
 def test_sina_current_dict_shape_preserves_native_scope_currency_and_converts_yuan() -> None:
     payload: dict[str, object] = {
         "result": {
@@ -272,6 +556,67 @@ def test_sina_current_dict_shape_preserves_native_scope_currency_and_converts_yu
     ]
 
 
+def test_sina_report_period_index_discovers_early_disclosed_half_year() -> None:
+    payload: dict[str, object] = {
+        "result": {
+            "status": {"code": 0},
+            "data": {
+                "report_date": [
+                    {"date_value": "20260630"},
+                    {"date_value": "20260331"},
+                    {"date_value": "20251231"},
+                ]
+            },
+        }
+    }
+
+    assert _sina_report_dates(payload) == [
+        date(2026, 6, 30),
+        date(2026, 3, 31),
+        date(2025, 12, 31),
+    ]
+
+
+def test_current_period_discovery_uses_actual_disclosed_period_not_month_guess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    paths.ensure_directories()
+    state = StateStore(paths.state_db, PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = CurrentResearchAcquisitionService(paths, state, ObjectStore(paths.objects))
+
+    class PeriodProvider:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def discover_report_periods(self, *_args: object, **_kwargs: object):
+            return (
+                [date(2026, 6, 30), date(2026, 3, 31), date(2025, 12, 31)],
+                SimpleNamespace(snapshot_id="period-index"),
+            )
+
+    monkeypatch.setattr("astock.research.acquisition.SinaFinancialProvider", PeriodProvider)
+
+    specs = service._discover_financial_periods(
+        "600989", Market.XSHG, date(2026, 8, 13)
+    )
+
+    assert specs == [
+        (
+            AcquisitionCapability.FINANCIAL_ANNUAL,
+            date(2025, 12, 31),
+            FinancialPeriodType.ANNUAL,
+        ),
+        (
+            AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+            date(2026, 6, 30),
+            FinancialPeriodType.SEMIANNUAL,
+        ),
+    ]
+
+
 def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_manual_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -283,6 +628,22 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
     objects = ObjectStore(paths.objects)
     times = iter([NOW, NOW + timedelta(seconds=2)])
     service = CurrentResearchAcquisitionService(paths, state, objects, clock=lambda: next(times))
+    monkeypatch.setattr(
+        service,
+        "_discover_financial_periods",
+        lambda *_args: [
+            (
+                AcquisitionCapability.FINANCIAL_ANNUAL,
+                date(2025, 12, 31),
+                FinancialPeriodType.ANNUAL,
+            ),
+            (
+                AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+                date(2026, 6, 30),
+                FinancialPeriodType.SEMIANNUAL,
+            ),
+        ],
+    )
 
     def fake_reference(capability: AcquisitionCapability, _action: object) -> AcquisitionAttempt:
         return _attempt(capability)
@@ -309,12 +670,14 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
     assert report.question_time_anchor_used is False
     assert report.decision_snapshot_frozen_after_acquisition is True
     assert report.historical_and_prospective_pit_preserved is True
+    assert report.automatic_resolution_budget_seconds == 1800
+    assert report.manual_escalation_after_automatic_exhaustion is True
     assert report.parallel_acquisition_used is True
     assert report.external_research_needs == []
     assert report.manual_actions == []
 
 
-def test_financial_secondary_hints_continue_even_when_identity_is_not_yet_verified(
+def test_financial_secondary_hints_prefer_source_with_native_scope_currency(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -331,7 +694,7 @@ def test_financial_secondary_hints_continue_even_when_identity_is_not_yet_verifi
             pass
 
         def fetch(self, *_args: object, **_kwargs: object) -> object:
-            raise ValueError("schema drift")
+            raise AssertionError("EastMoney should not run after Sina produced usable rows")
 
     class WorkingSina:
         provider_id = "sina-financial"
@@ -362,8 +725,8 @@ def test_financial_secondary_hints_continue_even_when_identity_is_not_yet_verifi
     )
 
     assert attempt.status is AcquisitionAttemptStatus.PARTIAL
-    assert attempt.provider_path == ["eastmoney-financial", "sina-financial"]
-    assert attempt.fallback_used is True
+    assert attempt.provider_path == ["sina-financial"]
+    assert attempt.fallback_used is False
     assert attempt.record_count == 3
     assert "INSTRUMENT_IDENTITY_UNVERIFIED" in attempt.internal_reason_codes
 
@@ -404,9 +767,42 @@ def test_investor_view_hides_internal_codes_and_execution_gap_by_default() -> No
     assert "CLAIM_IDS_REQUIRED" not in rendered
     assert "EVIDENCE_PACK_REQUIRED" not in rendered
     assert "TRADING_CLASSIFICATION_REQUIRED" not in rendered
-    assert "关键投资事实" in rendered
+    assert "影响投资判断" in rendered
     assert view.internal_codes_exposed is False
     assert view.artifact_ids_exposed is False
+    visible_text = " ".join([view.headline, *view.plain_language_gaps, view.next_step])
+    assert audit_investor_answer(visible_text).status == "PASS"
+
+
+def test_investor_answer_audit_rejects_backend_vocabulary_and_developer_meta() -> None:
+    audit = audit_investor_answer(
+        "这套系统先跑 research-plan，current_stage=EVIDENCE，"
+        "然后因为 CLAIM_IDS_REQUIRED 返回 NEEDS_INFO；"
+        "MarketPriceAnchor 和 ClassifiedTradeProtocol 还没有完成。"
+    )
+
+    assert audit.status == "FAIL"
+    assert audit.raw_answer_echoed is False
+    assert audit.internal_implementation_exposed is True
+    assert audit.developer_meta_exposed is True
+    assert set(audit.finding_codes) >= {
+        "CLI_OR_PIPELINE_EXPOSED",
+        "DEVELOPER_META_EXPOSED",
+        "INTERNAL_PROTOCOL_TERM_EXPOSED",
+        "RAW_MACHINE_STATE_EXPOSED",
+    }
+
+
+def test_investor_answer_audit_accepts_plain_language_investment_answer() -> None:
+    audit = audit_investor_answer(
+        "结论：我暂时不会追高。公司盈利趋势仍然不错，但当前价格已经反映了不少乐观预期。"
+        "如果后续盈利继续超预期、估值回到更有安全边际的位置，买入吸引力会明显提高。"
+    )
+
+    assert audit.status == "PASS"
+    assert audit.finding_codes == []
+    assert audit.internal_implementation_exposed is False
+    assert audit.developer_meta_exposed is False
 
 
 def test_probe_is_lightweight_and_does_not_run_full_integrity(

@@ -80,7 +80,7 @@ class CninfoDisclosureProvider:
             data={
                 "pageNum": str(request.page_number),
                 "pageSize": str(request.page_size),
-                "column": "szse",
+                "column": _column_for_exchange(request.exchange),
                 "tabName": "fulltext",
                 "plate": "",
                 "stock": f"{request.symbol},{cninfo_org_id(request.symbol, request.exchange)}",
@@ -95,6 +95,23 @@ class CninfoDisclosureProvider:
             },
         )
         snapshot = self._persist_response(response, source_id=f"{self.provider_id}:index")
+        resolution_snapshot_ids: list[str] = []
+        if _announcement_count(response.content) == 0:
+            resolved_org_id, discovery_snapshot, discovery_latency = self._discover_org_id(request)
+            latency_ms += discovery_latency
+            resolution_snapshot_ids.extend(
+                [snapshot.snapshot_id, discovery_snapshot.snapshot_id]
+            )
+            if resolved_org_id is not None and resolved_org_id != cninfo_org_id(
+                request.symbol, request.exchange
+            ):
+                response, retry_latency = self._request_with_org_id(
+                    request, resolved_org_id
+                )
+                latency_ms += retry_latency
+                snapshot = self._persist_response(
+                    response, source_id=f"{self.provider_id}:index"
+                )
         try:
             payload = json.loads(response.content)
             raw_announcements = payload.get("announcements") or []
@@ -118,6 +135,7 @@ class CninfoDisclosureProvider:
                 "provider_id": self.provider_id,
                 "request": request,
                 "announcement_ids": [item.announcement_id for item in announcements],
+                "resolution_snapshot_ids": resolution_snapshot_ids,
             }
         )
         return DisclosureSearchBatch(
@@ -128,7 +146,92 @@ class CninfoDisclosureProvider:
             total_count=total_count,
             total_pages=total_pages,
             raw_snapshot_id=snapshot.snapshot_id,
+            resolution_snapshot_ids=resolution_snapshot_ids,
             provider_latency_ms=latency_ms,
+        )
+
+    def _discover_org_id(
+        self,
+        request: DisclosureSearchRequest,
+    ) -> tuple[str | None, SourceSnapshot, int]:
+        response, latency_ms = self._request(
+            "POST",
+            self.search_endpoint,
+            data={
+                "pageNum": "1",
+                "pageSize": "30",
+                "column": _column_for_exchange(request.exchange),
+                "tabName": "fulltext",
+                "plate": "",
+                "stock": "",
+                "searchkey": request.symbol,
+                "secid": "",
+                "category": "",
+                "trade": "",
+                "seDate": "",
+                "sortName": "",
+                "sortType": "",
+                "isHLtitle": "true",
+            },
+        )
+        snapshot = self._persist_response(
+            response,
+            source_id=f"{self.provider_id}:org-discovery",
+        )
+        try:
+            payload = json.loads(response.content)
+            rows = payload.get("announcements") or []
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ProviderError(
+                "CNINFO returned an invalid organization discovery index",
+                failure_class=FailureClass.INVALID_RESPONSE,
+                details={"snapshot_id": snapshot.snapshot_id},
+            ) from exc
+        if not isinstance(rows, list):
+            raise ProviderError(
+                "CNINFO organization discovery rows are malformed",
+                failure_class=FailureClass.INVALID_RESPONSE,
+                details={"snapshot_id": snapshot.snapshot_id},
+            )
+        org_ids = {
+            str(item.get("orgId"))
+            for item in rows
+            if isinstance(item, dict)
+            and str(item.get("secCode")) == request.symbol
+            and item.get("orgId")
+        }
+        if len(org_ids) > 1:
+            raise ProviderError(
+                "CNINFO organization discovery returned conflicting identities",
+                failure_class=FailureClass.CONFLICT,
+                details={"snapshot_id": snapshot.snapshot_id},
+            )
+        return (next(iter(org_ids)) if org_ids else None), snapshot, latency_ms
+
+    def _request_with_org_id(
+        self,
+        request: DisclosureSearchRequest,
+        org_id: str,
+    ) -> tuple[httpx.Response, int]:
+        return self._request(
+            "POST",
+            self.search_endpoint,
+            data={
+                "pageNum": str(request.page_number),
+                "pageSize": str(request.page_size),
+                "column": _column_for_exchange(request.exchange),
+                "tabName": "fulltext",
+                "plate": "",
+                "stock": f"{request.symbol},{org_id}",
+                "searchkey": request.keyword,
+                "secid": "",
+                "category": _CATEGORY_CODES[request.category],
+                "trade": "",
+                "seDate": f"{request.start_date.isoformat()}~{request.end_date.isoformat()}",
+                "sortName": "",
+                "sortType": "",
+                "isHLtitle": "true",
+            },
         )
 
     def download(self, announcement: DisclosureAnnouncement) -> DownloadedDocument:
@@ -266,7 +369,7 @@ class CninfoDisclosureProvider:
             adjunct_path=adjunct_path,
             source_url=source_url,
             document_type=_DOCUMENT_TYPES[request.category],
-            org_id=cninfo_org_id(request.symbol, request.exchange),
+            org_id=str(item.get("orgId") or cninfo_org_id(request.symbol, request.exchange)),
         )
 
     @staticmethod
@@ -290,3 +393,15 @@ def cninfo_org_id(symbol: str, exchange: DisclosureExchange) -> str:
         raise ValueError("CNINFO symbol must be six digits")
     prefix = "gssz" if exchange is DisclosureExchange.SZSE else "gssh"
     return f"{prefix}0{symbol}"
+
+
+def _column_for_exchange(exchange: DisclosureExchange) -> str:
+    return "sse" if exchange is DisclosureExchange.SSE else "szse"
+
+
+def _announcement_count(raw: bytes) -> int:
+    try:
+        payload = json.loads(raw)
+        return int(payload.get("totalAnnouncement") or 0)
+    except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+        return 0

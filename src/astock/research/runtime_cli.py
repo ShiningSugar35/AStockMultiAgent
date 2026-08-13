@@ -17,7 +17,11 @@ from astock.portfolio.vnext_cli import register_portfolio_vnext_commands
 from astock.research.acquisition import CurrentResearchAcquisitionService
 from astock.research.institutional import InstitutionalResearchService
 from astock.research.knowledge_port import KnowledgeSkillProvider
-from astock.research.presentation import investor_view_from_acquisition, investor_view_from_run
+from astock.research.presentation import (
+    audit_investor_answer,
+    investor_view_from_acquisition,
+    investor_view_from_run,
+)
 from astock.research.production_cli import register_research_production_commands
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
@@ -188,6 +192,20 @@ def register_research_runtime_commands(
                 include_execution_readiness=include_execution_readiness,
             )
         )
+
+    @app.command("research-investor-answer-audit")
+    def research_investor_answer_audit(
+        answer_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        """Reject developer/runtime vocabulary before a normal investor answer is shown."""
+
+        audit = audit_investor_answer(answer_file.read_text(encoding="utf-8"))
+        emit(audit)
+        if audit.status == "FAIL":
+            raise typer.Exit(code=3)
 
     @app.command("phase7-study-ensure")
     def phase7_study_ensure(

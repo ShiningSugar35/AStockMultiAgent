@@ -176,8 +176,14 @@ def test_current_investor_skills_exhaust_automatic_fallback_before_manual_help()
         assert "artifact" in body
         assert "internal" in body.lower()
     assert "Do **not** run `uv run astock probe` before every investment question" in orchestrator
-    assert "Only after local/API fallbacks **and** authoritative Web search are exhausted" in (
-        orchestrator
+    assert "1800-second automatic resolution budget" in orchestrator
+    assert (
+        "Only after local/API/provider fallbacks **and** authoritative Web search are exhausted"
+        in orchestrator
     )
-    assert "automatically continue with Web search before asking the user" in investigation
+    assert "research-investor-answer-audit" in orchestrator
+    assert "never become the investor answer" in orchestrator
+    assert "1800-second recovery budget" in company
+    assert "1800-second automatic resolution budget" in investigation
+    assert "Web search before asking the user" in investigation
     assert "one consolidated checklist" in investigation

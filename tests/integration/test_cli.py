@@ -1059,27 +1059,6 @@ def test_committee_cli_schema_status_and_invalid_requests_fail_closed(
         assert secret not in invoked.output
         assert str(invalid_request) not in invoked.output
 
-    runtime_state = StateStore(
-        runtime / "state.sqlite",
-        PROJECT_ROOT / "migrations",
-    )
-    with runtime_state.transaction() as connection:
-        connection.execute(
-            "UPDATE schema_migration SET checksum=? WHERE version='0044'",
-            ("0" * 64,),
-        )
-    blocked_document = tmp_path / "phase7_status_blocked.md"
-    blocked = runner.invoke(
-        app,
-        ["phase7-status-update", "--output", str(blocked_document)],
-    )
-    assert blocked.exit_code == 0, blocked.output
-    assert json.loads(blocked.output)["migration_integrity_status"] == (
-        "BLOCKED_CHECKSUM_MISMATCH"
-    )
-    blocked_text = blocked_document.read_text(encoding="utf-8")
-    assert "Migration integrity: `BLOCKED_CHECKSUM_MISMATCH`" in blocked_text
-    assert "Status read mode: `READ_ONLY`" in blocked_text
 
 
 def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
@@ -1113,19 +1092,14 @@ def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
 
     status = runner.invoke(app, ["shadow-status", "--study-id", "study:not-run"])
     assert status.exit_code == 0, status.output
-    assert json.loads(status.output)["status"] == "COLLECTING"
-    status_document = tmp_path / "phase7_status.md"
-    refreshed = runner.invoke(
-        app,
-        ["phase7-status-update", "--output", str(status_document)],
-    )
-    assert refreshed.exit_code == 0, refreshed.output
-    refreshed_payload = json.loads(refreshed.output)
-    assert refreshed_payload["status"] == "COLLECTING"
-    assert refreshed_payload["migration_integrity_status"] == "PASS"
-    assert "Independent forward research events: `0 / 100`" in (
-        status_document.read_text(encoding="utf-8")
-    )
+    status_payload = json.loads(status.output)
+    assert status_payload["status"] == "COLLECTING"
+    assert status_payload["formal_forward_event_count"] == 0
+    assert status_payload["assignment_count"] == 0
+    assert status_payload["observation_count"] == 0
+    command_names = {command.name for command in app.registered_commands if command.name}
+    assert "phase7-status-update" not in command_names
+    assert not (PROJECT_ROOT / "phase7_status.md").exists()
     audit = runner.invoke(app, ["shadow-audit", "study:not-run"])
     assert audit.exit_code == 0, audit.output
     assert json.loads(audit.output) == {

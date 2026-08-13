@@ -178,12 +178,18 @@ class FinancialSourceService:
                 ["BJSE_OFFICIAL_FINANCIAL_REPORT_BLOCKED"],
                 [],
             )
+        providers = {
+            self.eastmoney.provider_id: self.eastmoney,
+            self.sina.provider_id: self.sina,
+        }
+        primary_provider = providers[self.config.primary_provider]
+        backup_provider = providers[self.config.backup_provider]
         reasons: list[str] = []
         payloads: list[FinancialProviderPayload] = []
         captured_snapshots = []
         primary_failed = False
         try:
-            primary = self.eastmoney.fetch(company_id, market, period_end, live=live)
+            primary = primary_provider.fetch(company_id, market, period_end, live=live)
             captured_snapshots.extend(primary.snapshots)
             primary_observations, primary_reasons = _parse_provider(
                 primary,
@@ -197,18 +203,22 @@ class FinancialSourceService:
             reasons.extend(primary_reasons)
             primary_failed = _critical_missing(primary_observations)
             if primary_failed:
-                reasons.append("EASTMONEY_CRITICAL_PERIOD_OR_TABLE_MISSING")
+                reasons.append(
+                    f"{_provider_reason_token(primary.provider_id)}_CRITICAL_PERIOD_OR_TABLE_MISSING"
+                )
             else:
                 payloads.append(primary)
         except (FinancialRawCaptureError, KeyError, TypeError, ValueError, ValidationError) as exc:
             primary_failed = True
             if isinstance(exc, FinancialRawCaptureError):
                 captured_snapshots.extend(exc.snapshots)
-            reasons.append("EASTMONEY_FINANCIAL_FAILED")
+            reasons.append(
+                f"{_provider_reason_token(primary_provider.provider_id)}_FINANCIAL_FAILED"
+            )
 
         if primary_failed or cross_check:
             try:
-                backup = self.sina.fetch(company_id, market, period_end, live=live)
+                backup = backup_provider.fetch(company_id, market, period_end, live=live)
                 captured_snapshots.extend(backup.snapshots)
                 backup_observations, backup_reasons = _parse_provider(
                     backup,
@@ -221,11 +231,14 @@ class FinancialSourceService:
                 )
                 reasons.extend(backup_reasons)
                 if _critical_missing(backup_observations):
-                    reasons.append("SINA_CRITICAL_PERIOD_OR_TABLE_MISSING")
+                    reasons.append(
+                        f"{_provider_reason_token(backup.provider_id)}_CRITICAL_PERIOD_OR_TABLE_MISSING"
+                    )
                 else:
                     payloads.append(backup)
+                    suffix = "FALLBACK_USED" if primary_failed else "CROSS_CHECK_USED"
                     reasons.append(
-                        "SINA_FALLBACK_USED" if primary_failed else "SINA_CROSS_CHECK_USED"
+                        f"{_provider_reason_token(backup.provider_id)}_{suffix}"
                     )
             except (
                 FinancialRawCaptureError,
@@ -236,7 +249,9 @@ class FinancialSourceService:
             ) as exc:
                 if isinstance(exc, FinancialRawCaptureError):
                     captured_snapshots.extend(exc.snapshots)
-                reasons.append("SINA_FINANCIAL_FAILED")
+                reasons.append(
+                    f"{_provider_reason_token(backup_provider.provider_id)}_FINANCIAL_FAILED"
+                )
 
         observations: list[FinancialSourceObservation] = []
         for payload in payloads:
@@ -1020,6 +1035,10 @@ def _release_matches(
         and manifest.available_to_system_at == available
         and manifest.coverage == coverage
     )
+
+
+def _provider_reason_token(provider_id: str) -> str:
+    return provider_id.upper().replace("-", "_")
 
 
 __all__ = ["FinancialSourceService"]

@@ -7,6 +7,16 @@
 - 不承诺收益，不自动向券商发单。真实交易只能由用户人工确认并在券商端执行。
 - 未实现的能力必须如实标记不可用，不得用叙述伪装成已经完成。
 
+## 交互模式：投资者默认，开发诊断显式开启
+
+- 用户询问“某股票现在能不能买 / 公司怎么样 / 组合怎么配 / 持仓怎么办”等投资问题时，**默认进入 INVESTOR_MODE**；只有用户明确要求“调试、排查系统、看命令/状态码/工件/数据库/provider 错误”时才进入 DEVELOPER_MODE。Skill 加载失败也不得改变这个默认模式。
+- INVESTOR_MODE 的最终回复只谈投资：结论与置信度、公司质量与盈利驱动、估值/赔率、催化因素、主要风险、什么情况会改变判断，以及确实仍需用户提供的资料。不得展示 CLI、阶段名、协议/Schema/Class 名、reason code、artifact/hash、SQLite/migration、provider 故障、内部 Agent/Committee 编排或“这套系统如何工作”的元评论。
+- INVESTOR_MODE 禁止直接出现 `MarketPriceAnchor / ClassifiedTradeProtocol / InstrumentReferenceRelease / FrozenEvidencePack / BaseCase / TradingClassification / NEEDS_INFO / CLAIM_IDS_REQUIRED / EVIDENCE_PACK_REQUIRED / research-plan / research-run-company / current_stage` 等内部词；也不得输出命令执行流水。发送前使用 `research-investor-answer-audit` 的同等规则自检，不通过就重写。
+- 运行时诊断、fallback 路径、错误码和工件身份可以完整保存在内部日志，供 DEVELOPER_MODE 复盘；**日志可观测性与投资者答案必须分层**。
+- 当前投资咨询遇到数据缺口时，在单次任务内优先自动解决，自动恢复预算上限为 1800 秒：定位失败原因 → 对 retryable 故障有限重试/熔断 → 备用 provider/更合适的同源端点 → 交易所/CNINFO/发行人 IR/监管机构等权威 Web 多源核验。只有这些自动渠道都无法解决的必要事项，才允许在最终一次性整理成人工协助清单。
+- 自动渠道尚未完全闭合但已有足够权威材料时，可以给出明确标注的不确定性和研究层判断；不得为了“正式状态”而把后台阻塞详情倒给用户，也不得为了给结论而伪造精确买卖价。
+- INVESTOR_MODE 推荐结构：**结论 → 为什么 → 估值与赔率 → 关键催化 → 最大风险 → 什么情况会改变结论**。来源用正常引用呈现，不解释内部抓取链。
+
 ## 唯一事实源
 
 - 原始响应：`runtime/objects/sha256/`，内容不可覆盖。
@@ -19,7 +29,7 @@
 ## 数据与证据
 
 - 禁止未来函数。所有输入必须带可得时间、来源和版本。
-- 来源访问固定为：官方/已验证 API 或本地数据 -> MCP -> Browser -> Manual Task。
+- 来源访问固定为：官方/已验证本地/API → 同能力备用 provider/更合适的公开端点 → MCP/Browser 权威 Web → Manual Task。单个 provider 失败不是终止条件；Manual 永远最后。
 - 上一层已满足时，不通过下一层重复抓取同一内容。
 - 投资结论必须引用 evidence_id/source_snapshot_id，或明确标记为推断/缺口。
 - 社区内容只能作线索；关键事实必须回到公告、交易所、财报等更强来源。
@@ -36,7 +46,7 @@
 - 默认回放使用未复权原始 5m；东方财富为主源，新浪为备用/交叉验证源。
 - 1m 不在默认链。缺失数据不得静默插值或虚构。
 - 复权研究序列由原始价格与版本化公司行为派生；复权价不得当作真实成交价。
-- 免费 reference 主源为 BaoStock 0.8.9，东方财富 direct HTTP 为备用/北交所补充；原始响应先入 ObjectStore，未复权日线在上海收盘前不可见。
+- 免费 reference：BaoStock 0.8.9 保留为可用时的批量/低频来源，并受 2 秒 TCP preflight + 30 分钟熔断保护；当前单证券身份优先使用东方财富精确证券端点，必要时才退到全市场分页。日线使用可用 provider + bounded retry/fallback；原始响应先入 ObjectStore，未复权日线在上海收盘前不可见。
 - 公司行动结构化结果只作线索；精确官方文档和条款核验完成前不得写模拟账本。
 - Repo Skill 不得直接修改账本，只能调用已校验的 `astock` 命令。
 
@@ -66,7 +76,7 @@ Phase 5 论证链入口包括：`knowledge-semantic-plan`、`knowledge-semantic-
 
 Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`provider-status`、`sync-instruments`、`sync-calendar`、`sync-daily`、`sync-corporate-actions`、`reference-status` 和 `reference-audit`。Provider 默认使用 recorded 探针；live 必须显式开启。当前单股投资咨询优先使用 `research-acquire-current <company_id> --market <market>`：先建立目标证券精确身份，再对行情、公司行动和年度/最新中期财务做 bounded fallback/并行采集，采集结束后才冻结当前决策快照；不得用用户提问的瞬间截断同一轮几分钟内新取得的公开数据。若本地/API 仍缺资料，Agent 必须继续按交易所/CNINFO/发行人 IR/监管机构优先做权威 Web 检索，自动渠道全部耗尽后才一次性请求人工协助。历史回放、正式前瞻研究和 backtest 仍保留严格 source-availability/PIT 边界。广泛荐股探索先使用 `research-seeds --live`：它只合并已有 Candidate、市场流动性/规模 Seeds 和由当前已发布大 V Skills 动态推导的 Expert Domain Seeds，不产生 CandidateRecord 或推荐权；随后优先使用 `research-seeds-promote <ResearchSeedReport-artifact-id> --live` 自动冻结 bounded instrument proof、reference/质量/官方公司行动/公告/财务输入并运行 Candidate Scan。`candidate-input-schema`、`candidate-input-stage`、`candidate-input-run` 只保留为手工/诊断 fallback。候选仍只表示研究优先级，不得输出交易方向、目标价、订单或持仓。
 
-财务来源稳定入口包括：`sync-financial`、`financial-source-status` 和 `financial-source-audit`。东方财富/Sina 财务值仅为 `SECONDARY_STRUCTURED` 定位线索；provider schema 漂移必须先适配并保留源生口径，不能因为 HTTP 成功就默认可用，也不能伪造缺失的 scope/currency。只有与精确 instrument release 一致且由官方原生 PDF 精确证明表名、合并口径、期间列、科目、数值和单位的事实才能进入现有财务审计。机构级基本面入口包括 `institutional-research-schema`、`institutional-research-finalize`、`institutional-decision-context-freeze`、`fundamental-model-status`、`fundamental-model-audit`。Research Runtime 稳定入口包括 `research-plan`、`research-run-company`、`research-status`、`research-audit`、`research-recover`、`trade-plan-view`；LIVE 当前研究允许省略 `--as-of` 并在命令实际执行时冻结时间，recorded/historical 必须显式提供。正常投资者回复优先使用自然语言 `research-acquisition-investor-view` / `research-investor-view`，不得泄露内部 code、artifact/hash、SQLite/CLI 日志；执行分类缺口只在用户要求可执行交易计划时展示。组合入口包括 `portfolio-paper-evaluate`、`portfolio-evaluate`、`portfolio-construct`、`portfolio-status`、`portfolio-audit`。模拟下单 prepare/确认链已验收，但任何账本写入仍要求独立人工确认，真实券商执行始终不存在。
+财务来源稳定入口包括：`sync-financial`、`financial-source-status` 和 `financial-source-audit`。Sina 当前作为结构化主定位源，因为 live 响应显式给出合并口径和 CNY；东方财富财务作为备用/交叉线索，其当前 live schema 缺少源生 scope/currency 时必须降级而不是猜值。两者都只是 `SECONDARY_STRUCTURED`；最终仍由 CNINFO/交易所/发行人正式报告精确证明表名、合并口径、期间列、科目、数值和单位。Current Acquisition 先发现**实际已经披露**的最新 report period，不再按固定月份猜 Q1/H1/Q3。机构级基本面入口包括 `institutional-research-schema`、`institutional-research-finalize`、`institutional-decision-context-freeze`、`fundamental-model-status`、`fundamental-model-audit`。Research Runtime 稳定入口包括 `research-plan`、`research-run-company`、`research-status`、`research-audit`、`research-recover`、`trade-plan-view`；LIVE 当前研究允许省略 `--as-of` 并在命令实际执行时冻结时间，recorded/historical 必须显式提供。正常投资者回复使用 `research-acquisition-investor-view` / `research-investor-view` 的自然语言边界，并由 `research-investor-answer-audit` 阻止后台术语泄露；执行条件只在用户明确询问具体买卖规则时解释。组合入口包括 `portfolio-paper-evaluate`、`portfolio-evaluate`、`portfolio-construct`、`portfolio-status`、`portfolio-audit`。模拟下单 prepare/确认链已验收，但任何账本写入仍要求独立人工确认，真实券商执行始终不存在。
 
 ## 开发约定
 

@@ -203,7 +203,6 @@ from astock.shadow import (
     ParquetShadowStore,
     ShadowEvaluationService,
     load_shadow_evaluation_policy,
-    write_phase7_status,
 )
 
 app = typer.Typer(
@@ -296,13 +295,6 @@ def _shadow_service(
         ParquetShadowStore(paths.parquet),
         CanonicalMarketStore(paths.parquet, paths.manifests),
     )
-
-
-def _refresh_phase7_status(
-    paths: ProjectPaths,
-    service: ShadowEvaluationService,
-) -> Path:
-    return write_phase7_status(service, paths.root / "phase7_status.md")
 
 
 def _phase4_chain(
@@ -3392,7 +3384,6 @@ def shadow_study_create(
         )
         service = _shadow_service(paths, state, objects)
         execution = service.create_study(request)
-        status_document = _refresh_phase7_status(paths, service)
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "SHADOW_STUDY_CREATE_REJECTED"})
         raise typer.Exit(code=2) from exc
@@ -3402,7 +3393,6 @@ def shadow_study_create(
             "study": execution.manifest,
             "arms": execution.arms,
             "object_sha256_by_id": execution.object_sha256_by_id,
-            "phase7_status_document": status_document,
         }
     )
 
@@ -3423,7 +3413,6 @@ def shadow_assign(
         )
         service = _shadow_service(paths, state, objects)
         assignment = service.assign(request)
-        status_document = _refresh_phase7_status(paths, service)
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "SHADOW_ASSIGNMENT_REJECTED"})
         raise typer.Exit(code=2) from exc
@@ -3431,7 +3420,6 @@ def shadow_assign(
         {
             "status": "ASSIGNED",
             "assignment": assignment,
-            "phase7_status_document": status_document,
         }
     )
 
@@ -3516,7 +3504,6 @@ def shadow_observation_record(
         )
         service = _shadow_service(paths, state, objects)
         observation = service.record_observation(draft)
-        status_document = _refresh_phase7_status(paths, service)
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "SHADOW_OBSERVATION_REJECTED"})
         raise typer.Exit(code=2) from exc
@@ -3524,7 +3511,6 @@ def shadow_observation_record(
         {
             "status": observation.status,
             "observation": observation,
-            "phase7_status_document": status_document,
         }
     )
 
@@ -3544,7 +3530,6 @@ def shadow_evaluate(
             study_id,
             as_of=parsed_as_of,
         )
-        status_document = _refresh_phase7_status(paths, service)
     except (AStockError, OSError, ValidationError, ValueError) as exc:
         _emit({"status": "REJECTED", "error_code": "SHADOW_EVALUATION_REJECTED"})
         raise typer.Exit(code=2) from exc
@@ -3555,7 +3540,6 @@ def shadow_evaluate(
             "phase8_admission": execution.admission,
             "report_object_sha256": execution.report_object_sha256,
             "admission_object_sha256": execution.admission_object_sha256,
-            "phase7_status_document": status_document,
         }
     )
 
@@ -3568,46 +3552,6 @@ def shadow_status(
 
     paths, state, objects = _services()
     _emit(_shadow_service(paths, state, objects).status(study_id))
-
-
-@app.command("phase7-status-update")
-def phase7_status_update(
-    output: Annotated[
-        Path | None,
-        typer.Option(
-            "--output",
-            help="Optional status-document path; defaults to project phase7_status.md.",
-        ),
-    ] = None,
-) -> None:
-    """Refresh phase7_status.md from current immutable/indexed runtime facts."""
-
-    migration_integrity_issue: str | None = None
-    try:
-        paths, state, objects = _services()
-    except RuntimeError as exc:
-        if not str(exc).startswith("Migration checksum changed:"):
-            raise
-        migration_integrity_issue = str(exc)
-        paths = ProjectPaths.discover()
-        paths.ensure_directories()
-        state = StateStore(paths.state_db, paths.root / "migrations")
-        objects = ObjectStore(paths.objects)
-    service = _shadow_service(paths, state, objects)
-    status_document = write_phase7_status(
-        service,
-        output if output is not None else paths.root / "phase7_status.md",
-        migration_integrity_issue=migration_integrity_issue,
-    )
-    _emit(
-        {
-            "status": service.status().status,
-            "phase7_status_document": status_document,
-            "migration_integrity_status": (
-                "BLOCKED_CHECKSUM_MISMATCH" if migration_integrity_issue else "PASS"
-            ),
-        }
-    )
 
 
 @app.command("shadow-audit")

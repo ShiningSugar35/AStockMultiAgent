@@ -94,7 +94,7 @@ class CurrentResearchAcquisitionService:
                 ),
             ),
         }
-        financial_specs = _current_financial_periods(current_date)
+        financial_specs = self._discover_financial_periods(company_id, market, current_date)
         identity_verified = identity.status is AcquisitionAttemptStatus.SUCCEEDED
         for capability, period_end, period_type in financial_specs:
             stage_two[capability] = lambda c=capability, p=period_end, t=period_type: (
@@ -166,7 +166,7 @@ class CurrentResearchAcquisitionService:
                 "status": status.value,
                 "external_research_need_count": len(external_needs),
             },
-            status="SUCCEEDED" if not external_needs else "BLOCKED_MANUAL",
+            status="SUCCEEDED" if not external_needs else "NEEDS_EXTERNAL_RESEARCH",
             object_hash=ref.sha256,
         )
         return report
@@ -197,6 +197,52 @@ class CurrentResearchAcquisitionService:
             FinancialSourceParquetStore(self.paths.parquet / "financial_sources"),
             self.paths.root,
         )
+
+    def _discover_financial_periods(
+        self,
+        company_id: str,
+        market: Market,
+        current: date,
+    ) -> list[tuple[AcquisitionCapability, date, FinancialPeriodType]]:
+        fallback = _current_financial_periods(current)
+        provider = SinaFinancialProvider(
+            self.objects,
+            self.state,
+            self.paths.root / "tests" / "fixtures" / "financial_sources",
+        )
+        try:
+            dates, _ = provider.discover_report_periods(company_id, market, live=True)
+        except Exception:
+            return fallback
+        eligible = sorted({item for item in dates if item <= current}, reverse=True)
+        annual_candidates = [item for item in eligible if item.month == 12]
+        if not annual_candidates:
+            return fallback
+        annual_date = annual_candidates[0]
+        annual = (
+            AcquisitionCapability.FINANCIAL_ANNUAL,
+            annual_date,
+            FinancialPeriodType.ANNUAL,
+        )
+        interim_candidates = [
+            item
+            for item in eligible
+            if item > annual_date and item.month in {3, 6, 9}
+        ]
+        if not interim_candidates:
+            return [annual, fallback[1]]
+        interim_date = interim_candidates[0]
+        interim_type = (
+            FinancialPeriodType.SEMIANNUAL
+            if interim_date.month == 6
+            else FinancialPeriodType.QUARTERLY
+        )
+        interim = (
+            AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+            interim_date,
+            interim_type,
+        )
+        return [annual, interim]
 
     def _run_parallel(
         self,
@@ -335,12 +381,12 @@ class CurrentResearchAcquisitionService:
     ) -> AcquisitionAttempt:
         started = perf_counter()
         providers = [
-            EastMoneyFinancialProvider(
+            SinaFinancialProvider(
                 self.objects,
                 self.state,
                 self.paths.root / "tests" / "fixtures" / "financial_sources",
             ),
-            SinaFinancialProvider(
+            EastMoneyFinancialProvider(
                 self.objects,
                 self.state,
                 self.paths.root / "tests" / "fixtures" / "financial_sources",

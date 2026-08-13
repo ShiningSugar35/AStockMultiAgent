@@ -7,7 +7,6 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 - [低成本A股多Agent投研系统方案.md](低成本A股多Agent投研系统方案.md)
 - [开发计划.md](开发计划.md)
 - [验收报告.md](验收报告.md)
-- [phase7_status.md](phase7_status.md)
 
 ## 当前产品能力
 

@@ -1,6 +1,6 @@
 schema_version: financial-sources-v1
-primary_provider: eastmoney-financial
-backup_provider: sina-financial
+primary_provider: sina-financial
+backup_provider: eastmoney-financial
 providers:
   eastmoney-financial:
     officiality: SECONDARY_STRUCTURED

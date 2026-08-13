@@ -17,7 +17,11 @@ from astock.core.errors import FailureClass, ProviderError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
-from astock.providers import BaoStockReferenceProvider, EastMoneyReferenceProvider
+from astock.providers import (
+    BaoStockReferenceProvider,
+    EastMoneyReferenceProvider,
+    SinaReferenceProvider,
+)
 from astock.providers.baostock import BaoStockCaptureError
 from astock.schemas import FetchStatus, Market
 
@@ -234,6 +238,87 @@ def test_baostock_heartbeat_renews_during_blocking_sdk_call(
 
     assert intruder is None
     assert len(result) == 1
+
+
+def test_eastmoney_default_client_uses_browser_compatible_live_headers(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    provider = EastMoneyReferenceProvider(
+        ObjectStore(tmp_path / "objects"), state, FIXTURES / "eastmoney"
+    )
+
+    assert provider.client.headers["user-agent"].startswith("Mozilla/5.0")
+    assert provider.client.headers["referer"] == "https://quote.eastmoney.com/"
+    provider.client.close()
+
+
+def test_eastmoney_exact_identity_uses_single_security_endpoint(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/qt/stock/get"
+        assert request.url.params["secid"] == "1.600989"
+        return httpx.Response(
+            200,
+            json={
+                "rc": 0,
+                "data": {
+                    "f57": "600989",
+                    "f58": "宝丰能源",
+                    "f189": 20190516,
+                },
+            },
+            request=request,
+        )
+
+    state = _state(tmp_path)
+    provider = EastMoneyReferenceProvider(
+        ObjectStore(tmp_path / "objects"),
+        state,
+        FIXTURES / "eastmoney",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    payload, snapshot = provider.fetch_identity("600989", Market.XSHG, live=True)
+
+    assert payload["rc"] == 0
+    assert payload["_astock_request"] == {
+        "market": "XSHG",
+        "symbol": "600989",
+        "purpose": "INSTRUMENT_IDENTITY_EXACT",
+    }
+    assert snapshot.fetch_status is FetchStatus.SUCCEEDED
+
+
+def test_sina_reference_recorded_identity_and_daily_are_raw_first(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    provider = SinaReferenceProvider(
+        ObjectStore(tmp_path / "objects"), state, FIXTURES / "sina"
+    )
+
+    identity, identity_snapshot = provider.fetch_identity(
+        "600989", Market.XSHG, live=False
+    )
+    daily, daily_snapshot = provider.fetch_daily(
+        "600989",
+        Market.XSHG,
+        "2026-08-10",
+        "2026-08-12",
+        live=False,
+    )
+
+    assert identity["provider_symbol"] == "sh600989"
+    assert identity["name"] == "宝丰能源"
+    identity_request = identity["_astock_request"]
+    assert isinstance(identity_request, dict)
+    assert identity_request["purpose"] == "INSTRUMENT_IDENTITY_EXACT"
+    result = daily["result"]
+    assert isinstance(result, dict)
+    status = result["status"]
+    data = result["data"]
+    assert isinstance(status, dict)
+    assert isinstance(data, list)
+    assert status["code"] == 0
+    assert len(data) == 3
+    assert state.get_snapshot(identity_snapshot.snapshot_id) is not None
+    assert state.get_snapshot(daily_snapshot.snapshot_id) is not None
 
 
 @pytest.mark.parametrize(

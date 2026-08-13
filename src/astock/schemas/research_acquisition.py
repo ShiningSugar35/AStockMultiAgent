@@ -93,6 +93,8 @@ class CurrentResearchAcquisitionReport(AStockModel):
     question_time_anchor_used: Literal[False] = False
     decision_snapshot_frozen_after_acquisition: Literal[True] = True
     historical_and_prospective_pit_preserved: Literal[True] = True
+    automatic_resolution_budget_seconds: Literal[1800] = 1800
+    manual_escalation_after_automatic_exhaustion: Literal[True] = True
     parallel_acquisition_used: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
     broker_execution_allowed: Literal[False] = False
@@ -135,6 +137,16 @@ class InvestorResearchView(AStockModel):
     broker_execution_allowed: Literal[False] = False
 
 
+class InvestorAnswerAudit(AStockModel):
+    schema_version: str = "investor-answer-audit-v1"
+    status: Literal["PASS", "FAIL"]
+    finding_codes: list[str] = Field(default_factory=list)
+    investor_mode_required: Literal[True] = True
+    internal_implementation_exposed: bool
+    developer_meta_exposed: bool
+    raw_answer_echoed: Literal[False] = False
+
+
 __all__ = [
     "AcquisitionAttempt",
     "AcquisitionAttemptStatus",
@@ -143,6 +155,7 @@ __all__ = [
     "CurrentResearchAcquisitionStatus",
     "ExternalAuthority",
     "ExternalResearchNeed",
+    "InvestorAnswerAudit",
     "InvestorResearchState",
     "InvestorResearchView",
     "ManualResearchAction",

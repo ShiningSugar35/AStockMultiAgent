@@ -39,7 +39,7 @@ class Sina5mProvider(HttpProviderBase):
             provider_id=self.provider_id,
             markets=[Market.XSHG, Market.XSHE, Market.BJSE, Market.INDEX],
             instrument_types=[InstrumentType.STOCK, InstrumentType.INDEX],
-            frequencies=[Frequency.M5],
+            frequencies=[Frequency.M5, Frequency.H1],
             adjustment_modes=[AdjustmentMode.NONE],
             amount_supported=False,
             timestamp_semantics=TimestampSemantics.BAR_END,
@@ -61,9 +61,10 @@ class Sina5mProvider(HttpProviderBase):
 
     def fetch_bars(self, request: BarRequest) -> MarketDataBatch:
         _validate_raw_5m_request(request)
+        interval_minutes = 5 if request.frequency is Frequency.M5 else 60
         params: dict[str, str | int] = {
             "symbol": sina_symbol(request),
-            "scale": 5,
+            "scale": interval_minutes,
             "ma": "no",
             "datalen": min(request.limit, 1023),
         }
@@ -105,7 +106,7 @@ class Sina5mProvider(HttpProviderBase):
                         provider_id=self.provider_id,
                         symbol=request.symbol,
                         market=request.market,
-                        frequency=Frequency.M5,
+                        frequency=request.frequency,
                         timestamp=timestamp,
                         timestamp_semantics=TimestampSemantics.BAR_END,
                         open=Decimal(str(raw_row["open"])),

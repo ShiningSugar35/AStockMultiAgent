@@ -42,7 +42,10 @@ class MarketSyncService:
         self.canonical_store = canonical_store
 
     def sync_5m(self, request: BarRequest) -> SyncResult:
-        job_id = self.state.create_job("sync-5m", content_hash(request))
+        return self.sync_intraday(request)
+
+    def sync_intraday(self, request: BarRequest) -> SyncResult:
+        job_id = self.state.create_job(f"sync-{request.frequency.value}", content_hash(request))
         attempt_id = self.state.start_attempt(job_id)
         attempt_open = True
         previous_manifest = self.canonical_store.load_manifest(request)
@@ -95,7 +98,10 @@ class MarketSyncService:
             ]
             if not usable:
                 raise ProviderError(
-                    "No 5m provider passed the quality gate; previous canonical remains unchanged",
+                    (
+                        "No intraday provider passed the quality gate; "
+                        "previous canonical remains unchanged"
+                    ),
                     failure_class=FailureClass.DATA_QUALITY,
                     details={"failures": failures},
                 )
@@ -120,9 +126,7 @@ class MarketSyncService:
                     selected,
                     canonical_report,
                     source_batch_ids=[batch.batch_id for batch, _ in usable],
-                    source_snapshot_ids=[
-                        batch.raw_snapshot_id for batch, _ in usable
-                    ],
+                    source_snapshot_ids=[batch.raw_snapshot_id for batch, _ in usable],
                 )
                 canonical_updated = True
                 canonical_publish_reason = "PUBLISHED_QUALITY_PASSED_INCREMENT"
@@ -208,4 +212,4 @@ class MarketSyncService:
 
     @staticmethod
     def _checkpoint_scope(provider_id: str, request: BarRequest) -> str:
-        return f"{provider_id}:{request.market.value}:{request.symbol}:5m"
+        return f"{provider_id}:{request.market.value}:{request.symbol}:{request.frequency.value}"

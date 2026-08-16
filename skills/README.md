@@ -23,7 +23,7 @@ AStockMultiAgent 的 canonical Agent Skills 位于 [`../.agents/skills/`](../.ag
 | `$financial-integrity-audit` | 财报口径、勾稽、异常与审计 | [SKILL.md](../.agents/skills/financial-integrity-audit/SKILL.md) | [financial integrity](../docs/workflows/workflow-financial-integrity.md) |
 | `$holding-monitor` | 持仓增量证据与 thesis 复核 | [SKILL.md](../.agents/skills/holding-monitor/SKILL.md) | [holding monitoring](../docs/workflows/workflow-holding-monitoring.md) |
 | `$portfolio-manager` | 组合风险、约束与四种构建方法 | [SKILL.md](../.agents/skills/portfolio-manager/SKILL.md) | [portfolio construction](../docs/workflows/workflow-portfolio-construction.md) |
-| `$paper-trading-recovery` | 模拟盘状态、恢复与 5m replay | [SKILL.md](../.agents/skills/paper-trading-recovery/SKILL.md) | [paper trading](../docs/workflows/workflow-paper-trading.md) |
+| `$paper-trading-recovery` | 会话式模拟账户、订单/成交恢复、默认 60m replay + 5m fallback | [SKILL.md](../.agents/skills/paper-trading-recovery/SKILL.md) | [paper trading](../docs/workflows/workflow-paper-trading.md) |
 | `$knowledge-ingest` | 批准来源采集、覆盖与知识蒸馏前置 | [SKILL.md](../.agents/skills/knowledge-ingest/SKILL.md) | [knowledge ingest](../docs/workflows/workflow-knowledge-ingest.md) |
 
 ## 维护规则

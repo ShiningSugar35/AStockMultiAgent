@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from astock.core.hashing import content_hash
 from astock.schemas import (
     DataQualityReport,
+    Frequency,
     MarketBar,
     MarketDataBatch,
     ProviderStatus,
@@ -24,6 +25,7 @@ _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _PRICE_TOLERANCE = Decimal("0.01")
 _CROSS_RULE_VERSION = "cross-5m-empirical-v1"
 _MIN_COMMON_BARS = 48
+_MIN_COMMON_HOURLY_BARS = 4
 _MIN_COVERAGE_RATIO = Decimal("0.98")
 _MAX_CLOSE_RELATIVE_P95 = Decimal("0.0015")
 _MAX_OHLC_RELATIVE_P95 = Decimal("0.0020")
@@ -64,10 +66,18 @@ def validate_batch(batch: MarketDataBatch) -> DataQualityReport:
         replay = ReplayQuality.UNREPLAYABLE
     elif missing:
         status = QualityStatus.PARTIAL
-        replay = ReplayQuality.SINGLE_SOURCE_5M
+        replay = (
+            ReplayQuality.PROVIDER_1H_APPROX
+            if batch.request.frequency is Frequency.H1
+            else ReplayQuality.SINGLE_SOURCE_5M
+        )
     else:
         status = QualityStatus.PASS
-        replay = ReplayQuality.SINGLE_SOURCE_5M
+        replay = (
+            ReplayQuality.PROVIDER_1H_APPROX
+            if batch.request.frequency is Frequency.H1
+            else ReplayQuality.SINGLE_SOURCE_5M
+        )
     reasons: list[str] = []
     if batch.bar_count == 0:
         reasons.append("provider returned no bars")
@@ -165,10 +175,13 @@ def cross_validate_batches(
     ohlc_relative_p95 = _nearest_rank_percentile(ohlc_relative_differences, Decimal("0.95"))
     ohlc_relative_max = max(ohlc_relative_differences, default=Decimal("1"))
     volume_relative_p95 = _nearest_rank_percentile(volume_relative_differences, Decimal("0.95"))
+    minimum_common_bars = (
+        _MIN_COMMON_HOURLY_BARS if primary.request.frequency is Frequency.H1 else _MIN_COMMON_BARS
+    )
     dual_verified = (
         primary_report.quality_status != QualityStatus.FAIL
         and secondary_report.quality_status != QualityStatus.FAIL
-        and len(overlap) >= _MIN_COMMON_BARS
+        and len(overlap) >= minimum_common_bars
         and Decimal(str(coverage_ratio)) >= _MIN_COVERAGE_RATIO
         and close_relative_p95 <= _MAX_CLOSE_RELATIVE_P95
         and ohlc_relative_p95 <= _MAX_OHLC_RELATIVE_P95
@@ -179,18 +192,28 @@ def cross_validate_batches(
     primary_usable = primary_report.quality_status != QualityStatus.FAIL
     if dual_verified:
         quality_status = QualityStatus.PASS
-        replay_quality = ReplayQuality.DUAL_SOURCE_5M_VERIFIED
+        replay_quality = (
+            ReplayQuality.PROVIDER_1H_APPROX
+            if primary.request.frequency is Frequency.H1
+            else ReplayQuality.DUAL_SOURCE_5M_VERIFIED
+        )
     elif primary_usable:
         quality_status = QualityStatus.PARTIAL
-        replay_quality = ReplayQuality.SINGLE_SOURCE_5M
+        replay_quality = (
+            ReplayQuality.PROVIDER_1H_APPROX
+            if primary.request.frequency is Frequency.H1
+            else ReplayQuality.SINGLE_SOURCE_5M
+        )
     else:
         quality_status = QualityStatus.FAIL
         replay_quality = ReplayQuality.UNREPLAYABLE
     reasons: list[str] = []
     if not dual_verified:
         reasons.append("dual-source verification threshold not met")
-    if len(overlap) < _MIN_COMMON_BARS:
-        reasons.append(f"common bar count {len(overlap)} is below {_MIN_COMMON_BARS} required bars")
+    if len(overlap) < minimum_common_bars:
+        reasons.append(
+            f"common bar count {len(overlap)} is below {minimum_common_bars} required bars"
+        )
     if Decimal(str(coverage_ratio)) < _MIN_COVERAGE_RATIO:
         reasons.append(f"common-window timestamp coverage is {coverage_ratio:.3f}")
     if close_relative_p95 > _MAX_CLOSE_RELATIVE_P95:
@@ -212,7 +235,7 @@ def cross_validate_batches(
         "ohlc_relative_p95": round(float(ohlc_relative_p95), 8),
         "ohlc_relative_max": round(float(ohlc_relative_max), 8),
         "volume_relative_p95": round(float(volume_relative_p95), 8),
-        "minimum_common_bars": _MIN_COMMON_BARS,
+        "minimum_common_bars": minimum_common_bars,
         "minimum_coverage_ratio": float(_MIN_COVERAGE_RATIO),
         "maximum_close_relative_p95": float(_MAX_CLOSE_RELATIVE_P95),
         "maximum_ohlc_relative_p95": float(_MAX_OHLC_RELATIVE_P95),
@@ -271,7 +294,7 @@ def _missing_bar_labels(batch: MarketDataBatch) -> list[str]:
     for trading_date, observed in sorted(grouped.items()):
         expected = [
             item
-            for item in _expected_times(semantics)
+            for item in _expected_times(semantics, batch.request.frequency)
             if requested_start
             <= datetime.combine(trading_date, item, tzinfo=_SHANGHAI)
             <= requested_end
@@ -284,7 +307,11 @@ def _missing_bar_labels(batch: MarketDataBatch) -> list[str]:
     return missing
 
 
-def _expected_times(semantics: TimestampSemantics) -> list[time]:
+def _expected_times(semantics: TimestampSemantics, frequency: Frequency) -> list[time]:
+    if frequency is Frequency.H1:
+        if semantics == TimestampSemantics.BAR_END:
+            return [time(10, 30), time(11, 30), time(14, 0), time(15, 0)]
+        return [time(9, 30), time(10, 30), time(13, 0), time(14, 0)]
     if semantics == TimestampSemantics.BAR_END:
         morning_start, morning_end = time(9, 35), time(11, 30)
         afternoon_start, afternoon_end = time(13, 5), time(15, 0)

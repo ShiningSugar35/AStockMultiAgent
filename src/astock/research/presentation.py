@@ -15,6 +15,9 @@ from astock.schemas.research_acquisition import (
 )
 from astock.schemas.research_runtime import ResearchRunReport, ResearchRunStatus
 
+_MAX_INVESTOR_ANSWER_CHARS = 2600
+_MAX_INVESTOR_BULLETS = 18
+
 _GAP_MESSAGES: dict[InvestorGapCategory, str] = {
     InvestorGapCategory.EVIDENCE: (
         "有些会影响投资判断的关键事实还需要从公司公告或正式报告进一步核实。"
@@ -195,8 +198,24 @@ def audit_investor_answer(text: str) -> InvestorAnswerAudit:
     """Fail closed when a normal investor answer leaks developer/runtime vocabulary."""
 
     finding_codes: set[str] = set()
-    if not text.strip():
+    stripped = text.strip()
+    if not stripped:
         finding_codes.add("EMPTY_INVESTOR_ANSWER")
+    if len(stripped) > _MAX_INVESTOR_ANSWER_CHARS:
+        finding_codes.add("INVESTOR_ANSWER_TOO_LONG")
+    bullet_count = sum(
+        line.lstrip().startswith(("- ", "* ", "• "))
+        for line in stripped.splitlines()
+    )
+    if bullet_count > _MAX_INVESTOR_BULLETS:
+        finding_codes.add("INVESTOR_ANSWER_TOO_MANY_BULLETS")
+    sentences = [
+        re.sub(r"\s+", "", item)
+        for item in re.split(r"[。！？!?；;\n]+", stripped)
+        if len(re.sub(r"\s+", "", item)) >= 16
+    ]
+    if len(sentences) != len(set(sentences)):
+        finding_codes.add("INVESTOR_ANSWER_REPETITIVE")
     for code, patterns in _ANSWER_POLICY_PATTERNS:
         if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
             finding_codes.add(code)

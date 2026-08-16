@@ -1,55 +1,57 @@
-# Workflow — Paper Trading
+# Workflow — Session-on-Demand Paper Account
 
 ## When to use
 
-Use for simulated account initialization/status, recovery after interruption, canonical 5-minute replay, simulated order preparation/confirmation, settlement and NAV marking.
+Use for simulated account/order/fill state, catch-up after an Agent session was offline, user- or AI-initiated paper orders, settlement and NAV. This workflow is intentionally **not** a continuously running trading daemon.
 
 Primary skill: `$paper-trading-recovery`.
 
 ## Flow
 
-1. **Initialize only when needed**
-   - Run `uv run astock init` only if the runtime has not been initialized.
-   - Otherwise preserve the existing account/journal.
+1. **Refresh local user state**
+   - The paper ledger remains the deterministic source for cash, orders, fills, settlement and positions.
+   - `user_state/portfolio.md`, `user_state/orders.md` and `user_state/trades.md` are Git-ignored, human-readable mirrors for the Agent.
+   - On session start, run `local-portfolio-sync-paper` when the paper account exists, then read `local-portfolio-status`.
 
-2. **Check integrity before any mutation**
-   - Run `paper-status`.
-   - Stop on unbalanced journal, corrupt frozen authorization, broken object lineage or inconsistent account state.
-   - Full SQLite `state-integrity-audit` is a separate diagnostic, not a prerequisite for every paper action.
+2. **Check account integrity before mutation**
+   - Use `paper-status`; reject mutation on an unbalanced journal or inconsistent account.
+   - Full SQLite integrity checking remains a separate developer/recovery operation, not a prerequisite for every investment question.
 
-3. **Acquire only verified market data**
-   - Synchronize the missing 5m interval through existing provider/fallback logic.
-   - Inspect quality/canonical manifest; one bad provider must not replace a previously valid canonical dataset.
-   - Never invent bars or advance beyond verified data.
+3. **Catch up offline intervals at hourly resolution by default**
+   - For each held symbol or open order, run `sync-hourly` over the missing interval.
+   - Run `paper-replay` at its default `60m` resolution.
+   - Hourly OHLC can show that a limit price was touched, but cannot prove queue priority or the exact intrahour price path. The replay therefore remains `PROVIDER_1H_APPROX` and uses conservative fill pricing.
+   - If the hourly bar is materially ambiguous, use `paper-replay --resolution 5m` as the explicit higher-fidelity fallback.
 
-4. **Replay deterministically**
-   - Run `paper-replay` only against an existing canonical manifest.
-   - Preserve stable order sequencing, capacity constraints, T+1 lots and replay checkpoint monotonicity.
-   - On provider/quality failure, keep the old canonical release/checkpoint.
+4. **Keep order and fill semantics separate**
+   - An accepted order is not a holding.
+   - Cash reservation, partial fills, fees, T+1 settlement and order status remain deterministic ledger facts.
+   - After replay, mirror confirmed fills/open orders/positions back to the local Markdown files.
 
-5. **Prepare a simulated operation only from a valid formal protocol**
-   - Use the paper execution/operation prepare path only when the exact Committee/ClassifiedTradeProtocol gates allow it.
-   - Preparation does not write an order by itself.
+5. **User-directed simulated order**
+   - If the user explicitly says to buy/sell/add/trim a symbol, their instruction overrides the Agent's investment opinion.
+   - Enter the simulated order flow without re-litigating whether the Agent likes the trade.
+   - Mechanical constraints still apply: account cash/available shares, board lot, verified tradability, price band, order confirmation, and later fill simulation.
 
-6. **Require independent explicit confirmation**
-   - Simulated order creation/cancel requires the configured user confirmation/signature/idempotency boundary.
-   - Expired/invalid/replayed confirmation cannot create a second order.
+6. **AI-initiated simulated order**
+   - Only an audited formal result that permits simulation **and** a currently satisfied entry rule may trigger an AI-initiated order.
+   - Local `auto_ai_paper_order_on_approved_entry=true` is standing permission to proceed into the existing paper-order confirmation flow, not permission to declare a fill.
+   - The replay layer determines whether the submitted order actually fills.
 
-7. **Settle and mark with verified references**
+7. **Settle and mark**
    - Settlement uses the verified trading calendar and exact lots.
-   - NAV mark uses valid unadjusted reference releases.
+   - NAV marking uses valid unadjusted market references.
 
 8. **Keep experimental research isolated**
-   - Shadow/Phase 7/Phase 8/Adaptive results are read-only analytical state for the main paper ledger.
-   - They cannot initialize, repair, replay or mutate the account.
+   - Shadow/prospective/adaptive research remains analytical. It may motivate a separately created paper order but cannot directly mutate account state.
 
 ## Output
 
-Show paper cash, frozen cash, positions/lots, open orders, NAV, replay checkpoint and integrity state in plain language. For recovery, say exactly which deterministic step can resume.
+Show only decision-relevant account state: holdings, open orders, filled/partially filled/unfilled status, cash impact, and any material execution uncertainty. Explain hourly approximation once when relevant; do not dump internal ledger mechanics unless asked.
 
 ## Stop conditions
 
 - No direct SQLite edits.
-- No synthetic data to bridge a market gap.
-- No shadow/adaptive output may mutate the main ledger.
-- No real brokerage connection or real order submission exists.
+- No invented bars or fills.
+- No accepted-but-unfilled order may be reported as a position.
+- No real brokerage connection or real order submission.

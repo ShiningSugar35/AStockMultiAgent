@@ -162,7 +162,7 @@ class ReplayCheckpoint(AStockModel):
     market: Market | None = None
     instrument_id: str | None = None
     symbol: str
-    requested_resolution: str = "5m"
+    requested_resolution: str = "60m"
     actual_resolution: str
     replay_quality: ReplayQuality
     provider_id: str | None = None

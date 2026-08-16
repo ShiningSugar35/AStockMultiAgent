@@ -18,6 +18,7 @@ from astock.paper_trading.ledger import LedgerService, ReplayFillPlan
 from astock.schemas import (
     AdjustmentMode,
     BarRequest,
+    Frequency,
     Market,
     MarketBar,
     Order,
@@ -89,13 +90,21 @@ class PaperReplayService:
         manifest = self.canonical_store.load_manifest(request)
         if manifest is None:
             raise PolicyError(
-                "Canonical 5m manifest is missing",
+                f"Canonical {request.frequency.value} manifest is missing",
                 failure_class=FailureClass.DATA_QUALITY,
             )
         replay_quality = ReplayQuality(str(manifest["replay_quality"]))
-        if replay_quality is not ReplayQuality.DUAL_SOURCE_5M_VERIFIED:
+        supported_quality = (
+            replay_quality is ReplayQuality.DUAL_SOURCE_5M_VERIFIED
+            if request.frequency is Frequency.M5
+            else replay_quality is ReplayQuality.PROVIDER_1H_APPROX
+        )
+        if request.frequency not in {Frequency.M5, Frequency.H1} or not supported_quality:
             raise PolicyError(
-                "Paper fills require dual-source verified 5m data",
+                (
+                    "Paper fills require dual-source verified 5m data or "
+                    "dual-source checked approximate 60m data"
+                ),
                 failure_class=FailureClass.DATA_QUALITY,
             )
         manifest_identity = {
@@ -119,7 +128,7 @@ class PaperReplayService:
             )
         if QualityStatus(str(manifest["quality_status"])) is not QualityStatus.PASS:
             raise PolicyError(
-                "Canonical 5m quality report is not PASS",
+                f"Canonical {request.frequency.value} quality report is not PASS",
                 failure_class=FailureClass.DATA_QUALITY,
             )
         if request.adjustment_mode is not AdjustmentMode.NONE:
@@ -136,6 +145,9 @@ class PaperReplayService:
                 "Legacy or mismatched replay checkpoint lacks formal instrument identity",
                 failure_class=FailureClass.DATA_QUALITY,
             )
+        resolution_changed = (
+            previous is not None and previous.actual_resolution != request.frequency.value
+        )
         previous_cursor = (
             datetime.fromisoformat(previous.market_cursor)
             if previous is not None and previous.market_cursor
@@ -176,7 +188,7 @@ class PaperReplayService:
                 failure_class=FailureClass.DATA_QUALITY,
             )
         self._validate_continuity(all_bars)
-        if previous is not None and previous.coverage_end is not None:
+        if previous is not None and previous.coverage_end is not None and not resolution_changed:
             previous_bar = next(
                 (bar for bar in all_bars if bar.timestamp == previous.coverage_end), None
             )
@@ -212,7 +224,7 @@ class PaperReplayService:
                 )
             bar_start = self._bar_start(bar)
             local_start = bar_start.astimezone(_SHANGHAI)
-            local_end = (bar_start + timedelta(minutes=5)).astimezone(_SHANGHAI)
+            local_end = (bar_start + self._bar_duration(bar)).astimezone(_SHANGHAI)
             if not self._inside_session(local_start.time(), local_end.time()):
                 raise PolicyError(
                     "Canonical bar is outside the continuous trading sessions",
@@ -254,8 +266,7 @@ class PaperReplayService:
                 if (
                     binding.get("validity") == "DAY"
                     and expires_at
-                    and datetime.fromisoformat(str(expires_at))
-                    < self._bar_visible_at(bar)
+                    and datetime.fromisoformat(str(expires_at)) < self._bar_visible_at(bar)
                 ):
                     continue
                 calendar_release_id = str(binding["calendar_release_id"])
@@ -323,7 +334,8 @@ class PaperReplayService:
                 market=request.market,
                 instrument_id=f"{request.market.value}:{request.symbol}",
                 symbol=request.symbol,
-                actual_resolution="5m",
+                requested_resolution=request.frequency.value,
+                actual_resolution=request.frequency.value,
                 replay_quality=replay_quality,
                 provider_id=str(manifest["selected_provider"]),
                 coverage_start=(
@@ -336,7 +348,10 @@ class PaperReplayService:
                 fallback_reason=(
                     None
                     if replay_quality == ReplayQuality.DUAL_SOURCE_5M_VERIFIED
-                    else "dual-source verification threshold not met"
+                    else (
+                        "60m OHLC can simulate price-touch fills but cannot prove "
+                        "queue priority or intrabar path"
+                    )
                 ),
                 last_event_seq=(checkpoint.last_event_seq if checkpoint else 0),
                 market_cursor=bar.timestamp.isoformat(),
@@ -346,9 +361,7 @@ class PaperReplayService:
                     "bar": bar.model_dump(mode="json", exclude={"created_at"}),
                     "fill_plans": fill_plans,
                     "maximum_participation_rate": str(maximum_participation_rate),
-                    "fee_schedule": fee_schedule.model_dump(
-                        mode="json", exclude={"created_at"}
-                    ),
+                    "fee_schedule": fee_schedule.model_dump(mode="json", exclude={"created_at"}),
                     "manifest_content_hash": stored_manifest_hash,
                     "request": request.model_dump(mode="json", exclude={"created_at"}),
                     "checkpoint": planned_checkpoint.model_dump(
@@ -385,20 +398,31 @@ class PaperReplayService:
         )
 
     @staticmethod
-    def _bar_start(bar: MarketBar) -> datetime:
+    def _bar_duration(bar: MarketBar) -> timedelta:
+        if bar.frequency is Frequency.M5:
+            return timedelta(minutes=5)
+        if bar.frequency is Frequency.H1:
+            return timedelta(minutes=60)
+        raise PolicyError(
+            "Paper replay supports only 5m or 60m bars",
+            failure_class=FailureClass.DATA_QUALITY,
+        )
+
+    @classmethod
+    def _bar_start(cls, bar: MarketBar) -> datetime:
         if bar.timestamp_semantics is TimestampSemantics.BAR_START:
             return bar.timestamp
         if bar.timestamp_semantics is TimestampSemantics.BAR_END:
-            return bar.timestamp - timedelta(minutes=5)
+            return bar.timestamp - cls._bar_duration(bar)
         raise PolicyError(
-            "5m replay requires BAR_START or BAR_END timestamp semantics",
+            "Paper replay requires BAR_START or BAR_END timestamp semantics",
             failure_class=FailureClass.DATA_QUALITY,
         )
 
     @classmethod
     def _bar_visible_at(cls, bar: MarketBar) -> datetime:
         if bar.timestamp_semantics is TimestampSemantics.BAR_START:
-            return bar.timestamp + timedelta(minutes=5)
+            return bar.timestamp + cls._bar_duration(bar)
         if bar.timestamp_semantics is TimestampSemantics.BAR_END:
             return bar.timestamp
         return cls._bar_start(bar)
@@ -414,18 +438,26 @@ class PaperReplayService:
         for previous, current in zip(bars, bars[1:], strict=False):
             previous_start = cls._bar_start(previous).astimezone(_SHANGHAI)
             current_start = cls._bar_start(current).astimezone(_SHANGHAI)
-            expected = previous_start + timedelta(minutes=5)
-            lunch_resume = previous_start.time() == time(11, 25) and current_start.time() == time(
-                13, 0
-            )
+            duration = cls._bar_duration(previous)
+            expected = previous_start + duration
+            if previous.frequency is Frequency.H1:
+                lunch_resume = previous_start.time() == time(
+                    10, 30
+                ) and current_start.time() == time(13, 0)
+                last_start = time(14, 0)
+            else:
+                lunch_resume = previous_start.time() == time(
+                    11, 25
+                ) and current_start.time() == time(13, 0)
+                last_start = time(14, 55)
             next_session = (
                 previous_start.date() < current_start.date()
-                and previous_start.time() == time(14, 55)
+                and previous_start.time() == last_start
                 and current_start.time() == time(9, 30)
             )
             if current_start != expected and not lunch_resume and not next_session:
                 raise PolicyError(
-                    "Canonical 5m series has a non-session continuity gap",
+                    f"Canonical {previous.frequency.value} series has a non-session continuity gap",
                     failure_class=FailureClass.DATA_QUALITY,
                     details={
                         "previous": previous.timestamp.isoformat(),
@@ -449,7 +481,7 @@ class PaperReplayService:
         }
         if bar_dates != open_dates:
             raise PolicyError(
-                "Canonical 5m session coverage disagrees with the frozen calendar",
+                "Canonical replay session coverage disagrees with the frozen calendar",
                 failure_class=FailureClass.DATA_QUALITY,
                 details={
                     "missing_open_dates": sorted(
@@ -470,18 +502,22 @@ class PaperReplayService:
     def _match_price_fen(order: Order, bar: MarketBar) -> int | None:
         if order.limit_price_fen is None:
             raise PolicyError(
-                "M1 replay only supports explicit limit orders",
+                "Paper replay only supports explicit limit orders",
                 failure_class=FailureClass.POLICY_REJECTED,
             )
         limit_yuan = Decimal(order.limit_price_fen) / 100
         if order.side == OrderSide.BUY:
             if bar.low > limit_yuan:
                 return None
-            matched_yuan = min(bar.open, limit_yuan)
+            matched_yuan = (
+                limit_yuan if bar.frequency is Frequency.H1 else min(bar.open, limit_yuan)
+            )
         else:
             if bar.high < limit_yuan:
                 return None
-            matched_yuan = max(bar.open, limit_yuan)
+            matched_yuan = (
+                limit_yuan if bar.frequency is Frequency.H1 else max(bar.open, limit_yuan)
+            )
         return int((matched_yuan * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
     @staticmethod

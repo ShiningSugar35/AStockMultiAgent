@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from astock.market_data.quality import cross_validate_batches, validate_batch
-from astock.schemas import QualityStatus, ReplayQuality, VolumeUnit
+from astock.schemas import Frequency, QualityStatus, ReplayQuality, VolumeUnit
 from tests.helpers import make_batch
 
 
@@ -15,6 +15,18 @@ def test_full_session_cross_source_is_dual_verified() -> None:
     assert report.replay_quality is ReplayQuality.DUAL_SOURCE_5M_VERIFIED
     assert report.cross_source_diffs["common_bar_count"] == 48
     assert report.cross_source_diffs["volume_difference_count"] == 0
+
+
+def test_full_hourly_session_is_quality_pass_but_explicitly_approximate() -> None:
+    eastmoney = make_batch(
+        "eastmoney-5m", volume_unit=VolumeUnit.LOT_100_SHARES, frequency=Frequency.H1
+    )
+    sina = make_batch("sina-5m", volume_unit=VolumeUnit.SHARE, frequency=Frequency.H1)
+    report = cross_validate_batches(eastmoney, sina)
+    assert report.quality_status is QualityStatus.PASS
+    assert report.replay_quality is ReplayQuality.PROVIDER_1H_APPROX
+    assert report.cross_source_diffs["common_bar_count"] == 4
+    assert report.cross_source_diffs["minimum_common_bars"] == 4
 
 
 def test_one_missing_bar_downgrades_to_single_source() -> None:

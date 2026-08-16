@@ -96,6 +96,7 @@ from astock.knowledge import (
     serve_loopback_capture,
     verify_local_model,
 )
+from astock.local_portfolio import register_local_portfolio_commands
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
 from astock.market_data.storage import (
     CanonicalMarketStore,
@@ -166,6 +167,7 @@ from astock.schemas import (
     FinancialIndustryProfile,
     FinancialPeriodType,
     FinancialSourceReleaseStatus,
+    Frequency,
     HoldingReviewRequest,
     InstrumentType,
     KnowledgeSourceRegistry,
@@ -369,6 +371,7 @@ def _jsonable(value: Any) -> Any:
 
 
 register_knowledge_completion_commands(app, _services, _emit)
+register_local_portfolio_commands(app, _services)
 register_research_runtime_commands(
     app,
     _services,
@@ -389,7 +392,13 @@ def _parse_local_datetime(value: str, *, end_of_day: bool = False) -> datetime:
     return parsed.astimezone(_SHANGHAI)
 
 
-def _request(symbol: str, market: Market, start: str | None, end: str | None) -> BarRequest:
+def _request(
+    symbol: str,
+    market: Market,
+    start: str | None,
+    end: str | None,
+    frequency: Frequency = Frequency.M5,
+) -> BarRequest:
     now = datetime.now(_SHANGHAI)
     requested_start = _parse_local_datetime(start) if start else now - timedelta(days=45)
     requested_end = _parse_local_datetime(end, end_of_day=True) if end else now
@@ -397,13 +406,20 @@ def _request(symbol: str, market: Market, start: str | None, end: str | None) ->
         symbol=symbol,
         market=market,
         instrument_type=(InstrumentType.INDEX if market == Market.INDEX else InstrumentType.STOCK),
+        frequency=frequency,
         requested_start=requested_start,
         requested_end=requested_end,
         adjustment_mode=AdjustmentMode.NONE,
     )
 
 
-def _sync(symbol: str, market: Market, start: str | None, end: str | None) -> dict[str, Any]:
+def _sync(
+    symbol: str,
+    market: Market,
+    start: str | None,
+    end: str | None,
+    frequency: Frequency = Frequency.M5,
+) -> dict[str, Any]:
     paths, state, objects = _services()
     providers = [
         EastMoney5mProvider(objects, state),
@@ -415,7 +431,7 @@ def _sync(symbol: str, market: Market, start: str | None, end: str | None) -> di
         ParquetMarketStore(paths.parquet, "market_observation"),
         CanonicalMarketStore(paths.parquet, paths.manifests),
     )
-    result = service.sync_5m(_request(symbol, market, start, end))
+    result = service.sync_intraday(_request(symbol, market, start, end, frequency))
     return {
         "job_id": result.job_id,
         "providers": [
@@ -769,7 +785,31 @@ def sync_5m(
     """Synchronize unadjusted 5m bars through both free providers when available."""
 
     try:
-        _emit(_sync(symbol, market, start, end))
+        _emit(_sync(symbol, market, start, end, Frequency.M5))
+    except AStockError as exc:
+        _emit(
+            {
+                "status": "FAILED",
+                "failure_class": exc.failure_class.value,
+                "retryable": exc.retryable,
+                "message": str(exc),
+                "details": exc.details,
+            }
+        )
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("sync-hourly")
+def sync_hourly(
+    symbol: Annotated[str, typer.Argument(help="Six-digit stock or index code.")],
+    market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    start: Annotated[str | None, typer.Option(help="ISO local start date/time.")] = None,
+    end: Annotated[str | None, typer.Option(help="ISO local end date/time.")] = None,
+) -> None:
+    """Synchronize unadjusted 60m bars for session-on-demand paper replay."""
+
+    try:
+        _emit(_sync(symbol, market, start, end, Frequency.H1))
     except AStockError as exc:
         _emit(
             {
@@ -2171,20 +2211,31 @@ def paper_recover(
 @app.command("paper-replay")
 def paper_replay(
     symbol: Annotated[str, typer.Argument()],
-    cursor: Annotated[str, typer.Option(help="Last verified 5m bar timestamp in ISO format.")],
+    cursor: Annotated[str, typer.Option(help="Last replay boundary in ISO format.")],
     account_id: Annotated[str, typer.Option()] = "default",
     market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    resolution: Annotated[
+        Frequency,
+        typer.Option(
+            help=(
+                "Replay resolution; 60m is the default, "
+                "5m remains an optional high-fidelity fallback."
+            )
+        ),
+    ] = Frequency.H1,
     fee_rules: Annotated[
         Path | None,
         typer.Option(help="Effective-dated YAML fee profile; defaults to configs/fee_rules.yaml."),
     ] = None,
     maximum_participation_rate: Annotated[
         str,
-        typer.Option(help="Maximum share of a 5m bar volume usable by all paper fills."),
-    ] = "0.10",
+        typer.Option(help="Maximum share of bar volume usable by all simulated fills."),
+    ] = "0.05",
 ) -> None:
-    """Match open paper limit orders on canonical 5m bars and advance the checkpoint."""
+    """Match open paper limit orders; default to conservative hourly session replay."""
 
+    if resolution not in {Frequency.H1, Frequency.M5}:
+        raise typer.BadParameter("paper replay supports only 60m or 5m")
     paths, state, objects = _services()
     parsed_cursor = _parse_local_datetime(cursor)
     profile_path = fee_rules or paths.root / "configs" / "fee_rules.yaml"
@@ -2198,7 +2249,7 @@ def paper_replay(
     try:
         report = service.replay(
             account_id=account_id,
-            request=_request(symbol, market, None, cursor),
+            request=_request(symbol, market, None, cursor, resolution),
             requested_cursor=parsed_cursor,
             fee_schedule=schedule,
             maximum_participation_rate=Decimal(maximum_participation_rate),

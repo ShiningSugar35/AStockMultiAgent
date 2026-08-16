@@ -8,9 +8,10 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
 
 ## Flow
 
-1. **Resolve identity**
-   - Resolve one six-digit A-share code and explicit market.
-   - Do not ask the user for internal artifact IDs.
+1. **Refresh local portfolio, then resolve identity**
+   - If the paper account exists, run `local-portfolio-sync-paper`, read the Git-ignored local portfolio, and catch up pending orders before the main research question.
+   - Review existing holdings incrementally in parallel with the requested company analysis; do not rerun every held company from scratch.
+   - Resolve one six-digit A-share code and explicit market. Do not ask the user for internal artifact IDs.
 
 2. **Current acquisition first**
    - Run `uv run astock research-acquire-current <company_id> --market <market>`.
@@ -48,11 +49,13 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
 
 8. **Separate research from execution**
    - Missing TradingClassification/corporate-action execution detail may block a simulated executable protocol but does not by itself block a months/years fundamental assessment.
-   - If the user asks for exact entry/exit/stop mechanics, continue through [Committee & Trade Plan](workflow-committee-trade-plan.md).
+   - If the formal result permits simulation and the entry condition is currently satisfied, local standing settings may continue into the paper order/confirmation workflow; the position changes only after replay confirms a fill.
+   - A direct user simulated-trade instruction overrides the research opinion but not cash/lot/tradability/price-band/fill mechanics.
 
 9. **Render and audit the investor answer**
-   - INVESTOR_MODE is the default for a stock question even if repo-skill discovery or one tool call fails. Prefer `research-acquisition-investor-view` / `research-investor-view` for state translation.
-   - Lead with: **结论 / 为什么 / 估值与赔率 / 催化 / 最大风险 / 什么情况会改变结论**.
+   - INVESTOR_MODE is the default for a stock question even if repo-skill discovery or one tool call fails.
+   - Default structure: **结论（1–2句）→ 2–4个决定性理由 → 最大风险/改变判断的条件**. Do not add a second summary that repeats the same conclusion.
+   - Explain unfamiliar finance/statistics terms briefly on first use, then continue in plain language.
    - Keep provider paths, internal Agents/committee stages, protocol/schema/class names, machine states, reason codes, artifact IDs/hashes, SQL/SQLite, CLI logs and developer meta commentary in diagnostics only.
    - Before sending, apply `research-investor-answer-audit` semantics. A failed audit means **rewrite**, not “show the audit” and not “show the backend blockers”.
 

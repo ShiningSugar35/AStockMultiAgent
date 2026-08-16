@@ -33,6 +33,9 @@ browser-profile/
 *.pem
 *.key
 
+# Per-user portfolio and trade state stays local
+user_state/
+
 # Private research source material stays local
 *.pdf
 *.doc

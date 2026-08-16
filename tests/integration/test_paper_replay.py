@@ -14,6 +14,7 @@ from astock.market_data.storage import CanonicalMarketStore
 from astock.paper_trading import LedgerService, PaperReplayService, load_fee_schedule
 from astock.paper_trading.ledger import ReplayFillPlan
 from astock.schemas import (
+    Frequency,
     Market,
     OrderSide,
     OrderStatus,
@@ -122,6 +123,63 @@ def _bind_order(state, order, schedule, market: Market = Market.XSHG) -> None:
         )
 
 
+def test_hourly_replay_is_default_grade_and_uses_conservative_limit_price(
+    tmp_path: Path, state, object_store
+) -> None:
+    east = make_batch(
+        "eastmoney-5m",
+        volume_unit=VolumeUnit.LOT_100_SHARES,
+        frequency=Frequency.H1,
+    )
+    sina = make_batch("sina-5m", volume_unit=VolumeUnit.SHARE, frequency=Frequency.H1)
+    store = CanonicalMarketStore(tmp_path / "data", tmp_path / "manifests")
+    hourly_quality = cross_validate_batches(east, sina)
+    assert hourly_quality.quality_status is QualityStatus.PASS
+    assert hourly_quality.replay_quality is ReplayQuality.PROVIDER_1H_APPROX
+    store.publish(
+        east,
+        hourly_quality,
+        source_batch_ids=[east.batch_id, sina.batch_id],
+    )
+    ledger = LedgerService(state, object_store)
+    ledger.initialize_account("paper", 5_000_000)
+    order = ledger.place_order(
+        account_id="paper",
+        client_request_id="hourly-buy",
+        symbol=east.request.symbol,
+        side=OrderSide.BUY,
+        qty=100,
+        limit_price_fen=9_990,
+        fee_reserve_fen=2_000,
+        submitted_at=east.bars[0].timestamp - timedelta(hours=2),
+    )
+    fee_schedule = load_fee_schedule(PROJECT_ROOT / "configs" / "fee_rules.yaml")
+    _bind_order(state, order, fee_schedule)
+    service = PaperReplayService(ledger, store, _CalendarFixture())
+
+    report = service.replay(
+        account_id="paper",
+        request=east.request,
+        requested_cursor=east.bars[0].timestamp,
+        fee_schedule=fee_schedule,
+        maximum_participation_rate=Decimal("0.05"),
+    )
+
+    assert report.replay_quality is ReplayQuality.PROVIDER_1H_APPROX
+    assert report.processed_bars == 1
+    assert len(report.fill_ids) == 1
+    checkpoint = ledger.replay_checkpoint("paper", east.request.symbol)
+    assert checkpoint is not None
+    assert checkpoint.requested_resolution == "60m"
+    assert checkpoint.actual_resolution == "60m"
+    assert checkpoint.fallback_reason is not None
+    with state.connect() as connection:
+        fill = connection.execute(
+            "SELECT price_fen FROM fill WHERE fill_id=?", (report.fill_ids[0],)
+        ).fetchone()
+    assert fill[0] == 9_990
+
+
 def test_replay_matches_partial_limit_fills_and_resumes(
     tmp_path: Path, state, object_store
 ) -> None:
@@ -195,14 +253,12 @@ def test_replay_matches_partial_limit_fills_and_resumes(
             "SELECT commission_fen FROM fill ORDER BY occurred_at,fill_id"
         ).fetchall()
         assert [row[0] for row in fees] == [500, 100]
-        assert connection.execute(
-            "SELECT commission_fen FROM paper_fee_accrual"
-        ).fetchone()[0] == 600
+        assert (
+            connection.execute("SELECT commission_fen FROM paper_fee_accrual").fetchone()[0] == 600
+        )
 
 
-def test_bar_fill_and_checkpoint_roll_back_together(
-    tmp_path: Path, state, object_store
-) -> None:
+def test_bar_fill_and_checkpoint_roll_back_together(tmp_path: Path, state, object_store) -> None:
     east = make_batch("eastmoney-5m", volume_unit=VolumeUnit.LOT_100_SHARES)
     sina = make_batch("sina-5m", volume_unit=VolumeUnit.SHARE)
     store = CanonicalMarketStore(tmp_path / "data", tmp_path / "manifests")
@@ -257,9 +313,7 @@ def test_bar_fill_and_checkpoint_roll_back_together(
     assert ledger.replay_checkpoint("paper", east.request.symbol) is None
     with state.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM fill").fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM paper_replay_bar_commit"
-        ).fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM paper_replay_bar_commit").fetchone()[0] == 0
 
     fills, committed = ledger.commit_replay_bar(
         account_id="paper",
@@ -443,9 +497,7 @@ def test_formal_replay_rejects_legacy_order_without_advancing_checkpoint(
     assert ledger.replay_checkpoint("paper", east.request.symbol) is None
 
 
-def test_bar_end_mid_bar_order_waits_until_next_bar(
-    tmp_path: Path, state, object_store
-) -> None:
+def test_bar_end_mid_bar_order_waits_until_next_bar(tmp_path: Path, state, object_store) -> None:
     east = make_batch("eastmoney-5m", volume_unit=VolumeUnit.LOT_100_SHARES)
     sina = make_batch("sina-5m", volume_unit=VolumeUnit.SHARE)
     store = CanonicalMarketStore(tmp_path / "data", tmp_path / "manifests")
@@ -485,12 +537,8 @@ def test_bar_end_mid_bar_order_waits_until_next_bar(
     assert len(second.fill_ids) == 1
 
 
-def test_canonical_gap_is_rejected_before_checkpoint(
-    tmp_path: Path, state, object_store
-) -> None:
-    east = make_batch(
-        "eastmoney-5m", volume_unit=VolumeUnit.LOT_100_SHARES, missing_index=1
-    )
+def test_canonical_gap_is_rejected_before_checkpoint(tmp_path: Path, state, object_store) -> None:
+    east = make_batch("eastmoney-5m", volume_unit=VolumeUnit.LOT_100_SHARES, missing_index=1)
     sina = make_batch("sina-5m", volume_unit=VolumeUnit.SHARE, missing_index=1)
     store = CanonicalMarketStore(tmp_path / "data", tmp_path / "manifests")
     forced_report = cross_validate_batches(east, sina).model_copy(
@@ -577,13 +625,17 @@ def test_formal_fifo_lots_preserve_exact_remainder_cost(state, object_store) -> 
     position = ledger.status("paper")["positions"][0]
     assert (position["qty_total"], position["avg_cost_fen"]) == (100, 1002)
     with state.connect() as connection:
-        assert connection.execute(
-            "SELECT total_cost_fen FROM paper_position_cost"
-        ).fetchone()[0] == 100200
+        assert (
+            connection.execute("SELECT total_cost_fen FROM paper_position_cost").fetchone()[0]
+            == 100200
+        )
         lots = connection.execute(
             "SELECT remaining_qty,total_cost_fen FROM paper_position_lot ORDER BY acquired_at"
         ).fetchall()
     assert [tuple(row) for row in lots] == [(0, 0), (100, 100200)]
-    assert ledger.recover(
-        "paper", as_of=acquired + timedelta(days=1), expire_day_orders=False
-    )["status"] == "HEALTHY_NOOP"
+    assert (
+        ledger.recover("paper", as_of=acquired + timedelta(days=1), expire_day_orders=False)[
+            "status"
+        ]
+        == "HEALTHY_NOOP"
+    )

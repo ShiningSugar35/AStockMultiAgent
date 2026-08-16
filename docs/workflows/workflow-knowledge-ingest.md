@@ -31,13 +31,16 @@ Primary skill: `$knowledge-ingest`.
    - Do not distill an isolated image paragraph or mechanical heading into an investment rule.
    - Preserve context around chart/evidence/conclusion boundaries.
 
-6. **Distill only reviewed reusable methods**
+6. **Distill reviewed source methods, then audit generality**
    - Candidate methods must retain source references, applicability, required evidence, signals/counter-signals and boundaries.
-   - Review/approve/reject is append-only and auditable.
-   - Published Knowledge Skills remain research methods/context; they do not automatically create company facts, Committee votes, target prices or weights.
+   - Review/approve/reject is append-only and auditable, but source review alone does not make a Skill active production knowledge.
+   - Before activation, every source Skill enters the Knowledge Skill Audit and receives exactly one `KEEP / KEEP_SCOPED / REVISE / RETIRE` verdict. The audit binds the original immutable Skill/object/hash and at least two external authoritative evidence IDs.
+   - Same-premise conflicts cannot remain broad active rules. Different time horizons/assets/information assumptions may coexist only after their premises are explicit; otherwise prefer the proposition with stronger regulatory/accounting/peer-reviewed evidence.
+   - Time-specific market calls, exact levels, named-company forecasts, direct trade instructions and unverifiable actor intent remain historical case evidence by default. `REVISE` creates a new object; original source objects are never overwritten.
 
-7. **Publish through the Knowledge registry**
-   - Research Runtime consumes knowledge only through the published `KnowledgeSkillProvider` registry and exact release/hash validation.
+7. **Publish only the audited Knowledge registry**
+   - Research Runtime consumes knowledge only through the latest audited `KnowledgeSkillProvider` registry and exact release/hash validation. Historical composite releases remain available only for provenance/re-audit.
+   - Community/social sources may identify missing capabilities but cannot admit a Skill. New curated Skills require multi-source official/peer-reviewed/primary-engineering evidence; alpha-like rules remain shadow/prospective-only until forward validation.
    - Do not query internal knowledge tables directly from the runtime.
 
 ## Output

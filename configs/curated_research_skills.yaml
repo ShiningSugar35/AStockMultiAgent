@@ -1,0 +1,172 @@
+schema_version: curated-research-skills-v1
+skills:
+  - curated_skill_id: CURATED_BACKTEST_MULTIPLE_TESTING
+    skill_name: 多重检验与回测过拟合治理
+    primary_module: SOURCING_SCREENING
+    decision_question: 一个回测因子、形态或参数组合是否具备进入生产研究的统计证据？
+    core_principle: 任何从大量候选规则中筛出的高收益结果，都必须把搜索次数、样本外表现、微盘偏差和多重检验纳入证据门槛；单次漂亮回测或少数成功案例不能证明稳定超额收益。
+    applicable_conditions:
+      - 使用历史数据挑选因子、技术形态、阈值、参数或策略组合
+      - 同一研究过程中比较过多个候选规则或多次调参
+    reasoning_steps:
+      - 冻结全部尝试过的候选与参数搜索空间
+      - 保留严格的训练/验证/样本外或前瞻切分
+      - 同时报告未经选择修正与多重检验修正后的显著性和经济收益
+      - 检查微盘、极端样本、幸存者偏差和数据泄漏是否驱动结果
+    invalidation_conditions:
+      - 独立样本外和前瞻结果在扣除摩擦后持续失败
+    evidence_ids: [RFS_MULTIPLE_TESTING_HLZ, RFS_REPLICATING_ANOMALIES_HXZ, QLIB_PIT]
+    shadow_or_prospective_only: true
+  - curated_skill_id: CURATED_TRADING_COST_CAPACITY_HYSTERESIS
+    skill_name: 交易成本、容量与买卖滞回门
+    primary_module: POSITION_RISK_MANAGEMENT
+    decision_question: 纸面 alpha 在实际换手、冲击成本和资金容量下是否仍可执行？
+    core_principle: 策略应分别定义更严格的建仓门和较宽的持有门，并用真实换手、滑点、冲击成本和容量评估净收益；高换手毛收益不能直接等同于可实现收益。
+    applicable_conditions:
+      - 策略依赖频繁调仓、低流动性标的或小盘股
+      - 候选池扩大或资金规模提高可能改变成交成本
+    reasoning_steps:
+      - 估计双边交易成本与市场冲击
+      - 按资金规模测试容量和成交占比
+      - 比较无摩擦、含摩擦和更严格建仓门的结果
+      - 对高换手规则设置更高的样本外证据门槛
+    invalidation_conditions:
+      - 不同规模和成本情景下净收益均不再为正或尾部风险不可接受
+    evidence_ids: [RFS_TRADING_COSTS_NMV, JF_BARBER_ODEAN_TRADING]
+    shadow_or_prospective_only: true
+  - curated_skill_id: CURATED_CHINA_RETURN_PATTERN_HORIZON
+    skill_name: A股动量与反转必须按周期和市场状态分层
+    primary_module: POSITION_RISK_MANAGEMENT
+    decision_question: 历史涨跌延续、反转或技术趋势能否作为当前A股信号？
+    core_principle: 不把“趋势有效”或“反转有效”写成普遍规律；A股过去收益效应高度依赖观察周期、持有期、投资者结构和市场状态，任何信号都必须在目标 horizon 上独立验证并监控崩溃风险。
+    applicable_conditions:
+      - 使用过去收益、趋势、均线、突破、相对强弱或反转信号
+      - 需要把技术信号接入择时、仓位或候选筛选
+    reasoning_steps:
+      - 明确 lookback 和 holding horizon
+      - 区分绝对动量、残差动量、短期反转和长期反转
+      - 按A股市场状态、流动性和投资者结构做分层验证
+      - 计算尾部损失并保留无信号基准
+    invalidation_conditions:
+      - 目标样本外或前瞻窗口中信号方向不稳定或摩擦后失效
+    evidence_ids: [CHINA_A_ANOMALIES_JSZ, ROF_CHINA_MOMENTUM_REVERSAL, NBER_MOMENTUM_CRASHES]
+    shadow_or_prospective_only: true
+  - curated_skill_id: CURATED_EARNINGS_QUALITY_ACCRUAL_CASHFLOW
+    skill_name: 应计、现金转换与利润质量交叉验证
+    primary_module: FUNDAMENTAL_RESEARCH
+    decision_question: 报告利润是否有足够现金转换和资产负债表证据支持其持续性？
+    core_principle: 利润与经营现金流、应收、存货和其他营运资本的长期背离应触发持续性调查，但应计异常只是研究信号，不能直接等同于造假或自动做空理由。
+    applicable_conditions:
+      - 利润增长明显快于经营现金流
+      - 应收、存货或其他营运资本项目出现异常扩张
+    reasoning_steps:
+      - 对利润与经营现金流做多期桥接
+      - 拆解非现金项目和营运资本变化
+      - 结合业务模式、季节性和融资安排解释差异
+      - 只有在官方证据支持时升级为会计或治理风险
+    invalidation_conditions:
+      - 差异可由可验证的业务周期、结算结构或一次性事项充分解释
+    evidence_ids: [IFRS_IAS7_CASHFLOW, CSRC_DISCLOSURE_RULES]
+    shadow_or_prospective_only: false
+  - curated_skill_id: CURATED_RISK_MODEL_EXPOSURE_GOVERNANCE
+    skill_name: 组合风险模型与经济暴露治理
+    primary_module: PORTFOLIO_CONSTRUCTION
+    decision_question: 多只看似不同的证券是否实际上共享同一经济或因子风险？
+    core_principle: 组合不能只按证券数量或行业标签判断分散度；应显式估计共同经济驱动、因子暴露、协方差、跟踪误差和压力情景，并让优化器服从这些风险约束而不是只追求预测分数。
+    applicable_conditions:
+      - 构建多证券组合或相对基准组合
+      - 多个持仓可能共享商品、利率、融资、政策或需求暴露
+    reasoning_steps:
+      - 建立可解释的经济暴露和统计风险矩阵
+      - 检查相关性与因子暴露在压力期是否上升
+      - 报告跟踪误差、集中度和边际风险贡献
+      - 组合优化必须在硬风险约束后执行
+    invalidation_conditions:
+      - 风险模型在新的市场状态下持续失配且未完成重新估计
+    evidence_ids: [QLIB_ENHANCED_INDEXING, NBER_PORTFOLIO_CONCENTRATION, NBER_UNDERDIVERSIFICATION_FIELD]
+    shadow_or_prospective_only: false
+  - curated_skill_id: CURATED_SIGNAL_DECAY_CONCEPT_DRIFT
+    skill_name: 信号衰减与概念漂移监控
+    primary_module: SOURCING_SCREENING
+    decision_question: 一个过去有效的研究规则是否仍处于同一数据生成机制？
+    core_principle: 已发现的异常、因子或经验规则不能被永久冻结为真理；必须追踪样本外衰减、市场制度变化、参与者适应和输入分布漂移，并在失效时自动降级到观察或重新研究。
+    applicable_conditions:
+      - 使用历史回测、因子、专家经验或长期沿用的筛选规则
+      - 市场制度、交易者结构或数据分布发生变化
+    reasoning_steps:
+      - 冻结原始样本期与首次发布时点
+      - 分别计算样本外、发布后和近期滚动表现
+      - 监控输入分布、命中率、收益方向和成本敏感度的漂移
+      - 达到失效条件时停止生产使用并重新验证
+    invalidation_conditions:
+      - 新版本规则重新通过独立样本外与前瞻验证后，可生成新的版本化Skill
+    evidence_ids: [RFS_MULTIPLE_TESTING_HLZ, RFS_REPLICATING_ANOMALIES_HXZ, QLIB_PIT]
+    shadow_or_prospective_only: true
+  - curated_skill_id: CURATED_EARNINGS_REACTION_COMPETING_HYPOTHESES
+    skill_name: 财报后价格漂移只作为竞争假设
+    primary_module: POSITION_RISK_MANAGEMENT
+    decision_question: 财报超预期或低预期后是否应该假定价格会继续同方向漂移？
+    core_principle: 财报后的延续、反转或无效反应都应被视为竞争假设；在A股中不能把PEAD方向写成恒定规律，必须按公告类型、horizon、流动性和市场状态做PIT样本外验证。
+    applicable_conditions:
+      - 策略试图依据财报、业绩预告或盈利惊喜做公告后交易
+      - 研究使用外部预期差或公告日价格反应
+    reasoning_steps:
+      - 冻结公告发布时间和可得的同期市场预期
+      - 区分公告日跳空与后续持有期收益
+      - 同时检验延续与反转基准而非只检验预设方向
+      - 扣除涨跌停、流动性和交易成本后再判断是否存在可执行效应
+    invalidation_conditions:
+      - 前瞻样本无法稳定区分延续与反转或净收益不再显著
+    evidence_ids: [ROF_CHINA_MOMENTUM_REVERSAL, CHINA_A_ANOMALIES_JSZ, RFS_MULTIPLE_TESTING_HLZ]
+    shadow_or_prospective_only: true
+  - curated_skill_id: CURATED_PARAMETER_NEIGHBORHOOD_STABILITY
+    skill_name: 参数邻域稳定性与扰动测试
+    primary_module: SOURCING_SCREENING
+    decision_question: 一个依赖特定参数、阈值或窗口的策略是否只是命中了历史样本中的尖锐最优点？
+    core_principle: 生产候选不应只在单一参数点表现优异；应对相邻参数、时间窗口和轻微数据扰动做敏感性测试，优先保留形成稳定平台而非针尖最优的规则，并继续接受独立样本外和前瞻验证。
+    applicable_conditions:
+      - 策略含可调阈值、lookback、holding period、技术指标参数或模型超参数
+      - 参数由历史收益、Sharpe、回撤或命中率优化得到
+    reasoning_steps:
+      - 冻结参数搜索空间和选择准则
+      - 对最优点周围的参数邻域做系统扰动并记录性能曲面
+      - 检查邻域内收益方向、风险和换手是否连续稳定
+      - 通过后仍必须进入独立样本外或walk-forward验证
+    invalidation_conditions:
+      - 轻微参数或窗口变化即导致收益方向翻转或风险显著恶化
+    evidence_ids: [QUANTCONNECT_PARAMETER_OVERFITTING, RFS_MULTIPLE_TESTING_HLZ, RFS_REPLICATING_ANOMALIES_HXZ]
+    shadow_or_prospective_only: true
+  - curated_skill_id: CURATED_UNIVERSE_PIT_SURVIVORSHIP
+    skill_name: 研究样本池必须按时点重建并治理幸存者偏差
+    primary_module: SOURCING_SCREENING
+    decision_question: 回测或历史研究使用的证券池是否真实反映当时可投资、可观察的市场，而不是今天仍存续的幸存者集合？
+    core_principle: 历史研究必须按当时可得信息重建证券池、上市退市状态、公告可得时间和公司行为；使用今天的成分股或事后修订数据回填历史，会把幸存者偏差和未来信息伪装成研究优势。
+    applicable_conditions:
+      - 使用历史指数成分、全市场股票池、财务数据或公司行为做回测
+      - 样本包含上市、退市、停牌、重组或成分调整
+    reasoning_steps:
+      - 冻结每个决策时点真实可见的证券池
+      - 使用available-to-system时间而非报告期末时间接入财务和公告
+      - 显式保留退市、停牌和公司行为样本
+      - 对当前成分股回填历史的结果单独标记为无效对照
+    invalidation_conditions:
+      - 无法恢复关键时期的时点证券池或数据可得时间
+    evidence_ids: [QLIB_PIT, QUANTCONNECT_RESEARCH_GUIDE, RFS_REPLICATING_ANOMALIES_HXZ]
+    shadow_or_prospective_only: true
+  - curated_skill_id: CURATED_FACTOR_IC_TURNOVER_DECAY
+    skill_name: 因子有效性联合检查IC、换手、分组稳定性与衰减
+    primary_module: SOURCING_SCREENING
+    decision_question: 一个因子或排序信号是否具有跨期、跨组且扣除换手成本后的稳定预测价值？
+    core_principle: 因子不能只用累计收益或单一Sharpe判断；应联合观察rank IC、分组收益、换手/自相关、行业或组别稳定性和随时间衰减，并在成本后评价其是否仍值得进入生产研究。
+    applicable_conditions:
+      - 使用横截面因子、评分、排序或多因子组合生成候选
+      - 因子可能因拥挤、制度变化或高换手而衰减
+    reasoning_steps:
+      - 按时点数据计算多周期rank IC及其分布
+      - 检查分组收益单调性和行业/规模分层稳定性
+      - 计算因子排名自相关、换手和成本后收益
+      - 监控滚动IC与发布后衰减并设定重新验证条件
+    invalidation_conditions:
+      - IC方向、分组单调性或成本后收益在样本外持续失效
+    evidence_ids: [ALPHALENS_FACTOR_ANALYSIS, RFS_TRADING_COSTS_NMV, RFS_REPLICATING_ANOMALIES_HXZ]
+    shadow_or_prospective_only: true

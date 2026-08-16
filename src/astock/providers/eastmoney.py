@@ -38,7 +38,7 @@ class EastMoney5mProvider(HttpProviderBase):
             provider_id=self.provider_id,
             markets=[Market.XSHG, Market.XSHE, Market.BJSE, Market.INDEX],
             instrument_types=[InstrumentType.STOCK, InstrumentType.INDEX],
-            frequencies=[Frequency.M5],
+            frequencies=[Frequency.M5, Frequency.H1],
             adjustment_modes=[AdjustmentMode.NONE],
             amount_supported=True,
             timestamp_semantics=TimestampSemantics.BAR_END,
@@ -53,9 +53,10 @@ class EastMoney5mProvider(HttpProviderBase):
 
     def fetch_bars(self, request: BarRequest) -> MarketDataBatch:
         _validate_raw_5m_request(request)
+        interval_minutes = 5 if request.frequency is Frequency.M5 else 60
         params: dict[str, str | int] = {
             "secid": eastmoney_secid(request),
-            "klt": 5,
+            "klt": interval_minutes,
             "fqt": 0,
             "beg": request.requested_start.strftime("%Y%m%d"),
             "end": request.requested_end.strftime("%Y%m%d"),
@@ -105,7 +106,7 @@ class EastMoney5mProvider(HttpProviderBase):
                         provider_id=self.provider_id,
                         symbol=request.symbol,
                         market=request.market,
-                        frequency=Frequency.M5,
+                        frequency=request.frequency,
                         timestamp=timestamp,
                         timestamp_semantics=TimestampSemantics.BAR_END,
                         open=Decimal(fields[1]),
@@ -152,9 +153,9 @@ class EastMoney5mProvider(HttpProviderBase):
 
 
 def _validate_raw_5m_request(request: BarRequest) -> None:
-    if request.frequency != Frequency.M5:
+    if request.frequency not in {Frequency.M5, Frequency.H1}:
         raise ProviderError(
-            "Provider only supports 5m in this adapter",
+            "Provider only supports 5m or 60m in this adapter",
             failure_class=FailureClass.CAPABILITY_UNAVAILABLE,
         )
     if request.adjustment_mode != AdjustmentMode.NONE:

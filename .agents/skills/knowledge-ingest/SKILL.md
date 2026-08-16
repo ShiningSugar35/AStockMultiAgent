@@ -16,6 +16,9 @@ description: Ingest an approved local document or allowlisted author's accessibl
 8. Never distill an image Paragraph alone. A chart between a claim and conclusion must use
    `MERGE_WITH_BOTH`; failed, low-confidence, no-text, unknown, or incomplete context stays
    `NEEDS_REVIEW`.
+9. A reviewed source Skill is **not automatically an active production method**. Before a new registry can become active, run the Knowledge Skill Audit: every Skill must bind its immutable original source/hash plus at least two external authoritative evidence IDs and receive exactly one `KEEP / KEEP_SCOPED / REVISE / RETIRE` verdict.
+10. Treat time-specific market commentary, exact index/price levels, named-company forecasts, first-person trade calls and unverifiable actor intent as historical evidence/case material by default, not reusable Skill logic. A reusable method must be rewritten with explicit premises, falsifiers and stronger evidence; `REVISE` creates a new object and never overwrites the source Skill.
+11. Community/social popularity may discover a missing method, but cannot admit it. New curated Skills require official, peer-reviewed or primary engineering evidence and remain `formal_committee_weight_allowed=false`; alpha-like rules stay shadow/prospective-only until forward evidence exists.
 
 ## Workflows
 
@@ -23,10 +26,11 @@ description: Ingest an approved local document or allowlisted author's accessibl
 
 ## Output
 
-Produce `AuthorCollectionCoverageReport` for every author/content type. Later distillation must produce separate candidate-selection and position-lifecycle manifests with source snapshot IDs.
+Produce `AuthorCollectionCoverageReport` for every author/content type. Later distillation must produce separate candidate-selection and position-lifecycle manifests with source snapshot IDs. A published source registry is historical provenance until the Knowledge Skill Audit publishes an audited active registry; report both historical and audited counts when they differ.
 
 ## Prohibitions
 
 - Do not store plaintext cookies or browser profiles in Git or logs.
 - Do not bypass captchas, signatures, access controls, or rate limits.
 - Do not interpret a failed or empty response as proof that no content exists.
+- Do not admit a social-media opinion, exact market call, or single successful backtest into active Knowledge solely because it was reviewed or visually grounded.

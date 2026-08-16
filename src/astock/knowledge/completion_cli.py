@@ -15,12 +15,14 @@ from astock.knowledge.completion_service import (
     ZhihuVisualCompletionService,
 )
 from astock.knowledge.provider import RepositoryKnowledgeSkillProvider
+from astock.knowledge.skill_audit import KnowledgeSkillAuditService
 from astock.knowledge.visual_pipeline import ZhihuVisualPipelineService
 from astock.knowledge.visual_skill_service import VisualSkillService
 from astock.schemas.knowledge_completion import (
     KnowledgeProviderReadiness,
     KnowledgeSkillQuery,
 )
+from astock.schemas.knowledge_skill_audit import KnowledgeSkillAuditVerdict
 
 
 def register_knowledge_completion_commands(
@@ -28,6 +30,10 @@ def register_knowledge_completion_commands(
     services: Callable[[], tuple[Any, Any, Any]],
     emit: Callable[[Any], None],
 ) -> None:
+    def skill_audit_service() -> KnowledgeSkillAuditService:
+        paths, state, objects = services()
+        return KnowledgeSkillAuditService(state, objects, paths.root)
+
     @app.command("knowledge-completion-review-plan")
     def review_plan(
         review_file: Annotated[
@@ -160,6 +166,63 @@ def register_knowledge_completion_commands(
         )
         query = KnowledgeSkillQuery(query=query_text, top_k=top_k)
         emit(provider.select(run_id, query))
+
+    @app.command("knowledge-skill-audit-plan")
+    def knowledge_skill_audit_plan(
+        source_run_id: Annotated[str | None, typer.Option("--source-run-id")] = None,
+    ) -> None:
+        emit(skill_audit_service().plan(source_run_id))
+
+    @app.command("knowledge-skill-audit-run")
+    def knowledge_skill_audit_run(audit_run_id: Annotated[str, typer.Argument()]) -> None:
+        emit(skill_audit_service().run(audit_run_id))
+
+    @app.command("knowledge-skill-audit-status")
+    def knowledge_skill_audit_status(
+        audit_run_id: Annotated[str | None, typer.Option("--audit-run-id")] = None,
+    ) -> None:
+        emit(skill_audit_service().status(audit_run_id))
+
+    @app.command("knowledge-skill-audit-decisions")
+    def knowledge_skill_audit_decisions(
+        audit_run_id: Annotated[str, typer.Argument()],
+        verdict: Annotated[KnowledgeSkillAuditVerdict | None, typer.Option()] = None,
+    ) -> None:
+        emit(skill_audit_service().decision_list(audit_run_id, verdict))
+
+    @app.command("knowledge-skill-audit")
+    def knowledge_skill_audit(audit_run_id: Annotated[str, typer.Argument()]) -> None:
+        report = skill_audit_service().audit(audit_run_id)
+        emit(report)
+        if report.status != "PASS":
+            raise typer.Exit(code=3)
+
+    @app.command("knowledge-skill-audit-publish")
+    def knowledge_skill_audit_publish(audit_run_id: Annotated[str, typer.Argument()]) -> None:
+        release = skill_audit_service().publish(audit_run_id)
+        emit(
+            {
+                "status": "PUBLISHED",
+                "release_id": release.release_id,
+                "release_artifact_id": release.release_artifact_id,
+                "source_skill_count": release.source_skill_count,
+                "decision_count": release.decision_count,
+                "keep_count": release.keep_count,
+                "keep_scoped_count": release.keep_scoped_count,
+                "revise_count": release.revise_count,
+                "retire_count": release.retire_count,
+                "curated_count": release.curated_count,
+                "active_skill_count": release.active_skill_count,
+                "source_registry_object_hash": release.source_registry_object_hash,
+            }
+        )
+
+    @app.command("knowledge-skill-prune-retired")
+    def knowledge_skill_prune_retired(
+        audit_run_id: Annotated[str | None, typer.Option("--audit-run-id")] = None,
+        confirm: Annotated[bool, typer.Option("--confirm")] = False,
+    ) -> None:
+        emit(skill_audit_service().prune_retired(audit_run_id, confirm=confirm))
 
     @app.command("knowledge-zhihu-visual-capture")
     def visual_capture(

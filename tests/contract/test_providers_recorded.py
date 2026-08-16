@@ -12,7 +12,7 @@ from astock.core.errors import FailureClass, ProviderError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.providers import EastMoney5mProvider, Sina5mProvider
-from astock.schemas import AdjustmentMode, BarRequest, Market, VolumeUnit
+from astock.schemas import AdjustmentMode, BarRequest, Frequency, Market, VolumeUnit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -140,3 +140,44 @@ def test_transport_failure_is_classified_and_retryable(
         provider.fetch_bars(request())
     assert error.value.failure_class is expected_class
     assert error.value.retryable
+
+
+def test_recorded_intraday_providers_request_hourly_resolution(tmp_path: Path) -> None:
+    east_fixture = (
+        PROJECT_ROOT / "tests" / "fixtures" / "providers" / "eastmoney_5m_600519.json"
+    ).read_bytes().replace(b"09:35", b"10:30").replace(b"09:40", b"11:30")
+    sina_fixture = (
+        PROJECT_ROOT / "tests" / "fixtures" / "providers" / "sina_5m_600519.json"
+    ).read_bytes().replace(b"09:35:00", b"10:30:00").replace(
+        b"09:40:00", b"11:30:00"
+    )
+    hourly_request = request().model_copy(update={"frequency": Frequency.H1})
+
+    observed: dict[str, str] = {}
+
+    def east_handler(http_request: httpx.Request) -> httpx.Response:
+        observed["east_klt"] = http_request.url.params["klt"]
+        return httpx.Response(200, content=east_fixture, request=http_request)
+
+    def sina_handler(http_request: httpx.Request) -> httpx.Response:
+        observed["sina_scale"] = http_request.url.params["scale"]
+        return httpx.Response(200, content=sina_fixture, request=http_request)
+
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    east = EastMoney5mProvider(
+        objects,
+        state,
+        client=httpx.Client(transport=httpx.MockTransport(east_handler)),
+    ).fetch_bars(hourly_request)
+    sina = Sina5mProvider(
+        objects,
+        state,
+        client=httpx.Client(transport=httpx.MockTransport(sina_handler)),
+    ).fetch_bars(hourly_request)
+
+    assert observed == {"east_klt": "60", "sina_scale": "60"}
+    assert east.request.frequency is Frequency.H1
+    assert sina.request.frequency is Frequency.H1
+    assert all(bar.frequency is Frequency.H1 for bar in [*east.bars, *sina.bars])

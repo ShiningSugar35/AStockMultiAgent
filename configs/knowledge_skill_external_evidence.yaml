@@ -1,0 +1,212 @@
+schema_version: knowledge-skill-external-evidence-v1
+sources:
+  RFS_MULTIPLE_TESTING_HLZ:
+    title: "... and the Cross-Section of Expected Returns"
+    authority: "The Review of Financial Studies / Oxford Academic"
+    source_type: PEER_REVIEWED
+    url: "https://academic.oup.com/rfs/article-abstract/29/1/5/1843824"
+    tags: [BACKTEST_GOVERNANCE, MULTIPLE_TESTING, FACTOR_ROBUSTNESS]
+    limitation: "Statistical hurdle guidance; not a claim that every factor or discretionary method is false."
+  RFS_REPLICATING_ANOMALIES_HXZ:
+    title: "Replicating Anomalies"
+    authority: "The Review of Financial Studies / Oxford Academic"
+    source_type: PEER_REVIEWED
+    url: "https://academic.oup.com/rfs/article/33/5/2019/5236964"
+    tags: [BACKTEST_GOVERNANCE, REPLICATION, MICROCAP_BIAS, FACTOR_ROBUSTNESS]
+    limitation: "US anomaly replication; used as evidence against weak generalisation from selected historical examples."
+  RFS_TRADING_COSTS_NMV:
+    title: "A Taxonomy of Anomalies and Their Trading Costs"
+    authority: "The Review of Financial Studies / Oxford Academic"
+    source_type: PEER_REVIEWED
+    url: "https://academic.oup.com/rfs/article-abstract/29/1/104/1844518"
+    tags: [TRADING_COST, TURNOVER, CAPACITY, HYSTERESIS]
+    limitation: "Trading-cost estimates are market and period dependent; the process principle is portable."
+  JF_BARBER_ODEAN_TRADING:
+    title: "Trading Is Hazardous to Your Wealth"
+    authority: "The Journal of Finance"
+    source_type: PEER_REVIEWED
+    url: "https://doi.org/10.1111/0022-1082.00226"
+    tags: [TURNOVER, OVERCONFIDENCE, BEHAVIOR, TRADING_COST]
+    limitation: "Household sample is historical US brokerage data; does not imply all active trading is inferior."
+  NBER_MOMENTUM_CRASHES:
+    title: "Momentum Crashes"
+    authority: "National Bureau of Economic Research"
+    source_type: ACADEMIC_WORKING_PAPER
+    url: "https://www.nber.org/papers/w20439"
+    tags: [MOMENTUM, REGIME, TAIL_RISK, TREND]
+    limitation: "Primarily international/US evidence; used to reject unconditional momentum rules."
+  CHINA_A_ANOMALIES_JSZ:
+    title: "Anomalies in the China A-share Market"
+    authority: "Pacific-Basin Finance Journal"
+    source_type: PEER_REVIEWED
+    url: "https://www.sciencedirect.com/science/article/pii/S0927538X21001141"
+    tags: [CHINA_A_SHARE, MOMENTUM, REVERSAL, FACTOR_ROBUSTNESS, REGIME]
+    limitation: "Evidence is anomaly- and horizon-specific; does not authorize a live trading rule."
+  ROF_CHINA_MOMENTUM_REVERSAL:
+    title: "Momentum, Reversals, and Investor Clientele"
+    authority: "Review of Finance / Oxford Academic"
+    source_type: PEER_REVIEWED
+    url: "https://academic.oup.com/rof/article-abstract/26/2/217/6529121"
+    tags: [CHINA_A_SHARE, MOMENTUM, REVERSAL, INVESTOR_CLIENTELE]
+    limitation: "Share-class and sample design matters; used to require horizon/clientele conditioning."
+  NBER_PORTFOLIO_CONCENTRATION:
+    title: "Portfolio Concentration and the Performance of Individual Investors"
+    authority: "National Bureau of Economic Research"
+    source_type: ACADEMIC_WORKING_PAPER
+    url: "https://www.nber.org/papers/w10675"
+    tags: [CONCENTRATION, INFORMATION_ADVANTAGE, PORTFOLIO]
+    limitation: "Concentration can reflect information skill for some investors; not a blanket recommendation to concentrate."
+  NBER_INFORMATION_UNDERDIVERSIFICATION:
+    title: "Information Acquisition and Under-Diversification"
+    authority: "National Bureau of Economic Research"
+    source_type: ACADEMIC_WORKING_PAPER
+    url: "https://www.nber.org/papers/w13904"
+    tags: [DIVERSIFICATION, INFORMATION_ADVANTAGE, PORTFOLIO]
+    limitation: "Model-based result; used to scope rather than universally endorse concentration."
+  NBER_UNDERDIVERSIFICATION_FIELD:
+    title: "Household Portfolio Underdiversification and Probability Weighting"
+    authority: "National Bureau of Economic Research"
+    source_type: ACADEMIC_WORKING_PAPER
+    url: "https://www.nber.org/papers/w24928"
+    tags: [DIVERSIFICATION, BEHAVIOR, LOTTERY_PREFERENCE, PORTFOLIO]
+    limitation: "Household behavior evidence; does not define a universal optimal number of holdings."
+  DAMODARAN_VALUATION_INTRO:
+    title: "An Introduction to Valuation"
+    authority: "Aswath Damodaran / NYU Stern"
+    source_type: ACADEMIC_REFERENCE
+    url: "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/background/valintro.htm"
+    tags: [VALUATION, DCF, CASH_FLOW, RISK, UNCERTAINTY]
+    limitation: "Valuation framework reference; valuation inputs remain model- and company-specific."
+  DAMODARAN_INTRINSIC_RELATIVE:
+    title: "Intrinsic vs Relative Value"
+    authority: "Aswath Damodaran / NYU Stern"
+    source_type: ACADEMIC_REFERENCE
+    url: "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/littlebook/intrinsicvsrelative.htm"
+    tags: [VALUATION, CASH_FLOW, GROWTH, RISK, MULTIPLES]
+    limitation: "Supports cash-flow/growth/risk framing, not a fixed multiple threshold."
+  IFRS_IAS7_CASHFLOW:
+    title: "IAS 7 Statement of Cash Flows"
+    authority: "IFRS Foundation"
+    source_type: OFFICIAL_STANDARD
+    url: "https://www.ifrs.org/issued-standards/list-of-standards/ias-7-statement-of-cash-flows.html/"
+    tags: [ACCOUNTING, CASH_FLOW, ACCRUAL, EARNINGS_QUALITY]
+    limitation: "IFRS reference; China-listed firms follow PRC standards, which substantially converge but remain the governing local rules."
+  IFRS_IAS12_INCOME_TAX:
+    title: "IAS 12 Income Taxes"
+    authority: "IFRS Foundation"
+    source_type: OFFICIAL_STANDARD
+    url: "https://www.ifrs.org/issued-standards/list-of-standards/ias-12-income-taxes/"
+    tags: [ACCOUNTING, DEFERRED_TAX]
+    limitation: "Used together with PRC CAS 18 for China-listed companies."
+  IFRS_IAS33_EPS:
+    title: "IAS 33 Earnings per Share"
+    authority: "IFRS Foundation"
+    source_type: OFFICIAL_STANDARD
+    url: "https://www.ifrs.org/issued-standards/list-of-standards/ias-33-earnings-per-share.html/"
+    tags: [ACCOUNTING, EPS, DILUTION]
+    limitation: "Used together with PRC EPS rules; denominator is weighted-average shares rather than simple period-end shares."
+  IFRS_IAS32_PRESENTATION:
+    title: "IAS 32 Financial Instruments: Presentation"
+    authority: "IFRS Foundation"
+    source_type: OFFICIAL_STANDARD
+    url: "https://www.ifrs.org/content/dam/ifrs/publications/pdf-standards/english/2022/issued/part-a/ias-32-financial-instruments-presentation.pdf?bypass=on"
+    tags: [ACCOUNTING, DEBT_EQUITY, FINANCIAL_INSTRUMENT]
+    limitation: "Classification depends on contractual obligations and settlement terms, not an instrument label."
+  MOF_CAS33_CONSOLIDATED:
+    title: "企业会计准则第33号——合并财务报表（财会〔2014〕10号）"
+    authority: "中华人民共和国财政部"
+    source_type: OFFICIAL_STANDARD
+    url: "https://www.mof.gov.cn/gkml/caizhengwengao/wg2014/wg201405/201412/t20141217_1168564.htm"
+    tags: [ACCOUNTING, CONSOLIDATED_FINANCIAL_STATEMENTS, GROUP_REPORTING]
+    limitation: "Consolidated statements present the group as an economic entity; parent-only statements retain separate legal-entity uses."
+  MOF_CAS34_EPS:
+    title: "企业会计准则第34号——每股收益"
+    authority: "中华人民共和国财政部"
+    source_type: OFFICIAL_STANDARD
+    url: "https://kjs.mof.gov.cn/zt/kjzzss/kuaijizhunzeshishi/index_3.htm"
+    tags: [ACCOUNTING, EPS, DILUTION, WEIGHTED_AVERAGE_SHARES]
+    limitation: "Official MOF standards index plus current MOF interpretations; entity-specific EPS still follows disclosed calculation details."
+  MOF_CAS18_INCOME_TAX:
+    title: "企业会计准则第18号——所得税"
+    authority: "中华人民共和国财政部"
+    source_type: OFFICIAL_STANDARD
+    url: "https://kjs.mof.gov.cn/zt/kjzzss/kuaijizhunzeshishi/200806/t20080618_46230.htm"
+    tags: [ACCOUNTING, DEFERRED_TAX]
+    limitation: "Governing PRC accounting standard for income-tax accounting."
+  MOF_CAS37_FINANCIAL_INSTRUMENTS:
+    title: "企业会计准则第37号——金融工具列报（财会〔2017〕14号）"
+    authority: "中华人民共和国财政部"
+    source_type: OFFICIAL_STANDARD
+    url: "https://kjs.mof.gov.cn/zt/kjzzss/kuaijizhunzeshishi/201709/t20170907_2694118.htm"
+    tags: [ACCOUNTING, DEBT_EQUITY, FINANCIAL_INSTRUMENT]
+    limitation: "Governing PRC presentation rules; classification follows contractual substance."
+  CSRC_DISCLOSURE_RULES:
+    title: "上市公司信息披露管理办法"
+    authority: "中国证券监督管理委员会"
+    source_type: REGULATORY
+    url: "https://www.csrc.gov.cn/csrc/c101953/c7547359/content.shtml"
+    tags: [DISCLOSURE, OFFICIAL_SOURCE, FUNDAMENTAL_RESEARCH]
+    limitation: "Defines disclosure obligations; it does not guarantee that every disclosed estimate is economically correct."
+  CNINFO_DISCLOSURE_PLATFORM:
+    title: "巨潮资讯网公告查询"
+    authority: "深圳证券交易所法定信息披露平台 / 深圳证券信息有限公司"
+    source_type: OFFICIAL_PLATFORM
+    url: "https://www.cninfo.com.cn/new/commonUrl?url=disclosure%2Flist%2Fnotice"
+    tags: [DISCLOSURE, OFFICIAL_SOURCE, FUNDAMENTAL_RESEARCH]
+    limitation: "Official disclosure distribution platform; source documents still require document-level interpretation."
+  SSE_TRADING_RULES_2026:
+    title: "上海证券交易所交易规则（2026年修订）"
+    authority: "上海证券交易所"
+    source_type: EXCHANGE_RULE
+    url: "https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20260424_10816482.shtml"
+    tags: [EXECUTION, LIMIT_ORDER, AUCTION, MICROSTRUCTURE]
+    limitation: "Venue-specific and effective-date-specific; must be revalidated when rules change."
+  IMF_COMMODITY_ELASTICITY_2024:
+    title: "The Power of Prices: How Fast Do Commodity Markets Adjust to Shocks?"
+    authority: "International Monetary Fund"
+    source_type: INSTITUTIONAL_RESEARCH
+    url: "https://www.imf.org/en/publications/wp/issues/2024/04/09/the-power-of-prices-how-fast-do-commodity-markets-adjust-to-shocks-547625"
+    tags: [COMMODITY, SUPPLY_DEMAND, ELASTICITY, CYCLE]
+    limitation: "Cross-commodity evidence; individual commodities require their own supply-demand data."
+  WORLDBANK_COMMODITY_OUTLOOK_2026:
+    title: "Commodity Markets Outlook, April 2026"
+    authority: "World Bank"
+    source_type: INSTITUTIONAL_RESEARCH
+    url: "https://documents.worldbank.org/en/publication/documents-reports/documentdetail/099842304282633100"
+    tags: [COMMODITY, SUPPLY_DEMAND, CYCLE, MACRO]
+    limitation: "Current institutional outlook; forecasts are uncertain and cannot become fixed trading thresholds."
+  QLIB_ENHANCED_INDEXING:
+    title: "Qlib Enhanced Indexing Strategy"
+    authority: "Microsoft Qlib"
+    source_type: PRIMARY_SOFTWARE_REFERENCE
+    url: "https://github.com/microsoft/qlib/blob/main/examples/portfolio/README.md"
+    tags: [RISK_MODEL, TRACKING_ERROR, PORTFOLIO, EXPOSURE]
+    limitation: "Software architecture reference, not independent evidence of investment alpha."
+  QLIB_PIT:
+    title: "Qlib Point-in-Time Database"
+    authority: "Microsoft Qlib"
+    source_type: PRIMARY_SOFTWARE_REFERENCE
+    url: "https://qlib.readthedocs.io/en/stable/advanced/PIT.html"
+    tags: [PIT, BACKTEST_GOVERNANCE, DATA_LINEAGE]
+    limitation: "Engineering reference for PIT discipline, not a performance claim."
+  QUANTCONNECT_RESEARCH_GUIDE:
+    title: "Research Guide: Overfitting and Look-Ahead Bias"
+    authority: "QuantConnect LEAN Documentation"
+    source_type: PRIMARY_SOFTWARE_REFERENCE
+    url: "https://www.quantconnect.com/docs/v2/writing-algorithms/key-concepts/research-guide"
+    tags: [BACKTEST_GOVERNANCE, LOOK_AHEAD_BIAS, OUT_OF_SAMPLE, PIT, WALK_FORWARD]
+    limitation: "Primary engineering guidance for research/backtest discipline; not independent evidence that a strategy has alpha."
+  QUANTCONNECT_PARAMETER_OVERFITTING:
+    title: "Optimization Parameters: Overfitting and Look-Ahead Bias"
+    authority: "QuantConnect LEAN Documentation"
+    source_type: PRIMARY_SOFTWARE_REFERENCE
+    url: "https://www.quantconnect.com/docs/v2/writing-algorithms/optimization/parameters"
+    tags: [BACKTEST_GOVERNANCE, OVERFITTING, PARAMETER_SENSITIVITY, WALK_FORWARD]
+    limitation: "Engineering guidance for parameter robustness; numerical stability thresholds remain strategy-specific."
+  ALPHALENS_FACTOR_ANALYSIS:
+    title: "Alphalens: Performance analysis of predictive stock factors"
+    authority: "Quantopian Alphalens / GitHub"
+    source_type: PRIMARY_SOFTWARE_REFERENCE
+    url: "https://github.com/quantopian/alphalens"
+    tags: [FACTOR_ANALYSIS, GROUP_ROBUSTNESS, INFORMATION_COEFFICIENT, SIGNAL_DECAY, TURNOVER]
+    limitation: "Software-method reference for factor diagnostics; it does not validate any particular factor or expected return."

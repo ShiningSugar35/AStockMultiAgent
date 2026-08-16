@@ -20,17 +20,28 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | 单公司 Research Runtime | 已实现 | `research-plan`、`research-run-company`、`research-audit` |
 | Institutional Fundamental Research | 已实现 | `institutional-research-schema/finalize`、`fundamental-model-audit`、`institutional-decision-context-freeze` |
 | Serenity typed specialists | 已实现 / v4 上游审计 | `research-skills-v3`：6 个 Serenity 方法 + 独立 Hourly Swing；含 Juglar 周期阶段 |
-| Knowledge Skill composite registry | 已发布 | `KnowledgeSkillProvider`，653 admitted Skills |
+| Knowledge Skill audited registry | 已发布 / 237 active | historical 653 只保留审计身份；426 RETIRE Skill 从活动表/ObjectStore 物理压缩，Provider 只读取 237 条 active Skills |
 | 投资委员会 | 已实现 | `committee-*`；委员会只消费冻结工件 |
 | PIT TradingClassification | 已实现 | `trading-classification-*` |
 | 最终模拟研究协议 | 已实现 | `ClassifiedTradeProtocol`、`trade-plan-view` |
 | 组合评估 | 已实现 | `portfolio-paper-evaluate`、`portfolio-evaluate` |
 | 组合构建 | 已实现 | `portfolio-construct`、`portfolio-audit` |
-| 模拟交易 / 5m 回放 | 已实现核心链 | `paper-*`；任何账本写入仍需独立人工确认 |
+| 会话式模拟账户 | 已实现 | 保留账户/订单/成交/确认；默认 60m 离线补回放，5m 仅作高精度 fallback；不要求常驻进程 |
 | Phase 7 前向影子评测 | 程序完成 / 真实样本采集中 | 正式 6-arm study，当前 0/100 |
 | Phase 8 自适应准入 | 程序完成 / `NOT_ADMITTED` | 真实 Phase 7 证据达标前全部关闭 |
 
 项目**没有真实券商自动下单接口**。真实交易只能由用户在券商端自行执行。
+
+### 本地用户态与会话式持仓复核
+
+系统不再要求为月度/年度投资策略常驻一个后台交易 Agent。每次投资类会话启动时，先把模拟账户的订单/成交/持仓同步到 Git 忽略的 `user_state/portfolio.md`、`orders.md`、`trades.md`，再对现有持仓做增量复核。
+
+- `portfolio.md`：当前持仓、平均成本、最近复核动作与投资逻辑状态；
+- `orders.md`：尚未完全成交的模拟订单；
+- `trades.md`：已确认的模拟成交/用户记录；
+- 三者均位于 `user_state/`，不会 push 到 Git。
+
+离线期间默认用 **60 分钟 OHLC** 补回放：它可以判断限价是否在某个小时内被触及，但不能证明盘口排队与小时内先后路径，所以状态明确标为近似成交模拟。只有小时线存在实质歧义时才使用 `--resolution 5m` 做更精细复核。订单和成交仍严格分开：**下单不等于持仓，只有回放确认成交后才更新持仓。**
 
 ## 自然语言用法
 
@@ -240,6 +251,15 @@ uv run astock adaptive-dialect-rollback <candidate-release-id>
 
 # 历史/recorded 研究仍显式提供 --as-of，保持防未来数据边界
 uv run astock research-plan 600519 --as-of 2026-08-11T10:00:00+08:00
+
+# 本地用户态 / 会话式模拟账户
+uv run astock local-portfolio-init
+uv run astock local-portfolio-sync-paper
+uv run astock local-portfolio-status
+uv run astock sync-hourly 600519 --market XSHG
+uv run astock paper-replay 600519 --market XSHG --cursor <ISO时间>
+# 小时线存在成交路径歧义时才切 5m
+uv run astock paper-replay 600519 --market XSHG --cursor <ISO时间> --resolution 5m
 
 # 组合
 uv run astock portfolio-paper-evaluate --account-id paper --live

@@ -1,0 +1,189 @@
+schema_version: knowledge-skill-audit-policy-v1
+expected_source_skill_count: 653
+minimum_external_evidence_count: 2
+default_direct_verdict: KEEP_SCOPED
+default_visual_verdict: RETIRE
+formal_committee_weight_allowed: false
+paper_ledger_write_allowed: false
+broker_execution_allowed: false
+module_evidence:
+  SOURCING_SCREENING: [RFS_MULTIPLE_TESTING_HLZ, RFS_REPLICATING_ANOMALIES_HXZ, CSRC_DISCLOSURE_RULES]
+  FUNDAMENTAL_RESEARCH: [CSRC_DISCLOSURE_RULES, DAMODARAN_VALUATION_INTRO, CNINFO_DISCLOSURE_PLATFORM]
+  VALUATION_PRICING: [DAMODARAN_VALUATION_INTRO, DAMODARAN_INTRINSIC_RELATIVE]
+  PORTFOLIO_CONSTRUCTION: [NBER_PORTFOLIO_CONCENTRATION, NBER_UNDERDIVERSIFICATION_FIELD, RFS_TRADING_COSTS_NMV]
+  POSITION_RISK_MANAGEMENT: [RFS_TRADING_COSTS_NMV, JF_BARBER_ODEAN_TRADING, NBER_MOMENTUM_CRASHES]
+  PSYCHOLOGY_BEHAVIOR: [JF_BARBER_ODEAN_TRADING, NBER_UNDERDIVERSIFICATION_FIELD]
+skill_evidence_routes:
+  - route_id: ACCOUNTING_EPS
+    keywords: [每股收益, EPS, 加权平均普通股, 稀释]
+    evidence_ids: [MOF_CAS34_EPS, IFRS_IAS33_EPS]
+  - route_id: ACCOUNTING_DEFERRED_TAX
+    keywords: [递延所得税, 可抵扣暂时性差异, 所得税资产]
+    evidence_ids: [MOF_CAS18_INCOME_TAX, IFRS_IAS12_INCOME_TAX]
+  - route_id: ACCOUNTING_CONSOLIDATION
+    keywords: [合并报表, 合并财务报表, 母公司报表]
+    evidence_ids: [MOF_CAS33_CONSOLIDATED, CSRC_DISCLOSURE_RULES]
+  - route_id: ACCOUNTING_DEBT_EQUITY
+    keywords: [永续债, 优先股, 可转债, 金融负债, 权益工具]
+    evidence_ids: [MOF_CAS37_FINANCIAL_INSTRUMENTS, IFRS_IAS32_PRESENTATION]
+  - route_id: OFFICIAL_DISCLOSURE
+    keywords: [公告, 年报, 法定披露, 巨潮, 交易所, 官方披露, 信息披露]
+    evidence_ids: [CSRC_DISCLOSURE_RULES, CNINFO_DISCLOSURE_PLATFORM]
+  - route_id: BACKTEST_MULTIPLE_TESTING
+    keywords: [回测, 因子, 参数, 过拟合, 样本外, 前瞻, 多重检验, backtest, factor]
+    evidence_ids: [RFS_MULTIPLE_TESTING_HLZ, RFS_REPLICATING_ANOMALIES_HXZ, QLIB_PIT]
+  - route_id: MOMENTUM_REVERSAL
+    keywords: [动量, 反转, 均线, 突破, 趋势, momentum, reversal]
+    evidence_ids: [CHINA_A_ANOMALIES_JSZ, ROF_CHINA_MOMENTUM_REVERSAL, NBER_MOMENTUM_CRASHES]
+  - route_id: TRADING_COST_CAPACITY
+    keywords: [换手, 滑点, 冲击成本, 流动性, 容量, 交易成本, turnover, slippage, capacity]
+    evidence_ids: [RFS_TRADING_COSTS_NMV, JF_BARBER_ODEAN_TRADING]
+  - route_id: CONCENTRATION_DIVERSIFICATION
+    keywords: [集中, 重仓, 分散, 组合, diversification, concentration]
+    evidence_ids: [NBER_PORTFOLIO_CONCENTRATION, NBER_INFORMATION_UNDERDIVERSIFICATION, NBER_UNDERDIVERSIFICATION_FIELD]
+  - route_id: VALUATION
+    keywords: [估值, 内在价值, DCF, PE, PB, 现金流折现, valuation]
+    evidence_ids: [DAMODARAN_VALUATION_INTRO, DAMODARAN_INTRINSIC_RELATIVE]
+  - route_id: COMMODITY_CYCLE
+    keywords: [周期, 库存, 产能, 供给, 供应, 需求, 商品, commodity, supply, demand]
+    evidence_ids: [IMF_COMMODITY_ELASTICITY_2024, WORLDBANK_COMMODITY_OUTLOOK_2026]
+  - route_id: EXECUTION_AUCTION
+    keywords: [集合竞价, 撤单, 限价, 申报, 涨跌停, 成交规则]
+    evidence_ids: [SSE_TRADING_RULES_2026, RFS_TRADING_COSTS_NMV]
+visual_default:
+  risk_codes: [HISTORICAL_CASE_NOT_GENERAL_METHOD, GENERALITY_FAILURE]
+  evidence_ids: [RFS_MULTIPLE_TESTING_HLZ, RFS_REPLICATING_ANOMALIES_HXZ]
+  rationale: Visual-derived source material remains immutable evidence, but a time-specific market call, company case, chart annotation, personal forecast, or direct trade instruction is not presumed to be a portable research method.
+conflict_groups:
+  CG_TECHNICAL_VS_FUNDAMENTAL: [技术, 均线, MACD, RSI, KDJ, 支撑, 压力, 趋势, technical, fundamental, 基本面]
+  CG_CONCENTRATION_VS_DIVERSIFICATION: [集中, 重仓, 分散, 组合, diversification, concentration]
+  CG_MOMENTUM_VS_REVERSAL: [动量, 趋势, 反转, momentum, reversal, breakout, 突破]
+  CG_AVERAGING_VS_STOP: [加仓, 补仓, 摊薄, 止损, 减仓, average down, stop loss]
+  CG_LONG_TERM_VS_TIMING: [长期, 长持, 择时, 短线, 波段, timing]
+  CG_DIVIDEND_VS_REINVESTMENT: [股息, 分红, 再投资, dividend, payout]
+  CG_CYCLE_SUPPLY_VS_DEMAND: [周期, 供给, 供应, 需求, 库存, commodity, supply, demand]
+  CG_VALUATION_POINT_VS_RANGE: [估值, 内在价值, 目标价, valuation, DCF, PE, PB]
+  CG_PRICE_SIGNAL_VS_FUNDAMENTAL_CAUSE: [股价, 价格, 情绪, 基本面, price, sentiment, fundamental]
+direct_retire_skill_ids:
+  - direct-final:162c7971f596763b04647c02859300bdfb75b75c544bc761b94362792b3e2760
+  - direct-final:4157b468555c0aaa14d51e7b2a73eeb3affa7a3b6586365163cec6b98354800a
+  - direct-final:5f37bae57a78ee3da84474cde7b7505b75ebcc50a907a3f136045a07c5255eb3
+  - direct-final:76b532c6ed3b9953cd04289187fcb137dc30b322b04fdd025b5ed691b3b87037
+  - direct-final:9a854d988fab79bf943e066f2430d47b534c12a3a0fd832e97536935bb2589ec
+  - direct-final:a0b475b2757632c8a7520828b7857a0f6461261940331a25d7881255dc6c75f9
+  - direct-final:a91912340abc56390d9945a1a6fbf157b83319294253f27c448cfa6a16312d60
+  - direct-final:bef9da475b4bf5d0d87291d3f21b7471a14675e6728fd77824450c989b797218
+  - direct-final:c4b087d2e582739a442b0c1dba565ad0b05c921919f92b315ed2f65224b4f9f4
+  - direct-final:eadf1fdcdf4510d56bf756fcb7884d5c0b96f8bfa6a6f34b6c4175a408eb09d0
+replacement_templates:
+  VALUATION_RANGE_UNCERTAINTY:
+    skill_name: 估值以区间、敏感性和失效条件表达
+    core_principle: 估值不是可被“确定”的单点事实；应把现金流、增长、风险、资本需求和折现假设写成区间与敏感性，并用新证据持续更新。
+    evidence_ids: [DAMODARAN_VALUATION_INTRO, DAMODARAN_INTRINSIC_RELATIVE]
+  FUNDAMENTAL_EXECUTION_ROLE:
+    skill_name: 基本面定义投资命题，市场信号只承担可验证的执行角色
+    core_principle: 企业基本面和估值决定中长期投资命题；技术或市场状态信号只有在目标周期、样本外和成本后被验证时，才可作为独立的执行或风险上下文，不能互相替代。
+    evidence_ids: [CHINA_A_ANOMALIES_JSZ, RFS_MULTIPLE_TESTING_HLZ, DAMODARAN_VALUATION_INTRO]
+  OOS_EVIDENCE_NOT_REALIZED_PNL:
+    skill_name: 用独立样本外与前瞻证据验证方法，而非用单个账户结果证明真理
+    core_principle: 单个账户、单次周期或幸存者案例不能证明一套投资理论；方法需要预先定义、独立样本外、前瞻记录、成本和尾部风险共同验证。
+    evidence_ids: [RFS_MULTIPLE_TESTING_HLZ, RFS_REPLICATING_ANOMALIES_HXZ, QLIB_PIT]
+  STOP_THESIS_RISK_SEPARATION:
+    skill_name: 将命题失效、仓位风险和价格止损分开判断
+    core_principle: 买入逻辑是否正确与账户能承受多大损失是两个问题；退出既可由命题失效触发，也可由预先定义的流动性、杠杆、集中度或风险预算触发，不能要求“先证明买错”才允许控险。
+    evidence_ids: [RFS_TRADING_COSTS_NMV, NBER_MOMENTUM_CRASHES]
+  TECHNICAL_HYPOTHESIS_VALIDATION:
+    skill_name: 技术形态只作为可检验假设，不赋予任何单一指标普遍优先级
+    core_principle: 支撑、压力、均线、突破、动量或反转都只能在明确周期、PIT数据、样本外和交易成本下验证；不存在未经检验即可宣称“唯一有效”的技术指标。
+    evidence_ids: [CHINA_A_ANOMALIES_JSZ, ROF_CHINA_MOMENTUM_REVERSAL, RFS_MULTIPLE_TESTING_HLZ]
+  CUMULATION_CONDITIONAL:
+    skill_name: 用可验证的蓄积机制判断商业模式持续性
+    core_principle: 历史客户、网络、资本、品牌或能力只有在存在可验证的保留率、再投资回报和转换机制时才支持未来价值；历史积累与未来收益不存在“必然正相关”。
+    evidence_ids: [DAMODARAN_VALUATION_INTRO, CSRC_DISCLOSURE_RULES]
+  SENTIMENT_REVIEW_NOT_SIGNAL:
+    skill_name: 情绪极端是复核触发器，不是自动买卖信号
+    core_principle: 恐惧、贪婪、拥挤或个人焦虑可以触发重新检查估值、流动性和命题，但不能单独决定买入、加仓、减仓或卖出。
+    evidence_ids: [JF_BARBER_ODEAN_TRADING, NBER_UNDERDIVERSIFICATION_FIELD]
+  PROBABILISTIC_NOT_CERTAIN:
+    skill_name: 用概率、赔率和可证伪条件替代“投资必然性”
+    core_principle: 投资结论应明确概率、情景、风险收益和失效条件；无法验证的“确定性”或“必然”不是投资优势，反而应提高证据门槛和降低仓位授权。
+    evidence_ids: [RFS_MULTIPLE_TESTING_HLZ, DAMODARAN_VALUATION_INTRO]
+  CYCLE_EVIDENCE_NOT_PRICE_LOW:
+    skill_name: 周期低位必须由供需、成本、库存与估值共同证明
+    core_principle: 价格跌得多或处于历史低位不能证明周期见底；需要同时验证供需弹性、库存/产能、边际成本、公司盈利传导和估值安全边际。
+    evidence_ids: [IMF_COMMODITY_ELASTICITY_2024, WORLDBANK_COMMODITY_OUTLOOK_2026]
+  NO_FIXED_RETURN_THRESHOLD:
+    skill_name: 用命题和风险预算定义持有与退出，不用固定涨跌幅或翻倍目标
+    core_principle: 10%到20%的波动、固定翻倍目标或固定收益年限不能跨标的通用；持有和退出应由投资命题、估值区间、流动性、组合风险和机会成本共同决定。
+    evidence_ids: [DAMODARAN_VALUATION_INTRO, RFS_TRADING_COSTS_NMV]
+  DIVERSIFICATION_CONCENTRATION_PREMISE:
+    skill_name: 集中与分散取决于信息优势、共同暴露和损失承受力
+    core_principle: 集中并非天然优于分散，分散也不是机械按证券数量；只有在信息优势可验证、共同风险暴露受控且尾部损失可承受时，才允许更高集中度。
+    evidence_ids: [NBER_PORTFOLIO_CONCENTRATION, NBER_INFORMATION_UNDERDIVERSIFICATION, NBER_UNDERDIVERSIFICATION_FIELD]
+  PRICE_CAUSE_CAUTION:
+    skill_name: 不用短期价格事后反推唯一基本面原因
+    core_principle: 短期价格可同时反映信息、流动性、风险偏好和噪声；除非有时间上可得的独立证据，不把涨跌自动归因为情绪、主力、政策或某个单一基本面事件。
+    evidence_ids: [CHINA_A_ANOMALIES_JSZ, CSRC_DISCLOSURE_RULES]
+  ACCOUNTING_CONSOLIDATED_SCOPE:
+    skill_name: 集团分析优先合并报表，同时保留母公司报表的独立用途
+    core_principle: 合并报表用于观察母公司及受控子公司形成的企业集团整体财务状况、经营成果和现金流量；母公司个别报表并非“没用”，仍可用于识别母公司层面的资产、负债、分配能力和对子公司的投资。
+    evidence_ids: [MOF_CAS33_CONSOLIDATED, CSRC_DISCLOSURE_RULES]
+  ACCOUNTING_EPS_WEIGHTED_AVERAGE:
+    skill_name: 每股收益按准则口径使用加权平均普通股并单独处理稀释效应
+    core_principle: 基本每股收益不能简单用净利润除以期末总股本替代；应使用归属于普通股股东的合适分子和发行在外普通股加权平均数，并按准则另行评估稀释性潜在普通股。
+    evidence_ids: [MOF_CAS34_EPS, IFRS_IAS33_EPS]
+  ACCOUNTING_DEBT_EQUITY_SUBSTANCE:
+    skill_name: 金融负债与权益按合同义务和经济实质分类
+    core_principle: 永续债、优先股、可转债等不能仅用名称或“要不要还本金”二分；应检查是否存在不可无条件避免的现金或其他金融资产交付义务、自身权益结算条款及合同经济实质。
+    evidence_ids: [MOF_CAS37_FINANCIAL_INSTRUMENTS, IFRS_IAS32_PRESENTATION]
+  ACCOUNTING_DEFERRED_TAX_TEMP_DIFF:
+    skill_name: 递延所得税资产以可抵扣暂时性差异及可利用税务利益为核心
+    core_principle: 递延所得税资产不是简单的“提前多交税”；它来自可抵扣暂时性差异以及符合确认条件的未使用税务亏损或税款抵减，并受未来可利用应纳税所得额等确认条件约束。
+    evidence_ids: [MOF_CAS18_INCOME_TAX, IFRS_IAS12_INCOME_TAX]
+  OFFICIAL_DISCLOSURE_PRIORITY:
+    skill_name: 上市公司正式事实优先回到法定披露与交易所/监管来源
+    core_principle: 年报、公告、重大事项与财务口径应优先使用法定披露平台、交易所、监管机构和发行人正式文件；二手平台和社交媒体只能用于定位或交叉线索。
+    evidence_ids: [CSRC_DISCLOSURE_RULES, CNINFO_DISCLOSURE_PLATFORM]
+  ANNUAL_REPORT_COMPARISON:
+    skill_name: 年报分析同时做纵向趋势、横向可比与异常科目复核
+    core_principle: 单年单公司的绝对数字不足以定义“好坏”；应先统一会计口径，再比较多期趋势、同业可比指标和异常变动科目，并回到附注与业务驱动解释差异。
+    evidence_ids: [CSRC_DISCLOSURE_RULES, IFRS_IAS7_CASHFLOW]
+direct_revise_templates:
+  direct-final:0e7a10940e6b17b885ac41fb5ad53403af733ac31ad1ff75ea6606a289807a59: VALUATION_RANGE_UNCERTAINTY
+  direct-final:18f751e880e3e13c2a5a5dbaaadb70562c03dba6c8b7dd1efd89f0dd1e23a262: CYCLE_EVIDENCE_NOT_PRICE_LOW
+  direct-final:2b9e9d97f3d5db9664e3d471e526b958c0af19147be062b65c1a7061df5f1460: VALUATION_RANGE_UNCERTAINTY
+  direct-final:339e6fec7feb1f76d43c9f4f13d950e0e9f9a069055d19e5c5dbfae6750160e1: FUNDAMENTAL_EXECUTION_ROLE
+  direct-final:4af3e1b7dede14e6bd516a6d2d6fc7ae8a9f8a30f45b2726f67af287c6ecb8c0: OOS_EVIDENCE_NOT_REALIZED_PNL
+  direct-final:50c70a8f9c66ba9a2dcf597511d020466d8b79fd8970566ec8c5e991a99206fd: OOS_EVIDENCE_NOT_REALIZED_PNL
+  direct-final:53bc78f546b02a5a13062867c85e305183832c0d25d41c32497611f58b5d5c01: STOP_THESIS_RISK_SEPARATION
+  direct-final:65920ab98c9d723737f469f6f457e32d131bd928f5fc244a0e953dfe40318e89: TECHNICAL_HYPOTHESIS_VALIDATION
+  direct-final:66be737b7882194a7363d641a3aaf19fa67de2e2aae0f4520294f76391e36c3c: CUMULATION_CONDITIONAL
+  direct-final:6b671cfb17cdb2c63f5aec845ea757eb8e9134a50a4c68867eeb9b0f09a2f0a7: NO_FIXED_RETURN_THRESHOLD
+  direct-final:73aa95a014336f2a71b4c3f6a2e610824c50203a37836d97656cb27091779e7b: SENTIMENT_REVIEW_NOT_SIGNAL
+  direct-final:85f83f4a240f21a649f7c4e67d3d70e5b89ecbbfb91a50f2aa78dbe19fa48b80: DIVERSIFICATION_CONCENTRATION_PREMISE
+  direct-final:879cc0c8985fb570e6fa5ce64870997f42ecc99b68d6c21799042c755dc6bf89: OOS_EVIDENCE_NOT_REALIZED_PNL
+  direct-final:9412019b33810b9bf6c29b2644235a97a284b0eadcd59065fb1af04614c98cd9: CYCLE_EVIDENCE_NOT_PRICE_LOW
+  direct-final:9991ffff03200aca5c8183f7986f9da06e53dfde1f69e3bf10fed35f314f3772: SENTIMENT_REVIEW_NOT_SIGNAL
+  direct-final:abab2fa7f98bb2093b13914dbd8fd8ac84e2a318976e3bf77104e95814484b2c: PROBABILISTIC_NOT_CERTAIN
+  direct-final:b3f8fa9921d420cd0c0d1df35b2be7caa05331fba00f967dd3ca15d0e93cca5d: FUNDAMENTAL_EXECUTION_ROLE
+  direct-final:b81f4a5187ace835d866cdc156cf57eee269e3d493b3a66b2ca169f5812bd969: FUNDAMENTAL_EXECUTION_ROLE
+  direct-final:c279d6b7084d7beb078ce36999a985dd65ec337b47e88770f4a5edf4bc9067cc: OOS_EVIDENCE_NOT_REALIZED_PNL
+  direct-final:c9cf68033a12f51ab20fcaa68385dbab7fcd2872e92a96df72cd68f279c3ef74: PRICE_CAUSE_CAUTION
+  direct-final:cac29cac6e64d7bdd1b6d298f17e90f09bc26b18ace8677d4a2a6155269d34e6: SENTIMENT_REVIEW_NOT_SIGNAL
+  direct-final:ccc1ea0f8a94e1869dd00f57e5a2bf09307fac2dba3feb38649a7d70d1a112e3: OOS_EVIDENCE_NOT_REALIZED_PNL
+  direct-final:dbf75fd09ffe0a7e13c41adb26b321e055b628aaffc73af2cda5249b1cc6ac32: NO_FIXED_RETURN_THRESHOLD
+  direct-final:de23c2852b3bfa5d490eb38af4501f5546f9e8a0f5d99fd47bf1883e2a769ab7: PROBABILISTIC_NOT_CERTAIN
+  direct-final:ea314f852b47c75825062671f063d2604a421b87f2848f1d161b806cef0fb23e: PROBABILISTIC_NOT_CERTAIN
+  direct-final:efcdab960c0dfa448feabc29435679e17d53db4f99b4529a21a6b6c057ead847: VALUATION_RANGE_UNCERTAINTY
+  direct-final:f41e43722f46e8ab56e6a638ccb835f826fb7c5ff9209fca1ccad353862227d9: PRICE_CAUSE_CAUTION
+  direct-final:f55ad7dc04c83eeb986a41ec0d92283ae12bd230d026c26c0ad957f744e27d8d: DIVERSIFICATION_CONCENTRATION_PREMISE
+  direct-final:f657e7c5f56b754f539ba9ac45af807cb617107cc61929a4bb5b949ab938b4c6: NO_FIXED_RETURN_THRESHOLD
+  direct-final:f95a01ea8b22ab46c406c3f176f91e6e6ed4219694cdbedf96386ab88d3d88e3: NO_FIXED_RETURN_THRESHOLD
+  direct-final:ffee4b165ec3676ddbc65f8b550d5e9d2fb649f6bcefb39ea7d4c5651702fb09: NO_FIXED_RETURN_THRESHOLD
+visual_revise_templates:
+  visual-skill:36a91440f6ad041974e1d79f523a92f6cd0479ac55cf87cfd2f507d0f4444096: ACCOUNTING_CONSOLIDATED_SCOPE
+  visual-skill:77f7be64ff2ff8b6a7aacfbca399428207ec01270b0135e453803da348ccb1a4: ACCOUNTING_EPS_WEIGHTED_AVERAGE
+  visual-skill:88eab718770bd2853188a6bb29365546ef68dcad54c684a44372849abb149601: ACCOUNTING_DEBT_EQUITY_SUBSTANCE
+  visual-skill:8b01816854e59493573771c1aaa6f30e3c04373819e9df9ebdedd6b20ed630db: ACCOUNTING_DEFERRED_TAX_TEMP_DIFF
+  visual-skill:966e95bf9b810bbece98a1885cbe73d68aaf79bcfe404167f17e365eeb56f640: OFFICIAL_DISCLOSURE_PRIORITY
+  visual-skill:d9c24e79278ab80370038adbadcecd22b1e419c2f5b402883994a6b8a671aa3b: ANNUAL_REPORT_COMPARISON

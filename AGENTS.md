@@ -15,7 +15,9 @@
 - 运行时诊断、fallback 路径、错误码和工件身份可以完整保存在内部日志，供 DEVELOPER_MODE 复盘；**日志可观测性与投资者答案必须分层**。
 - 当前投资咨询遇到数据缺口时，在单次任务内优先自动解决，自动恢复预算上限为 1800 秒：定位失败原因 → 对 retryable 故障有限重试/熔断 → 备用 provider/更合适的同源端点 → 交易所/CNINFO/发行人 IR/监管机构等权威 Web 多源核验。只有这些自动渠道都无法解决的必要事项，才允许在最终一次性整理成人工协助清单。
 - 自动渠道尚未完全闭合但已有足够权威材料时，可以给出明确标注的不确定性和研究层判断；不得为了“正式状态”而把后台阻塞详情倒给用户，也不得为了给结论而伪造精确买卖价。
-- INVESTOR_MODE 推荐结构：**结论 → 为什么 → 估值与赔率 → 关键催化 → 最大风险 → 什么情况会改变结论**。来源用正常引用呈现，不解释内部抓取链。
+- INVESTOR_MODE 默认短答：**结论（1–2句）→ 2–4个决定性理由 → 最大风险/改变判断的条件**。禁止把同一观点在“为什么/总结/建议”里重复三遍；专业金融/统计术语、论文结论或公式只有确实影响判断时才出现，并在首次出现时用一句括号解释给普通股民。来源用正常引用呈现，不解释内部抓取链。
+- 每次投资类会话先恢复用户态：若 paper account 存在，先同步到账户本地镜像 `user_state/portfolio.md / orders.md / trades.md`，再对当前持仓做**增量**复核；这些文件属于用户本机状态，`user_state/` 永久 Git-ignore，不进入提交。系统不要求月度/年度策略常驻后台 Agent。
+- 用户明确说“买入/卖出/加仓/减仓”时，其指令覆盖模型的投资意见，但不覆盖模拟账户机械约束：现金/可用股数、100股整手、可交易状态、价格限制、账户确认和成交回放仍必须成立。AI 主动下模拟单只允许在正式研究结果允许模拟、当前入场条件实际满足且本地 `auto_ai_paper_order_on_approved_entry=true` 时进入既有订单确认流程；下单不等于持仓，只有 fill 后才更新持仓。
 
 ## 唯一事实源
 
@@ -34,10 +36,10 @@
 - 投资结论必须引用 evidence_id/source_snapshot_id，或明确标记为推断/缺口。
 - 社区内容只能作线索；关键事实必须回到公告、交易所、财报等更强来源。
 - 委员会只读冻结工件，禁止重新联网、抓取或启动新研究；缺证据返回 `NEEDS_INFO`。
-- Phase 5 已完成并冻结：白名单作者正文、三位知乎视觉证据、direct-source 243 Skill、baseline 231 admitted 与 visual overlay 422 admitted 均保留不可变历史；当前 Research Runtime 只通过 composite Knowledge registry 653 使用知识资产。专栏真实无凭据枚举仍是独立外部观察边界，不得猜接口或把未取得的覆盖冒充完成。
+- Phase 5 原始**来源材料**（白名单正文、图片、SourceSnapshot、原 PDF/DOCX）继续保持不可变；historical composite 653 的成员身份/hash 只保留于 audit decision/tombstone 供 provenance。用户已于 2026-08-16 明确要求节省空间，因此 426 条 `RETIRE` Skill 的 Skill payload、活动数据库行及其未被其他工件引用的 Skill ObjectStore 对象允许通过 0056 compaction 物理删除；这不授权删除原始来源材料或 237 条 active/revised/curated Skill。Research Runtime 只能读取最新 audited active registry。
 - Phase 5 蒸馏粒度固定为 `SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate`；Paragraph 是存储、定位及本地语义辅助视图单位，只有完整 ArgumentUnit 可产生最终语义分数、DeepSeek 输入和 Skill 候选。
 - 图片证据必须经过不可变图片快照、PDF bbox 或 DOM 定位、逐图 OCR、类型和前后 Paragraph 回填；图片 Paragraph 永远不能独立蒸馏，夹在论点与结论之间时必须 `MERGE_WITH_BOTH`。OCR 或上下文不完整时 AU 保持 `NEEDS_REVIEW`。
-- 《价值投资功法》历史视觉覆盖证据仍为 249 页、57 个含图页、74/74 placements；71 个非装饰图映射到 55 个 AU，11 个 READY、44 个 REVIEW。三位知乎作者的真实视觉支线已于 2026-08-10 完成：2,503/2,503 placements、2,306 unique assets、2,503 READY、0 REVIEW/BLOCKED；三份 `VisualEvidencePack` 均 READY。visual Skill generation 评估 951 个真实视觉关联 AU，生成 422 个 admitted overlay Skill、529 个 NO_SKILL；baseline 231 + overlay 422 形成 composite registry 653，`KnowledgeSkillProvider` 状态为 `COMPOSITE_REGISTRY_READY`。后续不得回退为 `PROVISIONAL_TEXT_VIEW`，也不得绕过 composite registry 直接读取 knowledge 表。
+- 《价值投资功法》历史视觉覆盖证据仍为 249 页、57 个含图页、74/74 placements；71 个非装饰图映射到 55 个 AU，11 个 READY、44 个 REVIEW。三位知乎作者的真实视觉支线已于 2026-08-10 完成：2,503/2,503 placements、2,306 unique assets、2,503 READY、0 REVIEW/BLOCKED；三份 `VisualEvidencePack` 均 READY。visual Skill generation 的历史事实仍是 951 个真实视觉关联 AU、422 个 admitted overlay Skill、529 个 NO_SKILL，baseline 231 + overlay 422 = historical composite 653。2026-08-14 KGA-R1 对 653 条逐条裁决为 KEEP_SCOPED=190、REVISE=37、RETIRE=426，并新增 10 条多源权威证据支持的 curated Skills；2026-08-16 又为常见会计、估值、回测、动量/反转、交易成本/容量、集中/分散、周期和竞价命题增加 proposition-specific evidence routing；当前 audited active registry 为 237，`KnowledgeSkillProvider` 状态必须为 `AUDITED_REGISTRY_READY`。不得绕过 audited registry 直接读取 knowledge 表；historical composite 只允许 provenance/re-audit 显式读取。
 - Serenity 当前活动方法注册表为 `research-skills-v3`。muxuuu/haskaomni 上游代码只经版本化 v4 audit 编译成 typed Specialist contracts；`JuglarCycleStageSkill` 是当前新增的固定资产周期方法。任何 Serenity/scorecard/Juglar 输出都只是 evidence-bound Delta 或 report-only metric，不得直接产生交易权重、目标价、仓位或订单。
 - 新当前公司研究默认要求 Phase 9 机构级基本面层：`EvidenceSufficiencyReport → IndustryProfile / CompanyEconomicsProfile → DriverTree → ForecastPack → ValuationPack → FundamentalModelBundle → InstitutionalDecisionContext`。Forecast/Valuation 数值由 Python 确定性复算；Serenity Growth/Valuation 不得维护第二套平行数值账本。expected return / market-implied expectations 只能使用绑定注册 artifact/hash 且满足 PIT 的 `MarketPriceAnchor`。Bundle/DecisionContext 作为 Committee 共享 PRIMARY 冻结输入，不新增投票席位或权重；历史 Phase 6 recorded 链只作兼容。
 
@@ -52,8 +54,10 @@
 
 ## 行情与模拟盘
 
-- 默认回放使用未复权原始 5m；东方财富为主源，新浪为备用/交叉验证源。
-- 1m 不在默认链。缺失数据不得静默插值或虚构。
+- 模拟账户是**会话式恢复组件**，不是常驻自动交易服务：保留账户、订单、冻结现金、成交、费用、T+1、确认和回放；每次 Agent 投资会话按需补齐离线区间。
+- 默认回放使用未复权原始 **60m**，东方财富/新浪交叉质量校验后仍标记 `PROVIDER_1H_APPROX`；小时 OHLC 只能证明限价在该小时内被触及，不能证明盘口队列或小时内先后路径，因此小时级限价成交采用保守价。存在执行路径歧义时才显式切换 `--resolution 5m`。
+- 5m 保留为高精度 fallback，不再作为月/年级策略的默认存储/回放负担；1m 不在默认链。缺失数据不得静默插值或虚构。
+- Git-ignore 的 `user_state/portfolio.md / orders.md / trades.md` 是 Agent/用户可读镜像；SQLite paper ledger 是订单/成交/资金的确定性事实源。镜像不得反向绕过账本制造 fill。
 - 复权研究序列由原始价格与版本化公司行为派生；复权价不得当作真实成交价。
 - 免费 reference 的 provider/operation 顺序只能读取 `market-reference-v2` route；业务代码不得另写 BaoStock/EastMoney/Sina 固定顺序。BaoStock 可用时仍保留批量/低频能力并受 active preflight/circuit policy 保护；live route 会结合 provider health 跳过 UNAVAILABLE/CORRUPT。原始响应先入 ObjectStore，未复权日线在上海收盘前不可见。
 - 公司行动结构化结果只作线索；精确官方文档和条款核验完成前不得写模拟账本。
@@ -79,7 +83,7 @@
 
 ## 稳定命令
 
-使用 `uv run astock --help` 查看完整参数。M1 稳定入口包括：`init`、`probe`、`sync-market`、`sync-5m`、`quality-report`、`paper-status`、`paper-replay`、`context-plan`、`codex-run-init`、`codex-run-import`。`probe` 只做轻量只读 capability/schema 健康检查，不再执行全库 `PRAGMA integrity_check`；完整 SQLite 体检必须显式使用 `state-integrity-audit`。Phase 3 M3.1 入口包括：`financial-audit-schema`、`financial-audit`、`financial-audit-status`；同行分位和 PyOD 尚未启用。
+使用 `uv run astock --help` 查看完整参数。稳定入口包括：`init`、`probe`、`sync-market`、`sync-hourly`、`sync-5m`、`quality-report`、`paper-status`、`paper-replay`、`local-portfolio-init/status/sync-paper/review/audit/rebuild`、`context-plan`、`codex-run-init`、`codex-run-import`。`probe` 只做轻量只读 capability/schema 健康检查，不再执行全库 `PRAGMA integrity_check`；完整 SQLite 体检必须显式使用 `state-integrity-audit`。Phase 3 M3.1 入口包括：`financial-audit-schema`、`financial-audit`、`financial-audit-status`；同行分位和 PyOD 尚未启用。
 
 Phase 5 论证链入口包括：`knowledge-semantic-plan`、`knowledge-semantic-run`、`knowledge-semantic-status`、`knowledge-semantic-model-status`、`knowledge-semantic-embedding-run` 和 `knowledge-semantic-packet-export`。未校准相似度不得自动删除，DeepSeek 包不得自动外发。
 

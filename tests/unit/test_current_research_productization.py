@@ -835,6 +835,15 @@ def test_investor_answer_audit_accepts_plain_language_investment_answer() -> Non
     assert audit.developer_meta_exposed is False
 
 
+def test_investor_answer_audit_rejects_bloat_and_repetition() -> None:
+    repeated = "公司盈利仍在改善，但当前估值已经反映了较多乐观预期。"
+    audit = audit_investor_answer(f"{repeated}\n{repeated}\n" + "风险需要继续观察。" * 300)
+
+    assert audit.status == "FAIL"
+    assert "INVESTOR_ANSWER_REPETITIVE" in audit.finding_codes
+    assert "INVESTOR_ANSWER_TOO_LONG" in audit.finding_codes
+
+
 def test_probe_is_lightweight_and_does_not_run_full_integrity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

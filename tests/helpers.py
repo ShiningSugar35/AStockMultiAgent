@@ -410,8 +410,18 @@ def make_batch(
     missing_index: int | None = None,
     bad_ohlc: bool = False,
     symbol: str = "600519",
+    frequency: Frequency = Frequency.M5,
 ) -> MarketDataBatch:
-    timestamps = session_times()
+    timestamps = (
+        session_times()
+        if frequency is Frequency.M5
+        else [
+            datetime(2026, 7, 10, 10, 30, tzinfo=SHANGHAI),
+            datetime(2026, 7, 10, 11, 30, tzinfo=SHANGHAI),
+            datetime(2026, 7, 10, 14, 0, tzinfo=SHANGHAI),
+            datetime(2026, 7, 10, 15, 0, tzinfo=SHANGHAI),
+        ]
+    )
     if missing_index is not None:
         timestamps.pop(missing_index)
     request = BarRequest(
@@ -419,6 +429,7 @@ def make_batch(
         market=Market.XSHG,
         requested_start=datetime(2026, 7, 10, 0, 0, tzinfo=SHANGHAI),
         requested_end=datetime(2026, 7, 10, 23, 59, tzinfo=SHANGHAI),
+        frequency=frequency,
         adjustment_mode=AdjustmentMode.NONE,
     )
     bars: list[MarketBar] = []
@@ -447,7 +458,7 @@ def make_batch(
                 provider_id=provider_id,
                 symbol=symbol,
                 market=Market.XSHG,
-                frequency=Frequency.M5,
+                frequency=frequency,
                 timestamp=timestamp,
                 timestamp_semantics=TimestampSemantics.BAR_END,
                 open=open_price,

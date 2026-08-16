@@ -5,36 +5,34 @@ description: Build a cited current or historical deep A-share company research c
 
 # 公司深度研究
 
-1. Resolve the company to one six-digit A-share identity. For a **current** opinion, do not begin with `probe` or a question-time cutoff. Run `uv run astock research-acquire-current <company_id> --market <market>` first; its lookback/capability/stage/worker/recovery settings come from active policy. If the user asks a bounded non-default question, a validated ResearchPlanner artifact may tailor optional work, but deterministic validation always restores core acquisition and mandatory research gates. For historical/recorded research only, use an explicit `research-plan <company_id> --as-of <timestamp>`.
-2. The current acquisition layer must exhaust policy-driven automated recovery before escalating. Use the active policy budget (currently 1800 seconds), SourceAccessRouter scoring and provider health; retry only transient failures. If needed, use a `ProviderRecoveryProposal` only through deterministic validation. Unknown schema drift is raw-first and may generate a SchemaRepair proposal, but never direct formal facts or active-dialect mutation. Then automatically use authoritative Web research where provider capabilities remain insufficient. Do not ask the user to do a lookup the Agent can do itself.
-3. If authoritative Web research still cannot close every decision-relevant gap, collect all truly unavoidable manual requirements and ask the user **once**. A provider failure is not itself an investment conclusion. Provider names, exceptions, retry paths, reason codes, artifact identities and command logs are developer diagnostics only and must not enter the investor response.
-4. Reuse audited Evidence/Financial/BaseCase/Specialist/Memo artifacts when their company/source lineage remains applicable. For current research, the acquisition-ending decision timestamp replaces the user's question timestamp as the common current snapshot. Historical and prospective paths still enforce exact source availability and no-future-data rules.
-5. Run `$financial-integrity-audit` before treating cheap valuation as opportunity. Secondary structured providers are locating/cross-check hints; material financial facts must ultimately return to official reports or other authoritative evidence. A working backup source may continue the research even if the preferred provider is down.
-6. For a new current company opinion, build the institutional fundamental layer where formal certification is needed: `EvidenceSufficiencyReport → IndustryProfile → CompanyEconomicsProfile → DriverTree → ForecastPack → ValuationPack → FundamentalModelBundle → InstitutionalDecisionContext`. Forecast/valuation is deterministic Python over evidence-bound assumptions; preserve explicit Bull/Base/Bear scenario analysis and sensitivity to the assumptions that matter most. Current market data acquired during the run may be frozen as the market anchor after acquisition; do not reject it merely because it arrived minutes after the user's question.
-7. Build BaseCase once. Route only bounded incremental specialists and use published knowledge Skills through `KnowledgeSkillProvider`. Do not let Agents reread the same evidence independently. Community/OCR material remains methodology/lead evidence, not sole support for material facts.
-8. Separate fundamental-research readiness from execution readiness. Missing current corporate-action or TradingClassification details can block a paper order, but do not by themselves block a months/years company-quality/valuation conclusion. Only require `ClassifiedTradeProtocol` when the user asks for executable entry/exit/order eligibility.
-9. The committee receives only frozen artifacts. Use `committee-schema`, `committee-plan`, and the relevant audits. The committee cannot browse. `REJECT`, `NEEDS_INFO`, `WATCH`, `APPROVE_SIMULATION` retain their formal meanings; a provisional evidence-backed research stance is not automatically one of these committee states.
-10. When the user asks for exact entry/exit/stop rules, run `uv run astock trade-plan-view <ClassifiedTradeProtocol_artifact_id>`. Do not invent an exact price when the frozen protocol does not contain one.
-11. Require `research-chain-audit` and final runtime/committee audits for a formal certified chain. For durable internal provenance use `uv run astock codex-run-init <request> --artifact-id <artifact_id> --require-registered-output`, `codex-run-import`, and `codex-run-audit`; these identities stay out of the normal investor answer.
+1. Resolve the company to one six-digit A-share identity. For a **current** opinion, run `uv run astock research-acquire-current <company_id> --market <market>` first; do not begin with `probe` or the user's question-time cutoff. Historical/recorded research uses an explicit `research-plan <company_id> --as-of <timestamp>`.
+2. Exhaust policy-driven automatic recovery before asking the user for data. Use the active policy budget from `current-research-policy`; retry transient failures, route a `ProviderRecoveryProposal` only through deterministic validation, and treat unknown drift through raw-first `SchemaRepair` rather than guessed facts. Then use authoritative Web research. Aggregate any unavoidable manual request and ask once; provider/debug/artifact details remain internal and never belong in the investor answer.
+3. Reuse audited evidence, financial, BaseCase, specialist and memo artifacts while their company/source lineage remains applicable. Current research freezes one decision snapshot after acquisition; historical/prospective work keeps strict source-availability/PIT boundaries.
+4. Run `$financial-integrity-audit` before treating a low multiple as an opportunity. Secondary structured feeds may locate facts, but material financial claims return to official reports or equivalently authoritative sources.
+5. For a formal current opinion, build the institutional fundamental path: evidence sufficiency → industry/company economics → driver tree → Bull/Base/Bear forecast → valuation/sensitivity → decision context. Keep explicit Bull/Base/Bear scenario analysis; forecast and valuation are deterministic calculations over evidence-bound assumptions.
+6. Build BaseCase once. Route only bounded incremental specialists and audited Knowledge Skills. Community/OCR material remains methodology or lead evidence, never sole support for a material company fact.
+7. Separate research readiness from execution readiness. Missing current trading-rule/company-action detail may block a simulated order without blocking a months/years conclusion about company quality and valuation.
+8. The committee receives frozen artifacts only. Use `committee-schema`, `committee-plan`, relevant audits and the formal outcome states. The committee cannot browse.
+9. When exact entry/exit/stop mechanics are needed, use `uv run astock trade-plan-view <ClassifiedTradeProtocol_artifact_id>`. Never invent an exact price. If the formal result permits simulation, the current entry condition is satisfied, and local `auto_ai_paper_order_on_approved_entry=true`, proceed into the existing paper account/order-confirmation flow; do **not** call it a position until replay records a fill.
+10. A direct user instruction to buy/sell overrides the model's opinion, not execution mechanics. Do not veto the user's simulated order because research is bearish; route it to the paper-order path immediately while preserving cash/position availability, lot size, verified tradability, price-band, account-confirmation and fill checks.
+11. Require `research-chain-audit` and final runtime/committee audits for a formal certified chain. For durable internal provenance use `uv run astock codex-run-init <request> --artifact-id <artifact_id> --require-registered-output`, `codex-run-import`, and `codex-run-audit`; these identities stay internal.
 
 ## Workflows
 
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 - [`docs/workflows/workflow-committee-trade-plan.md`](../../../docs/workflows/workflow-committee-trade-plan.md)
+- [`docs/workflows/workflow-paper-trading.md`](../../../docs/workflows/workflow-paper-trading.md)
 - [`docs/workflows/workflow-adaptive-edge.md`](../../../docs/workflows/workflow-adaptive-edge.md)
 
 ## Output
 
-Write only for the investor. Start with a concise judgment and confidence, then explain business quality, valuation/risk-reward, earnings/cash-flow drivers, catalysts, main downside cases, and what would change the view. Translate unresolved evidence into investment language such as “半年报中的利润率还需要和公司正式披露核对”. Do **not** display provider names, internal Agent/committee stages, protocol/schema/class names, machine states, reason codes, artifact/hash, database terms, stack traces, or CLI transcripts. Before sending, apply the same rules as `research-investor-answer-audit`; rewrite any answer that fails.
-
-If automatic provider and authoritative Web fallback still leave uncertainty, give the strongest supportable research interpretation and explain only how that uncertainty affects valuation/odds. Do not tell a normal investor that a backend chain is incomplete. Do not invent BUY/SELL/price targets to hide uncertainty, and only ask for user material after all automatic channels are exhausted.
+Keep the investor answer compact: **结论（1–2句）→ 2–4个决定性理由 → 最大风险/改变判断的条件**. Add valuation or catalyst detail only when it changes the decision. Avoid saying the same thing again under “总结”. If a technical term, empirical paper result or formula is necessary, explain it once in a short parenthesis, e.g. “CVaR（最差那部分行情里的平均亏损）”. Translate unresolved evidence into investment language rather than backend terminology. Before sending, apply the same rules as `research-investor-answer-audit`.
 
 ## Prohibitions
 
-- Do not stop current research after the first provider fails if another provider or authoritative Web source can answer the same bounded question.
-- Do not use the user's question timestamp as a current-live cutoff.
-- Do not disable PIT/source-availability safeguards for historical replay or formal prospective evaluation.
+- Do not stop current research after the first provider fails if another automatic or authoritative source can answer the same bounded question.
 - Do not use community content as sole support for a key company fact.
-- Do not let a narrative replace a registered DecisionPack or ClassifiedTradeProtocol where formal execution is requested.
-- Do not infer exact entry/sell prices from free-text rules.
-- Do not write the paper ledger or send a real brokerage order from research output.
+- Do not invent BUY/SELL prices to hide uncertainty.
+- Do not treat a submitted but unfilled paper order as a holding.
+- Do not bypass paper-account mechanics merely because the user overrode the research opinion.
+- Do not submit a real brokerage order.

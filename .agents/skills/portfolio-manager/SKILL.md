@@ -5,29 +5,32 @@ description: Evaluate portfolio risk, compare constrained allocation methods, an
 
 # 组合评估与构建
 
-1. Distinguish the task first: existing-portfolio review uses `uv run astock portfolio-paper-evaluate` for the paper account or `portfolio-evaluate REQUEST.json` for read-only external holdings; a new portfolio uses the candidate/research/committee chain before `portfolio-construct REQUEST.json`.
-2. For a recommendation request, obtain a bounded discovery set through `uv run astock research-seeds --live`, then close complete Candidate evidence with `$candidate-scan`. Research Seeds may originate from existing candidates, market liquidity/scale, or expert Skill domains; none is a buy recommendation. A `RESEARCH_READY` candidate is still only worth researching. Run `$company-deep-research` for each shortlist member and retain only a current `ClassifiedTradeProtocol` whose final outcome is `APPROVE_SIMULATION` and whose audit passes.
-3. Before constructing a portfolio, align every candidate to one point-in-time `as_of`. Never combine stale and current classifications. Missing daily history, expired classification, unresolved corporate action, or incomplete research is `NEEDS_INFO`, not an assumed neutral input.
-4. Run `uv run astock portfolio-construct REQUEST.json`. Read every proposal enabled by the active `portfolio-allocators` policy. The current policy enables constrained equal weight, inverse volatility, hierarchical risk, and Ledoit-Wolf shrinkage minimum variance; allocator implementations come from `PortfolioAllocatorRegistry`, not a Service switch. Treat the policy's configured default (`EQUAL_WEIGHT_CONSTRAINED` today) as the comparison benchmark until real forward evidence supports a versioned policy change.
-5. Apply the frozen committee limits before explaining weights: no leverage, maximum single position, maximum total exposure, correlation/drawdown gates, and the currently available group-exposure constraint. Residual allocation stays cash rather than being forced into stocks.
-6. For an existing portfolio, explain annualized volatility and downside deviation, beta, tracking error, max drawdown, historical 95% VaR/CVaR/CDaR, concentration HHI/effective position count, pair correlations, and marginal risk contribution in plain language. Separate historical risk diagnostics from forecasts.
-7. Use industry/group exposure only when its provenance is clear. Current construction accepts a caller-supplied risk group and therefore reports `RISK_GROUP_IS_CALLER_SUPPLIED`; do not present that group limit as a fully certified industry taxonomy.
-8. Run `uv run astock portfolio-audit <PortfolioAnalysisReport_or_PortfolioConstructionReport_artifact_id>` before using a durable report in a final answer. Open only the compressed report and exact referenced artifacts; do not reread every company document.
-9. When the user asks “which stocks should I buy as a portfolio?”, summarize the single-stock committee outcomes first, then the portfolio interaction: why the names diversify or overlap, which risk dominates, what cash remains, and why the default allocation differs from the alternative methods.
+1. Refresh the Git-ignored local portfolio first with `uv run astock local-portfolio-sync-paper` when the paper account exists. Existing-paper review may use `uv run astock portfolio-paper-evaluate --account-id default --live`; a new portfolio still uses Candidate → company research → formal approval before construction.
+2. For recommendations, obtain a bounded discovery set with `research-seeds --live`, close Candidate evidence, and run `$company-deep-research` for each shortlist member. A `RESEARCH_READY` Candidate never creates BUY authority.
+3. Align every admitted company to one current point-in-time snapshot. Do not mix stale and current decisions or assume missing corporate-action/execution facts are neutral.
+4. Run `uv run astock portfolio-construct REQUEST.json`. Compare the policy-enabled `EQUAL_WEIGHT_CONSTRAINED` benchmark with inverse volatility, hierarchical risk, and Ledoit-Wolf shrinkage minimum variance. Keep constrained equal weight as the default until prospective evidence justifies a versioned change; optimization cannot override an individual company's `REJECT / WATCH / NEEDS_INFO`.
+5. Apply hard risk constraints before weights: no leverage, single-name/total exposure, correlation/drawdown, and available group exposure. Unallocated capital stays cash.
+6. Explain only the risk measures that materially affect the decision. If you use terms such as CVaR, beta or shrinkage covariance, define them once in ordinary language (for example, “CVaR = 最差那部分历史行情里的平均亏损”). Historical risk statistics are diagnostics, not return forecasts.
+7. If a newly constructed portfolio contains names whose formal result permits simulation and whose entry conditions are currently satisfied, local `auto_ai_paper_order_on_approved_entry=true` allows those names to enter the existing simulated account/order-confirmation flow. Portfolio weights determine intended sizing; actual holdings change only after replay records fills.
+8. A direct user paper-trade instruction still overrides the portfolio recommendation itself. Do not refuse a simulated user order because it worsens the recommended allocation; record the order request and separately warn, briefly, about the resulting concentration/risk.
+9. Run `uv run astock portfolio-audit <PortfolioAnalysisReport_or_PortfolioConstructionReport_artifact_id>` for durable formal output; internal artifact identities stay out of the normal investor answer.
 
 ## Workflows
 
 - [`docs/workflows/workflow-portfolio-construction.md`](../../../docs/workflows/workflow-portfolio-construction.md)
+- [`docs/workflows/workflow-holding-monitoring.md`](../../../docs/workflows/workflow-holding-monitoring.md)
+- [`docs/workflows/workflow-paper-trading.md`](../../../docs/workflows/workflow-paper-trading.md)
 
 ## Output
 
-For portfolio review, return a plain-language risk diagnosis plus the immutable `PortfolioAnalysisReport` identity. For construction, return the admitted/rejected company list, active-policy default proposal, every enabled comparison proposal, cash residual, binding constraints, model-risk warnings, and the immutable `PortfolioConstructionReport` identity. Explain percentages as portfolio weights, not certainty or expected return.
+Keep the final answer short. For an existing portfolio: **总体风险一句话 → 最需要处理的1–3个持仓/暴露 → 建议动作**. For construction: **入选标的与权重 → 保留现金 → 1–3个主要组合风险**. Do not dump every calculated metric merely because it exists; explain only decision-relevant metrics and define unfamiliar jargon briefly.
 
 ## Prohibitions
 
-- Do not turn a candidate-scan signal directly into a portfolio holding.
+- Do not turn a candidate-scan signal directly into a holding.
 - Do not maximize Sharpe from an unconstrained mean-return estimate or present one optimizer as ground truth.
 - Do not hide residual cash when constraints prevent full investment.
 - Do not treat unverified industry labels as official classifications.
-- Do not write the paper ledger, place a simulated order, or create a brokerage order from portfolio analysis.
-- Do not use retrospective returns or optimization output to override an individual company `REJECT`, `WATCH`, or `NEEDS_INFO` decision.
+- Do not treat a submitted but unfilled paper order as a position.
+- Do not use portfolio optimization to override an individual company `REJECT`, `WATCH`, or `NEEDS_INFO` for AI-initiated orders.
+- Do not create or send a real brokerage order.

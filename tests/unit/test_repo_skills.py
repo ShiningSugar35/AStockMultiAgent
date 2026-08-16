@@ -190,3 +190,30 @@ def test_current_investor_skills_exhaust_policy_driven_automatic_fallback_before
     assert "current-research-policy" in investigation
     assert "authoritative Web search before asking the user" in investigation
     assert "single `ManualInvestigationTask`-style checklist" in investigation
+
+
+def test_session_portfolio_commands_keep_orders_and_fills_separate() -> None:
+    command_names = {command.name for command in app.registered_commands if command.name}
+    assert {
+        "local-portfolio-init",
+        "local-portfolio-status",
+        "local-portfolio-sync-paper",
+        "local-portfolio-review",
+        "local-portfolio-audit",
+        "local-portfolio-rebuild",
+        "sync-hourly",
+        "paper-replay",
+    } <= command_names
+    assert "local-portfolio-trade" not in command_names
+    orchestrator = (
+        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    recovery = (SKILLS_ROOT / "paper-trading-recovery" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "A submitted order is never called a position until the fill ledger confirms it"
+        in orchestrator
+    )
+    assert "Default replay resolution is **60m**" in recovery
+    assert "--resolution 5m" in recovery

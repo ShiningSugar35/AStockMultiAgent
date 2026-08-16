@@ -1,29 +1,31 @@
 ---
 name: holding-monitor
-description: Review what changed for open paper positions or user-declared real monitoring positions. Use when the user asks which holdings need attention, whether a thesis strengthened or failed, whether to add, trim, exit, review stops, or compare current evidence with the last frozen review.
+description: Review what changed for positions recorded in the local user portfolio or deterministic paper account. Use when the user asks about holdings, or automatically alongside another investment task to decide whether each held name should be held, added, trimmed, or exited.
 ---
 
-# 持仓监控
+# 持仓复核
 
-1. Run `uv run astock paper-status` for paper positions; treat real positions as read-only user input, then load `position-plan-status <position_id>`.
-2. Synchronize raw 5m data and inspect `quality-report` before using price triggers.
-3. Gather only evidence after the latest review boundary and create a strict `HoldingReviewRequest`; distinguish no new evidence from refutation.
-4. Run `uv run astock holding-review-run <request.json>` and then `holding-review-audit <position_id>`; never construct an action outside the registered lifecycle rules.
-5. Resolve the frozen BaseCase/memo/financial/plan/update/review/proposal artifacts with `uv run astock committee-input-resolve --artifact-id <id>...`; run `committee-plan <request.json>`, then `committee-decide <request.json>` and `committee-audit <decision_id>`.
-6. Run `uv run astock context-plan --artifact-id <DecisionPack_artifact_id>` and initialize `codex-run-init <request> --artifact-id <DecisionPack_artifact_id> --require-registered-output`.
-7. Import the exact registered `DecisionPack` or final `ClassifiedTradeProtocol` through `codex-run-import`, then require `codex-run-audit` PASS.
-8. If the user asks about aggregate concentration, correlation, beta, drawdown, or whether the whole set of holdings is balanced, route the frozen position set to `$portfolio-manager`; do not infer portfolio risk by inspecting holdings one at a time.
+1. Start from `uv run astock local-portfolio-sync-paper` when the paper account exists, then read `uv run astock local-portfolio-status`. The Git-ignored Markdown files are the Agent-facing state; the paper ledger is the deterministic order/fill source.
+2. On **every investment-related Agent task**, review current holdings in addition to the user's main question. Do delta research rather than repeating the full company report: check new official disclosures, material financial changes, catalysts, thesis invalidation, valuation movement, and relevant market/execution changes since the last review.
+3. Refresh hourly data for held symbols/open orders and run session-on-demand paper replay before judging whether an order filled while the Agent was offline. Use 5m replay only when the hourly path is materially ambiguous.
+4. Classify each held position into exactly one user-facing action: `HOLD / ADD / TRIM / EXIT`. `ADD/TRIM/EXIT` must be supported by current evidence and existing risk/portfolio constraints; otherwise use `HOLD` and state what would change it.
+5. Record the review with `uv run astock local-portfolio-review <market> <symbol> --action <...> --thesis-status <...> --note <...>` so the next Agent session has a concise review boundary.
+6. For a material `ADD / TRIM / EXIT` proposal, keep the formal audit path: run `holding-review-run` / `holding-review-audit`, resolve current evidence with `committee-input-resolve`, and use `committee-plan` / `committee-decide` when a formal decision is needed. For a durable registered result, retain `codex-run-init --require-registered-output` and `codex-run-audit`; ordinary unchanged `HOLD` reviews do not need to repeat the entire formal chain.
+7. If the review produces a simulated order, preserve the account/order/fill lifecycle. Do not update the Markdown position as bought/sold merely because an order was submitted; update it after replay via `local-portfolio-sync-paper`.
+8. If the user asks about aggregate concentration, correlation, drawdown, or allocation, route the same current position set to `$portfolio-manager`.
 
 ## Workflows
 
 - [`docs/workflows/workflow-holding-monitoring.md`](../../../docs/workflows/workflow-holding-monitoring.md)
+- [`docs/workflows/workflow-paper-trading.md`](../../../docs/workflows/workflow-paper-trading.md)
 
 ## Output
 
-Produce `HoldingReviewPack`, a committee `DecisionPack`, and one TradeProtocol. Any `PositionActionProposal` and TradeProtocol remain advisory and require user confirmation; the service never writes an order or ledger entry.
+Keep it compact. For each position, normally one line is enough: **标的 — HOLD/ADD/TRIM/EXIT — one main reason — one condition that would change the action**. Explain unfamiliar finance/statistics jargon in a short parenthesis on first use.
 
 ## Prohibitions
 
-- Do not repeat full company research unless a material-change rule triggers it.
+- Do not perform a full company re-research when only incremental facts changed.
 - Do not infer an author's holding rule from selection-only content.
-- Do not submit a real order or write the paper ledger directly.
+- Do not treat an unfilled paper order as a position change.
+- Do not submit a real brokerage order.

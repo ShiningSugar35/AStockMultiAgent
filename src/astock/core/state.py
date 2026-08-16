@@ -196,6 +196,26 @@ class StateStore:
             row = connection.execute("PRAGMA integrity_check").fetchone()
         return str(row[0]) if row else "unknown"
 
+    def vacuum(self) -> dict[str, int]:
+        """Checkpoint WAL and rewrite SQLite once to return free pages to the filesystem."""
+
+        before = self.path.stat().st_size if self.path.exists() else 0
+        with closing(self.connect()) as connection:
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            connection.execute("VACUUM")
+            page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+            page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+            freelist_count = int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+        after = self.path.stat().st_size if self.path.exists() else 0
+        return {
+            "before_bytes": before,
+            "after_bytes": after,
+            "reclaimed_bytes": max(0, before - after),
+            "page_size": page_size,
+            "page_count": page_count,
+            "freelist_count": freelist_count,
+        }
+
     def create_job(self, job_type: str, input_hash: str, *, priority: int = 0) -> str:
         job_id = uuid4().hex
         now = utc_now_text()

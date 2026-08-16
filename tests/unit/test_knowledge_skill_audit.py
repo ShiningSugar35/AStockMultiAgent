@@ -23,7 +23,7 @@ NOW = datetime(2026, 8, 14, 1, 0, tzinfo=UTC)
 def _service(tmp_path: Path) -> KnowledgeSkillAuditService:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
     applied = state.migrate()
-    assert applied[-1] == "0056"
+    assert applied[-1] == "0057"
     return KnowledgeSkillAuditService(
         state,
         ObjectStore(tmp_path / "objects"),

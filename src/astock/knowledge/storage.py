@@ -10,6 +10,7 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from astock.knowledge.parquet_compaction import compacted_record_path
 from astock.schemas import ZhihuCommentNode, ZhihuContentRecord
 
 _KNOWLEDGE_SCHEMA = pa.schema(
@@ -76,6 +77,9 @@ class ParquetKnowledgeStore:
         )
         if path.exists():
             return path
+        compacted = compacted_record_path(path, record.version_id)
+        if compacted is not None:
+            return compacted
         path.parent.mkdir(parents=True, exist_ok=True)
         table = pa.Table.from_pylist(
             [
@@ -124,6 +128,9 @@ class ParquetKnowledgeStore:
         )
         if path.exists():
             return path
+        compacted = compacted_record_path(path, record.version_id)
+        if compacted is not None:
+            return compacted
         path.parent.mkdir(parents=True, exist_ok=True)
         table = pa.Table.from_pylist(
             [

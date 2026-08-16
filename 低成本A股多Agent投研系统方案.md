@@ -1622,6 +1622,8 @@ SQLite
 
 SQLite 不复制行情和财务事实；DuckDB 不再保存第二份相同事实。
 
+Knowledge 历史生产流水采用**热状态 / 冷历史分层**：当前 audited registry、现役 Direct/Visual provenance、SourceSnapshot/Evidence、原始 Zhihu version 与 Paper Ledger 留在热状态/不可变 ObjectStore；已被 KGA 固化且不再参与 Research Runtime 的 Semantic/Distillation/Reviewed/Book/Private 中间流水，可在计算所有存活 FK 父级闭包后写入按表 zstd Parquet 冷归档。冷档必须有 ObjectStore-backed manifest、文件 hash、逐表行数、FK 审计和可执行 restore；没有完成恢复演练不得从 SQLite 删除。大量单行 immutable metadata Parquet 必须按已有业务 partition 合并，避免小文件膨胀；历史 additive schema 演进以 nullable union 表示。SQLite 只在所有迁移审计通过后执行单次 VACUUM。
+
 ---
 
 ## 17.2 建议技术栈

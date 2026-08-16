@@ -96,6 +96,7 @@ from astock.knowledge import (
     serve_loopback_capture,
     verify_local_model,
 )
+from astock.knowledge.storage_cli import register_knowledge_storage_commands
 from astock.local_portfolio import register_local_portfolio_commands
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
 from astock.market_data.storage import (
@@ -371,6 +372,7 @@ def _jsonable(value: Any) -> Any:
 
 
 register_knowledge_completion_commands(app, _services, _emit)
+register_knowledge_storage_commands(app, _services, _emit)
 register_local_portfolio_commands(app, _services)
 register_research_runtime_commands(
     app,

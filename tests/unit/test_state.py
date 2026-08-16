@@ -77,6 +77,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0054",
         "0055",
         "0056",
+        "0057",
     ]
     assert state.migrate() == []
     with state.connect() as connection:

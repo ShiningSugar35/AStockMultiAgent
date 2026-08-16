@@ -43,6 +43,12 @@ Primary skill: `$knowledge-ingest`.
    - Community/social sources may identify missing capabilities but cannot admit a Skill. New curated Skills require multi-source official/peer-reviewed/primary-engineering evidence; alpha-like rules remain shadow/prospective-only until forward validation.
    - Do not query internal knowledge tables directly from the runtime.
 
+8. **Move obsolete production history out of the hot store only after publication**
+   - `knowledge-cold-archive-plan` must first compute the row-level FK parent closure required by all surviving hot tables. `knowledge-cold-archive-run --confirm` may archive only the unprotected historical Semantic/Distillation/Reviewed/Book/Private rows.
+   - Every archive is zstd Parquet by source table plus an ObjectStore-backed manifest; require hash/row-count audit and a successful restore proof. Raw SourceSnapshot/Evidence/Zhihu content/comment versions and source ObjectStore bodies remain immutable and hot-addressable.
+   - `knowledge-parquet-compact --confirm` may merge immutable one-row knowledge metadata files inside their existing author/content_type/year partition. Additive historical schema drift is a nullable union, not a rewritten record.
+   - Run `state-vacuum --confirm` only after cold-archive and Parquet audits both pass.
+
 ## Output
 
 Report source coverage, confirmed gaps, review state, published Skill counts and registry identity without exposing private plaintext/path data unnecessarily.

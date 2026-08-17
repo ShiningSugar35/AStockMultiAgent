@@ -1628,6 +1628,8 @@ Agent 可观测性继续遵守“单一事实源”：Repo Skill 路由只额外
 
 Canonical 行情存储采用**受影响分区增量发布**：一次同步只解码/合并/重写新批次涉及的 year partition，其他年份的不可变 Parquet 由 manifest 原样复用；manifest 保存 year-level content hash。复杂度从随全历史 bars 增长的全量读写，收敛为受影响年份 bars + 少量 manifest/file metadata，并通过 manifest reachability GC 删除不再被任何 active manifest 引用的旧 canonical Parquet。
 
+PIT 正确性在原有 source-availability 门之上增加**可验证 temporal validity 层**。`reference_time`（数据描述哪个时期）与 `available_at`（系统何时真正可见）必须分开建模；对 window/resample/as-of join/retrieval/transform/decision 等 value-independent availability 依赖图，从最终 decision output 反向求 active dependency closure，再用拓扑传播计算每个节点的 effective availability，未知依赖、依赖环、节点早于依赖可用、effective availability 晚于 decision time 或 value-dependent availability 均 fail closed。该检查复杂度为 `O(V+E)`，请求与报告均冻结到 ObjectStore。对 row-aligned 时间序列变换另做 truncation invariance：删除未来后重新计算，历史前缀必须与全数据计算的同一前缀完全一致；它只能证明具体 drift/泄漏存在，不能因“未发现 drift”宣称全系统绝对无泄漏。对 LLM 的 parametric look-ahead，只把 knowledge-cutoff 前后独立时期的 weighted alpha gap/retention 当描述性诊断，跨 cutoff 时期排除、样本缺一侧即 `NOT_EVALUABLE`，且始终无 Phase 8/Committee/Paper/券商授权。
+
 ---
 
 ## 17.2 建议技术栈

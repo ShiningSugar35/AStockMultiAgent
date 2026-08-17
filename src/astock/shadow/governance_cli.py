@@ -8,7 +8,13 @@ from typing import Annotated, Any
 
 import typer
 
+from astock.pit.temporal import TemporalValidityService
 from astock.schemas.prospective import ProspectiveTrialRecordRequest
+from astock.schemas.temporal_validity import (
+    KnowledgeCutoffDiagnosticRequest,
+    TemporalAuditStatus,
+    TemporalNonInterferenceRequest,
+)
 from astock.shadow.config import load_shadow_evaluation_policy
 from astock.shadow.governance import ProspectiveGovernanceService
 
@@ -24,6 +30,43 @@ def register_prospective_governance_commands(
         paths, state, objects = services()
         policy = load_shadow_evaluation_policy(paths.root / "configs" / "shadow_evaluation.yaml")
         return ProspectiveGovernanceService(state, objects, policy)
+
+    def temporal_service() -> TemporalValidityService:
+        _, state, objects = services()
+        return TemporalValidityService(state, objects)
+
+    @app.command("pit-temporal-schema")
+    def pit_temporal_schema() -> None:
+        emit(
+            {
+                "temporal_non_interference": TemporalNonInterferenceRequest.model_json_schema(),
+                "knowledge_cutoff_diagnostic": KnowledgeCutoffDiagnosticRequest.model_json_schema(),
+            }
+        )
+
+    @app.command("pit-temporal-audit")
+    def pit_temporal_audit(request_file: Annotated[Path, typer.Argument()]) -> None:
+        request = TemporalNonInterferenceRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        report = temporal_service().audit_non_interference(request)
+        emit(report)
+        if report.status is not TemporalAuditStatus.PASS:
+            raise typer.Exit(code=2)
+
+    @app.command("pit-knowledge-cutoff-diagnostic")
+    def pit_knowledge_cutoff_diagnostic(request_file: Annotated[Path, typer.Argument()]) -> None:
+        request = KnowledgeCutoffDiagnosticRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(temporal_service().knowledge_cutoff_diagnostic(request))
+
+    @app.command("pit-temporal-artifact-audit")
+    def pit_temporal_artifact_audit(artifact_id: Annotated[str, typer.Argument()]) -> None:
+        result = temporal_service().audit_artifact(artifact_id)
+        emit(result)
+        if result["status"] != "PASS":
+            raise typer.Exit(code=2)
 
     @app.command("prospective-governance-register")
     def prospective_governance_register(

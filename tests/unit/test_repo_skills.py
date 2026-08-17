@@ -201,6 +201,10 @@ def test_agent_observability_and_tech_scout_commands_are_discoverable() -> None:
         "agent-observability-report",
         "agent-observability-audit",
         "market-canonical-gc",
+        "pit-temporal-schema",
+        "pit-temporal-audit",
+        "pit-knowledge-cutoff-diagnostic",
+        "pit-temporal-artifact-audit",
     } <= command_names
     scout = (SKILLS_ROOT / "research-tech-scout" / "SKILL.md").read_text(encoding="utf-8")
     assert "ADAPT_PATTERN" in scout

@@ -729,6 +729,19 @@ from astock.schemas.shadow import (
     ShadowStudyPlan,
     ShadowThesisStatus,
 )
+from astock.schemas.temporal_validity import (
+    KnowledgeCutoffAlphaPeriod,
+    KnowledgeCutoffDiagnosticReport,
+    KnowledgeCutoffDiagnosticRequest,
+    KnowledgeCutoffDiagnosticStatus,
+    TemporalAuditStatus,
+    TemporalNodeAudit,
+    TemporalNonInterferenceReport,
+    TemporalNonInterferenceRequest,
+    TemporalOperationKind,
+    TemporalPipelineNode,
+    TruncationInvarianceResult,
+)
 
 __all__ = [
     "AccessTransport",
@@ -1399,4 +1412,15 @@ __all__ = [
     "ReferencePitStatus",
     "ReferenceSyncReport",
     "TradingSession",
+    "KnowledgeCutoffAlphaPeriod",
+    "KnowledgeCutoffDiagnosticReport",
+    "KnowledgeCutoffDiagnosticRequest",
+    "KnowledgeCutoffDiagnosticStatus",
+    "TemporalAuditStatus",
+    "TemporalNodeAudit",
+    "TemporalNonInterferenceReport",
+    "TemporalNonInterferenceRequest",
+    "TemporalOperationKind",
+    "TemporalPipelineNode",
+    "TruncationInvarianceResult",
 ]

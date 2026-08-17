@@ -24,6 +24,7 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | Knowledge Storage Lifecycle | 已实现 / 0057 | 1,066,886 行历史 Semantic/Distillation/Reviewed 流水冷归档；现役 FK 父级闭包保留；单行 knowledge Parquet 已分区合并；archive/restore/Parquet/VACUUM 均有显式审计命令 |
 | Agent Observability | 已实现 / 0058 | Repo Skill selection/execution hit rate、仅标注样本 routing precision/recall、任务耗时、ResearchRun stage/provider/cache、双源数据对齐质量统一报表 |
 | External Research Tech Scout | 已实现 | `$research-tech-scout`；GitHub/投研平台/社区发现 → 去重 → ADAPT/SHADOW/WATCH/REJECT，不自动改变生产权重 |
+| PIT Temporal Validity | 已实现 | `pit-temporal-audit`：availability/reference time 分离、O(V+E) temporal non-interference；truncation property tests；`pit-knowledge-cutoff-diagnostic` 仅作跨时期衰减诊断 |
 | 投资委员会 | 已实现 | `committee-*`；委员会只消费冻结工件 |
 | PIT TradingClassification | 已实现 | `trading-classification-*` |
 | 最终模拟研究协议 | 已实现 | `ClassifiedTradeProtocol`、`trade-plan-view` |
@@ -46,6 +47,12 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 `agent-observation-register` 为一次项目 Agent 任务冻结 eligible / selected / completed Repo Skills 与端到端耗时；普通任务不允许自行填写“正确答案”，只有人工标注、fixture 或独立评测才填写 `expected_skill_ids`，因此 routing precision/recall 只对真实标注子集计算。`agent-observability-report` 还直接聚合既有 `SkillUsageEvent`、ResearchRun wall/stage time、provider calls/cache hits 与 canonical 双源行情的 timestamp/OHLC/volume 对拍，不维护第二份性能事实源。
 
 `$research-tech-scout` 负责持续扫描 GitHub、量化/投研平台、论文/官方文档及实践社区。外部发现先与当前能力去重，再标记为 `ADAPT_PATTERN / SHADOW_EXPERIMENT / WATCH / REJECT`；量化模型、因子、执行规则仍必须经过既有 PIT 和 prospective/shadow 门，社媒只作发现线索。
+
+### PIT Temporal Validity
+
+`pit-temporal-audit` 对一个明确 decision time 下的 source/window/resample/as-of join/retrieval/transform/decision 依赖图做 temporal non-interference 审计。每个节点同时保存 `reference_time` 与 `available_at`；真正决定“当时能不能用”的是 availability。只对 value-independent availability fragment 给出可证明检查，使用 active output dependency closure + topological propagation，复杂度为 `O(V+E)`；未知依赖、依赖环、节点早于依赖可用、未来节点污染当前决策或 value-dependent availability 都 fail closed。报告和原始请求均进入 ObjectStore，但该审计本身没有生产准入、模拟盘写入或券商权限。
+
+`truncation_invariance_probe` 为 row-aligned 时间序列变换提供“截断未来后重算，当前前缀必须不变”的可复用检查；≤64 行默认全量检查，长序列默认最多取 64 个均匀覆盖 cutoff 并显式返回 `exhaustive=false`，需要全量时可显式传入全部 cutoffs，避免验证工具自身随历史长度形成近似二次写法。Hypothesis property tests 会随机追加未来后缀并验证 causal transform 不漂移，同时用显式 peeking transform 证明检查能抓到未来依赖。`pit-knowledge-cutoff-diagnostic` 仅把已冻结时期指标按模型 knowledge cutoff 分成 cutoff 前 / 后，并计算项目自定义的 `pre_alpha - post_alpha` 与 retention ratio；跨 cutoff 时期被排除，缺任一侧样本时返回 `NOT_EVALUABLE`。这些数值只用于识别可能的 parametric look-ahead / 泛化衰减，不构成泄漏定论，更不能直接改变 Phase 8、Committee 或 Paper 权重。
 
 ### 本地用户态与会话式持仓复核
 

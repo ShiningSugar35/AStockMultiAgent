@@ -20,6 +20,7 @@ EXPECTED_WORKFLOWS = {
     "workflow-knowledge-ingest.md",
     "workflow-prospective-evaluation.md",
     "workflow-adaptive-edge.md",
+    "workflow-research-tech-scout.md",
 }
 
 

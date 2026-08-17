@@ -25,6 +25,7 @@ AStockMultiAgent 的 canonical Agent Skills 位于 [`../.agents/skills/`](../.ag
 | `$portfolio-manager` | 组合风险、约束与四种构建方法 | [SKILL.md](../.agents/skills/portfolio-manager/SKILL.md) | [portfolio construction](../docs/workflows/workflow-portfolio-construction.md) |
 | `$paper-trading-recovery` | 会话式模拟账户、订单/成交恢复、默认 60m replay + 5m fallback | [SKILL.md](../.agents/skills/paper-trading-recovery/SKILL.md) | [paper trading](../docs/workflows/workflow-paper-trading.md) |
 | `$knowledge-ingest` | 批准来源采集、覆盖与知识蒸馏前置 | [SKILL.md](../.agents/skills/knowledge-ingest/SKILL.md) | [knowledge ingest](../docs/workflows/workflow-knowledge-ingest.md) |
+| `$research-tech-scout` | 外部 GitHub/投研平台/社区技术侦察与去重 | [SKILL.md](../.agents/skills/research-tech-scout/SKILL.md) | [research tech scout](../docs/workflows/workflow-research-tech-scout.md) |
 
 ## 维护规则
 

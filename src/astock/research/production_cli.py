@@ -9,7 +9,9 @@ from typing import Annotated, Any
 import typer
 
 from astock.research.config import load_research_skill_registry
+from astock.research.observability import AgentObservabilityService
 from astock.research.production import ResearchProductionService
+from astock.schemas.agent_observability import AgentTaskObservationRequest
 from astock.schemas.research_production import (
     CatalystMonitorRequest,
     CatalystRecordRequest,
@@ -31,6 +33,15 @@ def register_research_production_commands(
         registry = load_research_skill_registry(paths.root / "configs" / "research_skills.yaml")
         return ResearchProductionService(state, objects, registry)
 
+    def observability() -> AgentObservabilityService:
+        paths, state, objects = services()
+        return AgentObservabilityService(
+            state,
+            objects,
+            project_root=paths.root,
+            manifest_root=paths.manifests,
+        )
+
     @app.command("research-production-schema")
     def research_production_schema() -> None:
         emit(
@@ -42,6 +53,30 @@ def register_research_production_commands(
                 "catalyst_monitor_request": CatalystMonitorRequest.model_json_schema(),
             }
         )
+
+    @app.command("agent-observation-schema")
+    def agent_observation_schema() -> None:
+        emit(AgentTaskObservationRequest.model_json_schema())
+
+    @app.command("agent-observation-register")
+    def agent_observation_register(request_file: Annotated[Path, typer.Argument()]) -> None:
+        request = AgentTaskObservationRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(observability().register(request))
+
+    @app.command("agent-observability-report")
+    def agent_observability_report(
+        lookback_days: Annotated[int, typer.Option("--lookback-days")] = 30,
+    ) -> None:
+        emit(observability().report(lookback_days=lookback_days))
+
+    @app.command("agent-observability-audit")
+    def agent_observability_audit(report_id: Annotated[str, typer.Argument()]) -> None:
+        result = observability().audit(report_id)
+        emit(result)
+        if result["status"] != "PASS":
+            raise typer.Exit(code=2)
 
     @app.command("research-priority")
     def research_priority(request_file: Annotated[Path, typer.Argument()]) -> None:

@@ -19,6 +19,7 @@ EXPECTED = {
     "portfolio-manager": ("portfolio", "allocation"),
     "knowledge-ingest": ("allowlisted", "history"),
     "evidence-investigation": ("evidence", "gap"),
+    "research-tech-scout": ("external", "scout"),
 }
 
 
@@ -190,6 +191,22 @@ def test_current_investor_skills_exhaust_policy_driven_automatic_fallback_before
     assert "current-research-policy" in investigation
     assert "authoritative Web search before asking the user" in investigation
     assert "single `ManualInvestigationTask`-style checklist" in investigation
+
+
+def test_agent_observability_and_tech_scout_commands_are_discoverable() -> None:
+    command_names = {command.name for command in app.registered_commands if command.name}
+    assert {
+        "agent-observation-schema",
+        "agent-observation-register",
+        "agent-observability-report",
+        "agent-observability-audit",
+        "market-canonical-gc",
+    } <= command_names
+    scout = (SKILLS_ROOT / "research-tech-scout" / "SKILL.md").read_text(encoding="utf-8")
+    assert "ADAPT_PATTERN" in scout
+    assert "SHADOW_EXPERIMENT" in scout
+    assert "GitHub" in scout
+    assert "social" in scout.lower()
 
 
 def test_session_portfolio_commands_keep_orders_and_fills_separate() -> None:

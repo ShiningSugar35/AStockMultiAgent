@@ -19,6 +19,15 @@ from astock.schemas.adaptive import (
     AdaptiveResearchNextStage,
     AdaptiveResearchStatusReport,
 )
+from astock.schemas.agent_observability import (
+    AgentDataAlignmentSummary,
+    AgentObservabilityReport,
+    AgentSkillRoutingSummary,
+    AgentTaskObservation,
+    AgentTaskObservationRequest,
+    AgentTaskPerformanceSummary,
+    AgentTaskStatus,
+)
 from astock.schemas.book_visuals import (
     BookLayoutAtom,
     BookLayoutAtomKind,
@@ -727,6 +736,13 @@ __all__ = [
     "AdaptiveResearchCapabilityStatus",
     "AdaptiveResearchNextStage",
     "AdaptiveResearchStatusReport",
+    "AgentDataAlignmentSummary",
+    "AgentObservabilityReport",
+    "AgentSkillRoutingSummary",
+    "AgentTaskObservation",
+    "AgentTaskObservationRequest",
+    "AgentTaskPerformanceSummary",
+    "AgentTaskStatus",
     "AdjustmentDirection",
     "AdjustmentMode",
     "AmountUnit",

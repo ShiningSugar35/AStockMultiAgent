@@ -1,0 +1,4 @@
+interface:
+  display_name: "投研技术自由人"
+  short_description: "Scout quant tools and adapt only verified useful patterns"
+  default_prompt: "Use $research-tech-scout to scan current external tools and research patterns for this project."

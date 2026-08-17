@@ -22,6 +22,8 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | Serenity typed specialists | 已实现 / v4 上游审计 | `research-skills-v3`：6 个 Serenity 方法 + 独立 Hourly Swing；含 Juglar 周期阶段 |
 | Knowledge Skill audited registry | 已发布 / 237 active | historical 653 只保留审计身份；426 RETIRE Skill 从活动表/ObjectStore 物理压缩，Provider 只读取 237 条 active Skills |
 | Knowledge Storage Lifecycle | 已实现 / 0057 | 1,066,886 行历史 Semantic/Distillation/Reviewed 流水冷归档；现役 FK 父级闭包保留；单行 knowledge Parquet 已分区合并；archive/restore/Parquet/VACUUM 均有显式审计命令 |
+| Agent Observability | 已实现 / 0058 | Repo Skill selection/execution hit rate、仅标注样本 routing precision/recall、任务耗时、ResearchRun stage/provider/cache、双源数据对齐质量统一报表 |
+| External Research Tech Scout | 已实现 | `$research-tech-scout`；GitHub/投研平台/社区发现 → 去重 → ADAPT/SHADOW/WATCH/REJECT，不自动改变生产权重 |
 | 投资委员会 | 已实现 | `committee-*`；委员会只消费冻结工件 |
 | PIT TradingClassification | 已实现 | `trading-classification-*` |
 | 最终模拟研究协议 | 已实现 | `ClassifiedTradeProtocol`、`trade-plan-view` |
@@ -38,6 +40,12 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 当前热库只保留 Research Runtime 所需状态与现役 provenance。旧 Semantic/Distillation/Reviewed/Book/Private 生产流水通过 `knowledge-cold-archive-run --confirm` 写入 `runtime/archive/knowledge-history/<digest>/` 的 zstd Parquet，并把 manifest 同步写入 ObjectStore；`knowledge-cold-archive-audit` 可逐文件校验 hash/行数，`knowledge-cold-archive-restore` 可完整恢复。所有仍被 Direct/Visual/Audited 热表引用的 FK 父级行自动保留，原始 SourceSnapshot/Evidence/Zhihu version/ObjectStore 不随归档删除。
 
 历史 `knowledge_comments` / `knowledge_content` 的单行 Parquet 由 `knowledge-parquet-compact --confirm` 按已有 author/content_type/year 分区合并；兼容 additive schema 演进，旧记录缺失的新列补 `NULL`。全部 archive 与 Parquet audit 通过后，才允许 `state-vacuum --confirm` 把 SQLite free pages 一次性返还文件系统。
+
+### Agent Observability 与技术自由人
+
+`agent-observation-register` 为一次项目 Agent 任务冻结 eligible / selected / completed Repo Skills 与端到端耗时；普通任务不允许自行填写“正确答案”，只有人工标注、fixture 或独立评测才填写 `expected_skill_ids`，因此 routing precision/recall 只对真实标注子集计算。`agent-observability-report` 还直接聚合既有 `SkillUsageEvent`、ResearchRun wall/stage time、provider calls/cache hits 与 canonical 双源行情的 timestamp/OHLC/volume 对拍，不维护第二份性能事实源。
+
+`$research-tech-scout` 负责持续扫描 GitHub、量化/投研平台、论文/官方文档及实践社区。外部发现先与当前能力去重，再标记为 `ADAPT_PATTERN / SHADOW_EXPERIMENT / WATCH / REJECT`；量化模型、因子、执行规则仍必须经过既有 PIT 和 prospective/shadow 门，社媒只作发现线索。
 
 ### 本地用户态与会话式持仓复核
 

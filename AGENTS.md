@@ -75,16 +75,18 @@
 - 模拟盘启动恢复：`$paper-trading-recovery`
 - 白名单知识采集：`$knowledge-ingest`
 - 明确证据缺口：`$evidence-investigation`
+- GitHub/投研平台/社媒技术侦察与外部能力去重：`$research-tech-scout`
 
 ## Skill 与 Workflow 文档
 
 - canonical Repo Skills 位于 `.agents/skills/*/SKILL.md`，供 Agent 自动发现；顶层 `skills/README.md` 只做人类可见目录，不复制第二套 Skill。
 - 跨 Skill 用户任务统一记录在 `docs/workflows/`。Skill 定义能力边界，Workflow 定义步骤、依赖、并发、fallback 与停止条件；两者都不得绕过代码/Schema/Config 的硬门禁。
 - 新增稳定能力域时更新 Skill；新增跨 2 个以上 Skill 的完整用户路径时更新 Workflow，并同步文档合同测试。
+- 执行 canonical Repo Skill 的项目任务结束时，Agent 应写入恰好一个 `agent-observation-register` 观测：记录本次 eligible / selected / completed Skill 与端到端耗时。`expected_skill_ids` 只允许来自人工标注、fixture 或独立评测，不得在普通任务中由执行 Agent 自己猜标签；因此日常可稳定统计 selection/execution hit rate，precision/recall 仅在有真实标签的子集上计算。`agent-observability-report` 同时复用 ResearchRun checkpoint 的 wall time/provider/cache 指标及 canonical 双源行情对齐指标，不另建第二套运行账本。
 
 ## 稳定命令
 
-使用 `uv run astock --help` 查看完整参数。稳定入口包括：`init`、`probe`、`sync-market`、`sync-hourly`、`sync-5m`、`quality-report`、`paper-status`、`paper-replay`、`local-portfolio-init/status/sync-paper/review/audit/rebuild`、`context-plan`、`codex-run-init`、`codex-run-import`。`probe` 只做轻量只读 capability/schema 健康检查，不再执行全库 `PRAGMA integrity_check`；完整 SQLite 体检必须显式使用 `state-integrity-audit`。Phase 3 M3.1 入口包括：`financial-audit-schema`、`financial-audit`、`financial-audit-status`；同行分位和 PyOD 尚未启用。
+使用 `uv run astock --help` 查看完整参数。稳定入口包括：`init`、`probe`、`sync-market`、`sync-hourly`、`sync-5m`、`quality-report`、`market-canonical-gc`、`agent-observation-register`、`agent-observability-report`、`paper-status`、`paper-replay`、`local-portfolio-init/status/sync-paper/review/audit/rebuild`、`context-plan`、`codex-run-init`、`codex-run-import`。`probe` 只做轻量只读 capability/schema 健康检查，不再执行全库 `PRAGMA integrity_check`；完整 SQLite 体检必须显式使用 `state-integrity-audit`。Phase 3 M3.1 入口包括：`financial-audit-schema`、`financial-audit`、`financial-audit-status`；同行分位和 PyOD 尚未启用。
 
 Phase 5 论证链入口包括：`knowledge-semantic-plan`、`knowledge-semantic-run`、`knowledge-semantic-status`、`knowledge-semantic-model-status`、`knowledge-semantic-embedding-run` 和 `knowledge-semantic-packet-export`。未校准相似度不得自动删除，DeepSeek 包不得自动外发。
 

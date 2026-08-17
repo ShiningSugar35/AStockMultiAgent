@@ -17,6 +17,7 @@ Workflow 是跨 Skill 的**用户任务编排层**。它不替代 `.agents/skill
 | [Knowledge Ingest](workflow-knowledge-ingest.md) | “把这个作者/书籍方法沉淀进知识库” | `$knowledge-ingest` | coverage / immutable source / reviewed Skills |
 | [Prospective Evaluation](workflow-prospective-evaluation.md) | “怎么积累前瞻样本、判断系统是否真的有效？” | `$astock-research-orchestrator` | Phase 7/11/12 prospective evidence |
 | [Adaptive Edge Diagnostics](workflow-adaptive-edge.md) | “provider/schema/规划为什么失败，Agent 能否自动适配？” | `$astock-research-orchestrator` / `$evidence-investigation` | Validated plan / recovery validation / candidate dialect |
+| [Research Technology Scout](workflow-research-tech-scout.md) | “外面有什么值得项目吸收的新工具、算法或工程模式？” | `$research-tech-scout` | external candidate / ADAPT·SHADOW·WATCH·REJECT decision |
 
 ## 通用编排原则
 

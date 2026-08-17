@@ -141,7 +141,12 @@ class CanonicalMarketStore:
                 details={"report_id": report.report_id},
             )
         previous_manifest = self.load_manifest(selected.request)
-        previous_bars = self._read_manifest_bars(previous_manifest) if previous_manifest else []
+        affected_years = {bar.timestamp.year for bar in selected.bars}
+        previous_bars = (
+            self._read_manifest_bars(previous_manifest, years=affected_years)
+            if previous_manifest
+            else []
+        )
         merged_by_timestamp = {bar.timestamp: bar for bar in previous_bars}
         merged_by_timestamp.update({bar.timestamp: _canonical_bar(bar) for bar in selected.bars})
         canonical_bars = [merged_by_timestamp[key] for key in sorted(merged_by_timestamp)]
@@ -183,12 +188,29 @@ class CanonicalMarketStore:
                 ]
             )
         )
+        previous_files, previous_hashes = self._manifest_files(previous_manifest)
+        preserved_files = [
+            raw_path
+            for raw_path in previous_files
+            if _manifest_file_year(raw_path) not in affected_years
+        ]
+        previous_year_hashes = _manifest_year_content_hashes(previous_manifest, previous_hashes)
+        year_content_hashes = {
+            year: digest
+            for year, digest in previous_year_hashes.items()
+            if year not in affected_years
+        }
+        bars_by_year: dict[int, list[MarketBar]] = defaultdict(list)
+        for bar in canonical_bars:
+            bars_by_year[bar.timestamp.year].append(bar)
+        for year, bars in bars_by_year.items():
+            year_content_hashes[year] = content_hash([bar.observation_id for bar in bars])
         canonical_batch_id = content_hash(
             {
                 "selected_provider": selected.provider_id,
                 "report_id": report.report_id,
                 "source_batch_ids": all_source_batch_ids,
-                "bars": [bar.observation_id for bar in canonical_bars],
+                "year_content_hashes": dict(sorted(year_content_hashes.items())),
             }
         )
         canonical_batch = selected.model_copy(
@@ -203,9 +225,35 @@ class CanonicalMarketStore:
             }
         )
         files = self.writer.write_batch(canonical_batch)
-        relative_files = [str(path.relative_to(self.data_root)) for path in files]
+        written_relative_files = [str(path.relative_to(self.data_root)) for path in files]
+        relative_files = sorted([*preserved_files, *written_relative_files])
+        file_hashes = {raw_path: str(previous_hashes[raw_path]) for raw_path in preserved_files}
+        file_hashes.update(
+            {
+                relative_path: sha256_bytes(path.read_bytes())
+                for relative_path, path in zip(written_relative_files, files, strict=True)
+            }
+        )
+        previous_bar_count = 0
+        if previous_manifest is not None:
+            previous_bar_count = _safe_nonnegative_int(previous_manifest.get("bar_count"))
+        total_bar_count = previous_bar_count - len(previous_bars) + len(canonical_bars)
+        previous_start = _optional_manifest_datetime(previous_manifest, "actual_start")
+        previous_end = _optional_manifest_datetime(previous_manifest, "actual_end")
+        actual_start = min(
+            [
+                value
+                for value in (previous_start, canonical_batch.actual_start)
+                if value is not None
+            ],
+            default=None,
+        )
+        actual_end = max(
+            [value for value in (previous_end, canonical_batch.actual_end) if value is not None],
+            default=None,
+        )
         manifest: dict[str, object] = {
-            "schema_version": "1.3",
+            "schema_version": "1.4",
             "market": selected.request.market.value,
             "instrument_type": selected.request.instrument_type.value,
             "symbol": selected.request.symbol,
@@ -219,17 +267,13 @@ class CanonicalMarketStore:
             "replay_quality": report.replay_quality.value,
             "quality_status": report.quality_status.value,
             "quality_metrics": report.cross_source_diffs,
-            "actual_start": canonical_batch.actual_start.isoformat()
-            if canonical_batch.actual_start
-            else None,
-            "actual_end": canonical_batch.actual_end.isoformat()
-            if canonical_batch.actual_end
-            else None,
-            "bar_count": canonical_batch.bar_count,
+            "actual_start": actual_start.isoformat() if actual_start else None,
+            "actual_end": actual_end.isoformat() if actual_end else None,
+            "bar_count": total_bar_count,
             "files": relative_files,
-            "file_hashes": {
-                relative_path: sha256_bytes(path.read_bytes())
-                for relative_path, path in zip(relative_files, files, strict=True)
+            "file_hashes": dict(sorted(file_hashes.items())),
+            "year_content_hashes": {
+                str(year): digest for year, digest in sorted(year_content_hashes.items())
             },
         }
         manifest["content_hash"] = content_hash(manifest)
@@ -237,9 +281,12 @@ class CanonicalMarketStore:
         atomic_write_bytes(path, canonical_json_bytes(manifest))
         return manifest
 
-    def _read_manifest_bars(self, manifest: dict[str, object] | None) -> list[MarketBar]:
+    def _manifest_files(
+        self,
+        manifest: dict[str, object] | None,
+    ) -> tuple[list[str], dict[str, object]]:
         if manifest is None:
-            return []
+            return [], {}
         manifest_without_hash = dict(manifest)
         stored_manifest_hash = manifest_without_hash.pop("content_hash", None)
         if stored_manifest_hash != content_hash(manifest_without_hash):
@@ -249,18 +296,44 @@ class CanonicalMarketStore:
             )
         raw_files = manifest.get("files", [])
         raw_hashes = manifest.get("file_hashes")
-        if (
-            not isinstance(raw_files, list)
-            or not all(isinstance(item, str) for item in raw_files)
-            or not isinstance(raw_hashes, dict)
-            or set(raw_hashes) != set(raw_files)
-        ):
+        if not isinstance(raw_files, list) or not all(isinstance(item, str) for item in raw_files):
+            raise DataQualityError(
+                "Canonical manifest files are invalid",
+                failure_class=FailureClass.DATA_QUALITY,
+            )
+        if raw_hashes is None and str(manifest.get("schema_version", "")) in {"1.0", "1.1", "1.2"}:
+            legacy_hashes: dict[str, object] = {}
+            for raw_path in raw_files:
+                path = Path(raw_path)
+                if not path.is_absolute():
+                    path = self.data_root / path
+                path = path.resolve()
+                if not path.is_relative_to(self.data_root) or not path.is_file():
+                    raise DataQualityError(
+                        "Legacy canonical Parquet path is outside the store or missing",
+                        failure_class=FailureClass.DATA_QUALITY,
+                        details={"file": str(path)},
+                    )
+                legacy_hashes[raw_path] = sha256_bytes(path.read_bytes())
+            raw_hashes = legacy_hashes
+        if not isinstance(raw_hashes, dict) or set(raw_hashes) != set(raw_files):
             raise DataQualityError(
                 "Canonical manifest files and content hashes are invalid",
                 failure_class=FailureClass.DATA_QUALITY,
             )
+        return raw_files, raw_hashes
+
+    def _read_manifest_bars(
+        self,
+        manifest: dict[str, object] | None,
+        *,
+        years: set[int] | None = None,
+    ) -> list[MarketBar]:
+        raw_files, raw_hashes = self._manifest_files(manifest)
         bars: dict[datetime, MarketBar] = {}
         for raw_path in raw_files:
+            if years is not None and _manifest_file_year(raw_path) not in years:
+                continue
             path = Path(raw_path)
             if not path.is_absolute():
                 path = self.data_root / path
@@ -286,6 +359,93 @@ class CanonicalMarketStore:
                 bar = _market_bar_from_row(row)
                 bars[bar.timestamp] = bar
         return [bars[key] for key in sorted(bars)]
+
+    def prune_orphaned_files(self, *, confirm: bool = False) -> dict[str, object]:
+        referenced: set[Path] = set()
+        manifest_root = self.manifest_root / "canonical"
+        manifest_paths = sorted(manifest_root.rglob("*.json")) if manifest_root.exists() else []
+        for manifest_path in manifest_paths:
+            value = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise DataQualityError(
+                    "Canonical manifest is not a JSON object",
+                    failure_class=FailureClass.DATA_QUALITY,
+                )
+            raw_files, _ = self._manifest_files(value)
+            for raw_path in raw_files:
+                path = Path(raw_path)
+                if not path.is_absolute():
+                    path = self.data_root / path
+                referenced.add(path.resolve())
+        canonical_root = (self.data_root / "market_canonical").resolve()
+        candidates = sorted(canonical_root.rglob("*.parquet")) if canonical_root.exists() else []
+        orphaned = [path for path in candidates if path.resolve() not in referenced]
+        orphaned_bytes = sum(path.stat().st_size for path in orphaned)
+        if confirm:
+            for path in orphaned:
+                path.unlink(missing_ok=True)
+        return {
+            "status": "PRUNED" if confirm else "PLANNED",
+            "referenced_file_count": len(referenced),
+            "orphaned_file_count": len(orphaned),
+            "orphaned_bytes": orphaned_bytes,
+            "deleted_file_count": len(orphaned) if confirm else 0,
+            "deleted_bytes": orphaned_bytes if confirm else 0,
+        }
+
+
+def _manifest_file_year(raw_path: str) -> int | None:
+    for part in Path(raw_path).parts:
+        if part.startswith("year="):
+            try:
+                return int(part.split("=", 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
+def _manifest_year_content_hashes(
+    manifest: dict[str, object] | None,
+    file_hashes: dict[str, object],
+) -> dict[int, str]:
+    if manifest is None:
+        return {}
+    raw = manifest.get("year_content_hashes")
+    if isinstance(raw, dict):
+        parsed: dict[int, str] = {}
+        for year, digest in raw.items():
+            if isinstance(digest, str) and len(digest) == 64:
+                parsed[int(str(year))] = digest
+        return parsed
+    legacy_files: dict[int, list[str]] = defaultdict(list)
+    for raw_path, digest in file_hashes.items():
+        year = _manifest_file_year(raw_path)
+        if year is not None and isinstance(digest, str):
+            legacy_files[year].append(digest)
+    return {
+        year: content_hash(sorted(digests))
+        for year, digests in sorted(legacy_files.items())
+    }
+
+
+def _optional_manifest_datetime(
+    manifest: dict[str, object] | None,
+    key: str,
+) -> datetime | None:
+    if manifest is None:
+        return None
+    value = manifest.get(key)
+    return datetime.fromisoformat(value) if isinstance(value, str) and value else None
+
+
+def _safe_nonnegative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
 
 
 def _bar_row(bar: MarketBar, batch: MarketDataBatch) -> dict[str, object]:

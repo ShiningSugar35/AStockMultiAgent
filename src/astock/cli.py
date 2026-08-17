@@ -825,6 +825,17 @@ def sync_hourly(
         raise typer.Exit(code=2) from exc
 
 
+@app.command("market-canonical-gc")
+def market_canonical_gc(
+    confirm: Annotated[bool, typer.Option("--confirm")] = False,
+) -> None:
+    """Plan or delete canonical Parquet files not referenced by any active manifest."""
+
+    paths, _, _ = _services()
+    store = CanonicalMarketStore(paths.parquet, paths.manifests)
+    _emit(store.prune_orphaned_files(confirm=confirm))
+
+
 @app.command("sync-market")
 def sync_market(
     symbol: Annotated[str, typer.Argument(help="Six-digit stock or index code.")],

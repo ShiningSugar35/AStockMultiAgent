@@ -1624,6 +1624,10 @@ SQLite 不复制行情和财务事实；DuckDB 不再保存第二份相同事实
 
 Knowledge 历史生产流水采用**热状态 / 冷历史分层**：当前 audited registry、现役 Direct/Visual provenance、SourceSnapshot/Evidence、原始 Zhihu version 与 Paper Ledger 留在热状态/不可变 ObjectStore；已被 KGA 固化且不再参与 Research Runtime 的 Semantic/Distillation/Reviewed/Book/Private 中间流水，可在计算所有存活 FK 父级闭包后写入按表 zstd Parquet 冷归档。冷档必须有 ObjectStore-backed manifest、文件 hash、逐表行数、FK 审计和可执行 restore；没有完成恢复演练不得从 SQLite 删除。大量单行 immutable metadata Parquet 必须按已有业务 partition 合并，避免小文件膨胀；历史 additive schema 演进以 nullable union 表示。SQLite 只在所有迁移审计通过后执行单次 VACUUM。
 
+Agent 可观测性继续遵守“单一事实源”：Repo Skill 路由只额外冻结一次 `AgentTaskObservation`，日常统计 eligible→selected→completed 的 selection/execution hit rate；只有人工标注、fixture 或独立评测提供 `expected_skill_ids` 时才计算 precision/recall，禁止执行 Agent 自己生成正确标签。ResearchRun 耗时、provider call、cache hit 直接复用现有 `ResearchRunPerformanceSummary`；研究 Skill 的纠错/缺口/驱动/反证效用复用 `SkillUsageEvent`；行情数据对齐直接复用双源 `DataQualityReport` 的 timestamp coverage、OHLC/volume relative error。因此观测层只做聚合，不维护第二套投研事实或第二份日志账本。
+
+Canonical 行情存储采用**受影响分区增量发布**：一次同步只解码/合并/重写新批次涉及的 year partition，其他年份的不可变 Parquet 由 manifest 原样复用；manifest 保存 year-level content hash。复杂度从随全历史 bars 增长的全量读写，收敛为受影响年份 bars + 少量 manifest/file metadata，并通过 manifest reachability GC 删除不再被任何 active manifest 引用的旧 canonical Parquet。
+
 ---
 
 ## 17.2 建议技术栈

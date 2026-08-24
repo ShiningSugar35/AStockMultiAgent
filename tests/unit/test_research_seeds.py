@@ -191,9 +191,7 @@ def _service(tmp_path: Path) -> tuple[ResearchSeedService, StateStore, ObjectSto
         _skill("zhihu:expert-b", "skill:semi:b", "半导体"),
     ]
     cast(Any, service).visual_skills = _FakeVisualSkills(release, rows)
-    service.author_names.update(
-        {"zhihu:expert-a": "专家A", "zhihu:expert-b": "专家B"}
-    )
+    service.author_names.update({"zhihu:expert-a": "专家A", "zhihu:expert-b": "专家B"})
     return service, state, objects
 
 
@@ -235,7 +233,6 @@ def test_expert_domains_are_derived_from_current_skill_text(tmp_path: Path) -> N
     request = ResearchSeedRequest(
         as_of=NOW,
         minimum_domain_skill_count=3,
-        minimum_domain_skill_share=0.2,
         created_at=NOW,
     )
     rows = cast(Any, service.visual_skills).rows
@@ -264,6 +261,34 @@ def test_expert_domains_are_derived_from_current_skill_text(tmp_path: Path) -> N
     assert [item.board_name for item in changed_profiles[0].domains] == ["银行"]
 
 
+def test_expert_domain_gate_uses_absolute_skill_count_not_author_share(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+    rows = [
+        *[_skill("zhihu:dilution", f"skill:semi:{index}", "半导体芯片") for index in range(3)],
+        *[
+            _skill("zhihu:dilution", f"skill:unrelated:{index}", f"通用研究框架{index}")
+            for index in range(300)
+        ],
+    ]
+    request = ResearchSeedRequest(
+        as_of=NOW,
+        minimum_domain_skill_count=3,
+        created_at=NOW,
+    )
+
+    profiles = service._expert_profiles(
+        release_id="knowledge-registry-v2:dilution",
+        rows=rows,
+        boards=[("BK1036", "半导体")],
+        request=request,
+    )
+
+    assert len(profiles) == 1
+    assert [item.board_name for item in profiles[0].domains] == ["半导体"]
+    assert profiles[0].domains[0].matched_skill_count == 3
+    assert profiles[0].domains[0].skill_share < 0.015
+
+
 def test_research_seed_report_merges_market_and_expert_sources_and_audits(
     tmp_path: Path,
 ) -> None:
@@ -274,7 +299,6 @@ def test_research_seed_report_merges_market_and_expert_sources_and_audits(
         max_market_seeds=3,
         max_expert_seeds_per_author=2,
         minimum_domain_skill_count=3,
-        minimum_domain_skill_share=0.2,
         minimum_amount_cny=20_000_000,
         minimum_float_market_cap_cny=2_000_000_000,
         created_at=NOW,
@@ -312,10 +336,31 @@ def test_seed_id_depends_on_skill_support_and_snapshots(tmp_path: Path) -> None:
             max_market_seeds=3,
             max_expert_seeds_per_author=2,
             minimum_domain_skill_count=3,
-            minimum_domain_skill_share=0.2,
             created_at=NOW,
         )
     )
     seed = next(item for item in report.seeds if item.company_id == "600001")
     assert seed.seed_id.startswith("research-seed:")
     assert seed.seed_id != "research-seed:" + content_hash(seed.company_id)
+
+
+def test_expert_overlay_priority_bonus_is_request_policy_driven(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+
+    def request(bonus: float) -> ResearchSeedRequest:
+        return ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=10,
+            max_market_seeds=3,
+            max_expert_seeds_per_author=2,
+            minimum_domain_skill_count=3,
+            expert_overlay_max_priority_bonus=bonus,
+            created_at=NOW,
+        )
+
+    without_overlay = service.generate(request(0.0))
+    with_overlay = service.generate(request(0.20))
+
+    low = next(item for item in without_overlay.seeds if item.company_id == "600001")
+    high = next(item for item in with_overlay.seeds if item.company_id == "600001")
+    assert high.research_priority_score > low.research_priority_score

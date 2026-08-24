@@ -15,6 +15,7 @@ EXPECTED = {
     "company-deep-research": ("company", "deep"),
     "financial-integrity-audit": ("financial", "audit"),
     "holding-monitor": ("holding", "positions"),
+    "continuous-investment-monitor": ("continuous", "monitoring"),
     "paper-trading-recovery": ("paper", "recovery"),
     "portfolio-manager": ("portfolio", "allocation"),
     "knowledge-ingest": ("allowlisted", "history"),
@@ -211,6 +212,41 @@ def test_agent_observability_and_tech_scout_commands_are_discoverable() -> None:
     assert "SHADOW_EXPERIMENT" in scout
     assert "GitHub" in scout
     assert "social" in scout.lower()
+
+
+def test_continuous_monitor_skill_and_commands_are_discoverable() -> None:
+    command_names = {command.name for command in app.registered_commands if command.name}
+    assert {
+        "continuous-monitor-schema",
+        "continuous-monitor-enroll",
+        "continuous-monitor-rule-add",
+        "continuous-monitor-cycle",
+        "continuous-monitor-start",
+        "continuous-monitor-stop",
+        "continuous-monitor-status",
+        "continuous-monitor-events",
+        "continuous-monitor-tasks",
+        "continuous-monitor-task-claim",
+        "continuous-monitor-task-complete",
+        "continuous-monitor-task-fail",
+        "continuous-monitor-reviewed",
+    } <= command_names
+    monitor = (SKILLS_ROOT / "continuous-investment-monitor" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    orchestrator = (
+        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    company = (SKILLS_ROOT / "company-deep-research" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    candidate = (SKILLS_ROOT / "candidate-scan" / "SKILL.md").read_text(encoding="utf-8")
+    assert "continuous-monitor-task-claim" in monitor
+    assert "broker_execution_allowed=false" in monitor
+    assert "$continuous-investment-monitor" in orchestrator
+    assert "reason `RECOMMENDED`" in orchestrator
+    assert "ANALYZED" in company
+    assert "RECOMMENDED" in candidate
 
 
 def test_session_portfolio_commands_keep_orders_and_fills_separate() -> None:

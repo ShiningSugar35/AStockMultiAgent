@@ -1,0 +1,56 @@
+schema_version: continuous-monitor-v1
+policy_version: continuous-monitor-v1
+wake_interval_seconds: 60
+max_targets_per_cycle: 50
+source_cadence_seconds:
+  MARKET_60M: 900
+  CNINFO: 900
+  GDELT: 1800
+  CATALYST: 3600
+  SCHEDULE: 3600
+  PAPER: 900
+retry_backoff_seconds: [60, 300, 900, 1800]
+market:
+  lookback_days: 45
+  primary_frequency: 60m
+  precision_fallback_frequency: 5m
+  one_day_bars: 4
+  five_day_bars: 20
+  volume_ratio_window: 20
+news:
+  endpoint: https://api.gdeltproject.org/api/v2/doc/doc
+  max_records_per_target: 20
+  lookback_minutes: 180
+  timeout_seconds: 15
+  authority: LEAD_ONLY
+  material_keywords:
+    - 立案
+    - 调查
+    - 处罚
+    - 重大合同
+    - 中标
+    - 事故
+    - 停产
+    - 并购
+    - 重组
+    - 业绩预告
+    - 回购
+    - 减持
+    - 诉讼
+    - 退市
+    - 停牌
+    - 监管
+    - fraud
+    - investigation
+    - acquisition
+    - lawsuit
+    - recall
+daemon:
+  lease_seconds: 180
+  heartbeat_seconds: 30
+  pid_file: runtime/continuous_monitor.pid
+  log_file: runtime/logs/continuous-monitor.log
+safety:
+  broker_execution_allowed: false
+  news_can_directly_trade: false
+  natural_language_rule_execution_allowed: false

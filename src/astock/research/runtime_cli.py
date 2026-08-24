@@ -12,6 +12,7 @@ import typer
 from astock.adaptive.service import AdaptiveResearchStatusService
 from astock.candidates.cli_ext import register_candidate_input_commands
 from astock.market_data.storage import CanonicalMarketStore
+from astock.monitoring.cli import register_continuous_monitor_commands
 from astock.portfolio.allocators import load_portfolio_allocator_policy
 from astock.portfolio.cli import register_portfolio_commands
 from astock.portfolio.vnext_cli import register_portfolio_vnext_commands
@@ -35,6 +36,7 @@ from astock.research.production_cli import register_research_production_commands
 from astock.research.resource_policy import load_specialist_resource_policy
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
+from astock.research.team_cli import register_research_team_commands
 from astock.research.trade_view import TradePlanViewService
 from astock.research.trading_classification import TradingClassificationService
 from astock.schemas.adaptation import (
@@ -91,10 +93,12 @@ def register_research_runtime_commands(
     """Attach staged research and read-only readiness commands to the stable CLI."""
 
     register_candidate_input_commands(app, services, emit)
+    register_continuous_monitor_commands(app, services, emit)
     register_portfolio_commands(app, services, emit)
     register_portfolio_vnext_commands(app, services, emit)
     register_prospective_governance_commands(app, services, emit)
     register_research_production_commands(app, services, emit)
+    register_research_team_commands(app, services, emit)
 
     def runtime() -> ResearchRunService:
         paths, state, objects = services()

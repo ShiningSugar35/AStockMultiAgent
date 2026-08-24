@@ -6,6 +6,7 @@ Workflow 是跨 Skill 的**用户任务编排层**。它不替代 `.agents/skill
 
 | Workflow | 典型用户问题 | 主 Skill | 关键输出 |
 |---|---|---|---|
+| [Full-Market Research Team](workflow-full-market-research-team.md) | “有什么好买的股？推荐几只股票” | `$astock-research-orchestrator` | On-demand team DAG / RecommendationReadinessReport / formal ranking（仅 READY） |
 | [Current Company Research](workflow-current-company-research.md) | “现在买中国海油合适吗？” | `$company-deep-research` | 当前研究判断 / 正式 DecisionPack（若链闭合） |
 | [Candidate Discovery](workflow-candidate-discovery.md) | “现在有哪些股票值得深入研究？” | `$candidate-scan` | ResearchSeed / Candidate shortlist |
 | [Evidence Recovery](workflow-evidence-recovery.md) | “这个关键事实为什么缺证据？” | `$evidence-investigation` | 冻结证据或一次性人工清单 |
@@ -13,6 +14,7 @@ Workflow 是跨 Skill 的**用户任务编排层**。它不替代 `.agents/skill
 | [Committee & Trade Plan](workflow-committee-trade-plan.md) | “研究完成后能不能模拟买？什么条件进出？” | `$company-deep-research` | DecisionPack / ClassifiedTradeProtocol / TradePlanView |
 | [Portfolio Construction](workflow-portfolio-construction.md) | “把几只研究过的股票组成组合” | `$portfolio-manager` | Risk report / 4 allocation proposals |
 | [Holding Monitoring](workflow-holding-monitoring.md) | “持仓有什么变化，要不要加减仓？” | `$holding-monitor` | HoldingReviewPack / action proposal |
+| [Continuous Investment Monitoring](workflow-continuous-investment-monitoring.md) | “研究/荐股后继续盯着，什么时候该准备买卖？” | `$continuous-investment-monitor` | Watch target / MonitorEvent / leased research task / incremental review |
 | [Paper Trading](workflow-paper-trading.md) | “模拟盘恢复、回放、状态是否正常？” | `$paper-trading-recovery` | paper status / replay checkpoint / NAV |
 | [Knowledge Ingest](workflow-knowledge-ingest.md) | “把这个作者/书籍方法沉淀进知识库” | `$knowledge-ingest` | coverage / immutable source / reviewed Skills |
 | [Prospective Evaluation](workflow-prospective-evaluation.md) | “怎么积累前瞻样本、判断系统是否真的有效？” | `$astock-research-orchestrator` | Phase 7/11/12 prospective evidence |

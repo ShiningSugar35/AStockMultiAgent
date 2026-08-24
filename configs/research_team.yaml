@@ -1,0 +1,75 @@
+schema_version: research-team-policy-v1
+policy_version: research-team-policy-v1
+execution:
+  default_backend: CHAT_ORCHESTRATED
+  background_service_required: false
+  on_demand_only: true
+  automatic_resolution_budget_seconds: 7200
+  task_checkpointing_required: true
+  independent_bull_bear_required: true
+acquisition:
+  market_fetch_workers_by_resource:
+    LOW_RESOURCE: 2
+    STANDARD: 3
+    HIGH_RESOURCE: 3
+  agent_workers_by_resource:
+    LOW_RESOURCE: 2
+    STANDARD: 3
+    HIGH_RESOURCE: 6
+  duckdb_threads_by_resource:
+    LOW_RESOURCE: 2
+    STANDARD: 4
+    HIGH_RESOURCE: 8
+  max_parallel_companies_by_resource:
+    LOW_RESOURCE: 2
+    STANDARD: 3
+    HIGH_RESOURCE: 4
+  max_deep_candidates_by_resource:
+    LOW_RESOURCE: 6
+    STANDARD: 8
+    HIGH_RESOURCE: 10
+  same_run_snapshot_reuse: true
+  max_retry_rounds: 3
+discovery:
+  max_total_seeds: 40
+  max_market_seeds: 20
+  max_expert_seeds_per_author: 10
+  minimum_domain_skill_count: 3
+  skill_share_gate_enabled: false
+  reserve_blind_market_tranche: true
+  expert_overlay_max_priority_bonus: 0.15
+coverage:
+  universal_minimum: 90
+  industry_minimum: 80
+  evidence_minimum: 90
+  private_skill_gates_recommendation: false
+recommendation_gate:
+  required_checks:
+    - TEAM_DAG_COMPLETE
+    - UNIVERSE_COVERAGE
+    - MACRO_REGIME
+    - SECTOR_COMPARISON
+    - BLIND_CANDIDATE_SCAN
+    - INDUSTRY_PROFILE
+    - COMPANY_ECONOMICS
+    - FINANCIAL_INTEGRITY
+    - DRIVER_TREE
+    - FORECAST_BULL_BASE_BEAR
+    - VALUATION
+    - MARKET_PRICE_ANCHOR
+    - CATALYST_RISK
+    - BULL_CASE
+    - BEAR_CASE
+    - INDEPENDENT_REVIEW
+    - COMMITTEE
+    - PORTFOLIO_CONSTRUCTION
+  fail_closed: true
+  observation_only_on_failure: true
+industry:
+  taxonomy_kind: INTERNAL_RESEARCH_ARCHETYPE
+  certified_portfolio_taxonomy_claim_allowed: false
+safety:
+  seed_recommendation_allowed: false
+  candidate_recommendation_allowed: false
+  manual_candidate_fallback_allowed: false
+  broker_execution_allowed: false

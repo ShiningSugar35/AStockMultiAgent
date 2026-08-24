@@ -1,0 +1,137 @@
+schema_version: industry-research-archetypes-v1
+registry_version: industry-research-archetypes-v1
+taxonomy_kind: INTERNAL_RESEARCH_ARCHETYPE
+certified_external_taxonomy: false
+archetypes:
+  - archetype_id: BANK
+    name: 银行
+    aliases: [银行, 城商行, 农商行]
+    key_metrics: [净息差, 不良贷款率, 拨备覆盖率, 核心一级资本充足率]
+    valuation_methods: [PB-ROE, 股息折现]
+    key_risks: [资产质量恶化, 净息差收窄, 信贷需求不足]
+  - archetype_id: INSURANCE
+    name: 保险
+    aliases: [保险, 寿险, 财险]
+    key_metrics: [新业务价值, 综合成本率, 内含价值, 投资收益率]
+    valuation_methods: [PEV, SOTP]
+    key_risks: [利率下行, 资产负债久期错配, 赔付率上升]
+  - archetype_id: SECURITIES
+    name: 券商
+    aliases: [证券, 券商]
+    key_metrics: [经纪市占率, 投行业务收入, 两融余额敏感度, ROE]
+    valuation_methods: [PB-ROE, PE]
+    key_risks: [市场成交萎缩, 自营波动, 监管变化]
+  - archetype_id: REAL_ESTATE
+    name: 房地产
+    aliases: [房地产, 地产, 房屋建设]
+    key_metrics: [销售额, 去化率, 净负债率, 现金短债比]
+    valuation_methods: [NAV, PB, SOTP]
+    key_risks: [销售下行, 融资收紧, 存货减值]
+  - archetype_id: SOFTWARE
+    name: 软件与云服务
+    aliases: [软件, SaaS, 云计算, 信息技术服务]
+    key_metrics: [ARR, 续费率, 毛利率, 销售费用率, 自由现金流]
+    valuation_methods: [DCF, EV-Sales, EV-FCF]
+    key_risks: [客户流失, 获客成本上升, 资本化开发支出失真]
+  - archetype_id: SEMICONDUCTOR
+    name: 半导体与电子
+    aliases: [半导体, 芯片, 集成电路, 电子元件]
+    key_metrics: [ASP, 出货量, 产能利用率, 库存周转, 毛利率]
+    valuation_methods: [DCF, PE, EV-EBITDA, 周期中枢估值]
+    key_risks: [库存周期, 技术迭代, 客户集中, 资本开支过剩]
+  - archetype_id: COMMUNICATIONS
+    name: 通信与光模块
+    aliases: [通信, 光模块, 光通信, 通信设备]
+    key_metrics: [端口出货, ASP, 客户集中度, 毛利率, 研发强度]
+    valuation_methods: [DCF, PE, PEG]
+    key_risks: [客户资本开支波动, 技术路线切换, 高估值回撤]
+  - archetype_id: PHARMA
+    name: 医药与医疗
+    aliases: [医药, 医疗, 医疗器械, 医疗服务]
+    key_metrics: [收入增速, 毛利率, 研发费用率, 渠道库存, 集采暴露]
+    valuation_methods: [DCF, PE, SOTP]
+    key_risks: [集采降价, 合规风险, 产品单一]
+  - archetype_id: BIOTECH
+    name: 创新药与生物科技
+    aliases: [创新药, 生物科技, 生物制品, CRO, CXO]
+    key_metrics: [管线阶段, 临床成功概率, 现金跑道, 授权交易, 峰值销售]
+    valuation_methods: [rNPV, SOTP, DCF]
+    key_risks: [临床失败, 融资稀释, 专利与监管]
+  - archetype_id: CONSUMER
+    name: 消费与白酒
+    aliases: [白酒, 食品饮料, 消费, 家电, 零售]
+    key_metrics: [量价, 渠道库存, 经销商回款, 毛利率, ROIC]
+    valuation_methods: [DCF, PE, 股息折现]
+    key_risks: [需求疲弱, 渠道压货, 品牌势能下降]
+  - archetype_id: AUTOMOTIVE
+    name: 汽车与零部件
+    aliases: [汽车, 汽车零部件, 整车]
+    key_metrics: [销量, 单车收入, 单车毛利, 产能利用率, 海外收入]
+    valuation_methods: [DCF, PE, EV-EBITDA]
+    key_risks: [价格战, 车型周期, 产能过剩]
+  - archetype_id: NEW_ENERGY
+    name: 新能源设备
+    aliases: [光伏, 锂电, 电池, 风电, 储能, 新能源]
+    key_metrics: [出货量, ASP, 单位成本, 产能利用率, 库存]
+    valuation_methods: [DCF, PE, EV-EBITDA, 周期中枢估值]
+    key_risks: [供给过剩, 技术迭代, 原材料价格]
+  - archetype_id: UTILITIES
+    name: 电力与公用事业
+    aliases: [电力, 公用事业, 水务, 燃气]
+    key_metrics: [利用小时, 上网电价, 燃料成本, 资本开支, 自由现金流]
+    valuation_methods: [DCF, EV-EBITDA, 股息折现]
+    key_risks: [电价机制变化, 燃料成本, 高杠杆]
+  - archetype_id: COAL
+    name: 煤炭
+    aliases: [煤炭, 焦煤, 动力煤]
+    key_metrics: [产销量, 实现煤价, 单位成本, 可采储量, 资本开支]
+    valuation_methods: [周期中枢PE, DCF, 股息折现]
+    key_risks: [煤价下行, 安全生产, 资源税费]
+  - archetype_id: METALS_MINING
+    name: 有色与矿业
+    aliases: [有色, 有色金属, 黄金, 铜, 铝, 锂, 矿业]
+    key_metrics: [储量, 品位, 产量, 实现价格, 单位现金成本, AISC]
+    valuation_methods: [NAV, DCF, EV-EBITDA, 周期中枢估值]
+    key_risks: [商品价格, 资源国风险, 项目爬坡, 资本开支]
+  - archetype_id: CHEMICALS
+    name: 化工与材料
+    aliases: [化工, 化学制品, 新材料]
+    key_metrics: [价差, 开工率, 库存, 单位成本, 新增产能]
+    valuation_methods: [周期中枢PE, EV-EBITDA, DCF]
+    key_risks: [产能过剩, 原料波动, 安环保]
+  - archetype_id: MACHINERY
+    name: 机械与高端装备
+    aliases: [机械, 设备, 专用设备, 通用设备, 自动化]
+    key_metrics: [订单, 在手订单, 交付周期, 毛利率, 应收账款]
+    valuation_methods: [DCF, PE, EV-EBITDA]
+    key_risks: [资本开支周期, 应收恶化, 客户集中]
+  - archetype_id: DEFENSE
+    name: 国防军工
+    aliases: [军工, 国防, 航空装备, 航天装备]
+    key_metrics: [合同负债, 在手订单, 交付节奏, 毛利率, 研发投入]
+    valuation_methods: [DCF, PE, SOTP]
+    key_risks: [订单节奏, 验收延迟, 估值过高]
+  - archetype_id: TRANSPORTATION
+    name: 交通运输
+    aliases: [交通运输, 航空, 航运, 港口, 物流, 铁路]
+    key_metrics: [运量, 运价, 客座率, 单位成本, 燃油成本]
+    valuation_methods: [EV-EBITDA, DCF, PB]
+    key_risks: [运价周期, 油价, 高固定成本]
+  - archetype_id: AGRICULTURE
+    name: 农林牧渔
+    aliases: [农业, 农林牧渔, 养殖, 生猪, 种业]
+    key_metrics: [出栏量, 产品价格, 单位养殖成本, 存栏, 现金成本]
+    valuation_methods: [周期中枢估值, PB, DCF]
+    key_risks: [价格周期, 疫病, 天气]
+  - archetype_id: BUSINESS_SERVICES
+    name: 商业服务与检测
+    aliases: [检测, 认证, 商业服务, 专业服务, 环保服务]
+    key_metrics: [客户数, 单客户收入, 实验室利用率, 人效, 经营现金流]
+    valuation_methods: [DCF, PE, EV-EBITDA]
+    key_risks: [价格竞争, 固定成本利用率, 并购整合]
+  - archetype_id: CONSTRUCTION_MATERIALS
+    name: 建筑与建材
+    aliases: [建筑, 建材, 水泥, 玻璃, 工程建设]
+    key_metrics: [订单, 新签合同, 价格, 单位成本, 应收及合同资产]
+    valuation_methods: [PE, PB, EV-EBITDA, DCF]
+    key_risks: [地产与基建周期, 应收回款, 产能过剩]

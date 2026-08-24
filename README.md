@@ -17,6 +17,8 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | 财务可信度与红旗审计 | 已实现 | `financial-*` |
 | Research Seeds → Candidate 自动 Promotion | 已实现 | `research-seeds`、`research-seeds-promote`、`candidate-audit` |
 | 候选研究池 | 已实现 | Promotion 自动组装严格 `CandidateInputRelease`；`candidate-input-run` 保留为手工/诊断入口 |
+| 全市场专业投研团队 / 正式荐股门 | 已实现 | `research-team-plan/status`、`research-recommendation-readiness`；Macro→行业→公司→Bull/Bear→Reviewer→Committee→Portfolio 全链，缺任一硬门只能观察 |
+| 行业研究覆盖与 Skill Edge 治理 | 已实现 | `industry-research-archetypes/resolve`、`research-coverage-score`；22 类内部研究框架，Private Skill 仅作 Edge |
 | 单公司 Research Runtime | 已实现 | `research-plan`、`research-run-company`、`research-audit` |
 | Institutional Fundamental Research | 已实现 | `institutional-research-schema/finalize`、`fundamental-model-audit`、`institutional-decision-context-freeze` |
 | Serenity typed specialists | 已实现 / v4 上游审计 | `research-skills-v3`：6 个 Serenity 方法 + 独立 Hourly Swing；含 Juglar 周期阶段 |
@@ -30,7 +32,8 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | 最终模拟研究协议 | 已实现 | `ClassifiedTradeProtocol`、`trade-plan-view` |
 | 组合评估 | 已实现 | `portfolio-paper-evaluate`、`portfolio-evaluate` |
 | 组合构建 | 已实现 | `portfolio-construct`、`portfolio-audit` |
-| 会话式模拟账户 | 已实现 | 保留账户/订单/成交/确认；默认 60m 离线补回放，5m 仅作高精度 fallback；不要求常驻进程 |
+| 持续投研与 Watch Universe | 已实现 / 0059 | 60m 行情、CNINFO、GDELT lead、Catalyst、typed rule、事件/研究任务、lease/heartbeat、恢复式 daemon |
+| 模拟账户生命周期 | 已实现 | 保留账户/订单/成交/确认；默认 60m，5m 高精度 fallback；已确认开放模拟订单可由 monitor 持续 deterministic replay |
 | Phase 7 前向影子评测 | 程序完成 / 真实样本采集中 | 正式 6-arm study，当前 0/100 |
 | Phase 8 自适应准入 | 程序完成 / `NOT_ADMITTED` | 真实 Phase 7 证据达标前全部关闭 |
 
@@ -54,16 +57,16 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 
 `truncation_invariance_probe` 为 row-aligned 时间序列变换提供“截断未来后重算，当前前缀必须不变”的可复用检查；≤64 行默认全量检查，长序列默认最多取 64 个均匀覆盖 cutoff 并显式返回 `exhaustive=false`，需要全量时可显式传入全部 cutoffs，避免验证工具自身随历史长度形成近似二次写法。Hypothesis property tests 会随机追加未来后缀并验证 causal transform 不漂移，同时用显式 peeking transform 证明检查能抓到未来依赖。`pit-knowledge-cutoff-diagnostic` 仅把已冻结时期指标按模型 knowledge cutoff 分成 cutoff 前 / 后，并计算项目自定义的 `pre_alpha - post_alpha` 与 retention ratio；跨 cutoff 时期被排除，缺任一侧样本时返回 `NOT_EVALUABLE`。这些数值只用于识别可能的 parametric look-ahead / 泛化衰减，不构成泄漏定论，更不能直接改变 Phase 8、Committee 或 Paper 权重。
 
-### 本地用户态与会话式持仓复核
+### 本地用户态、持续监控与持仓复核
 
-系统不再要求为月度/年度投资策略常驻一个后台交易 Agent。每次投资类会话启动时，先把模拟账户的订单/成交/持仓同步到 Git 忽略的 `user_state/portfolio.md`、`orders.md`、`trades.md`，再对现有持仓做增量复核。
+系统将低成本 deterministic monitor 与高价值 Research Agent 分层：常驻 monitor 负责 Watch Universe、行情/公告/news lead/Catalyst、typed rule、已确认开放模拟订单回放和持久事件队列；需要语义判断的增量研究由可用 Agent worker/会话消费。每次投资类会话启动时，先把模拟账户同步到 Git 忽略的 `user_state/portfolio.md`、`orders.md`、`trades.md`，再读取 monitor 的 material delta/pending task 并做增量复核；若当前没有独立 LLM worker，任务会可靠排队而不会冒充已完成分析。
 
 - `portfolio.md`：当前持仓、平均成本、最近复核动作与投资逻辑状态；
 - `orders.md`：尚未完全成交的模拟订单；
 - `trades.md`：已确认的模拟成交/用户记录；
 - 三者均位于 `user_state/`，不会 push 到 Git。
 
-离线期间默认用 **60 分钟 OHLC** 补回放：它可以判断限价是否在某个小时内被触及，但不能证明盘口排队与小时内先后路径，所以状态明确标为近似成交模拟。只有小时线存在实质歧义时才使用 `--resolution 5m` 做更精细复核。订单和成交仍严格分开：**下单不等于持仓，只有回放确认成交后才更新持仓。**
+默认用 **60 分钟 OHLC** 做持续/离线补回放：它可以判断限价是否在某个小时内被触及，但不能证明盘口排队与小时内先后路径，所以状态明确标为近似成交模拟。只有小时线存在实质歧义时才使用 `--resolution 5m` 做更精细复核。开放模拟订单可由 Continuous Monitor 周期性调用同一 deterministic replay；订单和成交仍严格分开：**下单不等于持仓，只有回放确认成交后才更新持仓。**
 
 ## 自然语言用法
 
@@ -85,6 +88,7 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 → 投资委员会
 → TradingClassification
 → ClassifiedTradeProtocol
+→ 以 ANALYZED 纳入 Continuous Monitor / 写入已验证 typed rule
 → 面向普通用户的解释
 ```
 
@@ -164,7 +168,9 @@ CandidateInstrumentUniverseProof + 官方公告 / 财务 / PIT / 质量 / 公司
         ↓
 每只股票独立完成公司研究和投委会
         ↓
-只保留当前 APPROVE_SIMULATION 的 ClassifiedTradeProtocol
+WATCH / APPROVE_SIMULATION 进入 RECOMMENDED 持续观察集
+        ↓
+只有当前 APPROVE_SIMULATION 的 ClassifiedTradeProtocol 进入组合构建
         ↓
 Portfolio Construction
 ```

@@ -9,6 +9,7 @@ HUMAN_SKILLS = PROJECT_ROOT / "skills"
 WORKFLOWS = PROJECT_ROOT / "docs" / "workflows"
 
 EXPECTED_WORKFLOWS = {
+    "workflow-full-market-research-team.md",
     "workflow-current-company-research.md",
     "workflow-candidate-discovery.md",
     "workflow-evidence-recovery.md",
@@ -21,6 +22,7 @@ EXPECTED_WORKFLOWS = {
     "workflow-prospective-evaluation.md",
     "workflow-adaptive-edge.md",
     "workflow-research-tech-scout.md",
+    "workflow-continuous-investment-monitoring.md",
 }
 
 

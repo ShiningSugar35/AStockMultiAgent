@@ -109,9 +109,10 @@ class ResearchSeedRequest(AStockModel):
     max_total_seeds: int = Field(default=40, ge=5, le=100)
     max_market_seeds: int = Field(default=20, ge=0, le=60)
     max_expert_seeds_per_author: int = Field(default=10, ge=0, le=30)
+    market_fetch_workers: int = Field(default=2, ge=1, le=3)
     max_domains_per_author: int = Field(default=5, ge=1, le=10)
     minimum_domain_skill_count: int = Field(default=3, ge=2, le=50)
-    minimum_domain_skill_share: float = Field(default=0.015, gt=0, le=0.5)
+    expert_overlay_max_priority_bonus: float = Field(default=0.15, ge=0, le=0.25)
     minimum_amount_cny: float = Field(default=20_000_000.0, ge=0)
     minimum_float_market_cap_cny: float = Field(default=2_000_000_000.0, ge=0)
     include_existing_candidates: bool = True

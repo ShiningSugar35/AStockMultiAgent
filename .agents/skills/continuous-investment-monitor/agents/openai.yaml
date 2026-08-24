@@ -1,0 +1,4 @@
+interface:
+  display_name: "持续投研监控"
+  short_description: "Track watched A-share targets and route material changes"
+  default_prompt: "Use $continuous-investment-monitor to keep my researched stocks under continuous review."

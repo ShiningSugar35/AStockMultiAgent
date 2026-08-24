@@ -26,6 +26,7 @@ from astock.market_data.reference import MarketReferenceService
 from astock.market_data.reference_storage import ReferenceParquetStore
 from astock.paper_trading.operation import load_paper_trading_rules
 from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
+from astock.research.team import detect_hardware_budget, load_research_team_policy
 from astock.schemas.candidate_promotion import SeedPromotionRequest
 from astock.schemas.candidates import CandidateInputRelease, CandidateScanRequest
 from astock.schemas.research_seeds import ResearchSeedRequest
@@ -116,12 +117,17 @@ def register_candidate_input_commands(
         max_expert_seeds_per_author: Annotated[int, typer.Option(min=0, max=30)] = 10,
     ) -> None:
         timestamp = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+        paths, _, _ = services()
+        team_policy = load_research_team_policy(paths.root / "configs" / "research_team.yaml")
+        hardware = detect_hardware_budget(team_policy)
         request = ResearchSeedRequest(
             as_of=timestamp,
             live=live,
             max_total_seeds=max_total_seeds,
             max_market_seeds=max_market_seeds,
             max_expert_seeds_per_author=max_expert_seeds_per_author,
+            market_fetch_workers=min(3, hardware.provider_workers),
+            expert_overlay_max_priority_bonus=team_policy.expert_overlay_max_priority_bonus,
             created_at=timestamp,
         )
         emit(seed_service().generate(request))

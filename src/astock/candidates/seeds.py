@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from math import log1p
@@ -38,9 +39,7 @@ class SeedMarketProvider(Protocol):
         self, market: Market, *, live: bool = False
     ) -> tuple[dict[str, object], Any]: ...
 
-    def fetch_industry_boards(
-        self, *, live: bool = False
-    ) -> tuple[dict[str, object], Any]: ...
+    def fetch_industry_boards(self, *, live: bool = False) -> tuple[dict[str, object], Any]: ...
 
     def fetch_industry_constituents(
         self, board_code: str, *, live: bool = False
@@ -139,24 +138,29 @@ class ResearchSeedService:
         market_rows: dict[str, _MarketRow] = {}
         accumulators: dict[str, _SeedAccumulator] = {}
 
-        for market in _EQUITY_MARKETS:
-            try:
-                payload, snapshot = self.provider.fetch_seed_snapshot(
-                    market,
-                    live=request.live,
-                )
-                cutoff = max(cutoff, snapshot.available_to_system_at)
-                source_snapshots[snapshot.snapshot_id] = snapshot.object_sha256
-                source_hashes.add(snapshot.object_sha256)
-                raw = self._parse_market_rows(payload, market, snapshot.snapshot_id)
-                scored = self._score_market_rows(
-                    raw,
-                    minimum_amount=request.minimum_amount_cny,
-                    minimum_float_cap=request.minimum_float_market_cap_cny,
-                )
-                market_rows.update({item.company_id: item for item in scored})
-            except (AStockError, OSError, RuntimeError, ValueError):
-                warnings.add(f"MARKET_SEED_SNAPSHOT_UNAVAILABLE:{market.value}")
+        def fetch_market(market: Market) -> tuple[Market, Any, list[_MarketRow]]:
+            payload, snapshot = self.provider.fetch_seed_snapshot(market, live=request.live)
+            raw = self._parse_market_rows(payload, market, snapshot.snapshot_id)
+            scored = self._score_market_rows(
+                raw,
+                minimum_amount=request.minimum_amount_cny,
+                minimum_float_cap=request.minimum_float_market_cap_cny,
+            )
+            return market, snapshot, scored
+
+        workers = min(request.market_fetch_workers, len(_EQUITY_MARKETS))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(fetch_market, market): market for market in _EQUITY_MARKETS}
+            for future in as_completed(futures):
+                market = futures[future]
+                try:
+                    _, snapshot, scored = future.result()
+                    cutoff = max(cutoff, snapshot.available_to_system_at)
+                    source_snapshots[snapshot.snapshot_id] = snapshot.object_sha256
+                    source_hashes.add(snapshot.object_sha256)
+                    market_rows.update({item.company_id: item for item in scored})
+                except (AStockError, OSError, RuntimeError, ValueError):
+                    warnings.add(f"MARKET_SEED_SNAPSHOT_UNAVAILABLE:{market.value}")
 
         for row in sorted(
             market_rows.values(),
@@ -237,14 +241,20 @@ class ResearchSeedService:
                 except (AStockError, OSError, RuntimeError, ValueError):
                     warnings.add("EXPERT_DOMAIN_MARKET_TAXONOMY_UNAVAILABLE")
 
-        seeds = [self._finalize_seed(item, request.as_of) for item in accumulators.values()]
+        all_seeds = [self._finalize_seed(item, request.as_of) for item in accumulators.values()]
+        all_seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
+        blind = [item for item in all_seeds if ResearchSeedOrigin.MARKET in item.origins][
+            : min(request.max_market_seeds, request.max_total_seeds)
+        ]
+        selected_ids = {item.seed_id for item in blind}
+        fill = [item for item in all_seeds if item.seed_id not in selected_ids]
+        seeds = [*blind, *fill[: max(0, request.max_total_seeds - len(blind))]]
         seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
-        seeds = seeds[: request.max_total_seeds]
         status = ResearchSeedStatus.READY if seeds else ResearchSeedStatus.NEEDS_INFO
         if not market_rows:
             warnings.add("CURRENT_MARKET_SEED_UNIVERSE_UNAVAILABLE")
         if release is not None and not profiles:
-            warnings.add("NO_EXPERT_DOMAIN_PASSED_SKILL_DENSITY_GATE")
+            warnings.add("NO_EXPERT_DOMAIN_PASSED_SKILL_COUNT_GATE")
 
         report_id = "research-seeds:" + content_hash(
             {
@@ -262,9 +272,7 @@ class ResearchSeedService:
             data_cutoff_at=cutoff,
             status=status,
             registry_release_id=str(release["release_id"]) if release else None,
-            registry_release_object_hash=(
-                str(release["release_object_hash"]) if release else None
-            ),
+            registry_release_object_hash=(str(release["release_object_hash"]) if release else None),
             profiles=profiles,
             seeds=seeds,
             source_snapshot_ids=sorted(source_snapshots),
@@ -322,8 +330,7 @@ class ResearchSeedService:
                 release = self.visual_skills.release(report.registry_release_id)
                 if (
                     release is None
-                    or str(release["release_object_hash"])
-                    != report.registry_release_object_hash
+                    or str(release["release_object_hash"]) != report.registry_release_object_hash
                 ):
                     findings.add("RESEARCH_SEED_REGISTRY_RELEASE_DRIFT")
             profile_authors = {item.author_source_id for item in report.profiles}
@@ -345,17 +352,13 @@ class ResearchSeedService:
                         findings.add("RESEARCH_SEED_EXPERT_AUTHOR_DRIFT")
                     if not set(seed.expert_domain_names).issubset(profile_domains):
                         findings.add("RESEARCH_SEED_EXPERT_DOMAIN_DRIFT")
-                    if not set(seed.expert_domain_support_skill_ids).issubset(
-                        profile_skill_ids
-                    ):
+                    if not set(seed.expert_domain_support_skill_ids).issubset(profile_skill_ids):
                         findings.add("RESEARCH_SEED_EXPERT_SKILL_DRIFT")
                 if ResearchSeedOrigin.EXISTING_CANDIDATE in seed.origins:
                     if seed.candidate_version_id is None:
                         findings.add("RESEARCH_SEED_CANDIDATE_LINEAGE_MISSING")
                     else:
-                        candidate = self.candidates.get_candidate_version(
-                            seed.candidate_version_id
-                        )
+                        candidate = self.candidates.get_candidate_version(seed.candidate_version_id)
                         if (
                             candidate is None
                             or str(candidate["company_id"]) != seed.company_id
@@ -393,7 +396,6 @@ class ResearchSeedService:
         for profile in profiles:
             candidates: dict[str, tuple[float, ExpertDomainEvidence, str]] = {}
             max_count = max((item.matched_skill_count for item in profile.domains), default=1)
-            max_share = max((item.skill_share for item in profile.domains), default=1.0)
             for domain in profile.domains:
                 if domain.board_code not in constituent_cache:
                     payload, snapshot = self.provider.fetch_industry_constituents(
@@ -407,11 +409,7 @@ class ResearchSeedService:
                         snapshot.snapshot_id,
                     )
                 rows, snapshot_id = constituent_cache[domain.board_code]
-                domain_strength = min(
-                    1.0,
-                    0.5 * domain.matched_skill_count / max_count
-                    + 0.5 * domain.skill_share / max_share,
-                )
+                domain_strength = min(1.0, domain.matched_skill_count / max_count)
                 for raw in rows:
                     company_id = str(raw.get("f12") or "")
                     market_row = market_rows.get(company_id)
@@ -419,11 +417,15 @@ class ResearchSeedService:
                         continue
                     if (
                         market_row.amount_cny < request.minimum_amount_cny
-                        or market_row.float_market_cap_cny
-                        < request.minimum_float_market_cap_cny
+                        or market_row.float_market_cap_cny < request.minimum_float_market_cap_cny
                     ):
                         continue
-                    score = 0.72 + 0.18 * domain_strength + 0.10 * market_row.market_score
+                    blind_score = 0.60 + 0.25 * market_row.market_score
+                    score = min(
+                        1.0,
+                        blind_score
+                        + request.expert_overlay_max_priority_bonus * domain_strength,
+                    )
                     previous = candidates.get(company_id)
                     if previous is None or score > previous[0]:
                         candidates[company_id] = (score, domain, snapshot_id)
@@ -466,10 +468,7 @@ class ResearchSeedService:
                     if any(term and term in text for term in terms)
                 )
                 share = len(support) / len(skills)
-                if (
-                    len(support) < request.minimum_domain_skill_count
-                    or share < request.minimum_domain_skill_share
-                ):
+                if len(support) < request.minimum_domain_skill_count:
                     continue
                 domains.append(
                     ExpertDomainEvidence(
@@ -558,8 +557,7 @@ class ResearchSeedService:
         eligible = [
             row
             for row in rows
-            if row.amount_cny >= minimum_amount
-            and row.float_market_cap_cny >= minimum_float_cap
+            if row.amount_cny >= minimum_amount and row.float_market_cap_cny >= minimum_float_cap
         ]
         if not eligible:
             return []

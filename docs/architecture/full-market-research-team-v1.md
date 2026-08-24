@@ -392,6 +392,6 @@ A 股公告优先入口包括上海证券交易所最新公告和巨潮资讯。
 | P2.3 | Coverage/Skill bias 审计接口 | COMPLETE |
 | REVIEW | 两轮安全门返工 + 配置漂移/产品合同终审 | PASS |
 | TEST | 定向 + 全仓 + Ruff + Pyright + diff + integrity | PASS |
-| RELEASE | CLI/Workflow 启用、验收文档迁移 | READY_TO_COMMIT |
+| RELEASE | CLI/Workflow 启用、验收文档迁移 | RELEASED |
 
-发布状态以本节测试证据为准；人工 / live 长时间观察保持 `SKIPPED_MANUAL`，不得反向改写为已验收事实。
+软件实现发布提交 `7bb7288` 已成功推送 `origin/main`。发布状态以本节测试证据为准；人工 / live 长时间观察保持 `SKIPPED_MANUAL`，不得反向改写为已验收事实。

@@ -212,7 +212,7 @@ Seed snapshot 同样必须经过 per-market minimum row gate，避免一页/半�
 - [x] live `research-seeds --live` 最终=`20 market seeds / READY`；
 - [x] 盘前 live smoke 验证 activity proxy；进入交易时段后的最终 smoke 验证真实 amount/turnover 自动恢复且 warning 清零；
 - [x] 文档记录 review 发现、返工和最终证据；
-- [ ] commit + push `origin/main` 后状态改为 RELEASED。
+- [x] 软件实现提交 `ed0c970` 已成功 push `origin/main`，发布状态迁移为 RELEASED。
 
 ### Code Review / 返工记录
 
@@ -237,4 +237,4 @@ Seed snapshot 同样必须经过 per-market minimum row gate，避免一页/半�
 | Premarket / fresh-cache degradation | COMPLETE |
 | Code review & rework | PASS |
 | Test | PASS |
-| Release | READY_TO_COMMIT |
+| Release | RELEASED |

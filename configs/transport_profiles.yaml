@@ -4,8 +4,12 @@ profiles:
     timeout_seconds: 20
     follow_redirects: true
     trust_env: true
+    proxy_strategy: ENV_THEN_DIRECT
     max_attempts: 2
     backoff_seconds: 0.25
+    jitter_seconds: 0.10
+    retry_status_codes: [502, 503, 504]
+    retry_methods: [GET, HEAD]
     headers:
       User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36
       Accept: application/json,text/plain,*/*
@@ -14,8 +18,12 @@ profiles:
     timeout_seconds: 12
     follow_redirects: true
     trust_env: true
+    proxy_strategy: ENV_THEN_DIRECT
     max_attempts: 2
     backoff_seconds: 0.25
+    jitter_seconds: 0.10
+    retry_status_codes: [502, 503, 504]
+    retry_methods: [GET, HEAD]
     headers:
       User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36
       Accept: application/json,text/plain,*/*
@@ -25,8 +33,12 @@ profiles:
     timeout_seconds: 30
     follow_redirects: true
     trust_env: true
+    proxy_strategy: ENV_THEN_DIRECT
     max_attempts: 2
     backoff_seconds: 0.5
+    jitter_seconds: 0.20
+    retry_status_codes: [502, 503, 504]
+    retry_methods: [GET, HEAD, POST]
     headers:
       User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36
       Accept: application/json,application/pdf,*/*
@@ -37,8 +49,12 @@ profiles:
     timeout_seconds: 20
     follow_redirects: true
     trust_env: true
+    proxy_strategy: ENV_THEN_DIRECT
     max_attempts: 2
     backoff_seconds: 0.25
+    jitter_seconds: 0.10
+    retry_status_codes: [502, 503, 504]
+    retry_methods: [GET, HEAD]
     headers:
       User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36
       Accept: application/json,text/plain,*/*

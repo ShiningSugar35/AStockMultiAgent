@@ -120,7 +120,7 @@ def _snapshot(name: str, source_id: str = "eastmoney-reference") -> SourceSnapsh
     )
 
 
-def test_reference_retry_is_bounded_and_only_for_retryable_errors(
+def test_reference_retry_does_not_amplify_transport_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -130,16 +130,15 @@ def test_reference_retry_is_bounded_and_only_for_retryable_errors(
 
     def transient() -> str:
         calls.append(1)
-        if len(calls) == 1:
-            raise ProviderError(
-                "temporary",
-                failure_class=FailureClass.NETWORK,
-                retryable=True,
-            )
-        return "ok"
+        raise ProviderError(
+            "temporary",
+            failure_class=FailureClass.NETWORK,
+            retryable=True,
+        )
 
-    assert service._retry_reference_call(transient, live=True) == "ok"
-    assert len(calls) == 2
+    with pytest.raises(ProviderError):
+        service._retry_reference_call(transient, live=True)
+    assert len(calls) == 1
 
     calls.clear()
 

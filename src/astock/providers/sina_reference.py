@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 
+from astock.core.hashing import canonical_json_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.providers.base import HttpProviderBase
+from astock.providers.http_resilience import HttpClientLike
 from astock.schemas import Market, SourceSnapshot
 
 
@@ -20,6 +23,12 @@ class SinaReferenceProvider(HttpProviderBase):
         "https://quotes.sina.cn/cn/api/openapi.php/"
         "CN_MarketDataService.getKLineData"
     )
+    market_center_endpoint = (
+        "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        "Market_Center.getHQNodeData"
+    )
+    market_center_page_size = 100
+    market_center_max_pages = 80
     _LIVE_HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -37,7 +46,7 @@ class SinaReferenceProvider(HttpProviderBase):
         state: StateStore,
         fixture_root: Path,
         *,
-        client: httpx.Client | None = None,
+        client: HttpClientLike | None = None,
     ) -> None:
         if client is None:
             client = httpx.Client(
@@ -47,6 +56,103 @@ class SinaReferenceProvider(HttpProviderBase):
             )
         super().__init__(objects, state, client=client)
         self.fixture_root = fixture_root.resolve()
+
+    def fetch_master(
+        self,
+        market: Market,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[str, object], SourceSnapshot]:
+        return self._fetch_market_center(market, purpose="INSTRUMENT_MASTER", live=live)
+
+    def fetch_seed_snapshot(
+        self,
+        market: Market,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[str, object], SourceSnapshot]:
+        return self._fetch_market_center(market, purpose="RESEARCH_SEED_ONLY", live=live)
+
+    def _fetch_market_center(
+        self,
+        market: Market,
+        *,
+        purpose: str,
+        live: bool,
+    ) -> tuple[dict[str, object], SourceSnapshot]:
+        if market is Market.INDEX:
+            raise ValueError("Sina market-center requires an equity market")
+        prefix, node = _market_center_scope(market)
+        if not live:
+            response = self._recorded_response(
+                "instrument_master.json",
+                self.market_center_endpoint,
+                content_type="application/json; charset=utf-8",
+            )
+            snapshot = self._persist_response(response)
+            payload = _market_center_fixture_payload(response.content, prefix)
+            payload["_astock_request"] = {"market": market.value, "purpose": purpose}
+            payload["_astock_source"] = "SINA_MARKET_CENTER"
+            payload["page_snapshot_ids"] = [snapshot.snapshot_id]
+            return payload, snapshot
+
+        page_snapshot_ids: list[str] = []
+        rows: list[dict[str, object]] = []
+        complete = False
+        for page in range(1, self.market_center_max_pages + 1):
+            response, _ = self._get(
+                self.market_center_endpoint,
+                params={
+                    "page": page,
+                    "num": self.market_center_page_size,
+                    "sort": "symbol",
+                    "asc": 1,
+                    "node": node,
+                    "symbol": "",
+                    "_s_r_a": "page",
+                },
+            )
+            page_snapshot = self._persist_response(response)
+            page_snapshot_ids.append(page_snapshot.snapshot_id)
+            page_rows = _decode_market_center_rows(response.content)
+            if not page_rows:
+                complete = True
+                break
+            matching = [
+                item for item in page_rows if str(item.get("symbol") or "").startswith(prefix)
+            ]
+            rows.extend(matching)
+            if market is Market.BJSE:
+                if rows and len(matching) < len(page_rows):
+                    complete = True
+                    break
+                if rows and not matching:
+                    complete = True
+                    break
+            elif len(page_rows) < self.market_center_page_size:
+                complete = True
+                break
+        if not complete:
+            raise ValueError("Sina market-center pagination bound exhausted")
+        if not rows:
+            raise ValueError("Sina market-center returned no requested-market rows")
+        payload = {
+            "schema_version": "sina-market-center-aggregate-v1",
+            "created_at": datetime.now(UTC).isoformat(),
+            "_astock_source": "SINA_MARKET_CENTER",
+            "_astock_request": {"market": market.value, "purpose": purpose},
+            "page_snapshot_ids": page_snapshot_ids,
+            "rows": rows,
+            "complete": True,
+        }
+        aggregate = httpx.Response(
+            200,
+            content=canonical_json_bytes(payload),
+            headers={"content-type": "application/json; charset=utf-8"},
+            request=httpx.Request("GET", self.market_center_endpoint),
+        )
+        snapshot = self._persist_response(aggregate)
+        return payload, snapshot
 
     def fetch_identity(
         self,
@@ -136,6 +242,47 @@ class SinaReferenceProvider(HttpProviderBase):
             headers={"content-type": content_type},
             request=httpx.Request("GET", url),
         )
+
+
+def _market_center_scope(market: Market) -> tuple[str, str]:
+    if market is Market.XSHG:
+        return "sh", "sh_a"
+    if market is Market.XSHE:
+        return "sz", "sz_a"
+    if market is Market.BJSE:
+        return "bj", "hs_a"
+    raise ValueError(f"Unsupported Sina market-center market: {market}")
+
+
+def _decode_market_center_rows(content: bytes) -> list[dict[str, object]]:
+    try:
+        payload = json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("Sina market-center response is not JSON") from exc
+    if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+        raise ValueError("Sina market-center response root must be a row list")
+    return payload
+
+
+def _market_center_fixture_payload(content: bytes, prefix: str) -> dict[str, object]:
+    try:
+        payload = json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("Sina market-center fixture is not JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Sina market-center fixture root must be an object")
+    raw_rows = payload.get("rows")
+    if not isinstance(raw_rows, list) or any(not isinstance(item, dict) for item in raw_rows):
+        raise ValueError("Sina market-center fixture rows are malformed")
+    rows = [item for item in raw_rows if str(item.get("symbol") or "").startswith(prefix)]
+    if not rows:
+        raise ValueError("Sina market-center fixture lacks requested-market rows")
+    return {
+        "schema_version": "sina-market-center-aggregate-v1",
+        "created_at": payload.get("created_at") or datetime.now(UTC).isoformat(),
+        "rows": rows,
+        "complete": True,
+    }
 
 
 def _response_text(response: httpx.Response) -> str:

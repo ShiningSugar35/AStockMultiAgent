@@ -13,6 +13,7 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | 能力 | 当前状态 | 主要入口 |
 |---|---|---|
 | 数据 / ObjectStore / Parquet / SQLite / PIT | 已实现 | `probe`、`sync-*`、`reference-*` |
+| Provider Resilience / 全市场按需油路 | 已实现 | ENV↔DIRECT transport lane、BaoStock→EastMoney→Sina fallback、per-market completeness gate、fresh verified snapshot reuse；无需后台预同步 |
 | 官方公告、PDF/DOCX、Claim-Evidence | 已实现 | `disclosure-*`、文档 / evidence CLI |
 | 财务可信度与红旗审计 | 已实现 | `financial-*` |
 | Research Seeds → Candidate 自动 Promotion | 已实现 | `research-seeds`、`research-seeds-promote`、`candidate-audit` |

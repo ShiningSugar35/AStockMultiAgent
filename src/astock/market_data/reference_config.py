@@ -23,6 +23,7 @@ class MarketReferenceConfig:
     retry_max_attempts: int
     retry_backoff_seconds: float
     identity_search_max_pages: int
+    minimum_instrument_records: dict[Market, int]
     circuit_breaker_cooldown_seconds: dict[str, int]
     official_market_coverage: dict[str, dict[Market, str]]
 
@@ -90,6 +91,21 @@ def load_market_reference_config(
         raise ValueError("Market reference retry policy is outside safe bounds")
     if not 1 <= identity_search_max_pages <= 200:
         raise ValueError("Identity search page bound must be in 1..200")
+    raw_minimum_records = raw.get("minimum_instrument_records")
+    if not isinstance(raw_minimum_records, dict):
+        raise ValueError("minimum_instrument_records must be an object")
+    minimum_records: dict[Market, int] = {}
+    required_markets = {Market.XSHG, Market.XSHE, Market.BJSE}
+    for raw_market, raw_count in raw_minimum_records.items():
+        parsed_market = Market(str(raw_market))
+        if parsed_market not in required_markets:
+            raise ValueError("minimum_instrument_records supports equity markets only")
+        count = int(raw_count)
+        if not 1 <= count <= 10000:
+            raise ValueError("minimum instrument record floor must be in 1..10000")
+        minimum_records[parsed_market] = count
+    if set(minimum_records) != required_markets:
+        raise ValueError("minimum_instrument_records must cover XSHG/XSHE/BJSE")
     raw_breakers = raw.get("circuit_breakers", {})
     if not isinstance(raw_breakers, dict):
         raise ValueError("Market reference circuit breakers must be an object")
@@ -124,6 +140,7 @@ def load_market_reference_config(
         retry_max_attempts=max_attempts,
         retry_backoff_seconds=backoff,
         identity_search_max_pages=identity_search_max_pages,
+        minimum_instrument_records=minimum_records,
         circuit_breaker_cooldown_seconds=breakers,
         official_market_coverage=coverage,
     )

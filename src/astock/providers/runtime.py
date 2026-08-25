@@ -19,6 +19,7 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.providers.config import get_provider, load_provider_registry
 from astock.providers.dialects import ProviderDialect
+from astock.providers.http_resilience import HttpClientLike, ResilientHttpClient
 from astock.schemas import ProviderDefinition, ProviderRegistry, ProviderTransport
 
 
@@ -31,6 +32,10 @@ class TransportProfile:
     headers: dict[str, str]
     max_attempts: int = 2
     backoff_seconds: float = 0.25
+    proxy_strategy: str = "ENV_ONLY"
+    jitter_seconds: float = 0.0
+    retry_status_codes: tuple[int, ...] = (502, 503, 504)
+    retry_methods: tuple[str, ...] = ("GET", "HEAD")
 
 
 class ProviderFactory:
@@ -109,7 +114,7 @@ class ProviderFactory:
             kwargs["timeout_seconds"] = definition.timeout_seconds
         return kwargs
 
-    def _http_client(self, definition: ProviderDefinition) -> httpx.Client:
+    def _http_client(self, definition: ProviderDefinition) -> HttpClientLike:
         if not definition.transport_profile:
             return httpx.Client(
                 timeout=definition.timeout_seconds,
@@ -122,19 +127,14 @@ class ProviderFactory:
                 f"Unknown transport profile for {definition.provider_id}: "
                 f"{definition.transport_profile}"
             ) from exc
-        return httpx.Client(
-            timeout=profile.timeout_seconds,
-            follow_redirects=profile.follow_redirects,
-            trust_env=profile.trust_env,
-            headers=profile.headers,
-        )
+        return _build_resilient_client(profile)
 
 
 def build_provider_http_client(
     provider_id: str,
     *,
     project_root: Path | None = None,
-) -> httpx.Client:
+) -> HttpClientLike:
     root = project_root or Path(__file__).resolve().parents[3]
     registry = load_provider_registry(root / "configs" / "provider_registry.yaml")
     definition = get_provider(registry, provider_id)
@@ -147,12 +147,7 @@ def build_provider_http_client(
         raise ValueError(
             f"Unknown transport profile for {provider_id}: {definition.transport_profile}"
         ) from exc
-    return httpx.Client(
-        timeout=profile.timeout_seconds,
-        follow_redirects=profile.follow_redirects,
-        trust_env=profile.trust_env,
-        headers=profile.headers,
-    )
+    return _build_resilient_client(profile)
 
 
 def load_transport_profiles(path: Path) -> dict[str, TransportProfile]:
@@ -172,14 +167,25 @@ def load_transport_profiles(path: Path) -> dict[str, TransportProfile]:
         headers = raw.get("headers", {})
         if not isinstance(headers, dict):
             raise ValueError("Transport profile headers must be an object")
+        trust_env = bool(raw.get("trust_env", True))
         profile = TransportProfile(
             profile_id=str(profile_id),
             timeout_seconds=float(raw["timeout_seconds"]),
             follow_redirects=bool(raw.get("follow_redirects", True)),
-            trust_env=bool(raw.get("trust_env", True)),
+            trust_env=trust_env,
             headers={str(key): str(value) for key, value in headers.items()},
             max_attempts=int(raw.get("max_attempts", 2)),
             backoff_seconds=float(raw.get("backoff_seconds", 0.25)),
+            proxy_strategy=str(
+                raw.get("proxy_strategy", "ENV_ONLY" if trust_env else "DIRECT_ONLY")
+            ),
+            jitter_seconds=float(raw.get("jitter_seconds", 0.0)),
+            retry_status_codes=tuple(
+                int(item) for item in raw.get("retry_status_codes", [502, 503, 504])
+            ),
+            retry_methods=tuple(
+                str(item).upper() for item in raw.get("retry_methods", ["GET", "HEAD"])
+            ),
         )
         if not (0 < profile.timeout_seconds <= 120):
             raise ValueError("Transport timeout must be in (0, 120]")
@@ -187,8 +193,43 @@ def load_transport_profiles(path: Path) -> dict[str, TransportProfile]:
             raise ValueError("Transport max_attempts must be in 1..5")
         if not (0 <= profile.backoff_seconds <= 10):
             raise ValueError("Transport backoff_seconds must be in 0..10")
+        if profile.proxy_strategy not in {
+            "ENV_ONLY",
+            "DIRECT_ONLY",
+            "ENV_THEN_DIRECT",
+            "DIRECT_THEN_ENV",
+        }:
+            raise ValueError("Transport proxy_strategy is invalid")
+        if not (0 <= profile.jitter_seconds <= 10):
+            raise ValueError("Transport jitter_seconds must be in 0..10")
+        if any(item < 500 or item > 599 for item in profile.retry_status_codes):
+            raise ValueError("Transport retry_status_codes must contain only 5xx codes")
+        if not profile.retry_methods or any(
+            item not in {"GET", "HEAD", "POST"} for item in profile.retry_methods
+        ):
+            raise ValueError("Transport retry_methods must be a non-empty subset of GET/HEAD/POST")
         result[profile.profile_id] = profile
     return result
+
+
+def _build_resilient_client(profile: TransportProfile) -> ResilientHttpClient:
+    lanes = {
+        "ENV_ONLY": (True,),
+        "DIRECT_ONLY": (False,),
+        "ENV_THEN_DIRECT": (True, False),
+        "DIRECT_THEN_ENV": (False, True),
+    }[profile.proxy_strategy]
+    return ResilientHttpClient(
+        timeout_seconds=profile.timeout_seconds,
+        follow_redirects=profile.follow_redirects,
+        headers=profile.headers,
+        lane_trust_env=lanes,
+        max_attempts=profile.max_attempts,
+        backoff_seconds=profile.backoff_seconds,
+        jitter_seconds=profile.jitter_seconds,
+        retry_status_codes=profile.retry_status_codes,
+        retry_methods=profile.retry_methods,
+    )
 
 
 def _load_adapter_class(value: str) -> type[object]:

@@ -65,6 +65,8 @@ _ROUTE_FAILURE_CODES = {
     "eastmoney-exact": "EASTMONEY_EXACT_IDENTITY_FAILED",
     "sina-exact": "SINA_EXACT_IDENTITY_FAILED",
     "eastmoney-paginated-master": "EASTMONEY_FALLBACK_FAILED",
+    "eastmoney-master": "EASTMONEY_MASTER_FAILED",
+    "sina-master": "SINA_MASTER_FAILED",
     "eastmoney-daily": "EASTMONEY_FALLBACK_FAILED",
     "sina-daily": "SINA_FALLBACK_FAILED",
 }
@@ -72,6 +74,8 @@ _ROUTE_FALLBACK_CODES = {
     "eastmoney-exact": "EASTMONEY_FALLBACK_USED",
     "sina-exact": "SINA_FALLBACK_USED",
     "eastmoney-paginated-master": "EASTMONEY_FALLBACK_USED",
+    "eastmoney-master": "EASTMONEY_FALLBACK_USED",
+    "sina-master": "SINA_FALLBACK_USED",
     "eastmoney-daily": "EASTMONEY_FALLBACK_USED",
     "sina-daily": "SINA_FALLBACK_USED",
 }
@@ -405,6 +409,19 @@ class MarketReferenceService:
                 market,
             )
             return records, [snapshot.snapshot_id], snapshot.available_to_system_at, [], False
+        if step.operation == "sina-master":
+            if not isinstance(provider, SinaReferenceProvider):
+                raise ValueError("sina-master requires a Sina reference adapter")
+            if market is None:
+                raise ValueError("sina-master requires an explicit market")
+            payload, snapshot = provider.fetch_master(market, live=live)
+            records = _parse_sina_master(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+                market,
+            )
+            return records, [snapshot.snapshot_id], snapshot.available_to_system_at, [], True
         raise ValueError(f"Unsupported master route operation: {step.operation}")
 
     def _run_calendar_route_step(
@@ -475,17 +492,31 @@ class MarketReferenceService:
                 reasons.append(
                     str(failure_code)
                     if failure_code
-                    else f"{step.operation.upper().replace('-', '_')}_FAILED"
+                    else _ROUTE_FAILURE_CODES.get(
+                        step.operation,
+                        f"{step.operation.upper().replace('-', '_')}_FAILED",
+                    )
                 )
                 continue
             snapshot_ids.extend(step_snapshots)
             available_at = max(available_at, step_available)
             reasons.extend(step_reasons)
+            if step_records and live and market is not None:
+                minimum_records = self.config.minimum_instrument_records[market]
+                if len(step_records) < minimum_records:
+                    provider_code = step.provider_id.upper().replace("-", "_")
+                    reasons.append(f"{provider_code}_MASTER_BELOW_MINIMUM_COVERAGE")
+                    continue
             if step_records:
                 records = step_records
                 complete = step_complete
                 if step_index > 0:
-                    reasons.append("EASTMONEY_FALLBACK_USED")
+                    reasons.append(
+                        _ROUTE_FALLBACK_CODES.get(
+                            step.operation,
+                            f"{step.provider_id.upper().replace('-', '_')}_FALLBACK_USED",
+                        )
+                    )
                 break
         scope = market.value if market else "ALL"
         return self._release(
@@ -844,7 +875,10 @@ class MarketReferenceService:
                 reasons.append(
                     str(failure_code)
                     if failure_code
-                    else f"{step.operation.upper().replace('-', '_')}_FAILED"
+                    else _ROUTE_FAILURE_CODES.get(
+                        step.operation,
+                        f"{step.operation.upper().replace('-', '_')}_FAILED",
+                    )
                 )
         return self._release(
             command="sync-calendar",
@@ -1855,6 +1889,59 @@ def _parse_baostock_instruments(
         )
     return result
 
+
+def _parse_sina_master(
+    payload: dict[str, object],
+    snapshot_id: str,
+    available: datetime,
+    requested_market: Market | None,
+) -> list[InstrumentRecord]:
+    if requested_market is None or requested_market is Market.INDEX:
+        raise ValueError("Sina master requires an explicit equity market")
+    if payload.get("_astock_source") != "SINA_MARKET_CENTER":
+        raise ValueError("Sina master source provenance mismatch")
+    request = payload.get("_astock_request")
+    if (
+        not isinstance(request, dict)
+        or request.get("purpose") != "INSTRUMENT_MASTER"
+        or request.get("market") != requested_market.value
+    ):
+        raise ValueError("Sina master request provenance mismatch")
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or any(not isinstance(item, dict) for item in rows):
+        raise ValueError("Sina master rows are malformed")
+    prefix = {Market.XSHG: "sh", Market.XSHE: "sz", Market.BJSE: "bj"}[requested_market]
+    result: list[InstrumentRecord] = []
+    for item in rows:
+        assert isinstance(item, dict)
+        provider_symbol = str(item.get("symbol") or "")
+        symbol = str(item.get("code") or "")
+        name = str(item.get("name") or "").strip()
+        if (
+            provider_symbol != f"{prefix}{symbol}"
+            or len(symbol) != 6
+            or not symbol.isdigit()
+            or not name
+        ):
+            raise ValueError("Sina master row crossed market or identity boundary")
+        result.append(
+            InstrumentRecord(
+                created_at=available,
+                instrument_id=f"{requested_market.value}:{symbol}",
+                market=requested_market,
+                symbol=symbol,
+                name=name,
+                instrument_type=InstrumentType.STOCK,
+                tradable=True,
+                status_date=available.astimezone(_SHANGHAI).date(),
+                is_st=_is_st_name(name),
+                source_snapshot_id=snapshot_id,
+                available_to_system_at=available,
+            )
+        )
+    if len({item.instrument_id for item in result}) != len(result):
+        raise ValueError("Sina master contains duplicate instruments")
+    return result
 
 def _parse_sina_identity(
     payload: dict[str, object],

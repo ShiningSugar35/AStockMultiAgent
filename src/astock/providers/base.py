@@ -12,6 +12,7 @@ from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.providers.http_resilience import HttpClientLike
 from astock.providers.runtime import build_provider_http_client
 from astock.schemas import (
     BarRequest,
@@ -37,7 +38,7 @@ class HttpProviderBase:
         object_store: ObjectStore,
         state: StateStore,
         *,
-        client: httpx.Client | None = None,
+        client: HttpClientLike | None = None,
         timeout_seconds: float = 20.0,
     ) -> None:
         self.object_store = object_store

@@ -1,0 +1,39 @@
+{
+  "schema_version": "sina-market-center-fixture-v1",
+  "created_at": "2026-08-20T08:00:00+00:00",
+  "rows": [
+    {
+      "symbol": "sh600000",
+      "code": "600000",
+      "name": "浦发银行",
+      "trade": "9.000",
+      "amount": 500000000,
+      "turnoverratio": 0.50,
+      "mktcap": 30000000,
+      "nmc": 30000000,
+      "changepercent": 1.0
+    },
+    {
+      "symbol": "sz000001",
+      "code": "000001",
+      "name": "平安银行",
+      "trade": "12.000",
+      "amount": 600000000,
+      "turnoverratio": 0.60,
+      "mktcap": 24000000,
+      "nmc": 23000000,
+      "changepercent": 0.5
+    },
+    {
+      "symbol": "bj920000",
+      "code": "920000",
+      "name": "安徽凤凰",
+      "trade": "18.000",
+      "amount": 80000000,
+      "turnoverratio": 1.20,
+      "mktcap": 250000,
+      "nmc": 180000,
+      "changepercent": 2.0
+    }
+  ]
+}

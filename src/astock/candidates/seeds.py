@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import yaml
+from pydantic import ValidationError
 
 from astock.candidates.repository import CandidateRepository
 from astock.core.errors import AStockError
@@ -20,6 +21,11 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.knowledge.visual_skill_repository import VisualSkillRepository
 from astock.schemas.market import Market
+from astock.schemas.reference_data import (
+    DatasetReleaseManifest,
+    ReferenceCoverageStatus,
+    ReferenceDatasetKind,
+)
 from astock.schemas.research_seeds import (
     ExpertDomainEvidence,
     ExpertDomainProfile,
@@ -34,16 +40,196 @@ _CURRENT_LIVE_TOLERANCE = timedelta(minutes=15)
 _EQUITY_MARKETS = (Market.XSHG, Market.XSHE, Market.BJSE)
 
 
-class SeedMarketProvider(Protocol):
+class SeedSnapshotProvider(Protocol):
     def fetch_seed_snapshot(
         self, market: Market, *, live: bool = False
     ) -> tuple[dict[str, object], Any]: ...
 
+
+class SeedMarketProvider(SeedSnapshotProvider, Protocol):
     def fetch_industry_boards(self, *, live: bool = False) -> tuple[dict[str, object], Any]: ...
 
     def fetch_industry_constituents(
         self, board_code: str, *, live: bool = False
     ) -> tuple[dict[str, object], Any]: ...
+
+
+class ResearchSeedProviderRouter:
+    """Keep Blind Market discovery alive when the primary market snapshot provider fails."""
+
+    def __init__(
+        self,
+        primary: SeedMarketProvider,
+        fallback: SeedSnapshotProvider,
+        *,
+        minimum_rows_by_market: dict[Market, int],
+        state: StateStore | None = None,
+        objects: ObjectStore | None = None,
+        cache_freshness: timedelta = _CURRENT_LIVE_TOLERANCE,
+    ) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.minimum_rows_by_market = dict(minimum_rows_by_market)
+        self.state = state
+        self.objects = objects
+        self.cache_freshness = cache_freshness
+
+    def fetch_seed_snapshot(
+        self, market: Market, *, live: bool = False
+    ) -> tuple[dict[str, object], Any]:
+        last_error: Exception | None = None
+        for provider in (self.primary, self.fallback):
+            try:
+                payload, snapshot = provider.fetch_seed_snapshot(market, live=live)
+                if live and _seed_payload_row_count(payload) < self.minimum_rows_by_market[market]:
+                    raise ValueError("MARKET_SEED_BELOW_MINIMUM_COVERAGE")
+                return payload, snapshot
+            except (AStockError, OSError, RuntimeError, ValueError) as exc:
+                last_error = exc
+        if live:
+            cached = self._fresh_cached_sina_master(market)
+            if cached is not None:
+                return cached
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("research seed provider route is empty")
+
+    def _fresh_cached_sina_master(self, market: Market) -> tuple[dict[str, object], Any] | None:
+        if self.state is None or self.objects is None:
+            return None
+        releases = self.state.list_market_reference_releases("INSTRUMENT_MASTER", market.value)
+        now = datetime.now(UTC)
+        for release in releases:
+            if str(release.get("provider_id")) != "sina-reference":
+                continue
+            manifest_hash = str(release.get("manifest_object_hash") or "")
+            if not manifest_hash or not self.objects.verify(manifest_hash):
+                continue
+            try:
+                manifest = DatasetReleaseManifest.model_validate_json(
+                    self.objects.get_bytes(manifest_hash)
+                )
+            except (OSError, ValidationError, ValueError):
+                continue
+            release_identity = {
+                "dataset_kind": manifest.dataset_kind.value,
+                "scope_key": manifest.scope_key,
+                "provider_id": manifest.provider_id,
+                "batch_id": manifest.batch_id,
+                "content_hash": manifest.content_hash,
+                "previous_release_id": manifest.previous_release_id,
+                "available_to_system_at": manifest.available_to_system_at.isoformat(),
+            }
+            if (
+                manifest.dataset_kind is not ReferenceDatasetKind.INSTRUMENT_MASTER
+                or manifest.scope_key != market.value
+                or manifest.provider_id != "sina-reference"
+                or manifest.coverage.status is not ReferenceCoverageStatus.COMPLETE
+                or manifest.coverage.record_count < self.minimum_rows_by_market[market]
+                or str(release.get("release_id") or "") != manifest.release_id
+                or manifest.release_id != content_hash(release_identity)
+            ):
+                continue
+            age = now - manifest.available_to_system_at.astimezone(UTC)
+            if age < timedelta(0) or age > self.cache_freshness:
+                continue
+            for snapshot_id in reversed(manifest.raw_snapshot_ids):
+                snapshot = self.state.get_snapshot(snapshot_id)
+                if snapshot is None or not self.objects.verify(snapshot.object_sha256):
+                    continue
+                try:
+                    payload = json.loads(self.objects.get_bytes(snapshot.object_sha256))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                request = payload.get("_astock_request")
+                if (
+                    payload.get("_astock_source") == "SINA_MARKET_CENTER"
+                    and isinstance(request, dict)
+                    and request.get("market") == market.value
+                    and _seed_payload_row_count(payload) >= self.minimum_rows_by_market[market]
+                ):
+                    return payload, snapshot
+        return None
+
+    def fetch_industry_boards(self, *, live: bool = False) -> tuple[dict[str, object], Any]:
+        return self.primary.fetch_industry_boards(live=live)
+
+    def fetch_industry_constituents(
+        self, board_code: str, *, live: bool = False
+    ) -> tuple[dict[str, object], Any]:
+        return self.primary.fetch_industry_constituents(board_code, live=live)
+
+
+def _safe_float(value: object) -> float:
+    if not isinstance(value, (str, int, float)):
+        return 0.0
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
+
+
+def _sina_activity_unavailable(payload: dict[str, object]) -> bool:
+    if payload.get("_astock_source") != "SINA_MARKET_CENTER":
+        return False
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return False
+    valid = [item for item in rows if isinstance(item, dict)]
+    if len(valid) < max(1, int(len(rows) * 0.95)):
+        return False
+    threshold = len(valid) * 0.95
+    zero_amount = sum(_safe_float(item.get("amount")) <= 0 for item in valid)
+    zero_turnover = sum(_safe_float(item.get("turnoverratio")) <= 0 for item in valid)
+    zero_trade = sum(_safe_float(item.get("trade")) <= 0 for item in valid)
+    positive_settlement = sum(_safe_float(item.get("settlement")) > 0 for item in valid)
+    return (
+        zero_amount >= threshold
+        and zero_turnover >= threshold
+        and zero_trade >= threshold
+        and positive_settlement >= threshold
+    )
+
+
+def _seed_payload_row_count(payload: dict[str, object]) -> int:
+    if payload.get("_astock_source") == "SINA_MARKET_CENTER":
+        rows = payload.get("rows")
+        request = payload.get("_astock_request")
+        if not isinstance(rows, list) or not isinstance(request, dict):
+            return 0
+        market = str(request.get("market") or "")
+        prefix = {"XSHG": "sh", "XSHE": "sz", "BJSE": "bj"}.get(market)
+        if prefix is None:
+            return 0
+        return sum(
+            1
+            for item in rows
+            if isinstance(item, dict)
+            and len(str(item.get("code") or "")) == 6
+            and str(item.get("code") or "").isdigit()
+            and bool(str(item.get("name") or "").strip())
+            and str(item.get("symbol") or "") == f"{prefix}{item.get('code')}"
+        )
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return 0
+    diff = data.get("diff")
+    if isinstance(diff, dict):
+        rows = list(diff.values())
+    elif isinstance(diff, list):
+        rows = diff
+    else:
+        return 0
+    return sum(
+        1
+        for item in rows
+        if isinstance(item, dict)
+        and len(str(item.get("f12") or "")) == 6
+        and str(item.get("f12") or "").isdigit()
+        and bool(str(item.get("f14") or "").strip())
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,17 +322,19 @@ class ResearchSeedService:
         source_hashes: set[str] = set()
         cutoff = request.as_of
         market_rows: dict[str, _MarketRow] = {}
+        activity_proxy_markets: set[Market] = set()
         accumulators: dict[str, _SeedAccumulator] = {}
 
-        def fetch_market(market: Market) -> tuple[Market, Any, list[_MarketRow]]:
+        def fetch_market(market: Market) -> tuple[Market, Any, list[_MarketRow], bool]:
             payload, snapshot = self.provider.fetch_seed_snapshot(market, live=request.live)
             raw = self._parse_market_rows(payload, market, snapshot.snapshot_id)
+            sina_activity_proxy = request.live and _sina_activity_unavailable(payload)
             scored = self._score_market_rows(
                 raw,
-                minimum_amount=request.minimum_amount_cny,
+                minimum_amount=0.0 if sina_activity_proxy else request.minimum_amount_cny,
                 minimum_float_cap=request.minimum_float_market_cap_cny,
             )
-            return market, snapshot, scored
+            return market, snapshot, scored, sina_activity_proxy
 
         workers = min(request.market_fetch_workers, len(_EQUITY_MARKETS))
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -154,11 +342,14 @@ class ResearchSeedService:
             for future in as_completed(futures):
                 market = futures[future]
                 try:
-                    _, snapshot, scored = future.result()
+                    _, snapshot, scored, activity_proxy = future.result()
                     cutoff = max(cutoff, snapshot.available_to_system_at)
                     source_snapshots[snapshot.snapshot_id] = snapshot.object_sha256
                     source_hashes.add(snapshot.object_sha256)
                     market_rows.update({item.company_id: item for item in scored})
+                    if activity_proxy:
+                        activity_proxy_markets.add(market)
+                        warnings.add(f"SINA_ACTIVITY_PROXY_USED:{market.value}")
                 except (AStockError, OSError, RuntimeError, ValueError):
                     warnings.add(f"MARKET_SEED_SNAPSHOT_UNAVAILABLE:{market.value}")
 
@@ -169,7 +360,11 @@ class ResearchSeedService:
             accumulator = self._accumulator(accumulators, row)
             accumulator.origins.add(ResearchSeedOrigin.MARKET)
             accumulator.priority = max(accumulator.priority, 0.60 + 0.25 * row.market_score)
-            accumulator.reasons.add("LIQUID_SCALE_RESEARCH_SEED")
+            accumulator.reasons.add(
+                "SINA_ACTIVITY_PROXY_RESEARCH_SEED"
+                if row.market in activity_proxy_markets
+                else "LIQUID_SCALE_RESEARCH_SEED"
+            )
             accumulator.snapshot_ids.add(row.snapshot_id)
 
         if request.include_existing_candidates:
@@ -520,17 +715,29 @@ class ResearchSeedService:
             raise ValueError("research-seed market snapshot provenance mismatch")
         rows = self._payload_rows(payload)
         result: list[_RawMarketRow] = []
+        sina_market_center = payload.get("_astock_source") == "SINA_MARKET_CENTER"
         for row in rows:
-            company_id = str(row.get("f12") or "")
-            name = str(row.get("f14") or "").strip()
+            if sina_market_center:
+                company_id = str(row.get("code") or "")
+                name = str(row.get("name") or "").strip()
+                trade_price = self._number(row.get("trade"))
+                settlement_price = self._number(row.get("settlement"))
+                price = trade_price if trade_price > 0 else settlement_price
+                amount = self._number(row.get("amount"))
+                turnover = self._number(row.get("turnoverratio"))
+                raw_float_cap = self._number(row.get("nmc"))
+                float_cap = raw_float_cap * 10_000 if raw_float_cap >= 0 else -1.0
+            else:
+                company_id = str(row.get("f12") or "")
+                name = str(row.get("f14") or "").strip()
+                price = self._number(row.get("f2"))
+                amount = self._number(row.get("f6"))
+                turnover = self._number(row.get("f8"))
+                float_cap = self._number(row.get("f21"))
             if len(company_id) != 6 or not company_id.isdigit() or not name:
                 continue
             if self._excluded_name(name):
                 continue
-            price = self._number(row.get("f2"))
-            amount = self._number(row.get("f6"))
-            turnover = self._number(row.get("f8"))
-            float_cap = self._number(row.get("f21"))
             if price <= 0 or amount < 0 or turnover < 0 or float_cap < 0:
                 continue
             result.append(
@@ -634,6 +841,11 @@ class ResearchSeedService:
 
     @staticmethod
     def _payload_rows(payload: dict[str, object]) -> list[dict[str, object]]:
+        if payload.get("_astock_source") == "SINA_MARKET_CENTER":
+            rows = payload.get("rows")
+            if not isinstance(rows, list) or any(not isinstance(item, dict) for item in rows):
+                raise ValueError("Sina seed payload contains malformed rows")
+            return rows
         if payload.get("rc") != 0:
             raise ValueError("EastMoney seed request failed")
         data = payload.get("data")

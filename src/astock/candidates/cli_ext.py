@@ -17,7 +17,7 @@ from astock.candidates import (
     load_candidate_scan_config,
 )
 from astock.candidates.promotion import ResearchSeedPromotionService
-from astock.candidates.seeds import ResearchSeedService
+from astock.candidates.seeds import ResearchSeedProviderRouter, ResearchSeedService
 from astock.core.hashing import content_hash
 from astock.documents.cninfo import CninfoDisclosureProvider
 from astock.financial_sources.service import FinancialSourceService
@@ -25,7 +25,6 @@ from astock.financial_sources.storage import FinancialSourceParquetStore
 from astock.market_data.reference import MarketReferenceService
 from astock.market_data.reference_storage import ReferenceParquetStore
 from astock.paper_trading.operation import load_paper_trading_rules
-from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
 from astock.research.team import detect_hardware_budget, load_research_team_policy
 from astock.schemas.candidate_promotion import SeedPromotionRequest
 from astock.schemas.candidates import CandidateInputRelease, CandidateScanRequest
@@ -58,10 +57,18 @@ def register_candidate_input_commands(
 
     def seed_service() -> ResearchSeedService:
         paths, state, objects = services()
-        provider = EastMoneyReferenceProvider(
-            objects,
+        reference = MarketReferenceService(
             state,
-            paths.root / "tests" / "fixtures" / "reference" / "eastmoney",
+            objects,
+            ReferenceParquetStore(paths.parquet),
+            paths.root / "tests" / "fixtures" / "reference",
+        )
+        provider = ResearchSeedProviderRouter(
+            reference.eastmoney,
+            reference.sina,
+            minimum_rows_by_market=reference.config.minimum_instrument_records,
+            state=state,
+            objects=objects,
         )
         return ResearchSeedService(
             project_root=paths.root,

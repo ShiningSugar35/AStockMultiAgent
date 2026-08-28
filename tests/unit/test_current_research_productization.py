@@ -21,7 +21,10 @@ from astock.market_data.reference import (
 from astock.market_data.reference_storage import ReferenceParquetStore
 from astock.providers.dialects import load_provider_dialects
 from astock.providers.sina_financial import _normalize_sina, _sina_report_dates, _sina_rows
-from astock.research.acquisition import CurrentResearchAcquisitionService
+from astock.research.acquisition import (
+    CurrentResearchAcquisitionService,
+    _shanghai_acquisition_dates,
+)
 from astock.research.presentation import audit_investor_answer, investor_view_from_run
 from astock.schemas import FetchStatus, FinancialPeriodType, SourceSnapshot
 from astock.schemas.reference_data import Market
@@ -103,6 +106,21 @@ def _reference_service(tmp_path: Path) -> MarketReferenceService:
     )
 
 
+def _block_baostock(
+    service: MarketReferenceService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        service,
+        "_source_attempt_block_reason",
+        lambda provider_id, _capability, *, live: (
+            "CIRCUIT_OPEN"
+            if live and provider_id == "baostock-reference"
+            else None
+        ),
+    )
+
+
 def _snapshot(name: str, source_id: str = "eastmoney-reference") -> SourceSnapshot:
     return SourceSnapshot(
         snapshot_id=f"snapshot:{name}",
@@ -160,7 +178,7 @@ def test_exact_instrument_identity_prefers_single_security_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _reference_service(tmp_path)
-    monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+    _block_baostock(service, monkeypatch)
 
     def exact(symbol: str, market: Market, *, live: bool = False):
         assert symbol == "600989"
@@ -179,9 +197,11 @@ def test_exact_instrument_identity_prefers_single_security_endpoint(
             _snapshot("exact"),
         )
 
-    monkeypatch.setattr(service.eastmoney, "fetch_identity", exact)
     monkeypatch.setattr(
-        service.eastmoney,
+        service.provider_factory.create("eastmoney-reference"), "fetch_identity", exact
+    )
+    monkeypatch.setattr(
+        service.provider_factory.create("eastmoney-reference"),
         "fetch_master_page",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("pagination must not run after exact identity succeeds")
@@ -206,9 +226,9 @@ def test_exact_instrument_identity_falls_back_to_sina_before_bulk_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _reference_service(tmp_path)
-    monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+    _block_baostock(service, monkeypatch)
     monkeypatch.setattr(
-        service.eastmoney,
+        service.provider_factory.create("eastmoney-reference"),
         "fetch_identity",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ProviderError(
@@ -237,9 +257,11 @@ def test_exact_instrument_identity_falls_back_to_sina_before_bulk_page(
             _snapshot("sina-exact", "sina-reference"),
         )
 
-    monkeypatch.setattr(service.sina, "fetch_identity", sina_exact)
     monkeypatch.setattr(
-        service.eastmoney,
+        service.provider_factory.create("sina-reference"), "fetch_identity", sina_exact
+    )
+    monkeypatch.setattr(
+        service.provider_factory.create("eastmoney-reference"),
         "fetch_master_page",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("bulk pagination must not run after Sina exact fallback")
@@ -268,9 +290,9 @@ def test_exact_instrument_identity_paginates_eastmoney_after_baostock_failure(
 ) -> None:
     service = _reference_service(tmp_path)
     pages: list[int] = []
-    monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+    _block_baostock(service, monkeypatch)
     monkeypatch.setattr(
-        service.eastmoney,
+        service.provider_factory.create("eastmoney-reference"),
         "fetch_identity",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ProviderError(
@@ -281,7 +303,7 @@ def test_exact_instrument_identity_paginates_eastmoney_after_baostock_failure(
         ),
     )
     monkeypatch.setattr(
-        service.sina,
+        service.provider_factory.create("sina-reference"),
         "fetch_identity",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ProviderError(
@@ -306,7 +328,9 @@ def test_exact_instrument_identity_paginates_eastmoney_after_baostock_failure(
             _snapshot(str(number)),
         )
 
-    monkeypatch.setattr(service.eastmoney, "fetch_master_page", page)
+    monkeypatch.setattr(
+        service.provider_factory.create("eastmoney-reference"), "fetch_master_page", page
+    )
     captured: dict[str, object] = {}
 
     def release(**kwargs: object):
@@ -332,7 +356,7 @@ def test_corporate_action_official_lookup_runs_even_when_baostock_is_unavailable
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _reference_service(tmp_path)
-    monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+    _block_baostock(service, monkeypatch)
     calls: list[str] = []
 
     def official(*_args: object):
@@ -368,9 +392,9 @@ def test_daily_market_falls_back_to_sina_when_baostock_and_eastmoney_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _reference_service(tmp_path)
-    monkeypatch.setattr(service, "_baostock_circuit_open", lambda **_kwargs: True)
+    _block_baostock(service, monkeypatch)
     monkeypatch.setattr(
-        service.eastmoney,
+        service.provider_factory.create("eastmoney-reference"),
         "fetch_daily",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ProviderError(
@@ -441,7 +465,9 @@ def test_daily_market_falls_back_to_sina_when_baostock_and_eastmoney_fail(
             _snapshot("sina-daily", "sina-reference"),
         )
 
-    monkeypatch.setattr(service.sina, "fetch_daily", sina_daily)
+    monkeypatch.setattr(
+        service.provider_factory.create("sina-reference"), "fetch_daily", sina_daily
+    )
     captured: dict[str, object] = {}
     monkeypatch.setattr(service, "_release", lambda **kwargs: captured.update(kwargs) or kwargs)
 
@@ -637,6 +663,27 @@ def test_current_period_discovery_uses_actual_disclosed_period_not_month_guess(
             FinancialPeriodType.SEMIANNUAL,
         ),
     ]
+
+
+def test_current_acquisition_uses_shanghai_date_and_last_closed_daily_bound() -> None:
+    before_close = datetime(2026, 8, 27, 4, 0, tzinfo=UTC)
+    after_close = datetime(2026, 8, 27, 8, 0, tzinfo=UTC)
+    after_utc_rollover = datetime(2026, 8, 27, 17, 0, tzinfo=UTC)
+
+    assert _shanghai_acquisition_dates(before_close) == (
+        date(2026, 8, 27),
+        date(2026, 8, 26),
+    )
+    assert _shanghai_acquisition_dates(after_close) == (
+        date(2026, 8, 27),
+        date(2026, 8, 27),
+    )
+    assert _shanghai_acquisition_dates(after_utc_rollover) == (
+        date(2026, 8, 28),
+        date(2026, 8, 27),
+    )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        _shanghai_acquisition_dates(datetime(2026, 8, 27, 12, 0))
 
 
 def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_manual_empty(

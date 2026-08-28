@@ -132,6 +132,6 @@ def test_root_documents_name_current_sources_and_knowledge_boundaries() -> None:
     for text in (
         "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate",
         "`ParagraphUnit` 是原文存储和定位单位",
-        "PENDING/NOT_RUN",
     ):
-        assert text in design + plan
+        assert text in design
+    assert "本文件只保存当前未完成任务" in plan

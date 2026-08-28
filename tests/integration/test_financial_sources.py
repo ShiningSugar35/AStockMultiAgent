@@ -1,21 +1,28 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
+from astock.candidates.financial_policy import financial_pack_is_candidate_eligible
 from astock.cli import app
-from astock.core.errors import StorageError
+from astock.core.errors import FailureClass, ProviderError, StorageError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents import OfficialWebDocumentCaptureService
 from astock.evidence import EvidenceRepository
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
-from astock.financial_sources.official import _exact_report_title
+from astock.financial_sources.certification import FinancialPdfCertifier
+from astock.financial_sources.config import FinancialFieldMapping
+from astock.financial_sources.official import OfficialFinancialReport, _exact_report_title
 from astock.financial_sources.service import _parse_provider
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
 from astock.providers.financial_base import (
@@ -23,12 +30,19 @@ from astock.providers.financial_base import (
     FinancialRawCaptureError,
 )
 from astock.schemas import (
+    AgentSourceProposal,
     DocumentPage,
+    DocumentType,
+    FinancialCoverageStatus,
+    FinancialFieldCode,
     FinancialIndustryProfile,
     FinancialPeriodType,
     FinancialSourceReleaseStatus,
+    FinancialUnit,
     Market,
+    OfficialFinancialLineageKind,
     RunStatus,
+    SourceClass,
     SourceSnapshot,
 )
 
@@ -120,6 +134,228 @@ def _replace_page_text(
                 page.page_id,
             ),
         )
+
+
+def test_live_financial_route_does_not_readd_health_excluded_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    sina_definition = next(
+        item
+        for item in service.provider_registry.providers
+        if item.provider_id == "sina-financial"
+    )
+    monkeypatch.setattr(
+        service.provider_factory,
+        "definitions_for_capability",
+        lambda *args, **kwargs: [sina_definition],
+    )
+    monkeypatch.setattr(
+        service.providers["sina-financial"],
+        "fetch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("sina unavailable")),
+    )
+
+    eastmoney_called = False
+
+    def eastmoney_fetch(*args, **kwargs):
+        nonlocal eastmoney_called
+        del args, kwargs
+        eastmoney_called = True
+        raise AssertionError("health-excluded provider must not be called")
+
+    monkeypatch.setattr(service.providers["eastmoney-financial"], "fetch", eastmoney_fetch)
+    monkeypatch.setattr(service.official, "get", lambda *args, **kwargs: None)
+
+    report = service._sync(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+        live=True,
+        cross_check=False,
+        explicit_as_of=False,
+    )
+
+    assert not eastmoney_called
+    assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
+    assert "EASTMONEY_FINANCIAL_HEALTH_OR_BREAKER_SKIPPED" in report.reason_codes
+
+
+def test_all_secondary_financial_sources_can_recover_from_official_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    for provider in service.providers.values():
+        monkeypatch.setattr(
+            provider,
+            "fetch",
+            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("secondary unavailable")),
+        )
+
+    report = service.sync(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+    )
+
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    assert report.provider_ids == ["official-financial-document"]
+    assert report.coverage.certified_fact_count == 18
+    assert "STRUCTURED_FINANCIAL_SOURCES_UNAVAILABLE" in report.reason_codes
+    assert "OFFICIAL_DOCUMENT_RECOVERY_USED" in report.reason_codes
+    pack = service.run_audit(
+        "000001",
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+        industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+    )
+    assert pack.status is RunStatus.SUCCEEDED
+    assert len(pack.verified_numbers) == 18
+
+
+def test_cninfo_and_secondary_outage_recovers_limited_frozen_exchange_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    fixture = json.loads(
+        (PROJECT_ROOT / "tests" / "fixtures" / "financial_sources" / "cninfo_reports_000001.json")
+        .read_text(encoding="utf-8")
+    )
+    pdf = base64.b64decode(fixture["reports"][0]["pdf_base64"], validate=True)
+    observed = datetime(2026, 8, 27, 8, 0, tzinfo=UTC)
+    proposal = AgentSourceProposal.model_validate(
+        {
+            "requested_capability": "financial.official_document",
+            "query": "recover exact annual report from the exchange",
+            "candidate_url": "https://www.szse.cn/disclosure/listedinfo/example-annual.pdf",
+            "expected_fact": "limited official 2025 annual-report values",
+            "preferred_source_class": SourceClass.PRIMARY_OFFICIAL_WEB,
+            "formal_use": True,
+            "require_complete": False,
+            "reason": "CNINFO and secondary financial providers are unavailable",
+        }
+    )
+    capture = OfficialWebDocumentCaptureService(service.state, service.objects).capture(
+        proposal,
+        pdf,
+        title="平安银行股份有限公司2025年年度报告",
+        company_ids=["000001"],
+        published_at=observed - timedelta(days=1),
+        period_end=PERIOD_END,
+        document_type=DocumentType.ANNUAL_REPORT,
+        disclosure_id="szse-limited-annual-000001-2025",
+        observed_at=observed,
+    )
+
+    for provider in service.providers.values():
+        monkeypatch.setattr(
+            provider,
+            "fetch",
+            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("secondary unavailable")),
+        )
+
+    factory_calls: list[str] = []
+
+    def cninfo_unavailable(
+        capability: str,
+        _expected_type: type[object],
+        *,
+        formal_use: bool,
+        require_complete: bool,
+    ) -> object:
+        factory_calls.append(capability)
+        assert capability == "disclosure.enumerate"
+        assert formal_use
+        assert require_complete
+        raise ProviderError(
+            "CNINFO enumeration unavailable",
+            failure_class=FailureClass.NETWORK,
+            retryable=False,
+        )
+
+    monkeypatch.setattr(
+        service.official.provider_factory,
+        "create_for_capability",
+        cninfo_unavailable,
+    )
+    core_fields = {
+        FinancialFieldCode.TOTAL_ASSETS,
+        FinancialFieldCode.TOTAL_LIABILITIES,
+        FinancialFieldCode.TOTAL_EQUITY,
+        FinancialFieldCode.REVENUE,
+        FinancialFieldCode.NET_PROFIT_INCOME,
+        FinancialFieldCode.NET_CASH_OPERATING,
+    }
+    original_extract = FinancialPdfCertifier.extract_values
+
+    def limited_extract(
+        certifier: FinancialPdfCertifier,
+        report: OfficialFinancialReport,
+        period_end: date,
+        period_type: FinancialPeriodType,
+        mappings: list[FinancialFieldMapping],
+    ) -> tuple[list[tuple[FinancialFieldMapping, Decimal, FinancialUnit]], list[str]]:
+        values, reasons = original_extract(
+            certifier,
+            report,
+            period_end,
+            period_type,
+            mappings,
+        )
+        limited = [item for item in values if item[0].field_code in core_fields]
+        assert {item[0].field_code for item in limited} == core_fields
+        return limited, [*reasons, "OFFICIAL_LIMITED_RECOVERY_TEST"]
+
+    monkeypatch.setattr(FinancialPdfCertifier, "extract_values", limited_extract)
+    as_of = observed + timedelta(minutes=1)
+    report = service.sync(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=as_of,
+        live=True,
+    )
+
+    assert factory_calls == ["disclosure.enumerate"]
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    assert report.provider_ids == ["official-financial-document"]
+    assert report.coverage.certified_fact_count == len(core_fields)
+    assert "STRUCTURED_FINANCIAL_SOURCES_UNAVAILABLE" in report.reason_codes
+    assert "OFFICIAL_DOCUMENT_RECOVERY_USED" in report.reason_codes
+    assert capture.snapshot_id in report.raw_snapshot_ids
+    assert capture.admission_snapshot_id in report.raw_snapshot_ids
+    row = service.repository.get(
+        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
+    )
+    assert row is not None
+    manifest = service._verified_manifest(row)
+    assert (
+        manifest.official_lineage_kind
+        is OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION
+    )
+    assert manifest.official_lineage_snapshot_ids == [capture.admission_snapshot_id]
+    assert not manifest.official_exhaustive_proof_allowed
+
+    pack = service.run_audit(
+        "000001",
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=as_of,
+        industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+    )
+    assert pack.status is RunStatus.NEEDS_INFO
+    assert pack.coverage_status is FinancialCoverageStatus.PARTIAL
+    assert {item.field_code for item in pack.verified_numbers} == core_fields
+    assert financial_pack_is_candidate_eligible(pack)
 
 
 def test_recorded_financial_source_reaches_existing_audit_contract(tmp_path: Path) -> None:
@@ -305,6 +541,187 @@ def test_market_without_official_financial_coverage_is_blocked_by_config(tmp_pat
     )
     assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
     assert report.reason_codes == ["OFFICIAL_FINANCIAL_REPORT_UNAVAILABLE_FOR_MARKET"]
+
+
+def test_live_official_financial_report_enumerates_all_pages_for_exact_match(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    service = _service(tmp_path)
+    observed = datetime(2026, 3, 20, 8, tzinfo=UTC)
+
+    def registered_snapshot(label: str) -> SourceSnapshot:
+        ref = service.objects.put_json({"label": label})
+        snapshot = SourceSnapshot(
+            snapshot_id=f"test-cninfo:{label}:{ref.sha256}",
+            source_id=f"test-cninfo:{label}",
+            object_sha256=ref.sha256,
+            fetched_at=observed,
+            available_to_system_at=observed,
+            source_url=f"https://www.cninfo.com.cn/test/{label}",
+            mime="application/json",
+            byte_size=ref.byte_size,
+        )
+        service.state.register_snapshot(snapshot)
+        return snapshot
+
+    first_index = registered_snapshot("page-1")
+    second_index = registered_snapshot("page-2")
+    document_snapshot = registered_snapshot("document")
+    first_page_noise = SimpleNamespace(
+        announcement_id="noise",
+        title="平安银行2025年度报告摘要",
+        published_at=observed - timedelta(days=1),
+    )
+    exact_report = SimpleNamespace(
+        announcement_id="exact",
+        title="平安银行2025年年度报告",
+        published_at=observed,
+    )
+
+    class FakeCninfoProvider:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def search(self, *args, **kwargs):
+            pytest.fail("official financial recovery must not use discovery-only search")
+
+        def search_all(self, request):
+            assert request.symbol == "000001"
+            return [
+                SimpleNamespace(
+                    raw_snapshot_id=first_index.snapshot_id,
+                    announcements=[first_page_noise],
+                ),
+                SimpleNamespace(
+                    raw_snapshot_id=second_index.snapshot_id,
+                    announcements=[exact_report],
+                ),
+            ]
+
+        def download(self, announcement):
+            assert announcement.announcement_id == "exact"
+            return SimpleNamespace(
+                document=SimpleNamespace(document_id="cninfo:exact"),
+                snapshot=document_snapshot,
+            )
+
+    fake_provider = FakeCninfoProvider()
+
+    def create_for_capability(
+        capability: str,
+        _expected_type: type[object],
+        *,
+        formal_use: bool,
+        require_complete: bool,
+    ) -> FakeCninfoProvider:
+        assert capability == "disclosure.enumerate"
+        assert formal_use
+        assert require_complete
+        return fake_provider
+
+    monkeypatch.setattr(
+        service.official.provider_factory,
+        "create_for_capability",
+        create_for_capability,
+    )
+    candidates = service.official._live_candidates(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.document.document_id == "cninfo:exact"
+    assert candidate.snapshot.snapshot_id == document_snapshot.snapshot_id
+    assert candidate.index_snapshot.snapshot_id == second_index.snapshot_id
+    assert [item.snapshot_id for item in candidate.lineage_snapshots] == [
+        first_index.snapshot_id,
+        second_index.snapshot_id,
+    ]
+    assert candidate.lineage_kind is OfficialFinancialLineageKind.CNINFO_EXHAUSTIVE_ENUMERATION
+    assert candidate.exhaustive_proof_allowed
+    assert candidate.declared_supersedes is None
+
+
+def test_captured_exchange_financial_report_recovers_when_cninfo_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    observed = datetime(2026, 3, 20, 8, tzinfo=UTC)
+    proposal = AgentSourceProposal.model_validate(
+        {
+            "requested_capability": "financial.official_document",
+            "query": "recover exact annual report from the exchange",
+            "candidate_url": "https://www.szse.cn/disclosure/listedinfo/example-annual.pdf",
+            "expected_fact": "official 2025 annual-report values",
+            "preferred_source_class": SourceClass.PRIMARY_OFFICIAL_WEB,
+            "formal_use": True,
+            "require_complete": False,
+            "reason": "CNINFO unavailable; use exact issuer report on SZSE",
+        }
+    )
+    capture = OfficialWebDocumentCaptureService(service.state, service.objects).capture(
+        proposal,
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n",
+        title="平安银行2025年年度报告",
+        company_ids=["000001"],
+        published_at=observed - timedelta(days=1),
+        period_end=PERIOD_END,
+        document_type=DocumentType.ANNUAL_REPORT,
+        disclosure_id="szse-annual-000001-2025",
+        observed_at=observed,
+    )
+
+    factory_calls: list[str] = []
+
+    def cninfo_unavailable(
+        capability: str,
+        _expected_type: type[object],
+        *,
+        formal_use: bool,
+        require_complete: bool,
+    ) -> object:
+        factory_calls.append(capability)
+        assert capability == "disclosure.enumerate"
+        assert formal_use
+        assert require_complete
+        raise RuntimeError("CNINFO enumeration unavailable")
+
+    monkeypatch.setattr(
+        service.official.provider_factory,
+        "create_for_capability",
+        cninfo_unavailable,
+    )
+    monkeypatch.setattr(
+        service.official.parser,
+        "parse",
+        lambda *args, **kwargs: SimpleNamespace(page_ids=[]),
+    )
+
+    report = service.official.get(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=observed + timedelta(minutes=1),
+        live=True,
+    )
+
+    assert factory_calls == ["disclosure.enumerate"]
+    assert report is not None
+    assert report.document.document_id == capture.document_id
+    assert report.snapshot.snapshot_id == capture.snapshot_id
+    assert report.index_snapshot.snapshot_id == capture.admission_snapshot_id
+    assert report.lineage_kind is OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION
+    assert report.lineage_snapshot_ids == [capture.admission_snapshot_id]
+    assert report.exhaustive_proof_allowed is False
+    assert report.pit.period_end == PERIOD_END
+    assert report.pit.source_snapshot_id == capture.snapshot_id
 
 
 def test_common_first_and_third_quarter_titles_are_exactly_recognized() -> None:
@@ -608,9 +1025,10 @@ def test_live_normalization_failure_reports_persisted_raw_snapshot(
         FinancialPeriodType.ANNUAL,
         live=True,
     )
-    assert report.status is FinancialSourceReleaseStatus.FAILED
+    assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
     assert len(captured) == 1
-    assert report.raw_snapshot_ids == [captured[0].snapshot_id]
+    assert captured[0].snapshot_id in report.raw_snapshot_ids
+    assert "STRUCTURED_FINANCIAL_SOURCES_UNAVAILABLE" in report.reason_codes
     assert service.state.get_snapshot(captured[0].snapshot_id) is not None
     assert service.objects.verify(captured[0].object_sha256)
 

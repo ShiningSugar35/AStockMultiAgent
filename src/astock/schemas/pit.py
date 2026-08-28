@@ -58,6 +58,20 @@ class PointInTimeMetadata(AStockModel):
                 raise ValueError("DOCUMENT_RECONSTRUCTED requires document and snapshot lineage")
             if self.published_at is None:
                 raise ValueError("DOCUMENT_RECONSTRUCTED requires published_at")
-        if self.point_in_time_status is PointInTimeStatus.CERTIFIED and self.published_at is None:
-            raise ValueError("CERTIFIED requires published_at")
+        if self.point_in_time_status is PointInTimeStatus.CERTIFIED:
+            if (
+                self.availability_basis is AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP
+                and self.published_at is None
+            ):
+                raise ValueError("publication-certified PIT requires published_at")
+            if (
+                self.availability_basis is AvailabilityBasis.FETCH_OBSERVED
+                and self.source_snapshot_id is None
+            ):
+                raise ValueError("fetch-certified PIT requires source_snapshot_id")
+            if self.availability_basis not in {
+                AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP,
+                AvailabilityBasis.FETCH_OBSERVED,
+            }:
+                raise ValueError("CERTIFIED PIT requires an auditable availability basis")
         return self

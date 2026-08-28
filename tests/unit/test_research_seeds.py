@@ -5,13 +5,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from astock.candidates.seeds import ResearchSeedService, _RawMarketRow
+from astock.candidates.seeds import ResearchSeedProviderRouter, ResearchSeedService, _RawMarketRow
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.schemas.evidence import SourceSnapshot
 from astock.schemas.market import Market
-from astock.schemas.research_seeds import ResearchSeedOrigin, ResearchSeedRequest
+from astock.schemas.research_seeds import (
+    ResearchSeedOrigin,
+    ResearchSeedRequest,
+    ResearchSeedStatus,
+    ResearchUniverseCoverageStatus,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 8, 11, 4, 0, tzinfo=UTC)
@@ -82,6 +87,7 @@ class _FakeSeedProvider:
         return {
             "rc": 0,
             "data": {
+                "total": len(rows),
                 "diff": [
                     {
                         "f12": symbol,
@@ -311,6 +317,13 @@ def test_research_seed_report_merges_market_and_expert_sources_and_audits(
     assert report.seeds
     assert report.market_seed_count > 0
     assert report.expert_seed_count > 0
+    assert report.universe_coverage_status is ResearchUniverseCoverageStatus.FULL
+    assert report.formal_full_market_coverage_allowed
+    assert report.market_coverage_ratios == {
+        Market.XSHG: 1.0,
+        Market.XSHE: 1.0,
+        Market.BJSE: 1.0,
+    }
     assert not report.recommendation_allowed
     assert not report.candidate_record_write_allowed
     assert not report.paper_ledger_write_allowed
@@ -325,6 +338,83 @@ def test_research_seed_report_merges_market_and_expert_sources_and_audits(
     artifact_id = f"ResearchSeedReport:{report.report_id}"
     assert state.artifact_record(artifact_id) is not None
     assert service.audit(artifact_id)["status"] == "PASS"
+
+
+def test_partial_market_coverage_is_observation_only(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+    payload = cast(Any, service.provider).market_payloads[Market.XSHG]
+    cast(dict[str, object], payload["data"])["total"] = 3
+
+    report = service.generate(ResearchSeedRequest(as_of=NOW, created_at=NOW))
+
+    assert report.universe_coverage_status is ResearchUniverseCoverageStatus.PARTIAL
+    assert not report.formal_full_market_coverage_allowed
+    assert report.market_coverage_ratios[Market.XSHG] == 2 / 3
+    assert any(
+        item.startswith("MARKET_SEED_UNIVERSE_PARTIAL:XSHG:")
+        for item in report.warning_codes
+    )
+
+
+def test_full_universe_with_zero_eligible_market_candidates_is_not_unavailable(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(tmp_path)
+    report = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            minimum_amount_cny=10_000_000_000_000,
+            minimum_float_market_cap_cny=10_000_000_000_000,
+            created_at=NOW,
+        )
+    )
+
+    assert report.status is ResearchSeedStatus.EMPTY
+    assert report.universe_coverage_status is ResearchUniverseCoverageStatus.FULL
+    assert report.formal_full_market_coverage_allowed
+    assert report.market_seed_count == 0
+    assert "CURRENT_MARKET_SCAN_ZERO_ELIGIBLE_CANDIDATES" in report.warning_codes
+    assert "CURRENT_MARKET_SEED_UNIVERSE_UNAVAILABLE" not in report.warning_codes
+
+
+def test_unavailable_universe_is_distinct_from_zero_eligible_candidates(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(tmp_path)
+
+    def unavailable(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("all market snapshot providers unavailable")
+
+    cast(Any, service.provider).fetch_seed_snapshot = unavailable
+    report = service.generate(ResearchSeedRequest(as_of=NOW, created_at=NOW))
+
+    assert report.universe_coverage_status is ResearchUniverseCoverageStatus.UNAVAILABLE
+    assert not report.formal_full_market_coverage_allowed
+    assert "CURRENT_MARKET_SEED_UNIVERSE_UNAVAILABLE" in report.warning_codes
+    assert "CURRENT_MARKET_SCAN_ZERO_ELIGIBLE_CANDIDATES" not in report.warning_codes
+
+
+def test_live_seed_router_continues_past_partial_provider_to_full_fallback(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "router.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "router-objects")
+    primary = _FakeSeedProvider(state, objects)
+    fallback = _FakeSeedProvider(state, objects)
+    cast(dict[str, object], primary.market_payloads[Market.XSHG]["data"])["total"] = 3
+    router = ResearchSeedProviderRouter(
+        primary,
+        fallback,
+        minimum_rows_by_market={Market.XSHG: 1, Market.XSHE: 1, Market.BJSE: 1},
+        state=state,
+        objects=objects,
+    )
+
+    payload, _ = router.fetch_seed_snapshot(Market.XSHG, live=True)
+
+    assert cast(dict[str, object], payload["data"])["total"] == 2
 
 
 def test_seed_id_depends_on_skill_support_and_snapshots(tmp_path: Path) -> None:

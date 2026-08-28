@@ -11,7 +11,7 @@ from astock.core.errors import PolicyError
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.documents.cninfo import CninfoDisclosureProvider
+from astock.documents import DisclosureEnumerationProvider
 from astock.market_data.reference import MarketReferenceService
 from astock.paper_trading.operation import (
     MarketReferencePaperVerifier,
@@ -145,7 +145,7 @@ class TradingClassificationService:
         company_id: str,
         *,
         live: bool,
-        provider: CninfoDisclosureProvider | None = None,
+        provider: DisclosureEnumerationProvider | None = None,
         sync_instrument_reference: bool = True,
     ) -> tuple[str, TradingClassificationCorporateActionBaseline]:
         """Freeze a prospective CNINFO enumeration before a later research decision."""
@@ -161,18 +161,21 @@ class TradingClassificationService:
         visible_at = datetime.now(UTC)
         verifier = MarketReferencePaperVerifier(self.reference, self.trading_rules)
         instrument, _ = verifier.resolve_instrument(company_id, visible_at=visible_at)
-        if instrument.listing_date is None:
-            raise ValueError("official corporate-action baseline requires a listing date")
         exchange = {
             Market.XSHG: DisclosureExchange.SSE,
             Market.XSHE: DisclosureExchange.SZSE,
         }.get(instrument.market)
         if exchange is None:
             raise ValueError("official corporate-action baseline is unavailable for this market")
-        official = provider or CninfoDisclosureProvider(self.objects, self.state)
+        official = provider or self.reference.provider_factory.create_for_capability(
+            "disclosure.enumerate",
+            DisclosureEnumerationProvider,
+            formal_use=True,
+            require_complete=True,
+        )
         local_date = visible_at.astimezone(_SHANGHAI).date()
-        coverage_start = max(instrument.listing_date, local_date - timedelta(days=45))
-        first = official.search(
+        coverage_start = _corporate_action_window_start(instrument.listing_date, local_date)
+        batches = official.search_all(
             DisclosureSearchRequest(
                 symbol=instrument.symbol,
                 exchange=exchange,
@@ -183,11 +186,7 @@ class TradingClassificationService:
                 page_size=100,
             )
         )
-        batches = [first]
-        for page_number in range(2, first.total_pages + 1):
-            batches.append(
-                official.search(first.request.model_copy(update={"page_number": page_number}))
-            )
+        first = batches[0]
         self._validate_official_enumeration(batches)
         snapshot_ids = sorted({item.raw_snapshot_id for item in batches})
         announcements = {
@@ -220,6 +219,11 @@ class TradingClassificationService:
             "observed_record_count": first.total_count,
         }
         digest = sha256_bytes(canonical_json_bytes(payload))
+        reason_codes: list[str] = []
+        if instrument.listing_date is None:
+            reason_codes.append("LISTING_DATE_UNKNOWN_BOUNDED_LOOKBACK_USED")
+        if candidates:
+            reason_codes.append("OFFICIAL_CORPORATE_ACTION_CANDIDATES_FOUND")
         baseline = TradingClassificationCorporateActionBaseline(
             baseline_id=f"trading-corporate-action-baseline:{digest}",
             company_id=company_id,
@@ -233,7 +237,7 @@ class TradingClassificationService:
             official_query_snapshot_ids=snapshot_ids,
             candidate_announcement_ids=candidates,
             observed_record_count=first.total_count,
-            reason_codes=([] if not candidates else ["OFFICIAL_CORPORATE_ACTION_CANDIDATES_FOUND"]),
+            reason_codes=reason_codes,
             absence_is_officially_certified=not candidates,
             created_at=captured_at,
         )
@@ -861,20 +865,21 @@ class TradingClassificationService:
         if not batches:
             raise ValueError("official corporate-action enumeration is empty")
         first = batches[0]
-        expected_pages = max(1, first.total_pages)
-        if len(batches) != expected_pages:
-            raise ValueError("official corporate-action enumeration is incomplete")
-        if first.total_count > 0 and first.total_pages < 1:
-            raise ValueError("official corporate-action enumeration page count is invalid")
         baseline_request = first.request.model_dump(mode="json", exclude={"page_number"})
         ids: list[str] = []
         for ordinal, batch in enumerate(batches, start=1):
             request = batch.request.model_dump(mode="json", exclude={"page_number"})
             if request != baseline_request or batch.request.page_number != ordinal:
                 raise ValueError("official corporate-action enumeration request drift")
-            if batch.total_count != first.total_count or batch.total_pages != first.total_pages:
+            if batch.total_count != first.total_count:
                 raise ValueError("official corporate-action enumeration count drift")
+            if ordinal < len(batches) and not batch.has_more:
+                raise ValueError(
+                    "official corporate-action enumeration stopped before the final page"
+                )
             ids.extend(item.announcement_id for item in batch.announcements)
+        if batches[-1].has_more:
+            raise ValueError("official corporate-action enumeration is incomplete")
         if len(ids) != len(set(ids)) or len(ids) != first.total_count:
             raise ValueError("official corporate-action enumeration identity coverage mismatch")
 
@@ -1039,6 +1044,11 @@ class TradingClassificationService:
         if "special" in message or "delisting" in message:
             return "SPECIAL_REGIME_REFERENCE_REQUIRED"
         return "TRADING_CLASSIFICATION_RESOLUTION_FAILED"
+
+
+def _corporate_action_window_start(listing_date: date | None, local_date: date) -> date:
+    bounded_start = local_date - timedelta(days=45)
+    return max(listing_date, bounded_start) if listing_date is not None else bounded_start
 
 
 __all__ = ["TradingClassificationService"]

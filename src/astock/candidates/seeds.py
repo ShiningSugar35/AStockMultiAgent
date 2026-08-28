@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from math import log1p
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import yaml
 from pydantic import ValidationError
@@ -18,6 +19,11 @@ from astock.candidates.repository import CandidateRepository
 from astock.core.errors import AStockError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.source_resilience import (
+    SourceCircuitBreaker,
+    SourceFailureClass,
+    classify_source_error,
+)
 from astock.core.state import StateStore
 from astock.knowledge.visual_skill_repository import VisualSkillRepository
 from astock.schemas.market import Market
@@ -34,9 +40,11 @@ from astock.schemas.research_seeds import (
     ResearchSeedReport,
     ResearchSeedRequest,
     ResearchSeedStatus,
+    ResearchUniverseCoverageStatus,
 )
 
 _CURRENT_LIVE_TOLERANCE = timedelta(minutes=15)
+_FULL_MARKET_COVERAGE_RATIO = 0.995
 _EQUITY_MARKETS = (Market.XSHG, Market.XSHE, Market.BJSE)
 
 
@@ -59,49 +67,112 @@ class ResearchSeedProviderRouter:
 
     def __init__(
         self,
-        primary: SeedMarketProvider,
-        fallback: SeedSnapshotProvider,
+        primary: SeedMarketProvider | None = None,
+        fallback: SeedSnapshotProvider | None = None,
         *,
+        providers: Sequence[SeedSnapshotProvider] | None = None,
         minimum_rows_by_market: dict[Market, int],
         state: StateStore | None = None,
         objects: ObjectStore | None = None,
         cache_freshness: timedelta = _CURRENT_LIVE_TOLERANCE,
     ) -> None:
-        self.primary = primary
-        self.fallback = fallback
+        configured: list[SeedSnapshotProvider] = list(providers) if providers is not None else [
+            provider for provider in (primary, fallback) if provider is not None
+        ]
+        if not configured and (state is None or objects is None):
+            raise ValueError(
+                "Research seed routing requires a provider or a durable local cache"
+            )
+        self.providers = tuple(configured)
+        self.primary = primary or (configured[0] if configured else None)
+        self.fallback = fallback or (
+            configured[1]
+            if len(configured) > 1
+            else (configured[0] if configured else None)
+        )
         self.minimum_rows_by_market = dict(minimum_rows_by_market)
         self.state = state
         self.objects = objects
+        self.source_breaker = SourceCircuitBreaker(state) if state is not None else None
         self.cache_freshness = cache_freshness
 
     def fetch_seed_snapshot(
         self, market: Market, *, live: bool = False
     ) -> tuple[dict[str, object], Any]:
         last_error: Exception | None = None
-        for provider in (self.primary, self.fallback):
+        best_partial: tuple[dict[str, object], Any] | None = None
+        best_partial_ratio = -1.0
+        if live:
+            cached = self._fresh_cached_seed_snapshot(market)
+            if cached is not None:
+                cached_ratio = _seed_payload_coverage_ratio(cached[0], market)
+                if (
+                    cached_ratio is not None
+                    and cached_ratio >= _FULL_MARKET_COVERAGE_RATIO
+                ):
+                    return cached
+                best_partial = cached
+                best_partial_ratio = cached_ratio if cached_ratio is not None else -1.0
+        for provider in self.providers:
+            provider_id = str(getattr(provider, "provider_id", "")).strip()
+            if (
+                live
+                and self.source_breaker is not None
+                and provider_id
+                and not self.source_breaker.claim_attempt(provider_id, "market.seed_snapshot")
+            ):
+                last_error = ValueError(f"MARKET_SEED_CIRCUIT_OPEN:{provider_id}")
+                continue
             try:
                 payload, snapshot = provider.fetch_seed_snapshot(market, live=live)
-                if live and _seed_payload_row_count(payload) < self.minimum_rows_by_market[market]:
-                    raise ValueError("MARKET_SEED_BELOW_MINIMUM_COVERAGE")
-                return payload, snapshot
+                if not live:
+                    return payload, snapshot
+                if _seed_payload_row_count(payload) < self.minimum_rows_by_market[market]:
+                    if self.source_breaker is not None and provider_id:
+                        self.source_breaker.record_failure(
+                            provider_id,
+                            "market.seed_snapshot",
+                            SourceFailureClass.COVERAGE_INCOMPLETE,
+                        )
+                    last_error = ValueError("MARKET_SEED_BELOW_MINIMUM_COVERAGE")
+                    continue
+                ratio = _seed_payload_coverage_ratio(payload, market)
+                if ratio is not None and ratio >= _FULL_MARKET_COVERAGE_RATIO:
+                    if self.source_breaker is not None and provider_id:
+                        self.source_breaker.record_success(provider_id, "market.seed_snapshot")
+                    return payload, snapshot
+                if self.source_breaker is not None and provider_id:
+                    self.source_breaker.record_failure(
+                        provider_id,
+                        "market.seed_snapshot",
+                        SourceFailureClass.COVERAGE_INCOMPLETE,
+                    )
+                ranked_ratio = ratio if ratio is not None else -1.0
+                if best_partial is None or ranked_ratio > best_partial_ratio:
+                    best_partial = (payload, snapshot)
+                    best_partial_ratio = ranked_ratio
             except (AStockError, OSError, RuntimeError, ValueError) as exc:
                 last_error = exc
-        if live:
-            cached = self._fresh_cached_sina_master(market)
-            if cached is not None:
-                return cached
+                if self.source_breaker is not None and provider_id:
+                    self.source_breaker.record_failure(
+                        provider_id,
+                        "market.seed_snapshot",
+                        classify_source_error(exc),
+                    )
+        if live and best_partial is not None:
+            return best_partial
         if last_error is not None:
             raise last_error
         raise RuntimeError("research seed provider route is empty")
 
-    def _fresh_cached_sina_master(self, market: Market) -> tuple[dict[str, object], Any] | None:
+    def _fresh_cached_seed_snapshot(
+        self, market: Market
+    ) -> tuple[dict[str, object], Any] | None:
         if self.state is None or self.objects is None:
             return None
         releases = self.state.list_market_reference_releases("INSTRUMENT_MASTER", market.value)
         now = datetime.now(UTC)
         for release in releases:
-            if str(release.get("provider_id")) != "sina-reference":
-                continue
             manifest_hash = str(release.get("manifest_object_hash") or "")
             if not manifest_hash or not self.objects.verify(manifest_hash):
                 continue
@@ -123,7 +194,8 @@ class ResearchSeedProviderRouter:
             if (
                 manifest.dataset_kind is not ReferenceDatasetKind.INSTRUMENT_MASTER
                 or manifest.scope_key != market.value
-                or manifest.provider_id != "sina-reference"
+                or not manifest.provider_id
+                or str(release.get("provider_id") or "") != manifest.provider_id
                 or manifest.coverage.status is not ReferenceCoverageStatus.COMPLETE
                 or manifest.coverage.record_count < self.minimum_rows_by_market[market]
                 or str(release.get("release_id") or "") != manifest.release_id
@@ -135,7 +207,11 @@ class ResearchSeedProviderRouter:
                 continue
             for snapshot_id in reversed(manifest.raw_snapshot_ids):
                 snapshot = self.state.get_snapshot(snapshot_id)
-                if snapshot is None or not self.objects.verify(snapshot.object_sha256):
+                if (
+                    snapshot is None
+                    or snapshot.source_id != manifest.provider_id
+                    or not self.objects.verify(snapshot.object_sha256)
+                ):
                     continue
                 try:
                     payload = json.loads(self.objects.get_bytes(snapshot.object_sha256))
@@ -145,21 +221,52 @@ class ResearchSeedProviderRouter:
                     continue
                 request = payload.get("_astock_request")
                 if (
-                    payload.get("_astock_source") == "SINA_MARKET_CENTER"
-                    and isinstance(request, dict)
+                    isinstance(request, dict)
                     and request.get("market") == market.value
                     and _seed_payload_row_count(payload) >= self.minimum_rows_by_market[market]
                 ):
+                    # Reuse any fresh, integrity-checked local Instrument Master whose
+                    # captured payload is compatible with seed parsing. Formal FULL is
+                    # still decided later by _seed_payload_coverage_ratio; a legacy
+                    # COMPLETE manifest or a pagination floor never manufactures 99.5%.
                     return payload, snapshot
         return None
 
     def fetch_industry_boards(self, *, live: bool = False) -> tuple[dict[str, object], Any]:
-        return self.primary.fetch_industry_boards(live=live)
+        last_error: Exception | None = None
+        for provider in self.providers:
+            fetch = getattr(provider, "fetch_industry_boards", None)
+            if not callable(fetch):
+                continue
+            try:
+                board_fetch = cast(
+                    Callable[..., tuple[dict[str, object], Any]], fetch
+                )
+                return board_fetch(live=live)
+            except (AStockError, OSError, RuntimeError, ValueError) as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("No routed provider exposes industry-board discovery")
 
     def fetch_industry_constituents(
         self, board_code: str, *, live: bool = False
     ) -> tuple[dict[str, object], Any]:
-        return self.primary.fetch_industry_constituents(board_code, live=live)
+        last_error: Exception | None = None
+        for provider in self.providers:
+            fetch = getattr(provider, "fetch_industry_constituents", None)
+            if not callable(fetch):
+                continue
+            try:
+                constituent_fetch = cast(
+                    Callable[..., tuple[dict[str, object], Any]], fetch
+                )
+                return constituent_fetch(board_code, live=live)
+            except (AStockError, OSError, RuntimeError, ValueError) as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("No routed provider exposes industry-constituent discovery")
 
 
 def _safe_float(value: object) -> float:
@@ -230,6 +337,54 @@ def _seed_payload_row_count(payload: dict[str, object]) -> int:
         and str(item.get("f12") or "").isdigit()
         and bool(str(item.get("f14") or "").strip())
     )
+
+
+def _seed_payload_coverage_ratio(payload: dict[str, object], market: Market) -> float | None:
+    """Return auditable market coverage; a row-count floor alone never proves FULL."""
+
+    request = payload.get("_astock_request")
+    if not isinstance(request, dict) or request.get("market") != market.value:
+        return None
+    valid_rows = _seed_payload_row_count(payload)
+    if payload.get("_astock_source") == "SINA_MARKET_CENTER":
+        rows = payload.get("rows")
+        if payload.get("complete") is not True or not isinstance(rows, list) or not rows:
+            return None
+        # Sina's market-center list has no authoritative Universe total. Pagination
+        # exhaustion plus the legacy row-count floor is useful truncation defence, but
+        # it cannot prove >=99.5% formal market coverage. Only admit a ratio when an
+        # explicit auditable denominator is present in the captured payload.
+        raw_total = payload.get("coverage_denominator")
+        try:
+            if isinstance(raw_total, bool):
+                return None
+            total = int(raw_total)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        if total <= 0 or len(rows) > total:
+            return None
+        return min(1.0, valid_rows / total)
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    raw_total = data.get("total")
+    try:
+        if isinstance(raw_total, bool):
+            return None
+        total = int(raw_total)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    diff = data.get("diff")
+    if isinstance(diff, dict):
+        observed = len(diff)
+    elif isinstance(diff, list):
+        observed = len(diff)
+    else:
+        return None
+    if total <= 0 or observed > total:
+        return None
+    return min(1.0, valid_rows / total)
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,7 +480,9 @@ class ResearchSeedService:
         activity_proxy_markets: set[Market] = set()
         accumulators: dict[str, _SeedAccumulator] = {}
 
-        def fetch_market(market: Market) -> tuple[Market, Any, list[_MarketRow], bool]:
+        def fetch_market(
+            market: Market,
+        ) -> tuple[Market, Any, list[_MarketRow], bool, float | None]:
             payload, snapshot = self.provider.fetch_seed_snapshot(market, live=request.live)
             raw = self._parse_market_rows(payload, market, snapshot.snapshot_id)
             sina_activity_proxy = request.live and _sina_activity_unavailable(payload)
@@ -334,19 +491,34 @@ class ResearchSeedService:
                 minimum_amount=0.0 if sina_activity_proxy else request.minimum_amount_cny,
                 minimum_float_cap=request.minimum_float_market_cap_cny,
             )
-            return market, snapshot, scored, sina_activity_proxy
+            return (
+                market,
+                snapshot,
+                scored,
+                sina_activity_proxy,
+                _seed_payload_coverage_ratio(payload, market),
+            )
 
         workers = min(request.market_fetch_workers, len(_EQUITY_MARKETS))
+        market_coverage_ratios: dict[Market, float] = {}
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(fetch_market, market): market for market in _EQUITY_MARKETS}
             for future in as_completed(futures):
                 market = futures[future]
                 try:
-                    _, snapshot, scored, activity_proxy = future.result()
+                    _, snapshot, scored, activity_proxy, coverage_ratio = future.result()
                     cutoff = max(cutoff, snapshot.available_to_system_at)
                     source_snapshots[snapshot.snapshot_id] = snapshot.object_sha256
                     source_hashes.add(snapshot.object_sha256)
                     market_rows.update({item.company_id: item for item in scored})
+                    if coverage_ratio is not None:
+                        market_coverage_ratios[market] = coverage_ratio
+                        if coverage_ratio < _FULL_MARKET_COVERAGE_RATIO:
+                            warnings.add(
+                                f"MARKET_SEED_UNIVERSE_PARTIAL:{market.value}:{coverage_ratio:.6f}"
+                            )
+                    else:
+                        warnings.add(f"MARKET_SEED_COVERAGE_UNPROVEN:{market.value}")
                     if activity_proxy:
                         activity_proxy_markets.add(market)
                         warnings.add(f"SINA_ACTIVITY_PROXY_USED:{market.value}")
@@ -445,9 +617,37 @@ class ResearchSeedService:
         fill = [item for item in all_seeds if item.seed_id not in selected_ids]
         seeds = [*blind, *fill[: max(0, request.max_total_seeds - len(blind))]]
         seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
-        status = ResearchSeedStatus.READY if seeds else ResearchSeedStatus.NEEDS_INFO
-        if not market_rows:
+        full_universe = (
+            set(market_coverage_ratios) == set(_EQUITY_MARKETS)
+            and all(
+                ratio >= _FULL_MARKET_COVERAGE_RATIO
+                for ratio in market_coverage_ratios.values()
+            )
+        )
+        universe_coverage_status = (
+            ResearchUniverseCoverageStatus.FULL
+            if full_universe
+            else (
+                ResearchUniverseCoverageStatus.PARTIAL
+                if market_coverage_ratios
+                else ResearchUniverseCoverageStatus.UNAVAILABLE
+            )
+        )
+        status = (
+            ResearchSeedStatus.READY
+            if seeds
+            else (
+                ResearchSeedStatus.EMPTY
+                if full_universe
+                else ResearchSeedStatus.NEEDS_INFO
+            )
+        )
+        if universe_coverage_status is ResearchUniverseCoverageStatus.UNAVAILABLE:
             warnings.add("CURRENT_MARKET_SEED_UNIVERSE_UNAVAILABLE")
+        elif not market_rows and full_universe:
+            warnings.add("CURRENT_MARKET_SCAN_ZERO_ELIGIBLE_CANDIDATES")
+        elif not market_rows:
+            warnings.add("CURRENT_MARKET_PARTIAL_UNIVERSE_NO_ELIGIBLE_OBSERVATIONS")
         if release is not None and not profiles:
             warnings.add("NO_EXPERT_DOMAIN_PASSED_SKILL_COUNT_GATE")
 
@@ -457,6 +657,11 @@ class ResearchSeedService:
                 "data_cutoff_at": cutoff.isoformat(),
                 "registry_release_id": str(release["release_id"]) if release else None,
                 "source_hashes": sorted(source_hashes),
+                "market_coverage_ratios": {
+                    market.value: market_coverage_ratios[market]
+                    for market in sorted(market_coverage_ratios, key=lambda item: item.value)
+                },
+                "universe_coverage_status": universe_coverage_status.value,
                 "seed_ids": [item.seed_id for item in seeds],
                 "profiles": [item.model_dump(mode="json") for item in profiles],
             }
@@ -473,6 +678,9 @@ class ResearchSeedService:
             source_snapshot_ids=sorted(source_snapshots),
             source_object_hashes=sorted(source_hashes),
             warning_codes=sorted(warnings),
+            market_coverage_ratios=market_coverage_ratios,
+            universe_coverage_status=universe_coverage_status,
+            formal_full_market_coverage_allowed=full_universe,
             market_seed_count=sum(ResearchSeedOrigin.MARKET in item.origins for item in seeds),
             expert_seed_count=sum(
                 ResearchSeedOrigin.EXPERT_SKILL in item.origins for item in seeds

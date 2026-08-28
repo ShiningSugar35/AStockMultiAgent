@@ -41,14 +41,20 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     ):
         assert required in design
     for required in (
-        "开发计划只写未完成项",
+        "本文件只保存当前未完成任务",
         "维护契约",
+        "External Dependency Resilience v1",
+        "s8 — 显式提交、推送、Tag/GitHub Release 与 clean worktree",
+        "独立长期运行/数据义务",
+    ):
+        assert required in plan
+    for completed_history in (
         "Phase 5：COMPLETE",
         "Phase 5 已完成后的不可变边界",
         "composite registry",
         "Priority 1：可恢复的单股票 Research Runtime",
     ):
-        assert required in plan
+        assert completed_history not in plan
     for required in (
         "本报告只记录已实现",
         "当前能力",

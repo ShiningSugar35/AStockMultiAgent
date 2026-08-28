@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -11,30 +13,44 @@ import pytest
 from astock.candidates.seeds import (
     ResearchSeedProviderRouter,
     ResearchSeedService,
+    _seed_payload_coverage_ratio,
     _sina_activity_unavailable,
 )
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.source_resilience import SourceFailureClass
 from astock.core.state import StateStore
+from astock.documents import DisclosureEnumerationProvider
 from astock.market_data.reference import MarketReferenceService, _parse_sina_master
 from astock.market_data.reference_config import ReferenceRouteStep, load_market_reference_config
 from astock.market_data.reference_storage import ReferenceParquetStore
+from astock.providers import ProviderProbeService, RawProbeResponse
 from astock.providers.config import load_provider_registry
 from astock.providers.http_resilience import ResilientHttpClient
-from astock.providers.runtime import load_transport_profiles
+from astock.providers.runtime import (
+    ProviderFactory,
+    build_provider_http_client,
+    load_transport_profiles,
+)
 from astock.providers.sina_reference import SinaReferenceProvider
 from astock.schemas import (
+    AdjustmentMode,
+    AmountUnit,
+    CompletenessSemantics,
+    DailyBarObservation,
     DatasetReleaseManifest,
     FetchStatus,
     InstrumentRecord,
     InstrumentType,
     Market,
+    ProviderHealthStatus,
     ReferenceCoverage,
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
     ReferenceFileDescriptor,
     ReferencePitStatus,
     SourceSnapshot,
+    VolumeUnit,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -63,14 +79,20 @@ class _FakeHttpClient:
         *,
         params: dict[str, str | int] | None = None,
         data: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
-        del params, data
+        del params, data, timeout
         self.calls.append(self.trust_env)
         request = httpx.Request(method, url)
         if self.mode == "network_then_ok" and self.trust_env:
             raise httpx.ConnectError("env lane failed", request=request)
+        if self.mode == "timeout_then_ok" and self.trust_env:
+            raise httpx.ReadTimeout("env lane timed out", request=request)
         if self.mode == "forbidden":
             return httpx.Response(403, request=request)
+        if self.mode.startswith("server_") and self.mode.endswith("_then_ok") and self.trust_env:
+            status = int(self.mode.split("_", 2)[1])
+            return httpx.Response(status, request=request)
         if self.mode == "server_then_ok" and self.trust_env:
             return httpx.Response(503, request=request)
         return httpx.Response(200, json={"ok": True}, request=request)
@@ -85,6 +107,7 @@ def _resilient_client(
     mode: str,
     calls: list[bool],
     retry_methods: tuple[str, ...] = ("GET", "HEAD"),
+    elapsed_budget_seconds: float = 30.0,
 ) -> ResilientHttpClient:
     def factory(**kwargs: object) -> _FakeHttpClient:
         return _FakeHttpClient(bool(kwargs["trust_env"]), mode, calls)
@@ -102,6 +125,7 @@ def _resilient_client(
         jitter_seconds=0,
         retry_status_codes=(502, 503, 504),
         retry_methods=retry_methods,
+        elapsed_budget_seconds=elapsed_budget_seconds,
     )
 
 
@@ -132,15 +156,92 @@ def test_nonretryable_403_does_not_consume_direct_lane(monkeypatch: pytest.Monke
     assert calls == [True]
 
 
-def test_retryable_503_uses_next_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_retryable_gateway_statuses_use_next_lane(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+) -> None:
     calls: list[bool] = []
-    client = _resilient_client(monkeypatch, mode="server_then_ok", calls=calls)
+    client = _resilient_client(
+        monkeypatch,
+        mode=f"server_{status}_then_ok",
+        calls=calls,
+    )
 
     response = client.get("https://example.invalid")
 
     assert response.status_code == 200
     assert calls == [True, False]
     assert response.extensions["astock_transport_lane"] == "DIRECT"
+
+
+def test_timeout_uses_next_lane_within_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[bool] = []
+    client = _resilient_client(monkeypatch, mode="timeout_then_ok", calls=calls)
+
+    response = client.get("https://example.invalid")
+
+    assert response.status_code == 200
+    assert calls == [True, False]
+    assert response.extensions["astock_transport_lane"] == "DIRECT"
+
+
+def test_http_elapsed_budget_prevents_retry_storm_after_first_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+    ticks = iter([0.0, 0.0, 31.0])
+    monkeypatch.setattr(
+        "astock.providers.http_resilience.time.monotonic",
+        lambda: next(ticks),
+    )
+    client = _resilient_client(
+        monkeypatch,
+        mode="network_then_ok",
+        calls=calls,
+        elapsed_budget_seconds=30.0,
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        client.get("https://example.invalid")
+
+    assert calls == [True]
+
+
+def test_elapsed_budget_returns_last_5xx_response_without_second_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+    ticks = iter([0.0, 0.0, 31.0])
+    monkeypatch.setattr(
+        "astock.providers.http_resilience.time.monotonic",
+        lambda: next(ticks),
+    )
+    client = _resilient_client(
+        monkeypatch,
+        mode="server_503_then_ok",
+        calls=calls,
+        elapsed_budget_seconds=30.0,
+    )
+
+    response = client.get("https://example.invalid")
+
+    assert response.status_code == 503
+    assert response.extensions["astock_transport_attempt"] == 1
+    assert calls == [True]
+
+
+def test_runtime_http_client_consumes_versioned_source_elapsed_budget() -> None:
+    client = build_provider_http_client(
+        "eastmoney-reference",
+        project_root=PROJECT_ROOT,
+    )
+    try:
+        assert isinstance(client, ResilientHttpClient)
+        assert client.elapsed_budget_seconds == 30.0
+        assert client.timeout_seconds <= client.elapsed_budget_seconds
+    finally:
+        client.close()
 
 
 def test_post_is_not_replayed_unless_transport_profile_explicitly_allows_it(
@@ -190,6 +291,445 @@ def test_project_transport_and_reference_configs_enable_bounded_resilience() -> 
     ]
 
 
+def test_provider_factory_consumes_source_catalog_for_seed_routing(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    profiles = load_transport_profiles(PROJECT_ROOT / "configs" / "transport_profiles.yaml")
+    factory = ProviderFactory(
+        registry,
+        profiles,
+        objects,
+        state,
+        PROJECT_ROOT / "tests" / "fixtures",
+    )
+
+    capabilities = factory.catalog_capabilities("market.seed_snapshot")
+    definitions = factory.definitions_for_capability(
+        "market.seed_snapshot",
+        require_complete=True,
+    )
+
+    assert {item.source_id for item in capabilities} == {
+        "eastmoney-reference",
+        "sina-reference",
+    }
+    assert all(
+        item.completeness_semantics is CompletenessSemantics.FULL_UNIVERSE
+        and item.completeness_score == 1
+        for item in capabilities
+    )
+    assert {item.provider_id for item in definitions} == {
+        "eastmoney-reference",
+        "sina-reference",
+    }
+
+
+def test_cninfo_catalog_uses_canonical_disclosure_capability_vocabulary(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    profiles = load_transport_profiles(PROJECT_ROOT / "configs" / "transport_profiles.yaml")
+    factory = ProviderFactory(
+        registry,
+        profiles,
+        objects,
+        state,
+        PROJECT_ROOT / "tests" / "fixtures",
+    )
+
+    capabilities = factory.catalog_capabilities("disclosure.document")
+    definitions = factory.definitions_for_capability(
+        "disclosure.document",
+        formal_use=True,
+        require_complete=True,
+    )
+    provider = factory.create_for_capability(
+        "disclosure.enumerate",
+        DisclosureEnumerationProvider,
+        formal_use=True,
+        require_complete=True,
+    )
+
+    assert [item.source_id for item in capabilities] == ["cninfo-disclosures"]
+    assert capabilities[0].source_class.value == "PRIMARY_OFFICIAL_WEB"
+    assert capabilities[0].completeness_semantics is CompletenessSemantics.EXACT_ITEM
+    assert [item.provider_id for item in definitions] == ["cninfo-disclosures"]
+    assert isinstance(provider, DisclosureEnumerationProvider)
+
+
+def test_provider_health_failure_is_scoped_to_the_checked_capability(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    ProviderProbeService(
+        project_root=PROJECT_ROOT,
+        registry=registry,
+        state=state,
+        objects=objects,
+        live_transport=lambda provider: RawProbeResponse(403, b'{"denied":true}'),
+    ).probe("sina-reference", live=True, probe_key="identity-denied")
+    factory = ProviderFactory(
+        registry,
+        load_transport_profiles(PROJECT_ROOT / "configs" / "transport_profiles.yaml"),
+        objects,
+        state,
+        PROJECT_ROOT / "tests" / "fixtures",
+    )
+
+    assert (
+        factory.capability_health_status("sina-reference", "instrument.identity")
+        is ProviderHealthStatus.UNAVAILABLE
+    )
+    assert (
+        factory.capability_health_status("sina-reference", "market.daily_unadjusted")
+        is ProviderHealthStatus.NOT_PROBED
+    )
+    assert not factory.claim_capability_attempt(
+        "sina-reference",
+        "instrument.identity",
+        live=True,
+    )
+    assert factory.claim_capability_attempt(
+        "sina-reference",
+        "market.daily_unadjusted",
+        live=True,
+    )
+
+    with state.transaction() as connection:
+        connection.execute(
+            "UPDATE provider_health SET latest_probe_id=? WHERE provider_id=?",
+            ("0" * 64, "sina-reference"),
+        )
+    assert (
+        factory.capability_health_status("sina-reference", "instrument.identity")
+        is ProviderHealthStatus.CORRUPT
+    )
+
+def test_reference_route_health_blocking_is_capability_scoped(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    ProviderProbeService(
+        project_root=PROJECT_ROOT,
+        registry=registry,
+        state=state,
+        objects=objects,
+        live_transport=lambda provider: RawProbeResponse(403, b'{"denied":true}'),
+    ).probe("sina-reference", live=True, probe_key="identity-route-denied")
+    service = MarketReferenceService(
+        state,
+        objects,
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    identity_step = next(
+        step
+        for step in service.config.route("instrument.identity")
+        if step.provider_id == "sina-reference"
+    )
+    daily_step = next(
+        step
+        for step in service.config.route("market.daily_unadjusted")
+        if step.provider_id == "sina-reference"
+    )
+
+    assert service._route_provider_blocked(
+        identity_step,
+        "instrument.identity",
+        live=True,
+    )
+    assert not service._route_provider_blocked(
+        daily_step,
+        "market.daily_unadjusted",
+        live=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing_health",
+        "blank_pointer",
+        "invalid_status",
+        "pointer",
+        "event",
+        "artifact",
+        "artifact_json",
+        "failure_count",
+        "object",
+    ],
+)
+def test_provider_factory_health_fails_closed_on_probe_lineage_corruption(
+    tmp_path: Path,
+    damage: str,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    probe = ProviderProbeService(
+        project_root=PROJECT_ROOT,
+        registry=registry,
+        state=state,
+        objects=objects,
+    ).probe("eastmoney-5m")
+    factory = ProviderFactory(
+        registry,
+        load_transport_profiles(PROJECT_ROOT / "configs" / "transport_profiles.yaml"),
+        objects,
+        state,
+        PROJECT_ROOT / "tests" / "fixtures",
+    )
+
+    if damage == "missing_health":
+        with state.transaction() as connection:
+            connection.execute(
+                "DELETE FROM provider_health WHERE provider_id=?",
+                ("eastmoney-5m",),
+            )
+    elif damage == "blank_pointer":
+        with state.transaction() as connection:
+            connection.execute(
+                "UPDATE provider_health SET report_artifact_id=NULL,"
+                "report_object_hash=NULL,latest_probe_id=NULL WHERE provider_id=?",
+                ("eastmoney-5m",),
+            )
+    elif damage == "invalid_status":
+        with state.transaction() as connection:
+            connection.execute(
+                "UPDATE provider_health SET status='INVALID' WHERE provider_id=?",
+                ("eastmoney-5m",),
+            )
+    elif damage == "pointer":
+        with state.transaction() as connection:
+            connection.execute(
+                "UPDATE provider_health SET latest_probe_id=? WHERE provider_id=?",
+                ("0" * 64, "eastmoney-5m"),
+            )
+    elif damage == "event":
+        with state.transaction() as connection:
+            connection.execute(
+                "UPDATE provider_probe_event SET status='DEGRADED' WHERE probe_id=?",
+                (str(probe.report_artifact_id).split(":", maxsplit=1)[1],),
+            )
+    elif damage == "artifact":
+        with state.transaction() as connection:
+            connection.execute(
+                "UPDATE artifact_registry SET input_hashes_json='[]' WHERE artifact_id=?",
+                (probe.report_artifact_id,),
+            )
+    elif damage == "artifact_json":
+        with state.transaction() as connection:
+            connection.execute(
+                "UPDATE artifact_registry SET input_hashes_json='not-json' WHERE artifact_id=?",
+                (probe.report_artifact_id,),
+            )
+    elif damage == "failure_count":
+        with state.transaction() as connection:
+            connection.execute(
+                "UPDATE provider_health SET failure_count='not-an-int' WHERE provider_id=?",
+                ("eastmoney-5m",),
+            )
+    else:
+        objects.path_for(str(probe.report_object_hash)).write_bytes(b"tampered")
+
+    assert (
+        factory.capability_health_status("eastmoney-5m", "market.raw_5m")
+        is ProviderHealthStatus.CORRUPT
+    )
+
+
+def test_provider_catalog_does_not_treat_unrelated_snapshot_as_capability_local_cache(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    ref = objects.put_json({"purpose": "unrelated-disclosure"})
+    snapshot = SourceSnapshot(
+        snapshot_id="eastmoney-reference:unrelated",
+        source_id="eastmoney-reference",
+        object_sha256=ref.sha256,
+        fetched_at=NOW,
+        available_to_system_at=NOW,
+        fetch_status=FetchStatus.SUCCEEDED,
+        source_url="https://example.invalid/unrelated",
+        mime="application/json",
+        byte_size=ref.byte_size,
+        headers_hash="1" * 64,
+        rights_status="PUBLIC_REFERENCE_DATA",
+        created_at=NOW,
+    )
+    state.register_snapshot(snapshot)
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    profiles = load_transport_profiles(PROJECT_ROOT / "configs" / "transport_profiles.yaml")
+    factory = ProviderFactory(
+        registry,
+        profiles,
+        objects,
+        state,
+        PROJECT_ROOT / "tests" / "fixtures",
+    )
+
+    capability = next(
+        item
+        for item in factory.catalog_capabilities("market.seed_snapshot")
+        if item.source_id == "eastmoney-reference"
+    )
+
+    assert capability.local_availability_score == 0
+    assert capability.freshness_score == Decimal("0.5")
+
+
+def test_market_reference_capability_route_prefers_healthy_source_over_static_hint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+
+    def health(provider_id: str, capability: str) -> ProviderHealthStatus:
+        del capability
+        return {
+            "baostock-reference": ProviderHealthStatus.UNAVAILABLE,
+            "eastmoney-reference": ProviderHealthStatus.HEALTHY,
+            "sina-reference": ProviderHealthStatus.HEALTHY,
+        }.get(provider_id, ProviderHealthStatus.NOT_PROBED)
+
+    monkeypatch.setattr(service.provider_factory, "capability_health_status", health)
+
+    route = service._capability_route(
+        "instrument.master", live=True, formal_use=True, require_complete=True
+    )
+
+    assert route[0].provider_id == "eastmoney-reference"
+    assert route[-1].provider_id == "baostock-reference"
+
+
+def test_market_reference_config_rejects_nested_retry_drift(tmp_path: Path) -> None:
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    source = (PROJECT_ROOT / "configs" / "market_reference.yaml").read_text(encoding="utf-8")
+    config_path = tmp_path / "market_reference.yaml"
+    config_path.write_text(
+        source.replace("max_attempts: 1", "max_attempts: 2", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="retry must stay at one attempt"):
+        load_market_reference_config(config_path, registry)
+
+
+def test_market_reference_config_rejects_formal_eligibility_drift() -> None:
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    providers = [
+        item.model_copy(
+            update={
+                "formal_capabilities": [
+                    capability
+                    for capability in item.formal_capabilities
+                    if capability != "instrument.master"
+                ]
+            }
+        )
+        if item.provider_id == "eastmoney-reference"
+        else item
+        for item in registry.providers
+    ]
+
+    with pytest.raises(ValueError, match="not formally eligible"):
+        load_market_reference_config(
+            PROJECT_ROOT / "configs" / "market_reference.yaml",
+            registry.model_copy(update={"providers": providers}),
+        )
+
+
+def test_market_reference_config_rejects_completeness_semantics_drift() -> None:
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    providers = [
+        item.model_copy(
+            update={
+                "completeness_semantics": {
+                    **item.completeness_semantics,
+                    "market.daily_unadjusted": CompletenessSemantics.DISCOVERY_ONLY,
+                }
+            }
+        )
+        if item.provider_id == "sina-reference"
+        else item
+        for item in registry.providers
+    ]
+
+    with pytest.raises(ValueError, match="invalid completeness semantics"):
+        load_market_reference_config(
+            PROJECT_ROOT / "configs" / "market_reference.yaml",
+            registry.model_copy(update={"providers": providers}),
+        )
+
+
+def test_market_reference_breaker_failure_is_isolated_by_capability(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    for _ in range(3):
+        service.source_breaker.record_failure(
+            "baostock-reference",
+            "instrument.master",
+            SourceFailureClass.TRANSIENT_NETWORK,
+        )
+
+    assert (
+        service._source_attempt_block_reason(
+            "baostock-reference",
+            "instrument.master",
+            live=True,
+        )
+        == "BAOSTOCK_REFERENCE_CIRCUIT_OPEN"
+    )
+    assert (
+        service._source_attempt_block_reason(
+            "baostock-reference",
+            "market.calendar",
+            live=True,
+        )
+        is None
+    )
+
+
+def test_market_reference_config_rejects_provider_wide_breaker_drift(
+    tmp_path: Path,
+) -> None:
+    registry = load_provider_registry(PROJECT_ROOT / "configs" / "provider_registry.yaml")
+    source = (PROJECT_ROOT / "configs" / "market_reference.yaml").read_text(encoding="utf-8")
+    config_path = tmp_path / "market_reference.yaml"
+    config_path.write_text(
+        source + "\ncircuit_breakers:\n  baostock-reference:\n    cooldown_seconds: 1800\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"provider\+capability policy"):
+        load_market_reference_config(config_path, registry)
+
+
 def test_sina_recorded_master_preserves_three_market_boundaries(tmp_path: Path) -> None:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
     state.migrate()
@@ -215,6 +755,107 @@ def test_sina_recorded_master_preserves_three_market_boundaries(tmp_path: Path) 
         )
         assert [item.symbol for item in records] == [symbol]
         assert all(item.market is market for item in records)
+
+
+def test_sina_live_master_rejects_repeated_pagination_page(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    repeated_page = [
+        {"symbol": "sh600000", "code": "600000", "name": "浦发银行"},
+        {"symbol": "sh600001", "code": "600001", "name": "测试证券"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=repeated_page, request=request)
+
+    provider = SinaReferenceProvider(
+        objects,
+        state,
+        PROJECT_ROOT / "tests" / "fixtures" / "reference" / "sina",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    provider.market_center_page_size = 2
+    provider.market_center_max_pages = 3
+
+    with pytest.raises(ValueError, match="repeated a pagination page"):
+        provider.fetch_master(Market.XSHG, live=True)
+
+
+def _daily_bar(
+    provider_id: str,
+    close: str,
+    session: date = date(2026, 8, 20),
+) -> DailyBarObservation:
+    close_value = Decimal(close)
+    identity = {
+        "provider_id": provider_id,
+        "symbol": "600519",
+        "session": session.isoformat(),
+        "close": close,
+    }
+    return DailyBarObservation(
+        created_at=NOW,
+        observation_id=content_hash(identity),
+        instrument_id="XSHG:600519",
+        market=Market.XSHG,
+        symbol="600519",
+        session_date=session,
+        session_close_at=datetime.combine(
+            session,
+            datetime.min.time().replace(hour=15),
+            tzinfo=ZoneInfo("Asia/Shanghai"),
+        ),
+        open=Decimal("10.00"),
+        high=Decimal("11.00"),
+        low=Decimal("9.00"),
+        close=close_value,
+        previous_close=Decimal("9.90"),
+        volume=Decimal("1000000"),
+        volume_unit=VolumeUnit.SHARE,
+        amount=Decimal("10000000"),
+        amount_unit=AmountUnit.CNY,
+        adjustment_mode=AdjustmentMode.NONE,
+        source_snapshot_id=f"{provider_id}:snapshot",
+        available_to_system_at=NOW,
+    )
+
+
+def test_official_calendar_proves_secondary_daily_window_only_when_all_sessions_present(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    complete = [
+        _daily_bar("eastmoney-reference", "10.00", date(2026, 7, 20)),
+        _daily_bar("eastmoney-reference", "10.10", date(2026, 7, 21)),
+        _daily_bar("eastmoney-reference", "10.20", date(2026, 7, 22)),
+    ]
+
+    assert service._daily_window_complete(
+        complete,
+        Market.XSHG,
+        date(2026, 7, 20),
+        date(2026, 7, 22),
+    )
+    assert not service._daily_window_complete(
+        [complete[0], complete[2]],
+        Market.XSHG,
+        date(2026, 7, 20),
+        date(2026, 7, 22),
+    )
+    assert not service._daily_window_complete(
+        complete,
+        Market.XSHG,
+        date(2027, 7, 20),
+        date(2027, 7, 22),
+    )
 
 
 def _instrument(symbol: str) -> InstrumentRecord:
@@ -276,6 +917,269 @@ def test_live_master_below_floor_continues_to_sina_fallback(
     assert "BAOSTOCK_REFERENCE_MASTER_BELOW_MINIMUM_COVERAGE" in reasons
     assert "EASTMONEY_MASTER_FAILED" in reasons
     assert "SINA_FALLBACK_USED" in reasons
+
+
+@pytest.mark.parametrize(
+    ("killed_provider", "killed_operation", "survivor_provider", "survivor_operation"),
+    [
+        (
+            "baostock-reference",
+            "baostock-daily",
+            "eastmoney-reference",
+            "eastmoney-daily",
+        ),
+        (
+            "eastmoney-reference",
+            "eastmoney-daily",
+            "sina-reference",
+            "sina-daily",
+        ),
+        (
+            "sina-reference",
+            "sina-daily",
+            "baostock-reference",
+            "baostock-daily",
+        ),
+    ],
+)
+def test_single_market_provider_kill_is_isolated_by_daily_capability_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    killed_provider: str,
+    killed_operation: str,
+    survivor_provider: str,
+    survivor_operation: str,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    route = [
+        ReferenceRouteStep(provider_id=killed_provider, operation=killed_operation),
+        ReferenceRouteStep(provider_id=survivor_provider, operation=survivor_operation),
+    ]
+    monkeypatch.setattr(service, "_capability_route", lambda *_args, **_kwargs: route)
+
+    def run_route(step: ReferenceRouteStep, *args: object, **kwargs: object):
+        del args, kwargs
+        if step.provider_id == killed_provider:
+            raise ValueError(f"{killed_provider} killed")
+        return [_daily_bar(survivor_provider, "10.00")], ["snap:survivor"], NOW, [], True
+
+    captured: dict[str, object] = {}
+
+    def release(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(status="COMPLETE")
+
+    monkeypatch.setattr(service, "_run_daily_route_step", run_route)
+    monkeypatch.setattr(service, "_release", release)
+
+    service.sync_daily(
+        "600519",
+        Market.XSHG,
+        date(2026, 8, 20),
+        date(2026, 8, 25),
+        live=True,
+    )
+
+    assert captured["provider_id"] == survivor_provider
+    assert captured["complete"] is True
+    assert len(captured["records"]) == 1  # type: ignore[arg-type]
+    assert any(str(reason).endswith("FAILED") for reason in captured["reasons"])  # type: ignore[index]
+
+
+def test_baostock_daily_envelope_cannot_bypass_exact_trading_window_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    monkeypatch.setattr(service, "_daily_window_complete", lambda *args, **kwargs: False)
+
+    records, _snapshots, _available, reasons, complete = service._run_daily_route_step(
+        ReferenceRouteStep(
+            provider_id="baostock-reference",
+            operation="baostock-daily",
+        ),
+        "600519",
+        Market.XSHG,
+        date(2026, 7, 20),
+        date(2026, 7, 22),
+        live=False,
+    )
+
+    assert records
+    assert not complete
+    assert reasons == ["BAOSTOCK_DAILY_WINDOW_INCOMPLETE"]
+
+
+def test_reference_acquisition_never_calls_health_unavailable_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    route = [
+        ReferenceRouteStep(provider_id="eastmoney-reference", operation="eastmoney-daily"),
+        ReferenceRouteStep(provider_id="baostock-reference", operation="baostock-daily"),
+    ]
+    monkeypatch.setattr(service, "_capability_route", lambda *_args, **_kwargs: route)
+
+    def health(provider_id: str, capability: str) -> ProviderHealthStatus:
+        del capability
+        return {
+            "eastmoney-reference": ProviderHealthStatus.HEALTHY,
+            "baostock-reference": ProviderHealthStatus.UNAVAILABLE,
+        }.get(provider_id, ProviderHealthStatus.NOT_PROBED)
+
+    monkeypatch.setattr(service.provider_factory, "capability_health_status", health)
+    calls: list[str] = []
+
+    def run_route(step: ReferenceRouteStep, *args: object, **kwargs: object):
+        del args, kwargs
+        calls.append(step.provider_id)
+        if step.provider_id == "eastmoney-reference":
+            raise ValueError("healthy source failed during this request")
+        raise AssertionError("UNAVAILABLE provider must not be called")
+
+    captured: dict[str, object] = {}
+
+    def release(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(status="FAILED")
+
+    monkeypatch.setattr(service, "_run_daily_route_step", run_route)
+    monkeypatch.setattr(service, "_release", release)
+
+    service.sync_daily(
+        "600519",
+        Market.XSHG,
+        date(2026, 8, 20),
+        date(2026, 8, 25),
+        live=True,
+    )
+
+    assert calls == ["eastmoney-reference"]
+    assert captured["records"] == []
+    reasons = captured["reasons"]
+    assert isinstance(reasons, list)
+    assert "BAOSTOCK_REFERENCE_HEALTH_UNAVAILABLE" in reasons
+
+
+def test_live_daily_ohlcv_conflict_is_typed_and_not_published(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    route = [
+        ReferenceRouteStep(provider_id="baostock-reference", operation="baostock-daily"),
+        ReferenceRouteStep(provider_id="eastmoney-reference", operation="eastmoney-daily"),
+    ]
+    monkeypatch.setattr(service, "_capability_route", lambda *_args, **_kwargs: route)
+
+    def run_route(step: ReferenceRouteStep, *args: object, **kwargs: object):
+        del args, kwargs
+        if step.provider_id == "baostock-reference":
+            return (
+                [_daily_bar("baostock-reference", "10.00")],
+                ["snap:primary"],
+                NOW,
+                [],
+                True,
+            )
+        return (
+            [_daily_bar("eastmoney-reference", "10.10")],
+            ["snap:shadow"],
+            NOW,
+            [],
+            False,
+        )
+
+    monkeypatch.setattr(service, "_run_daily_route_step", run_route)
+
+    report = service.sync_daily(
+        "600519",
+        Market.XSHG,
+        date(2026, 8, 20),
+        date(2026, 8, 20),
+        live=True,
+    )
+
+    assert report.status is ReferenceCoverageStatus.CONFLICTED
+    assert report.coverage.status is ReferenceCoverageStatus.CONFLICTED
+    assert report.release_id is None
+    assert report.pit_status is ReferencePitStatus.UNVERIFIED
+    assert any(code.startswith("OHLCV_CONFLICTED:") for code in report.reason_codes)
+    assert state.list_market_reference_releases() == []
+
+
+def test_live_master_above_floor_but_unproven_continues_to_complete_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    service = MarketReferenceService(
+        state,
+        objects,
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    service.config.minimum_instrument_records[Market.XSHG] = 1
+    route = [
+        ReferenceRouteStep(provider_id="eastmoney-reference", operation="eastmoney-master"),
+        ReferenceRouteStep(provider_id="baostock-reference", operation="baostock-master"),
+    ]
+    monkeypatch.setattr(service, "_capability_route", lambda *_args, **_kwargs: route)
+
+    def run_route(step: ReferenceRouteStep, market: Market | None, *, live: bool):
+        assert market is Market.XSHG
+        assert live
+        if step.provider_id == "eastmoney-reference":
+            return [_instrument("600000"), _instrument("600001")], ["snap:em"], NOW, [
+                "EASTMONEY_MASTER_COVERAGE_UNPROVEN"
+            ], False
+        return [_instrument("600000"), _instrument("600001")], ["snap:bao"], NOW, [], True
+
+    captured: dict[str, object] = {}
+
+    def release(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(status="COMPLETE")
+
+    monkeypatch.setattr(service, "_run_master_route_step", run_route)
+    monkeypatch.setattr(service, "_release", release)
+
+    service.sync_instruments(Market.XSHG, live=True)
+
+    assert captured["provider_id"] == "baostock-reference"
+    assert captured["complete"] is True
+    assert len(captured["records"]) == 2  # type: ignore[arg-type]
 
 
 class _PrimarySeedProvider:
@@ -349,6 +1253,16 @@ def _premarket_sina_payload() -> dict[str, object]:
     }
 
 
+def test_sina_row_floor_and_pagination_end_do_not_prove_formal_universe_coverage() -> None:
+    payload = _premarket_sina_payload()
+    payload["complete"] = True
+
+    assert _seed_payload_coverage_ratio(payload, Market.XSHG) is None
+
+    payload["coverage_denominator"] = 2
+    assert _seed_payload_coverage_ratio(payload, Market.XSHG) == 1.0
+
+
 def test_sina_premarket_activity_proxy_requires_settlement_pattern() -> None:
     payload = _premarket_sina_payload()
     assert _sina_activity_unavailable(payload)
@@ -388,10 +1302,11 @@ class _FailingSeedProvider(_PrimarySeedProvider):
         raise ValueError("provider unavailable")
 
 
-def _cached_sina_release(
+def _cached_master_release(
     objects: ObjectStore,
     snapshot: SourceSnapshot,
     available: datetime,
+    provider_id: str = "sina-reference",
 ) -> dict[str, object]:
     logical_hash = "c" * 64
     descriptor = ReferenceFileDescriptor(
@@ -406,7 +1321,7 @@ def _cached_sina_release(
         {
             "dataset_kind": ReferenceDatasetKind.INSTRUMENT_MASTER.value,
             "scope_key": Market.XSHG.value,
-            "provider_id": "sina-reference",
+            "provider_id": provider_id,
             "batch_id": batch_id,
             "content_hash": logical_hash,
             "previous_release_id": None,
@@ -418,7 +1333,7 @@ def _cached_sina_release(
         content_hash=logical_hash,
         dataset_kind=ReferenceDatasetKind.INSTRUMENT_MASTER,
         scope_key=Market.XSHG.value,
-        provider_id="sina-reference",
+        provider_id=provider_id,
         batch_id=batch_id,
         raw_snapshot_ids=[snapshot.snapshot_id],
         observation_files=[descriptor],
@@ -435,7 +1350,7 @@ def _cached_sina_release(
     manifest_ref = objects.put_bytes(manifest.model_dump_json().encode("utf-8"))
     return {
         "release_id": manifest.release_id,
-        "provider_id": "sina-reference",
+        "provider_id": provider_id,
         "manifest_object_hash": manifest_ref.sha256,
     }
 
@@ -449,6 +1364,7 @@ def test_fresh_complete_sina_master_is_reused_after_live_provider_failure(
     objects = ObjectStore(tmp_path / "objects")
     payload = _premarket_sina_payload()
     payload["_astock_request"] = {"market": "XSHG", "purpose": "INSTRUMENT_MASTER"}
+    payload["complete"] = True
     ref = objects.put_json(payload)
     available = datetime.now(UTC)
     snapshot = SourceSnapshot(
@@ -466,7 +1382,7 @@ def test_fresh_complete_sina_master_is_reused_after_live_provider_failure(
         created_at=available,
     )
     state.register_snapshot(snapshot)
-    release = _cached_sina_release(objects, snapshot, available)
+    release = _cached_master_release(objects, snapshot, available)
     monkeypatch.setattr(state, "list_market_reference_releases", lambda *_args: [release])
 
     router = ResearchSeedProviderRouter(
@@ -483,6 +1399,121 @@ def test_fresh_complete_sina_master_is_reused_after_live_provider_failure(
     assert restored_snapshot.snapshot_id == snapshot.snapshot_id
 
 
+def test_fresh_complete_master_cache_is_provider_independent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    payload: dict[str, object] = {
+        "_astock_request": {"market": "XSHG", "purpose": "INSTRUMENT_MASTER"},
+        "data": {
+            "total": 2,
+            "diff": [
+                {
+                    "f12": "600000",
+                    "f14": "甲",
+                    "f2": 10.0,
+                    "f6": 100_000_000,
+                    "f8": 1.0,
+                    "f21": 10_000_000_000,
+                },
+                {
+                    "f12": "600001",
+                    "f14": "乙",
+                    "f2": 11.0,
+                    "f6": 110_000_000,
+                    "f8": 1.1,
+                    "f21": 11_000_000_000,
+                },
+            ],
+        },
+    }
+    ref = objects.put_json(payload)
+    available = datetime.now(UTC)
+    snapshot = SourceSnapshot(
+        snapshot_id="eastmoney-reference:test-master",
+        source_id="eastmoney-reference",
+        object_sha256=ref.sha256,
+        fetched_at=available,
+        available_to_system_at=available,
+        fetch_status=FetchStatus.SUCCEEDED,
+        source_url="https://example.invalid/eastmoney-master",
+        mime="application/json",
+        byte_size=ref.byte_size,
+        headers_hash="f" * 64,
+        rights_status="PUBLIC_REFERENCE_DATA",
+        created_at=available,
+    )
+    state.register_snapshot(snapshot)
+    release = _cached_master_release(
+        objects,
+        snapshot,
+        available,
+        provider_id="eastmoney-reference",
+    )
+    monkeypatch.setattr(state, "list_market_reference_releases", lambda *_args: [release])
+    router = ResearchSeedProviderRouter(
+        providers=[],
+        minimum_rows_by_market={Market.XSHG: 2, Market.XSHE: 2, Market.BJSE: 1},
+        state=state,
+        objects=objects,
+    )
+
+    restored, restored_snapshot = router.fetch_seed_snapshot(Market.XSHG, live=True)
+
+    assert restored == payload
+    assert restored_snapshot.snapshot_id == snapshot.snapshot_id
+    assert _seed_payload_coverage_ratio(restored, Market.XSHG) == 1.0
+
+
+def test_cached_master_snapshot_provider_lineage_mismatch_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    payload = _premarket_sina_payload()
+    payload["_astock_request"] = {"market": "XSHG", "purpose": "INSTRUMENT_MASTER"}
+    payload["complete"] = True
+    ref = objects.put_json(payload)
+    available = datetime.now(UTC)
+    snapshot = SourceSnapshot(
+        snapshot_id="sina-reference:mismatched-master",
+        source_id="sina-reference",
+        object_sha256=ref.sha256,
+        fetched_at=available,
+        available_to_system_at=available,
+        fetch_status=FetchStatus.SUCCEEDED,
+        source_url="https://example.invalid/mismatched-master",
+        mime="application/json",
+        byte_size=ref.byte_size,
+        headers_hash="8" * 64,
+        rights_status="PUBLIC_REFERENCE_DATA",
+        created_at=available,
+    )
+    state.register_snapshot(snapshot)
+    release = _cached_master_release(
+        objects,
+        snapshot,
+        available,
+        provider_id="eastmoney-reference",
+    )
+    monkeypatch.setattr(state, "list_market_reference_releases", lambda *_args: [release])
+    router = ResearchSeedProviderRouter(
+        _FailingSeedProvider(),
+        _FailingSeedProvider(),
+        minimum_rows_by_market={Market.XSHG: 2, Market.XSHE: 2, Market.BJSE: 1},
+        state=state,
+        objects=objects,
+    )
+
+    with pytest.raises(ValueError, match="provider unavailable"):
+        router.fetch_seed_snapshot(Market.XSHG, live=True)
+
+
 def test_tampered_sina_release_identity_is_not_reused(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -492,6 +1523,7 @@ def test_tampered_sina_release_identity_is_not_reused(
     objects = ObjectStore(tmp_path / "objects")
     payload = _premarket_sina_payload()
     payload["_astock_request"] = {"market": "XSHG", "purpose": "INSTRUMENT_MASTER"}
+    payload["complete"] = True
     ref = objects.put_json(payload)
     available = datetime.now(UTC)
     snapshot = SourceSnapshot(
@@ -509,8 +1541,50 @@ def test_tampered_sina_release_identity_is_not_reused(
         created_at=available,
     )
     state.register_snapshot(snapshot)
-    release = _cached_sina_release(objects, snapshot, available)
+    release = _cached_master_release(objects, snapshot, available)
     release["release_id"] = "0" * 64
+    monkeypatch.setattr(state, "list_market_reference_releases", lambda *_args: [release])
+    router = ResearchSeedProviderRouter(
+        _FailingSeedProvider(),
+        _FailingSeedProvider(),
+        minimum_rows_by_market={Market.XSHG: 2, Market.XSHE: 2, Market.BJSE: 1},
+        state=state,
+        objects=objects,
+    )
+
+    with pytest.raises(ValueError, match="provider unavailable"):
+        router.fetch_seed_snapshot(Market.XSHG, live=True)
+
+
+def test_corrupted_local_master_snapshot_is_rejected_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    payload = _premarket_sina_payload()
+    payload["_astock_request"] = {"market": "XSHG", "purpose": "INSTRUMENT_MASTER"}
+    payload["complete"] = True
+    ref = objects.put_json(payload)
+    available = datetime.now(UTC)
+    snapshot = SourceSnapshot(
+        snapshot_id="sina-reference:corrupt-master",
+        source_id="sina-reference",
+        object_sha256=ref.sha256,
+        fetched_at=available,
+        available_to_system_at=available,
+        fetch_status=FetchStatus.SUCCEEDED,
+        source_url="https://example.invalid/sina-master",
+        mime="application/json",
+        byte_size=ref.byte_size,
+        headers_hash="9" * 64,
+        rights_status="PUBLIC_REFERENCE_DATA",
+        created_at=available,
+    )
+    state.register_snapshot(snapshot)
+    release = _cached_master_release(objects, snapshot, available)
+    objects.path_for(snapshot.object_sha256).write_bytes(b"corrupted-local-snapshot")
     monkeypatch.setattr(state, "list_market_reference_releases", lambda *_args: [release])
     router = ResearchSeedProviderRouter(
         _FailingSeedProvider(),
@@ -533,6 +1607,7 @@ def test_stale_sina_master_is_not_reused(
     objects = ObjectStore(tmp_path / "objects")
     payload = _premarket_sina_payload()
     payload["_astock_request"] = {"market": "XSHG", "purpose": "INSTRUMENT_MASTER"}
+    payload["complete"] = True
     ref = objects.put_json(payload)
     available = datetime.now(UTC) - timedelta(hours=1)
     snapshot = SourceSnapshot(
@@ -550,7 +1625,7 @@ def test_stale_sina_master_is_not_reused(
         created_at=available,
     )
     state.register_snapshot(snapshot)
-    release = _cached_sina_release(objects, snapshot, available)
+    release = _cached_master_release(objects, snapshot, available)
     monkeypatch.setattr(state, "list_market_reference_releases", lambda *_args: [release])
     router = ResearchSeedProviderRouter(
         _FailingSeedProvider(),

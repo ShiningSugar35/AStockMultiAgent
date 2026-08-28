@@ -40,12 +40,14 @@ from astock.core.codex_runs import (
 from astock.core.errors import AStockError, FailureClass
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
+from astock.core.source_policy_gate import SourcePolicyGate
 from astock.core.state import StateStore
 from astock.documents import (
     CninfoDisclosureProvider,
     DisclosureSyncService,
     DocumentPageRepository,
     DocumentRepository,
+    OfficialWebDocumentCaptureService,
     PdfParseService,
 )
 from astock.financial_integrity import (
@@ -147,6 +149,7 @@ from astock.research import (
 )
 from astock.schemas import (
     AdjustmentMode,
+    AgentSourceProposal,
     BarRequest,
     BaseCaseBuildRequest,
     CandidateAuditStatus,
@@ -191,6 +194,7 @@ from astock.schemas import (
     ShadowDecisionAssignmentRequest,
     ShadowExecutionObservationDraft,
     ShadowStudyCreateRequest,
+    SourceClass,
     SpecialistDeltaBuildRequest,
     SpecialistDiagnosticRequest,
     SpecialistDiagnosticRequestV2,
@@ -683,6 +687,123 @@ def _candidate_scan_service(
     )
 
 
+@app.command("source-proposal-check")
+def source_proposal_check(
+    capability: Annotated[str, typer.Option("--capability", help="Requested research capability.")],
+    query: Annotated[str, typer.Option(help="Agent discovery query or source-selection context.")],
+    expected_fact: Annotated[
+        str,
+        typer.Option("--expected-fact", help="Fact the source is expected to support."),
+    ],
+    preferred_source_class: Annotated[
+        SourceClass,
+        typer.Option("--source-class", case_sensitive=False),
+    ] = SourceClass.REPUTABLE_WEB_SEARCH,
+    candidate_url: Annotated[
+        str | None,
+        typer.Option(
+            "--url",
+            help="Exact candidate URL after discovery; omit for query-only discovery.",
+        ),
+    ] = None,
+    formal_use: Annotated[bool, typer.Option("--formal-use")] = False,
+    require_complete: Annotated[bool, typer.Option("--require-complete")] = False,
+    reason: Annotated[
+        str,
+        typer.Option(help="Why the Agent selected or wants to discover this source."),
+    ] = "agent dynamic source proposal",
+) -> None:
+    """Validate an Agent-proposed dynamic source before acquisition or evidence admission."""
+
+    try:
+        proposal = AgentSourceProposal.model_validate(
+            {
+                "requested_capability": capability,
+                "query": query,
+                "candidate_url": candidate_url,
+                "expected_fact": expected_fact,
+                "preferred_source_class": preferred_source_class,
+                "formal_use": formal_use,
+                "require_complete": require_complete,
+                "reason": reason,
+            }
+        )
+        decision = SourcePolicyGate().validate(proposal)
+    except (OSError, ValueError, ValidationError):
+        _emit({"status": "FAILED", "failure_code": "INVALID_SOURCE_PROPOSAL"})
+        raise typer.Exit(code=1) from None
+    _emit(decision.model_dump(mode="json"))
+    if not decision.allowed:
+        raise typer.Exit(code=2)
+
+
+@app.command("official-web-document-ingest")
+def official_web_document_ingest(
+    path: Annotated[Path, typer.Argument(exists=True, file_okay=True, dir_okay=False)],
+    url: Annotated[str, typer.Option(help="Exact admitted official HTTPS document URL.")],
+    title: Annotated[str, typer.Option(help="Official document title.")],
+    published_at: Annotated[str, typer.Option(help="Aware official publication timestamp.")],
+    company_ids: Annotated[
+        list[str],
+        typer.Option("--company-id", help="Related six-digit A-share company id; repeatable."),
+    ],
+    capability: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Exact-item capability: disclosure.document or "
+                "financial.official_document."
+            )
+        ),
+    ] = "disclosure.document",
+    document_type: Annotated[
+        DocumentType, typer.Option(case_sensitive=False)
+    ] = DocumentType.ANNOUNCEMENT,
+    disclosure_id: Annotated[str | None, typer.Option()] = None,
+    period_end: Annotated[
+        str | None, typer.Option(help="Optional YYYY-MM-DD reporting period.")
+    ] = None,
+    query: Annotated[str, typer.Option(help="Agent source-discovery query/context.")] = (
+        "authoritative official document recovery"
+    ),
+    expected_fact: Annotated[
+        str,
+        typer.Option(help="Decision-relevant fact expected from the document."),
+    ] = "official disclosed fact",
+    reason: Annotated[str, typer.Option()] = "Agent official-domain recovery",
+) -> None:
+    """Freeze an Agent-acquired official PDF after deterministic source admission."""
+
+    _, state, objects = _services()
+    try:
+        proposal = AgentSourceProposal.model_validate(
+            {
+                "requested_capability": capability,
+                "query": query,
+                "candidate_url": url,
+                "expected_fact": expected_fact,
+                "preferred_source_class": SourceClass.PRIMARY_OFFICIAL_WEB,
+                "formal_use": True,
+                "require_complete": False,
+                "reason": reason,
+            }
+        )
+        capture = OfficialWebDocumentCaptureService(state, objects).capture(
+            proposal,
+            path.read_bytes(),
+            title=title,
+            company_ids=company_ids,
+            published_at=datetime.fromisoformat(published_at.replace("Z", "+00:00")),
+            document_type=document_type,
+            disclosure_id=disclosure_id,
+            period_end=date.fromisoformat(period_end) if period_end else None,
+        )
+    except (AStockError, OSError, ValueError, ValidationError):
+        _emit({"status": "FAILED", "failure_code": "OFFICIAL_WEB_DOCUMENT_INGEST_FAILED"})
+        raise typer.Exit(code=2) from None
+    _emit(capture.model_dump(mode="json"))
+
+
 @app.command("provider-list")
 def provider_list() -> None:
     """List declared providers and durable health without calling the network."""
@@ -870,7 +991,7 @@ def sync_instruments(
         _emit({"status": "FAILED", "failure_code": "REFERENCE_SYNC_FAILED"})
         raise typer.Exit(code=2) from exc
     _emit(report)
-    if report.status is ReferenceCoverageStatus.FAILED:
+    if report.status in {ReferenceCoverageStatus.FAILED, ReferenceCoverageStatus.CONFLICTED}:
         raise typer.Exit(code=2)
 
 
@@ -880,19 +1001,30 @@ def sync_calendar(
     start: Annotated[str, typer.Option(help="Inclusive YYYY-MM-DD date.")],
     end: Annotated[str, typer.Option(help="Inclusive YYYY-MM-DD date.")],
     live: Annotated[bool, typer.Option("--live")] = False,
+    official_search_completed: Annotated[
+        bool,
+        typer.Option(
+            "--official-search-completed",
+            help="Acknowledge authoritative exchange-domain Search before provider fallback.",
+        ),
+    ] = False,
 ) -> None:
     """Publish a point-in-time exchange-calendar release."""
 
     paths, state, objects = _services()
     try:
         report = _market_reference_service(paths, state, objects).sync_calendar(
-            exchange, date.fromisoformat(start), date.fromisoformat(end), live=live
+            exchange,
+            date.fromisoformat(start),
+            date.fromisoformat(end),
+            live=live,
+            official_search_completed=official_search_completed,
         )
     except (AStockError, OSError, RuntimeError, ValueError) as exc:
         _emit({"status": "FAILED", "failure_code": "REFERENCE_SYNC_FAILED"})
         raise typer.Exit(code=2) from exc
     _emit(report)
-    if report.status is ReferenceCoverageStatus.FAILED:
+    if report.status in {ReferenceCoverageStatus.FAILED, ReferenceCoverageStatus.CONFLICTED}:
         raise typer.Exit(code=2)
 
 
@@ -919,7 +1051,7 @@ def sync_daily(
         _emit({"status": "FAILED", "failure_code": "REFERENCE_SYNC_FAILED"})
         raise typer.Exit(code=2) from exc
     _emit(report)
-    if report.status is ReferenceCoverageStatus.FAILED:
+    if report.status in {ReferenceCoverageStatus.FAILED, ReferenceCoverageStatus.CONFLICTED}:
         raise typer.Exit(code=2)
 
 
@@ -946,7 +1078,7 @@ def sync_corporate_actions(
         _emit({"status": "FAILED", "failure_code": "REFERENCE_SYNC_FAILED"})
         raise typer.Exit(code=2) from exc
     _emit(report)
-    if report.status is ReferenceCoverageStatus.FAILED:
+    if report.status in {ReferenceCoverageStatus.FAILED, ReferenceCoverageStatus.CONFLICTED}:
         raise typer.Exit(code=2)
 
 
@@ -1101,9 +1233,9 @@ def financial_source_audit(
             raise typer.Exit(code=2)
         return
     try:
-        if period_end is None or as_of is None:
-            raise ValueError("period_end and as_of are required for company audit")
-        parsed_as_of = datetime.fromisoformat(as_of)
+        if period_end is None:
+            raise ValueError("period_end is required for company audit")
+        parsed_as_of = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
         if parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None:
             raise ValueError("as_of requires timezone")
         pack = service.run_audit(

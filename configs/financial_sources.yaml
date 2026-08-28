@@ -14,6 +14,10 @@ allowed_official_publishers:
   - 上海证券交易所
   - 深圳证券交易所
   - 北京证券交易所
+  - cninfo-official-web
+  - sse-official-web
+  - szse-official-web
+  - bse-official-web
 official_market_coverage:
   XSHG: AVAILABLE
   XSHE: AVAILABLE

@@ -10,12 +10,14 @@ from statistics import median
 from typing import Any
 
 from astock.candidates.config import CandidateScanConfig
+from astock.candidates.financial_policy import financial_pack_is_candidate_eligible
 from astock.candidates.repository import CandidateRepository
 from astock.candidates.storage import CandidateParquetStore
 from astock.candidates.verification import (
     CandidateInputVerifier,
     ProductionCandidateInputVerifier,
 )
+from astock.core.errors import AStockError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.schemas.candidates import (
@@ -50,6 +52,7 @@ from astock.schemas.candidates import (
     CandidateUniverseSnapshot,
     CandidateWatchlistIntent,
 )
+from astock.schemas.financial import FinancialIntegrityEvidencePack
 
 
 class CandidateInterrupted(RuntimeError):
@@ -668,7 +671,15 @@ class CandidateScanService:
             if artifact.role in required_roles and (
                 artifact.coverage_status is not CandidateCoverageStatus.COMPLETE
             ):
-                issues.append(f"COVERAGE_{artifact.coverage_status.value}:{artifact.artifact_id}")
+                financial_partial_allowed = (
+                    artifact.role is CandidateArtifactRole.FINANCIAL_INTEGRITY
+                    and artifact.coverage_status is CandidateCoverageStatus.PARTIAL
+                    and self._financial_partial_is_research_safe(artifact)
+                )
+                if not financial_partial_allowed:
+                    issues.append(
+                        f"COVERAGE_{artifact.coverage_status.value}:{artifact.artifact_id}"
+                    )
             if artifact.available_to_system_at > request.as_of:
                 issues.append(f"FUTURE_INPUT:{artifact.artifact_id}")
             if (
@@ -697,6 +708,15 @@ class CandidateScanService:
                         f"NOT_PIT_SAFE:{item.source_artifact_id}:{type(item).__name__}"
                     )
         return sorted(set(issues))
+
+    def _financial_partial_is_research_safe(self, artifact: CandidateInputArtifact) -> bool:
+        try:
+            pack = FinancialIntegrityEvidencePack.model_validate_json(
+                self.objects.get_bytes(artifact.object_hash)
+            )
+        except (AStockError, OSError, ValueError):
+            return False
+        return financial_pack_is_candidate_eligible(pack)
 
     def _release_verification_issues(self, release: CandidateInputRelease) -> list[str]:
         result = self.input_verifier.verify(release)

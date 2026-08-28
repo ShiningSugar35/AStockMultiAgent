@@ -371,6 +371,7 @@ def test_incomplete_baostock_daily_uses_direct_eastmoney_not_akshare(tmp_path: P
     )
 
     assert report.provider_id == "eastmoney-reference"
+    assert report.status.value == "COMPLETE"
     assert "EASTMONEY_FALLBACK_USED" in report.reason_codes
     assert all("akshare" not in item.lower() for item in report.reason_codes)
     status = service.status(report.dataset_kind, report.scope_key)

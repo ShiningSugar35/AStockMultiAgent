@@ -1,7 +1,7 @@
 # 持续投研与模拟交易生命周期架构 v1
 
-> 状态：IMPLEMENTATION CONTRACT
-> 日期：2026-08-22
+> 状态：RELEASED（migration 0059 与 Continuous Monitor 已进入 `main`；External Dependency Resilience 集成增强发布中）
+> 日期：2026-08-22；现行集成校正：2026-08-27
 > 适用范围：AStockMultiAgent 当前主线
 > 安全边界：仅自动化投研、监控、模拟账户与模拟调仓；`broker_execution_allowed=false` 永久保持，真实交易继续由用户在券商端人工执行。
 
@@ -282,46 +282,46 @@ continuous-monitor-tasks [--pending-only]
 - 失败 backoff：60s → 5m → 15m → 30m，上限 30m；
 - 每轮 target 上限：默认 50；避免低成本环境发生 provider 风暴。
 
-## 7. 验收标准
+## 7. 当前验收状态
 
-### A. 数据与运行时
+### A. 数据与运行时（确定性实现已验收）
 
-- [ ] fresh SQLite migration 从 0001 到 0059 全通过且 checksum 守卫不放宽。
-- [ ] 同一事件重复抓取不产生第二条 `MonitorEvent`。
-- [ ] 一个 source 失败不会阻塞其他 source/target。
-- [ ] daemon 被杀后 stale lease 能恢复，不能同时存在两个 active owner。
-- [ ] 每轮有 run summary、duration、target/source 成功失败计数。
+- [x] fresh SQLite migration 从 0001 到 0059 全通过且 checksum 守卫未放宽。
+- [x] 同一事件重复抓取不产生第二条 `MonitorEvent`。
+- [x] 一个 source 失败不会阻塞其他 source/target。
+- [x] daemon stale lease 可被新 owner 接管，不能同时存在两个 active owner。
+- [x] 每轮持久化 run summary、duration、target/source 成功失败计数。
 
-### B. 行情与交易条件
+### B. 行情与交易条件（确定性实现已验收）
 
-- [ ] watched target 能持续更新 60m 路径并产生价格类 event。
-- [ ] typed entry/exit rule 只由确定性比较器触发；自然语言 rule 不被 daemon 猜测。
-- [ ] 路径歧义保留 5m fallback，不以小时 OHLC 冒充精确成交顺序。
-- [ ] daemon 不直接写 position；模拟成交仍由现有 paper ledger/replay 决定。
+- [x] recorded/integration 路径可更新 60m 数据并产生价格类 event；真实长期 cadence 另列运行观察。
+- [x] typed entry/exit rule 只由确定性比较器触发；自然语言 rule 不被 daemon 猜测。
+- [x] 路径歧义保留 5m fallback，不以小时 OHLC 冒充精确成交顺序。
+- [x] daemon 不直接写 position；模拟成交仍由现有 Paper Ledger/replay 决定。
 
-### C. 公告、新闻与 Catalyst
+### C. 公告、新闻与 Catalyst（确定性实现已验收）
 
-- [ ] CNINFO 新 announcement id 能被增量识别且 raw snapshot 可追溯。
-- [ ] 新闻 headline/url 进入 `NEWS_LEAD`，不能直接成为正式 Evidence fact。
-- [ ] Catalyst 只返回 affected modules，不全链盲重跑。
-- [ ] material announcement/news task 能指向正确的 ResearchModule 集合。
+- [x] CNINFO announcement id 可增量识别、去重并绑定 raw snapshot。
+- [x] 新闻 headline/url 只进入 `NEWS_LEAD`，不能直接成为正式 Evidence fact。
+- [x] Catalyst 只返回 affected modules，不全链盲重跑。
+- [x] material announcement/news task 能指向正确的 ResearchModule 集合。
 
 ### D. 产品行为
 
-- [ ] “某标的怎么样？”完成正式分析后 target 自动/按 Skill 合同进入 watch universe。
-- [ ] “请进行荐股”后正式研究通过的候选进入 watch universe，Candidate 本身不能直接变成 BUY。
-- [ ] 已分析未持仓标的仍持续检查 entry timing、Catalyst 与失效条件。
-- [ ] 已持仓标的能持续形成 HOLD/ADD/TRIM/EXIT 的增量复核输入。
-- [ ] 正常投资者回答不出现 daemon、migration、artifact/hash 等内部术语。
+- [x] “某标的怎么样？”完成正式分析后可按 Skill/Workflow 合同进入 watch universe。
+- [x] “请进行荐股”后只有完成深研或正式 WATCH/APPROVE_SIMULATION 的标的可进入 recommendation watch；Candidate 本身不能直接变成 BUY。
+- [ ] 已分析未持仓标的在真实长时间 daemon 中持续检查 entry timing、Catalyst 与失效条件：`SKIPPED_MANUAL`，需自然运行证据。
+- [ ] 已持仓标的在真实长时间 daemon 中持续形成 HOLD/ADD/TRIM/EXIT 增量复核输入：`SKIPPED_MANUAL`，需自然运行证据。
+- [x] 正常投资者输出合同禁止泄露 daemon、migration、artifact/hash 等内部术语。
 
-### E. 安全与工程门
+### E. 安全与工程门（已验收）
 
-- [ ] `broker_execution_allowed=false` 在新增 schema/服务/CLI 中无例外。
-- [ ] 新闻不能单源直接触发模拟买入/卖出。
-- [ ] `uv run pytest` 全仓通过。
-- [ ] `uv run ruff check .` 通过。
-- [ ] `uv run pyright` 通过。
-- [ ] 新增 unit/integration tests 覆盖 dedupe、lease、rule evaluator、source degradation、CNINFO/GDELT recorded fixture、restart recovery、CLI。
+- [x] `broker_execution_allowed=false` 在新增 schema/服务/CLI 中无例外。
+- [x] 新闻不能单源直接触发模拟买入/卖出。
+- [x] 发布时全仓 pytest、Ruff、Pyright、diff check 与 state-integrity-audit 全部通过；历史数字保留在《验收报告》，不冒充本轮 External 冻结树结果。
+- [x] unit/integration tests 覆盖 dedupe、lease、rule evaluator、source degradation、CNINFO/GDELT recorded fixture、restart recovery 与 CLI。
+
+真实长时间 daemon、自然语言场景及 crash/source-degradation 连续观察仍是长期运行义务，不影响 0059 确定性软件架构已经发布，但不得描述为真实无人值守运行已完成。
 
 ## 8. 上线验收场景
 
@@ -344,7 +344,9 @@ continuous-monitor-tasks [--pending-only]
 6. 满足 approved typed entry 后才允许进入模拟订单路径；
 7. 建仓后 source reason 增加 `PAPER_POSITION`，继续监控至退出复盘。
 
-## 9. 本轮实施顺序
+## 9. 已实施范围与长期运行断点
+
+已完成并发布：
 
 1. 0059 状态层与 schema；
 2. repository + deterministic evaluator；
@@ -355,7 +357,18 @@ continuous-monitor-tasks [--pending-only]
 7. Skill/workflow/docs；
 8. unit/integration tests；
 9. code review；
-10. 全仓 gates；
-11. live smoke；
-12. 启动 daemon；
-13. 模拟两个用户问题并观察事件/heartbeat/run report。
+10. 全仓工程门。
+
+仍需真实自然运行积累、不得冒充已完成：
+
+1. 长时间 daemon heartbeat、source degradation 与 crash recovery 观察；
+2. “某标的怎么样？”和“请进行荐股”两个真实自然语言场景的持续事件/任务闭环；
+3. 持仓与未持仓标的跨日 entry/exit/Catalyst 增量研究证据。
+
+## 10. External Dependency Resilience 现行集成校正
+
+- Continuous Monitor 的 market/CNINFO/GDELT lane 复用现有 ProviderFactory、SourceAccessRouter、capability health/breaker、ObjectStore 与 Evidence；不得自建第二套 provider 状态或事件外证据库。
+- 单 source/capability 故障只产生结构化 `DATA_SOURCE_DEGRADED` 与 bounded backoff，不阻塞其他 source/target。OPEN 或有效 HALF_OPEN claim 时不重复撞击同一失败 capability；stale claim 可恢复。
+- CNINFO known-item/disclosure discovery 可经正式官方 exact-item 路恢复；公告“没有发生”的 negative proof 仍必须依赖 exhaustive pagination，Search/Web 未命中没有该权限。
+- 5m 仅在 paper path ambiguity 时按需使用。单一备用源成功不能覆盖已有双源 canonical，也不能伪造成交；所有 Paper Ledger 与 `broker_execution_allowed=false` 边界保持不变。
+- 本轮 External Dependency 增强发布前状态仍为 `IMPLEMENTATION_IN_PROGRESS`；其冻结树和远端 release 证据由《验收报告》及唯一 durable run `lr_mtb4gekw_ff5540ff05d2` 维护。

@@ -24,7 +24,7 @@ class FinancialSourceReleaseRepository:
             manifest.instrument_manifest_object_hash,
             manifest.instrument_content_hash,
             *manifest.raw_snapshot_ids,
-            manifest.official_index_snapshot_id,
+            *_official_lineage_snapshot_ids(manifest),
             manifest.official_snapshot_id,
             manifest.source_content_hash,
             manifest.certified_content_hash,
@@ -92,7 +92,7 @@ class FinancialSourceReleaseRepository:
                 return False
             for snapshot_id in [
                 *manifest.raw_snapshot_ids,
-                manifest.official_index_snapshot_id,
+                *_official_lineage_snapshot_ids(manifest),
                 manifest.official_snapshot_id,
             ]:
                 if connection.execute(
@@ -228,7 +228,8 @@ class FinancialSourceReleaseRepository:
                 row = connection.execute(
                     _SELECT_RELEASE
                     + " WHERE r.company_id=? AND r.period_end=? AND r.period_type=? "
-                    "AND r.available_to_system_at<=? ORDER BY r.available_to_system_at DESC,"
+                    "AND r.available_to_system_at<=? "
+                    "ORDER BY r.available_to_system_at DESC,r.created_at DESC,"
                     "r.release_id DESC LIMIT 1",
                     (
                         company_id,
@@ -256,7 +257,7 @@ _SELECT_RELEASE = (
 
 
 def _release_identity(manifest: FinancialSourceReleaseManifest) -> dict[str, object]:
-    return {
+    identity: dict[str, object] = {
         "company_id": manifest.company_id,
         "instrument_id": manifest.instrument_id,
         "market": manifest.market,
@@ -281,6 +282,27 @@ def _release_identity(manifest: FinancialSourceReleaseManifest) -> dict[str, obj
         "available_to_system_at": manifest.available_to_system_at,
         "coverage": manifest.coverage,
     }
+    if manifest.schema_version == "financial-source-release-v2":
+        identity.update(
+            {
+                "official_lineage_kind": manifest.official_lineage_kind,
+                "official_lineage_snapshot_ids": manifest.official_lineage_snapshot_ids,
+                "official_exhaustive_proof_allowed": (
+                    manifest.official_exhaustive_proof_allowed
+                ),
+            }
+        )
+    return identity
 
 
-__all__ = ["FinancialSourceReleaseRepository", "_release_identity"]
+def _official_lineage_snapshot_ids(manifest: FinancialSourceReleaseManifest) -> list[str]:
+    if manifest.schema_version == "financial-source-release-v1":
+        return [manifest.official_index_snapshot_id]
+    return manifest.official_lineage_snapshot_ids
+
+
+__all__ = [
+    "FinancialSourceReleaseRepository",
+    "_official_lineage_snapshot_ids",
+    "_release_identity",
+]

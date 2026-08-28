@@ -10,6 +10,8 @@
 - Continuous Monitor 只执行确定性采集、事件判断、typed rule 和已确认模拟订单回放；不会从自然语言猜交易阈值。
 - 新闻/社媒只作线索。公司关键事实必须回到交易所、CNINFO、监管机构、发行人公告/财报等更强来源。
 - 语义研究任务必须由可用 Research Agent 消费。若机器当前没有独立 Agent worker，任务持久排队，不能冒充已分析。
+- 外部源 health 与 circuit breaker 必须按 `(provider, capability)` 隔离；5m/60m 原始行情同步也不得回写或污染 provider-wide probe health。
+- Search/Web 只能在 `SourcePolicyGate` 允许的能力边界内使用：普通 Search 不能证明 Universe、连续 OHLCV 或公告 negative proof；交易所/官方站点 exact-item PDF 只能证明该具体文档，不能冒充 CNINFO 全分页枚举。
 
 ## Flow
 
@@ -31,7 +33,7 @@
 
 - 单一 provider 故障：该 target/source 有界退避，其余来源和标的继续。
 - 官方事实无法验证：保留 NEEDS_INFO/不确定性，禁止用新闻替代。
-- 60m 无法确定小时内成交路径：升级到 5m fallback；仍不确定则不伪造 fill。
+- 60m 无法确定小时内成交路径：升级到 5m fallback；5m provider 按 `market.raw_5m` capability 独立熔断/切换。若只剩单一来源，结果保持 `SINGLE_SOURCE_5M` 降级语义；存在既有 canonical 且本轮任一 provider 失败时不得覆盖既有 canonical。仍不确定则不伪造 fill。
 - Agent worker 不可用：持续采集/规则/paper replay 继续，语义研究任务保持 PENDING，下一次 Agent 会话优先消费。
 - daemon lease stale：新实例允许接管；未 stale 时第二 owner 必须拒绝。
 

@@ -15,7 +15,14 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 class ResearchSeedStatus(StrEnum):
     READY = "READY"
+    EMPTY = "EMPTY"
     NEEDS_INFO = "NEEDS_INFO"
+
+
+class ResearchUniverseCoverageStatus(StrEnum):
+    FULL = "FULL"
+    PARTIAL = "PARTIAL"
+    UNAVAILABLE = "UNAVAILABLE"
 
 
 class ResearchSeedOrigin(StrEnum):
@@ -132,6 +139,11 @@ class ResearchSeedReport(AStockModel):
     source_snapshot_ids: list[str]
     source_object_hashes: list[str]
     warning_codes: list[str]
+    market_coverage_ratios: dict[Market, float] = Field(default_factory=dict)
+    universe_coverage_status: ResearchUniverseCoverageStatus = (
+        ResearchUniverseCoverageStatus.UNAVAILABLE
+    )
+    formal_full_market_coverage_allowed: bool = False
     market_seed_count: int = Field(ge=0)
     expert_seed_count: int = Field(ge=0)
     existing_candidate_seed_count: int = Field(ge=0)
@@ -160,6 +172,32 @@ class ResearchSeedReport(AStockModel):
             raise ValueError("research-seed origin counts do not reconcile")
         if self.status is ResearchSeedStatus.READY and not self.seeds:
             raise ValueError("READY research-seed report requires at least one seed")
+        if self.status is ResearchSeedStatus.EMPTY and self.seeds:
+            raise ValueError("EMPTY research-seed report cannot contain seeds")
+        if any(value < 0 or value > 1 for value in self.market_coverage_ratios.values()):
+            raise ValueError("market coverage ratios must stay in [0,1]")
+        equity_markets = {Market.XSHG, Market.XSHE, Market.BJSE}
+        full = (
+            set(self.market_coverage_ratios) == equity_markets
+            and all(value >= 0.995 for value in self.market_coverage_ratios.values())
+        )
+        expected_status = (
+            ResearchUniverseCoverageStatus.FULL
+            if full
+            else (
+                ResearchUniverseCoverageStatus.PARTIAL
+                if self.market_coverage_ratios
+                else ResearchUniverseCoverageStatus.UNAVAILABLE
+            )
+        )
+        if self.universe_coverage_status is not expected_status:
+            raise ValueError("research-seed universe coverage status does not match ratios")
+        if self.status is ResearchSeedStatus.EMPTY and not full:
+            raise ValueError("EMPTY research-seed status requires a proven FULL universe")
+        if self.status is ResearchSeedStatus.NEEDS_INFO and full and not self.seeds:
+            raise ValueError("proven FULL zero-result reports must use EMPTY status")
+        if self.formal_full_market_coverage_allowed != full:
+            raise ValueError("formal full-market coverage authority must match >=99.5% per market")
         return self
 
 
@@ -171,4 +209,5 @@ __all__ = [
     "ResearchSeedReport",
     "ResearchSeedRequest",
     "ResearchSeedStatus",
+    "ResearchUniverseCoverageStatus",
 ]

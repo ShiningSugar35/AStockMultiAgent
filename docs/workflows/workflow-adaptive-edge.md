@@ -34,7 +34,7 @@ Agent 根据用户意图生成 `ResearchPlannerProposal`，只声明 requested m
 
 ## 3. Provider Recovery
 
-Provider 连续失败时，Agent 可以根据 failure class、retryable、health、capability 和 transport profile 生成 `ProviderRecoveryProposal`，然后运行 `adaptive-recovery-validate`。
+Provider 连续失败时，Agent 可以根据 failure class、retryable、health、capability 和 transport profile 生成 `ProviderRecoveryProposal`，然后运行 `adaptive-recovery-validate`。Health 与 durable circuit breaker 均按 `(provider, capability)` 隔离；一个 capability 的失败、OPEN/HALF_OPEN 或 probe corruption 不得污染同 provider 的其他 capability。
 
 Validator 只允许：
 
@@ -44,7 +44,7 @@ Validator 只允许：
 - 不把 non-retryable 原 provider 当作无条件重试路径；
 - authority fallback 仍遵守强官方优先与 Manual-last。
 
-未知 provider、capability mismatch、transport-profile drift 或无自动/权威路径会得到 `REJECTED` validation，而不是让 Agent 自行请求任意 URL/插件。
+未知 provider、capability mismatch、transport-profile drift 或无自动/权威路径会得到 `REJECTED` validation，而不是让 Agent 自行请求任意 URL/插件。动态 Search/Web proposal 还必须先通过 `source-proposal-check` / `SourcePolicyGate`：普通 Search 只能 discovery，不能证明 Universe、连续 OHLCV 或公告 negative proof；官方 exact-item Web/PDF 经不可变 snapshot 入库后也只证明该具体文档，不能冒充 CNINFO exhaustive enumeration。Provider probe 状态只有在 pointer/event/artifact/object/report 完整 lineage 校验通过后才可用于路由。
 
 ## 4. Schema Repair
 

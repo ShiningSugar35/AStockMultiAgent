@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from astock.core.errors import AStockError, StorageError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
+from astock.core.source_resilience import SourceFailureClass
 from astock.core.state import StateStore
 from astock.evidence import EvidenceRepository
 from astock.financial_integrity import FinancialIntegrityService
@@ -27,9 +28,13 @@ from astock.financial_sources.instrument import (
     FinancialInstrumentBinding,
     FinancialInstrumentResolver,
 )
-from astock.financial_sources.official import OfficialFinancialReportService
+from astock.financial_sources.official import (
+    OfficialFinancialReport,
+    OfficialFinancialReportService,
+)
 from astock.financial_sources.repository import (
     FinancialSourceReleaseRepository,
+    _official_lineage_snapshot_ids,
     _release_identity,
 )
 from astock.financial_sources.storage import FinancialSourceParquetStore
@@ -58,6 +63,7 @@ from astock.schemas import (
     FinancialUnit,
     InstrumentType,
     Market,
+    OfficialFinancialLineageKind,
 )
 
 
@@ -101,7 +107,10 @@ class FinancialSourceService:
 
 
         self.official = OfficialFinancialReportService(
-            state, objects, self.config.official_reports_fixture
+            state,
+            objects,
+            self.config.official_reports_fixture,
+            self.provider_factory,
         )
         self.repository = FinancialSourceReleaseRepository(state)
         self.instruments = FinancialInstrumentResolver(
@@ -196,8 +205,37 @@ class FinancialSourceService:
         payloads: list[FinancialProviderPayload] = []
         captured_snapshots = []
         first_success_index: int | None = None
-        for index, provider_id in enumerate(self.config.provider_order):
+        provider_order = list(self.config.provider_order)
+        if live:
+            ranked_definitions = self.provider_factory.definitions_for_capability(
+                "financial.statement_values",
+                source_hint=(
+                    self.config.provider_order[0] if self.config.provider_order else None
+                ),
+            )
+            provider_order = [
+                definition.provider_id
+                for definition in ranked_definitions
+                if definition.provider_id in self.providers
+            ]
+            excluded = [
+                provider_id
+                for provider_id in self.config.provider_order
+                if provider_id not in provider_order
+            ]
+            reasons.extend(
+                f"{_provider_reason_token(provider_id)}_HEALTH_OR_BREAKER_SKIPPED"
+                for provider_id in excluded
+            )
+        for index, provider_id in enumerate(provider_order):
             provider = self.providers[provider_id]
+            if not self.provider_factory.claim_capability_attempt(
+                provider_id,
+                "financial.statement_values",
+                live=live,
+            ):
+                reasons.append(f"{_provider_reason_token(provider_id)}_FINANCIAL_CIRCUIT_OPEN")
+                continue
             try:
                 payload = provider.fetch(company_id, market, period_end, live=live)
                 captured_snapshots.extend(payload.snapshots)
@@ -215,7 +253,18 @@ class FinancialSourceService:
                     reasons.append(
                         f"{_provider_reason_token(provider_id)}_CRITICAL_PERIOD_OR_TABLE_MISSING"
                     )
+                    self.provider_factory.record_capability_failure(
+                        provider_id,
+                        "financial.statement_values",
+                        SourceFailureClass.COVERAGE_INCOMPLETE,
+                        live=live,
+                    )
                     continue
+                self.provider_factory.record_capability_success(
+                    provider_id,
+                    "financial.statement_values",
+                    live=live,
+                )
                 payloads.append(payload)
                 if first_success_index is None:
                     first_success_index = index
@@ -234,6 +283,12 @@ class FinancialSourceService:
             ) as exc:
                 if isinstance(exc, FinancialRawCaptureError):
                     captured_snapshots.extend(exc.snapshots)
+                self.provider_factory.record_capability_failure(
+                    provider_id,
+                    "financial.statement_values",
+                    exc,
+                    live=live,
+                )
                 reasons.append(f"{_provider_reason_token(provider_id)}_FINANCIAL_FAILED")
 
         observations: list[FinancialSourceObservation] = []
@@ -257,31 +312,15 @@ class FinancialSourceService:
                 datetime.now(UTC),
                 *(snapshot.available_to_system_at for snapshot in captured_snapshots),
             )
+        captured_snapshot_ids = list(
+            dict.fromkeys(snapshot.snapshot_id for snapshot in captured_snapshots)
+        )
         raw_snapshot_ids = list(
             dict.fromkeys(item.source_snapshot_id for item in observations)
         )
         provider_ids = list(dict.fromkeys(item.provider_id for item in observations))
         observed_statements = list(
             dict.fromkeys(item.statement_type for item in observations)
-        )
-        if not observations:
-            return self._empty_report(
-                company_id,
-                period_end,
-                period_type,
-                provider_ids or list(self.config.provider_order),
-                list(
-                    dict.fromkeys(
-                        snapshot.snapshot_id for snapshot in captured_snapshots
-                    )
-                ),
-                FinancialSourceReleaseStatus.FAILED,
-                reasons,
-                observed_statements,
-            )
-        provider_available = max(item.available_to_system_at for item in observations)
-        _, source_hash, source_descriptor = self.parquet.write_observations(
-            company_id, period_end, provider_available, observations
         )
         official = self.official.get(
             company_id,
@@ -293,6 +332,8 @@ class FinancialSourceService:
             allow_live_capture_after_cutoff=live and not explicit_as_of,
         )
         if official is None:
+            if not observations:
+                reasons.append("STRUCTURED_FINANCIAL_SOURCES_UNAVAILABLE")
             if live and official_coverage != "AVAILABLE":
                 reasons.append("OFFICIAL_FINANCIAL_REPORT_COVERAGE_INSUFFICIENT")
             else:
@@ -303,8 +344,8 @@ class FinancialSourceService:
                 company_id,
                 period_end,
                 period_type,
-                provider_ids,
-                raw_snapshot_ids,
+                provider_ids or list(self.config.provider_order),
+                raw_snapshot_ids or captured_snapshot_ids,
                 FinancialSourceReleaseStatus.NEEDS_INFO,
                 reasons,
                 observed_statements,
@@ -316,17 +357,84 @@ class FinancialSourceService:
                 company_id,
                 period_end,
                 period_type,
-                provider_ids,
-                raw_snapshot_ids,
+                provider_ids or list(self.config.provider_order),
+                raw_snapshot_ids or captured_snapshot_ids,
                 FinancialSourceReleaseStatus.NEEDS_INFO,
                 reasons,
                 observed_statements,
                 source_count=len(observations),
                 official_snapshot_id=official.snapshot.snapshot_id,
             )
-        facts, certification_reasons = FinancialPdfCertifier(
-            self.state, self.objects
-        ).certify(official, observations, self.mappings)
+        certifier = FinancialPdfCertifier(self.state, self.objects)
+        if not observations:
+            extracted, extraction_reasons = certifier.extract_values(
+                official,
+                period_end,
+                period_type,
+                self.mappings,
+            )
+            reasons.extend(extraction_reasons)
+            observations = _official_recovery_observations(
+                company_id,
+                period_end,
+                period_type,
+                binding,
+                official,
+                extracted,
+            )
+            if not observations:
+                reasons.extend(
+                    [
+                        "STRUCTURED_FINANCIAL_SOURCES_UNAVAILABLE",
+                        "NO_EXACT_OFFICIAL_FINANCIAL_FACT",
+                    ]
+                )
+                return self._empty_report(
+                    company_id,
+                    period_end,
+                    period_type,
+                    list(self.config.provider_order),
+                    list(
+                        dict.fromkeys(
+                            [
+                                *captured_snapshot_ids,
+                                official.index_snapshot.snapshot_id,
+                                official.snapshot.snapshot_id,
+                            ]
+                        )
+                    ),
+                    FinancialSourceReleaseStatus.NEEDS_INFO,
+                    reasons,
+                    [],
+                    source_count=0,
+                    official_snapshot_id=official.snapshot.snapshot_id,
+                )
+            reasons.extend(
+                [
+                    "STRUCTURED_FINANCIAL_SOURCES_UNAVAILABLE",
+                    "OFFICIAL_DOCUMENT_RECOVERY_USED",
+                ]
+            )
+            provider_ids = ["official-financial-document"]
+            raw_snapshot_ids = list(
+                dict.fromkeys(
+                    [
+                        *captured_snapshot_ids,
+                        official.index_snapshot.snapshot_id,
+                        official.snapshot.snapshot_id,
+                    ]
+                )
+            )
+            observed_statements = list(
+                dict.fromkeys(item.statement_type for item in observations)
+            )
+        provider_available = max(item.available_to_system_at for item in observations)
+        _, source_hash, source_descriptor = self.parquet.write_observations(
+            company_id, period_end, provider_available, observations
+        )
+        facts, certification_reasons = certifier.certify(
+            official, observations, self.mappings
+        )
         reasons.extend(certification_reasons)
         if not facts:
             reasons.append("NO_EXACT_OFFICIAL_FINANCIAL_FACT")
@@ -379,8 +487,7 @@ class FinancialSourceService:
             binding,
             provider_ids,
             raw_snapshot_ids,
-            official.index_snapshot.snapshot_id,
-            official.snapshot.snapshot_id,
+            official,
             source_hash,
             certified_hash,
             available,
@@ -402,8 +509,7 @@ class FinancialSourceService:
             binding,
             provider_ids,
             raw_snapshot_ids,
-            official.index_snapshot.snapshot_id,
-            official.snapshot.snapshot_id,
+            official,
             source_hash,
             certified_hash,
             available,
@@ -445,6 +551,11 @@ class FinancialSourceService:
             raw_snapshot_ids=raw_snapshot_ids,
             official_document_id=official.document.document_id,
             official_index_snapshot_id=official.index_snapshot.snapshot_id,
+            official_lineage_kind=official.lineage_kind,
+            official_lineage_snapshot_ids=official.lineage_snapshot_ids,
+            official_exhaustive_proof_allowed=(
+                official.exhaustive_proof_allowed
+            ),
             official_snapshot_id=official.snapshot.snapshot_id,
             official_pit_id=official.pit.pit_id,
             source_files=[source_descriptor],
@@ -600,7 +711,7 @@ class FinancialSourceService:
                 manifest.instrument_manifest_object_hash,
                 manifest.instrument_content_hash,
                 *manifest.raw_snapshot_ids,
-                manifest.official_index_snapshot_id,
+                *_official_lineage_snapshot_ids(manifest),
                 manifest.official_snapshot_id,
                 manifest.source_content_hash,
                 manifest.certified_content_hash,
@@ -611,7 +722,7 @@ class FinancialSourceService:
             raise ValueError("Financial release artifact inputs mismatch")
         for snapshot_id in [
             *manifest.raw_snapshot_ids,
-            manifest.official_index_snapshot_id,
+            *_official_lineage_snapshot_ids(manifest),
             manifest.official_snapshot_id,
         ]:
             snapshot = self.state.get_snapshot(snapshot_id)
@@ -621,6 +732,7 @@ class FinancialSourceService:
                 or not self.objects.verify(snapshot.object_sha256)
             ):
                 raise ValueError("Financial release snapshot chain is invalid")
+        _verify_official_lineage(self.state, self.objects, manifest)
         binding = self.instruments.resolve(
             manifest.company_id,
             manifest.market,
@@ -669,10 +781,13 @@ class FinancialSourceService:
             ):
                 raise ValueError("Financial source observation lineage mismatch")
             snapshot = self.state.get_snapshot(observation.source_snapshot_id)
-            if (
-                snapshot is None
-                or snapshot.source_id
-                != f"{observation.provider_id}:{observation.source_request_hash}"
+            if snapshot is None:
+                raise ValueError("Financial provider snapshot request binding mismatch")
+            if observation.provider_id == "official-financial-document":
+                if snapshot.snapshot_id != manifest.official_snapshot_id:
+                    raise ValueError("Official financial observation snapshot binding mismatch")
+            elif snapshot.source_id != (
+                f"{observation.provider_id}:{observation.source_request_hash}"
             ):
                 raise ValueError("Financial provider snapshot request binding mismatch")
         for descriptor in manifest.certified_files:
@@ -743,6 +858,84 @@ class FinancialSourceService:
             reason_codes=unique_reasons,
         )
 
+
+
+def _official_recovery_observations(
+    company_id: str,
+    period_end: date,
+    period_type: FinancialPeriodType,
+    binding: FinancialInstrumentBinding,
+    official: OfficialFinancialReport,
+    extracted: list[tuple[FinancialFieldMapping, Decimal, FinancialUnit]],
+) -> list[FinancialSourceObservation]:
+    observations: list[FinancialSourceObservation] = []
+    request_hash = content_hash(
+        {
+            "source": "official-financial-document",
+            "document_id": official.document.document_id,
+            "snapshot_id": official.snapshot.snapshot_id,
+            "company_id": company_id,
+            "period_end": period_end,
+            "period_type": period_type,
+        }
+    )
+    period_start = date(period_end.year, 1, 1)
+    for mapping, value, unit in extracted:
+        duration = (
+            FinancialDurationSemantics.INSTANT
+            if mapping.statement_type is FinancialStatementType.BALANCE_SHEET
+            else (
+                FinancialDurationSemantics.REPORTED_PERIOD
+                if period_type is FinancialPeriodType.ANNUAL
+                else FinancialDurationSemantics.YEAR_TO_DATE
+            )
+        )
+        identity = {
+            "provider_id": "official-financial-document",
+            "source_snapshot_id": official.snapshot.snapshot_id,
+            "source_request_hash": request_hash,
+            "company_id": company_id,
+            "instrument_id": binding.record.instrument_id,
+            "period_end": period_end,
+            "period_type": period_type,
+            "statement_type": mapping.statement_type,
+            "field_code": mapping.field_code,
+            "value": value,
+            "unit": unit,
+        }
+        observations.append(
+            FinancialSourceObservation(
+                created_at=official.snapshot.available_to_system_at,
+                observation_id=content_hash(identity),
+                company_id=company_id,
+                instrument_id=binding.record.instrument_id,
+                market=binding.record.market,
+                instrument_type=InstrumentType.STOCK,
+                instrument_release_id=binding.release_id,
+                instrument_manifest_artifact_id=binding.manifest_artifact_id,
+                instrument_manifest_object_hash=binding.manifest_object_hash,
+                instrument_content_hash=binding.content_hash,
+                period_start=(
+                    None
+                    if mapping.statement_type is FinancialStatementType.BALANCE_SHEET
+                    else period_start
+                ),
+                period_end=period_end,
+                period_type=period_type,
+                duration_semantics=duration,
+                statement_type=mapping.statement_type,
+                statement_scope=FinancialStatementScope.CONSOLIDATED,
+                field_code=mapping.field_code,
+                provider_field=f"OFFICIAL:{mapping.field_code.value}",
+                reported_value=value,
+                unit=unit,
+                provider_id="official-financial-document",
+                source_snapshot_id=official.snapshot.snapshot_id,
+                source_request_hash=request_hash,
+                available_to_system_at=official.snapshot.available_to_system_at,
+            )
+        )
+    return observations
 
 def _parse_provider(
     payload: FinancialProviderPayload,
@@ -921,6 +1114,120 @@ def _strict_decimal(value: object) -> Decimal | None:
     return parsed if parsed.is_finite() else None
 
 
+def _verify_official_lineage(
+    state: StateStore,
+    objects: ObjectStore,
+    manifest: FinancialSourceReleaseManifest,
+) -> None:
+    lineage_ids = _official_lineage_snapshot_ids(manifest)
+    snapshots = [state.get_snapshot(snapshot_id) for snapshot_id in lineage_ids]
+    if any(snapshot is None for snapshot in snapshots):
+        raise ValueError("Financial official lineage snapshot is missing")
+    verified = [snapshot for snapshot in snapshots if snapshot is not None]
+    kind = manifest.official_lineage_kind
+    if kind is OfficialFinancialLineageKind.LEGACY_UNVERIFIED:
+        if manifest.official_exhaustive_proof_allowed:
+            raise ValueError("legacy financial lineage cannot assert exhaustive proof")
+        if any(
+            snapshot.source_id != "cninfo-financial:index"
+            and snapshot.source_id != "cninfo-disclosures:index"
+            and not snapshot.source_id.endswith(":admission")
+            for snapshot in verified
+        ):
+            raise ValueError("legacy financial lineage has an unknown source kind")
+        return
+    if kind is OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION:
+        if len(verified) != 1 or manifest.official_exhaustive_proof_allowed:
+            raise ValueError("exact-item admission cannot assert exhaustive proof")
+        admission_snapshot = verified[0]
+        if not admission_snapshot.source_id.endswith(":admission"):
+            raise ValueError("exact-item admission snapshot source is invalid")
+        try:
+            admission = json.loads(objects.get_bytes(admission_snapshot.object_sha256))
+        except (AStockError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("exact-item admission payload is invalid") from exc
+        proposal = admission.get("proposal") if isinstance(admission, dict) else None
+        decision = admission.get("decision") if isinstance(admission, dict) else None
+        if (
+            not isinstance(admission, dict)
+            or not isinstance(proposal, dict)
+            or not isinstance(decision, dict)
+            or admission.get("schema_version") != "official-web-admission-v1"
+            or admission.get("document_id") != manifest.official_document_id
+            or admission.get("document_snapshot_id") != manifest.official_snapshot_id
+            or admission.get("exhaustive_proof_allowed") is not False
+            or proposal.get("requested_capability") != "financial.official_document"
+            or proposal.get("require_complete") is not False
+            or decision.get("requested_capability") != "financial.official_document"
+            or decision.get("allowed") is not True
+            or decision.get("formal_eligible") is not True
+            or decision.get("exhaustive_proof_allowed") is not False
+            or decision.get("admission_status") != "ADMIT_AFTER_SNAPSHOT"
+        ):
+            raise ValueError("exact-item admission semantics are invalid")
+        return
+    if kind is OfficialFinancialLineageKind.RECORDED_EXACT_ITEM_FIXTURE:
+        if (
+            len(verified) != 1
+            or verified[0].source_id != "cninfo-financial:index"
+            or manifest.official_exhaustive_proof_allowed
+        ):
+            raise ValueError("recorded financial exact-item lineage is invalid")
+        try:
+            payload = json.loads(objects.get_bytes(verified[0].object_sha256))
+        except (AStockError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("recorded financial index payload is invalid") from exc
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != "financial-official-index-v1"
+        ):
+            raise ValueError("recorded financial index schema is invalid")
+        return
+    if kind is not OfficialFinancialLineageKind.CNINFO_EXHAUSTIVE_ENUMERATION:
+        raise ValueError("unknown financial official lineage kind")
+    if not manifest.official_exhaustive_proof_allowed or not verified:
+        raise ValueError("CNINFO exhaustive lineage flag is invalid")
+    if any(snapshot.source_id != "cninfo-disclosures:index" for snapshot in verified):
+        raise ValueError("CNINFO exhaustive lineage contains a non-enumeration snapshot")
+    expected_total: int | None = None
+    seen_ids: set[str] = set()
+    for index, snapshot in enumerate(verified):
+        try:
+            payload = json.loads(objects.get_bytes(snapshot.object_sha256))
+        except (AStockError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("CNINFO exhaustive lineage payload is invalid") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("announcements"), list):
+            raise ValueError("CNINFO exhaustive lineage payload schema is invalid")
+        raw_total = payload.get("totalRecordNum", payload.get("totalAnnouncement"))
+        if isinstance(raw_total, bool) or not isinstance(raw_total, (int, str)):
+            raise ValueError("CNINFO exhaustive lineage total is invalid")
+        try:
+            total = int(raw_total)
+        except ValueError as exc:
+            raise ValueError("CNINFO exhaustive lineage total is invalid") from exc
+        if total < 0 or (expected_total is not None and total != expected_total):
+            raise ValueError("CNINFO exhaustive lineage total changed across pages")
+        expected_total = total
+        for announcement in payload["announcements"]:
+            if not isinstance(announcement, dict):
+                raise ValueError("CNINFO exhaustive lineage announcement is invalid")
+            announcement_id = announcement.get("announcementId")
+            if not isinstance(announcement_id, str) or not announcement_id:
+                raise ValueError("CNINFO exhaustive lineage announcement id is invalid")
+            if announcement_id in seen_ids:
+                raise ValueError("CNINFO exhaustive lineage contains duplicate announcements")
+            seen_ids.add(announcement_id)
+        has_more = payload.get("hasMore")
+        if has_more is not None:
+            normalized = str(has_more).strip().lower() in {"1", "true", "yes"}
+            if index < len(verified) - 1 and not normalized:
+                raise ValueError("CNINFO exhaustive lineage terminated before the final page")
+            if index == len(verified) - 1 and normalized:
+                raise ValueError("CNINFO exhaustive lineage has no terminal page")
+    if expected_total is None or len(seen_ids) != expected_total:
+        raise ValueError("CNINFO exhaustive lineage does not cover total_count")
+
+
 def _verify_release_row(
     row: dict[str, Any], manifest: FinancialSourceReleaseManifest
 ) -> None:
@@ -992,8 +1299,7 @@ def _release_matches(
     binding: FinancialInstrumentBinding,
     provider_ids: list[str],
     raw_snapshot_ids: list[str],
-    official_index_snapshot_id: str,
-    official_snapshot_id: str,
+    official: OfficialFinancialReport,
     source_hash: str,
     certified_hash: str,
     available: datetime,
@@ -1011,8 +1317,11 @@ def _release_matches(
         == binding.available_to_system_at
         and manifest.provider_ids == provider_ids
         and manifest.raw_snapshot_ids == raw_snapshot_ids
-        and manifest.official_index_snapshot_id == official_index_snapshot_id
-        and manifest.official_snapshot_id == official_snapshot_id
+        and manifest.official_index_snapshot_id == official.index_snapshot.snapshot_id
+        and manifest.official_lineage_kind is official.lineage_kind
+        and manifest.official_lineage_snapshot_ids == official.lineage_snapshot_ids
+        and manifest.official_exhaustive_proof_allowed is official.exhaustive_proof_allowed
+        and manifest.official_snapshot_id == official.snapshot.snapshot_id
         and manifest.source_content_hash == source_hash
         and manifest.certified_content_hash == certified_hash
         and manifest.available_to_system_at == available

@@ -202,6 +202,7 @@ class ProductionCandidateInputVerifier:
         expected_coverage = {
             ReferenceCoverageStatus.COMPLETE: CandidateCoverageStatus.COMPLETE,
             ReferenceCoverageStatus.PARTIAL: CandidateCoverageStatus.PARTIAL,
+            ReferenceCoverageStatus.CONFLICTED: CandidateCoverageStatus.CONFLICTED,
             ReferenceCoverageStatus.FAILED: CandidateCoverageStatus.FAILED,
             ReferenceCoverageStatus.EMPTY: CandidateCoverageStatus.NOT_AVAILABLE,
         }[verified.coverage.status]

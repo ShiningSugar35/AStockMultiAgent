@@ -23,6 +23,7 @@ class ReferenceDatasetKind(StrEnum):
 class ReferenceCoverageStatus(StrEnum):
     COMPLETE = "COMPLETE"
     PARTIAL = "PARTIAL"
+    CONFLICTED = "CONFLICTED"
     EMPTY = "EMPTY"
     FAILED = "FAILED"
 

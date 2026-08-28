@@ -15,6 +15,7 @@ import httpx
 from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.source_resilience import SourceCircuitBreaker, classify_source_error
 from astock.core.state import StateStore
 from astock.documents.identity import OfficialIdentityResolver
 from astock.providers.runtime import build_provider_http_client
@@ -65,8 +66,24 @@ class CninfoDisclosureProvider:
         self.maximum_pdf_bytes = maximum_pdf_bytes
         self.client = client or build_provider_http_client(self.provider_id)
         self.identity_resolver = OfficialIdentityResolver(state, self.provider_id)
+        self.source_breaker = SourceCircuitBreaker(state)
 
     def search(self, request: DisclosureSearchRequest) -> DisclosureSearchBatch:
+        capability = "disclosure.discover"
+        if not self.source_breaker.claim_attempt(self.provider_id, capability):
+            raise ProviderError(
+                "CNINFO disclosure search circuit is open",
+                failure_class=FailureClass.CAPABILITY_UNAVAILABLE,
+            )
+        try:
+            batch = self._search_unchecked(request)
+        except Exception as exc:
+            self._record_source_failure(capability, exc)
+            raise
+        self.source_breaker.record_success(self.provider_id, capability)
+        return batch
+
+    def _search_unchecked(self, request: DisclosureSearchRequest) -> DisclosureSearchBatch:
         resolution_snapshot_ids: list[str] = []
         latency_ms = 0
         resolved_org_id: str | None = None
@@ -80,8 +97,12 @@ class CninfoDisclosureProvider:
             resolved_org_id = resolution.external_id
             if resolution.discovery_snapshot_id:
                 resolution_snapshot_ids.append(resolution.discovery_snapshot_id)
-        except (ProviderError, OSError, ValueError):
-            # Discovery is preferred, but a legacy id remains a bounded request hint.
+        except ProviderError:
+            # Transport/deterministic provider failures already consumed the single HTTP
+            # retry layer. Do not hit the same source again with a heuristic identity.
+            raise
+        except (OSError, ValueError):
+            # Local resolver/cache problems may still use the bounded legacy request hint.
             resolved_org_id = None
         request_org_id = resolved_org_id or cninfo_org_id(request.symbol, request.exchange)
         response, request_latency = self._request_with_org_id(request, request_org_id)
@@ -89,9 +110,29 @@ class CninfoDisclosureProvider:
         snapshot = self._persist_response(response, source_id=f"{self.provider_id}:index")
         try:
             payload = json.loads(response.content)
+            if not isinstance(payload, dict):
+                raise TypeError("CNINFO disclosure index root must be an object")
             raw_announcements = payload.get("announcements") or []
-            total_count = int(payload.get("totalAnnouncement") or 0)
-            total_pages = int(payload.get("totalpages") or 0)
+            total_count = int(
+                payload.get("totalAnnouncement")
+                or payload.get("totalRecordNum")
+                or len(raw_announcements)
+            )
+            total_count = max(total_count, len(raw_announcements))
+            raw_total_pages = int(payload.get("totalpages") or 0)
+            raw_has_more = payload.get("hasMore")
+            if isinstance(raw_has_more, bool):
+                has_more = raw_has_more
+            elif isinstance(raw_has_more, str) and raw_has_more.casefold() in {"true", "false"}:
+                has_more = raw_has_more.casefold() == "true"
+            else:
+                has_more = raw_total_pages > request.page_number
+            minimum_pages = request.page_number + (1 if has_more else 0)
+            total_pages = max(
+                raw_total_pages,
+                minimum_pages,
+                request.page_number if total_count > 0 else 0,
+            )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise ProviderError(
                 "CNINFO returned an invalid disclosure index",
@@ -120,10 +161,94 @@ class CninfoDisclosureProvider:
             announcements=announcements,
             total_count=total_count,
             total_pages=total_pages,
+            has_more=has_more,
             raw_snapshot_id=snapshot.snapshot_id,
             resolution_snapshot_ids=resolution_snapshot_ids,
             provider_latency_ms=latency_ms,
         )
+
+    def search_all(
+        self,
+        request: DisclosureSearchRequest,
+        *,
+        max_pages: int = 200,
+    ) -> list[DisclosureSearchBatch]:
+        capability = "disclosure.enumerate"
+        if not self.source_breaker.claim_attempt(self.provider_id, capability):
+            raise ProviderError(
+                "CNINFO disclosure enumeration circuit is open",
+                failure_class=FailureClass.CAPABILITY_UNAVAILABLE,
+            )
+        try:
+            batches = self._search_all_unchecked(request, max_pages=max_pages)
+        except Exception as exc:
+            self._record_source_failure(capability, exc)
+            raise
+        self.source_breaker.record_success(self.provider_id, capability)
+        return batches
+
+    def _search_all_unchecked(
+        self,
+        request: DisclosureSearchRequest,
+        *,
+        max_pages: int = 200,
+    ) -> list[DisclosureSearchBatch]:
+        if max_pages < 1:
+            raise ValueError("CNINFO max_pages must be positive")
+        base = request.model_copy(update={"page_number": 1})
+        batches = [self._search_unchecked(base)]
+        expected_total = batches[0].total_count
+        seen_ids = {item.announcement_id for item in batches[0].announcements}
+        if len(seen_ids) != len(batches[0].announcements) or len(seen_ids) > expected_total:
+            raise ProviderError(
+                "CNINFO disclosure pagination returned duplicate or excess announcements",
+                failure_class=FailureClass.DATA_QUALITY,
+                details={"page_number": 1, "total_count": expected_total},
+            )
+        _assert_terminal_consistency(batches[0], len(seen_ids), expected_total)
+        while batches[-1].has_more:
+            next_page = len(batches) + 1
+            if next_page > max_pages:
+                raise ProviderError(
+                    "CNINFO disclosure pagination exceeded the safety bound",
+                    failure_class=FailureClass.DATA_QUALITY,
+                    details={"max_pages": max_pages},
+                )
+            batch = self._search_unchecked(base.model_copy(update={"page_number": next_page}))
+            if batch.total_count != expected_total:
+                raise ProviderError(
+                    "CNINFO disclosure pagination total_count changed between pages",
+                    failure_class=FailureClass.DATA_QUALITY,
+                    details={
+                        "page_number": next_page,
+                        "expected_total": expected_total,
+                        "observed_total": batch.total_count,
+                    },
+                )
+            page_ids = [item.announcement_id for item in batch.announcements]
+            page_set = set(page_ids)
+            if len(page_set) != len(page_ids) or page_set & seen_ids:
+                raise ProviderError(
+                    "CNINFO disclosure pagination repeated a page or announcement across pages",
+                    failure_class=FailureClass.DATA_QUALITY,
+                    details={"page_number": next_page},
+                )
+            seen_ids.update(page_set)
+            if len(seen_ids) > expected_total:
+                raise ProviderError(
+                    "CNINFO disclosure pagination exceeded reported total_count",
+                    failure_class=FailureClass.DATA_QUALITY,
+                    details={"page_number": next_page, "total_count": expected_total},
+                )
+            _assert_terminal_consistency(batch, len(seen_ids), expected_total)
+            batches.append(batch)
+        if len(seen_ids) != expected_total:
+            raise ProviderError(
+                "CNINFO disclosure pagination terminated before total_count was enumerated",
+                failure_class=FailureClass.DATA_QUALITY,
+                details={"expected_total": expected_total, "enumerated_total": len(seen_ids)},
+            )
+        return batches
 
     def _discover_org_id(
         self,
@@ -155,6 +280,8 @@ class CninfoDisclosureProvider:
         )
         try:
             payload = json.loads(response.content)
+            if not isinstance(payload, dict):
+                raise TypeError("CNINFO organization discovery root must be an object")
             rows = payload.get("announcements") or []
         except (json.JSONDecodeError, TypeError) as exc:
             raise ProviderError(
@@ -193,7 +320,7 @@ class CninfoDisclosureProvider:
             self.search_endpoint,
             data={
                 "pageNum": str(request.page_number),
-                "pageSize": str(request.page_size),
+                "pageSize": str(min(request.page_size, 30)),
                 "column": _column_for_exchange(request.exchange),
                 "tabName": "fulltext",
                 "plate": "",
@@ -210,6 +337,21 @@ class CninfoDisclosureProvider:
         )
 
     def download(self, announcement: DisclosureAnnouncement) -> DownloadedDocument:
+        capability = "disclosure.document"
+        if not self.source_breaker.claim_attempt(self.provider_id, capability):
+            raise ProviderError(
+                "CNINFO disclosure download circuit is open",
+                failure_class=FailureClass.CAPABILITY_UNAVAILABLE,
+            )
+        try:
+            downloaded = self._download_unchecked(announcement)
+        except Exception as exc:
+            self._record_source_failure(capability, exc)
+            raise
+        self.source_breaker.record_success(self.provider_id, capability)
+        return downloaded
+
+    def _download_unchecked(self, announcement: DisclosureAnnouncement) -> DownloadedDocument:
         self._validate_download_url(announcement.source_url)
         response, _ = self._request("GET", announcement.source_url)
         if len(response.content) > self.maximum_pdf_bytes:
@@ -242,6 +384,19 @@ class CninfoDisclosureProvider:
         )
         return DownloadedDocument(document=document, snapshot=snapshot)
 
+    def _record_source_failure(self, capability: str, error: BaseException) -> None:
+        retry_after_seconds: int | None = None
+        if isinstance(error, ProviderError):
+            raw_retry_after = error.details.get("retry_after_seconds")
+            if isinstance(raw_retry_after, (int, float)) and not isinstance(raw_retry_after, bool):
+                retry_after_seconds = max(0, int(raw_retry_after))
+        self.source_breaker.record_failure(
+            self.provider_id,
+            capability,
+            classify_source_error(error),
+            retry_after_seconds=retry_after_seconds,
+        )
+
     def _request(
         self,
         method: str,
@@ -267,10 +422,17 @@ class CninfoDisclosureProvider:
             ) from exc
         latency_ms = round((time.perf_counter() - started) * 1000)
         if response.status_code == 429:
+            retry_after = response.extensions.get("astock_retry_after_seconds")
+            details = (
+                {"retry_after_seconds": retry_after}
+                if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool)
+                else {}
+            )
             raise ProviderError(
                 "CNINFO rate limited the request",
                 failure_class=FailureClass.RATE_LIMITED,
                 retryable=False,
+                details=details,
             )
         if response.status_code in {401, 403}:
             raise ProviderError(
@@ -361,6 +523,29 @@ class CninfoDisclosureProvider:
                 failure_class=FailureClass.POLICY_REJECTED,
                 details={"url": url},
             )
+
+
+def _assert_terminal_consistency(
+    batch: DisclosureSearchBatch,
+    enumerated_total: int,
+    expected_total: int,
+) -> None:
+    page_number = batch.request.page_number
+    if batch.has_more and enumerated_total >= expected_total:
+        raise ProviderError(
+            "CNINFO disclosure pagination claims hasMore after total_count was exhausted",
+            failure_class=FailureClass.DATA_QUALITY,
+            details={"page_number": page_number, "total_count": expected_total},
+        )
+    if not batch.has_more and batch.total_pages > page_number:
+        raise ProviderError(
+            "CNINFO disclosure pagination terminal proof contradicts total_pages",
+            failure_class=FailureClass.DATA_QUALITY,
+            details={
+                "page_number": page_number,
+                "total_pages": batch.total_pages,
+            },
+        )
 
 
 def cninfo_org_id(symbol: str, exchange: DisclosureExchange) -> str:

@@ -32,6 +32,8 @@
 
 - 禁止未来函数。所有输入必须带可得时间、来源和版本。
 - 来源访问由版本化 `source-access-policy` 评分：官方性、capability match、recent health、freshness、transport、latency、cost/auth friction 与 retryability 共同决定自动路径；对强官方能力，只要存在可用 `PRIMARY_OFFICIAL`，低权威快源不得反超。Manual 永远最后，单个 provider 失败不是终止条件。
+- 数据源按稳定性分层：① 可确定/低频规则事实优先使用“权威 Web/Search 核验一次 → 版本化本地冻结 → 后续零网络运行”；② 公告、政策、制度日期等低频外部事实优先权威网页/Search，不为了结构化而强依赖脆弱 API；③ 实时价格、连续 K 线、全市场 Universe 等高频结构化数据才使用多 Provider API/fallback。Agent 动态发现或提议新的 Web/Search 来源时必须先通过 `uv run astock source-proposal-check` 的确定性能力/官方域名/完整性策略校验；`DISCOVERY_ONLY` 结果不得直接进入正式证据，`ADMIT_AFTER_SNAPSHOT` 也必须先形成不可变快照与 provenance。Search 不得替代 OHLCV、全市场覆盖证明，也不得用“没搜到”证明某事项不存在。
+- 交易日历属于低频确定性事实：当前年份若已有 `official_trading_calendar.yaml` 的交易所官方核验记录，`sync-calendar --live` 必须优先本地确定性生成，不得先打 BaoStock/API；新年份配置缺失时，Chat/Codex 自动 Search 上交所/深交所/北交所年度休市通知并交叉核验后更新版本化配置，再恢复任务。仅 Search/Provider 均无法形成可审计日历时才允许降级。
 - 上一层已满足时，不通过下一层重复抓取同一内容。
 - 投资结论必须引用 evidence_id/source_snapshot_id，或明确标记为推断/缺口。
 - 社区内容只能作线索；关键事实必须回到公告、交易所、财报等更强来源。
@@ -95,10 +97,21 @@ Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`pr
 
 财务来源稳定入口包括：`sync-financial`、`financial-source-status` 和 `financial-source-audit`。结构化财务来源顺序只读取 `financial-sources-v2.provider_order`；当前配置中 Sina 优先、EastMoney 备用/交叉，但业务 Service 不得复制这两个名字。任一 live schema 缺少源生 scope/currency 时必须降级而不是猜值；结构化源均只是 `SECONDARY_STRUCTURED`，最终仍由 CNINFO/交易所/发行人正式报告精确证明表名、合并口径、期间列、科目、数值和单位。Current Acquisition 先发现**实际已经披露**的最新 report period，不再按固定月份猜 Q1/H1/Q3。机构级基本面入口包括 `institutional-research-schema`、`institutional-research-finalize`、`institutional-decision-context-freeze`、`fundamental-model-status`、`fundamental-model-audit`。Research Runtime 稳定入口包括 `research-plan`、`research-run-company`、`research-status`、`research-audit`、`research-recover`、`trade-plan-view`；LIVE 当前研究允许省略 `--as-of` 并在命令实际执行时冻结时间，recorded/historical 必须显式提供。开发诊断入口新增 `research-capability-status`、`provider-dialect-status`、`adaptive-edge-status`、`adaptive-edge-schema`；Agent proposal 的受控入口为 `adaptive-plan-validate`、`adaptive-recovery-validate`、`adaptive-schema-repair-validate`，candidate dialect 准入必须显式 `adaptive-schema-repair-admit --approve`，并可用 `adaptive-artifact-audit` / `adaptive-dialect-rollback` 审计和回滚。这些命令属于 DEVELOPER_MODE，正常投资者回复仍使用 `research-acquisition-investor-view` / `research-investor-view` 的自然语言边界，并由 `research-investor-answer-audit` 阻止后台术语泄露；执行条件只在用户明确询问具体买卖规则时解释。组合入口包括 `portfolio-paper-evaluate`、`portfolio-evaluate`、`portfolio-construct`、`portfolio-status`、`portfolio-audit`。模拟下单 prepare/确认链已验收，但任何账本写入仍要求独立人工确认，真实券商执行始终不存在。
 
-## 开发约定
+## 强制开发工作流与恢复契约
+
+- 所有开发任务必须依次执行：`需求分析 → 根因定位与量化/权威研究 → 架构设计 → 性能与可落地性评估 → 开发 → 独立 Code Review → 专业测试 → 文档迁移 → 发布`。任何阶段不通过都必须返回对应开发阶段返工，禁止绕过 Review、测试或发布门。
+- 开工前必须以需求分析师身份明确需求、问题边界、不可改变约束和验收口径；先使用代码、日志、数据库、运行工件和测试定位根因，不得凭聊天印象直接改代码。涉及投研策略、数据源、算法、外部规范或安全治理时，优先检索官方文档、原始论文、监管机构或高认可度资料，并记录采用与不采用的理由。
+- 架构师与算法工程师必须评估算法复杂度、CPU、内存、I/O、并发、故障恢复、兼容性、风险与回滚；禁止为了实现功能建立第二套事实源、平行 Router/Evidence/Paper 架构或可漂移状态副本。
+- `开发计划.md` 只保存当前未完成任务。新任务编码前必须写入需求、根因、权威依据、方案、实施步骤、验收标准、测试与 Review 门、风险和回滚；已经完成且验收通过的子任务不得继续保留在计划中。长任务必须同步维护唯一 durable run，记录步骤状态、故障断点和真实证据；未验证的中间进度不得冒充验收事实。
+- 开发完成后必须按开发计划执行独立 Code Review；不符合架构、安全、性能或验收标准时，附明确意见打回返工，返工后重新 Review。Review 通过后按验收标准执行定向、集成、故障注入、静态检查和全仓测试；任何失败必须返回开发返工，禁止带失败发布。
+- 每个子任务 Review 和测试通过后，立即从 `开发计划.md` 删除，并将实现内容、代码修改、测试数字、Review、性能、迁移和发布证据写入 `验收报告.md`。`docs/architecture/` 只维护当前真实架构；过时、重复或被替代内容必须同步修正或删除。仓库已有 `docs/architecture/`，不得仅为恢复流程另建重复的 `项目架构.md`。
+- 最终发布必须完成显式路径暂存、staged diff 审核、secret/private/runtime 审计、commit、push、tag/release、远端验证和 clean worktree；禁止无审计的全量暂存、带失败发布或把本地候选状态预写成已发布。
+- MCP 断连、新会话或上下文丢失后，恢复事实源顺序固定为：`AGENTS.md → docs/architecture/ 现行架构合同 → 开发计划.md → 验收报告.md → 唯一 durable run → Git/测试/运行工件`。禁止依赖聊天记忆、创建平行 long-run，或重新编写超长接管提示词替代仓库事实。
+
+## 工程约定
 
 - Python 版本固定为 `>=3.12,<3.13`，依赖以 `uv.lock` 为准。
 - 修改后运行 `uv run pytest`、`uv run ruff check .`、`uv run pyright`。
 - 外部 Provider 同时维护 recorded fixture 和低频 live smoke；日常测试不得依赖外网。
 - Windows 路径、UTF-8 中文文件名、原子写入和崩溃恢复必须有测试。
-- 不提交 `runtime/`、密钥、Cookie、浏览器 Profile 或私有 PDF。
+- 不提交 `runtime/`、密钥、Cookie、浏览器 Profile、私有 PDF、`.ai-bridge/` 或缓存工件。

@@ -7,9 +7,6 @@ minimum_instrument_records:
   XSHG: 1500
   XSHE: 2000
   BJSE: 150
-circuit_breakers:
-  baostock-reference:
-    cooldown_seconds: 1800
 routes:
   instrument.master:
     - {provider_id: baostock-reference, operation: baostock-master}

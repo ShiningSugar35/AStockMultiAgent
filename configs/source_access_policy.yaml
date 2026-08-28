@@ -1,19 +1,25 @@
-schema_version: source-access-policy-v1
+schema_version: source-access-policy-v2
 manual_last: true
 strong_official_capability_tokens: [official, financial, disclosure, corporate_action, identity]
 weights:
+  formal_eligibility: 120
   officiality: 100
+  completeness: 60
+  local_availability: 50
   health: 35
-  freshness: 20
-  transport: 15
-  latency: 10
-  cost_efficiency: 8
+  freshness: 25
+  independence: 15
+  transport: 2
+  latency: 8
+  cost_efficiency: 6
   auth_ease: 5
-  retryable_recovery: 3
+  retryable_recovery: -5
 transport_scores:
-  API: 4
-  MCP: 3
-  BROWSER: 2
+  LOCAL: 5
+  API: 3
+  MCP: 2.9
+  BROWSER: 2.8
+  SEARCH: 2.8
   MANUAL: 0
 officiality_scores:
   PRIMARY_OFFICIAL: 3

@@ -698,17 +698,19 @@ class StateStore:
         with self.transaction() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO source_access_decision(decision_id,source_id,"
-                "requested_capability,selected_transport,selection_reason,fallback_chain_json,"
-                "request_started_at,request_finished_at,result_hash,failure_class,"
-                "rate_limit_state) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "selected_source_id,requested_capability,selected_transport,selection_reason,"
+                "fallback_chain_json,fallback_source_chain_json,request_started_at,"
+                "request_finished_at,result_hash,failure_class,rate_limit_state) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     decision.decision_id,
                     decision.source_id,
+                    decision.selected_source_id,
                     decision.requested_capability,
                     decision.selected_transport.value,
                     decision.selection_reason,
                     json.dumps([item.value for item in decision.fallback_chain]),
+                    json.dumps(decision.fallback_source_chain),
                     decision.request_started_at.isoformat(),
                     decision.request_finished_at.isoformat()
                     if decision.request_finished_at

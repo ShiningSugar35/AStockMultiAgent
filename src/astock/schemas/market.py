@@ -79,10 +79,30 @@ class ReplayQuality(StrEnum):
 
 
 class AccessTransport(StrEnum):
+    LOCAL = "LOCAL"
     API = "API"
     MCP = "MCP"
     BROWSER = "BROWSER"
+    SEARCH = "SEARCH"
     MANUAL = "MANUAL"
+
+
+class SourceClass(StrEnum):
+    LOCAL_IMMUTABLE = "LOCAL_IMMUTABLE"
+    PRIMARY_OFFICIAL_WEB = "PRIMARY_OFFICIAL_WEB"
+    SECONDARY_STRUCTURED = "SECONDARY_STRUCTURED"
+    REPUTABLE_WEB_SEARCH = "REPUTABLE_WEB_SEARCH"
+    MANUAL = "MANUAL"
+    UNKNOWN = "UNKNOWN"
+
+
+class CompletenessSemantics(StrEnum):
+    DISCOVERY_ONLY = "DISCOVERY_ONLY"
+    EXACT_ITEM = "EXACT_ITEM"
+    WINDOW_EXHAUSTIVE = "WINDOW_EXHAUSTIVE"
+    FULL_UNIVERSE = "FULL_UNIVERSE"
+    CONTINUOUS_SERIES = "CONTINUOUS_SERIES"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
 class RateLimitState(StrEnum):
@@ -144,6 +164,13 @@ class TransportCapability(AStockModel):
     available: bool
     reason: str
     officiality: str = "UNKNOWN"
+    source_class: SourceClass = SourceClass.UNKNOWN
+    formal_eligible: bool = True
+    completeness_semantics: CompletenessSemantics = CompletenessSemantics.NOT_APPLICABLE
+    completeness_score: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
+    local_availability_score: Decimal = Field(default=Decimal("0"), ge=0, le=1)
+    independence_score: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
+    independence_group: str | None = None
     health_status: str = "UNKNOWN"
     freshness_score: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
     latency_ms: int = Field(default=0, ge=0)
@@ -153,17 +180,21 @@ class TransportCapability(AStockModel):
 
 
 class SourceAccessRequest(AStockModel):
-    source_id: str
+    source_id: str | None = None
     requested_capability: str
+    formal_use: bool = False
+    require_complete: bool = False
 
 
 class SourceAccessDecision(AStockModel):
     decision_id: str
     source_id: str
+    selected_source_id: str | None = None
     requested_capability: str
     selected_transport: AccessTransport
     selection_reason: str
     fallback_chain: list[AccessTransport]
+    fallback_source_chain: list[str] = Field(default_factory=list)
     request_started_at: AwareDatetime
     request_finished_at: AwareDatetime | None = None
     result_hash: str | None = None

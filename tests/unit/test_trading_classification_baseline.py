@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -8,7 +8,10 @@ import pytest
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.research.trading_classification import TradingClassificationService
+from astock.research.trading_classification import (
+    TradingClassificationService,
+    _corporate_action_window_start,
+)
 from astock.schemas import FetchStatus, Market, SourceSnapshot
 from astock.schemas.research_runtime import TradingClassificationCorporateActionBaseline
 
@@ -105,11 +108,15 @@ def test_official_baseline_rejects_non_cninfo_or_future_snapshot(tmp_path: Path)
 
 
 def test_official_capture_uses_bounded_recent_implementation_window() -> None:
+    local_date = date(2026, 7, 27)
+    assert _corporate_action_window_start(None, local_date) == date(2026, 6, 12)
+    assert _corporate_action_window_start(date(2026, 7, 20), local_date) == date(2026, 7, 20)
+    assert _corporate_action_window_start(date(2020, 1, 1), local_date) == date(2026, 6, 12)
+
     source = (
         PROJECT_ROOT / "src" / "astock" / "research" / "trading_classification.py"
     ).read_text(encoding="utf-8")
-
-    assert "local_date - timedelta(days=45)" in source
+    assert "_corporate_action_window_start(instrument.listing_date, local_date)" in source
     assert "start_date=coverage_start" in source
     assert "end_date=local_date" in source
     assert "_validate_official_enumeration(batches)" in source

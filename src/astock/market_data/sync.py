@@ -8,6 +8,11 @@ from pathlib import Path
 
 from astock.core.errors import AStockError, FailureClass, ProviderError
 from astock.core.hashing import content_hash
+from astock.core.source_resilience import (
+    SourceCircuitBreaker,
+    SourceFailureClass,
+    classify_source_error,
+)
 from astock.core.state import StateStore
 from astock.market_data.quality import cross_validate_batches, validate_batch
 from astock.market_data.storage import CanonicalMarketStore, ParquetMarketStore
@@ -38,6 +43,7 @@ class MarketSyncService:
     ) -> None:
         self.providers = providers
         self.state = state
+        self.source_breaker = SourceCircuitBreaker(state)
         self.observation_store = observation_store
         self.canonical_store = canonical_store
 
@@ -53,8 +59,12 @@ class MarketSyncService:
         reports: list[DataQualityReport] = []
         files: list[Path] = []
         failures: dict[str, str] = {}
+        capability = f"market.raw_{request.frequency.value}"
         try:
             for provider in self.providers:
+                if not self.source_breaker.claim_attempt(provider.provider_id, capability):
+                    failures[provider.provider_id] = f"CIRCUIT_OPEN:{capability}"
+                    continue
                 try:
                     provider_request = self._incremental_request(
                         provider.provider_id,
@@ -71,25 +81,19 @@ class MarketSyncService:
                         failures[provider.provider_id] = (
                             "DATA_QUALITY: provider batch failed deterministic quality gates"
                         )
-                    self.state.record_provider_health(
-                        provider.provider_id,
-                        status=(
-                            "AVAILABLE" if report.quality_status != QualityStatus.FAIL else "ERROR"
-                        ),
-                        capability_hash=content_hash(provider.capability()),
-                        failure_class=(
-                            None
-                            if report.quality_status != QualityStatus.FAIL
-                            else FailureClass.DATA_QUALITY.value
-                        ),
-                    )
+                        self.source_breaker.record_failure(
+                            provider.provider_id,
+                            capability,
+                            SourceFailureClass.COVERAGE_INCOMPLETE,
+                        )
+                    else:
+                        self.source_breaker.record_success(provider.provider_id, capability)
                 except AStockError as exc:
                     failures[provider.provider_id] = f"{exc.failure_class.value}: {exc}"
-                    self.state.record_provider_health(
+                    self.source_breaker.record_failure(
                         provider.provider_id,
-                        status="ERROR",
-                        capability_hash=content_hash(provider.capability()),
-                        failure_class=exc.failure_class.value,
+                        capability,
+                        classify_source_error(exc),
                     )
             usable = [
                 (batch, report)

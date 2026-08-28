@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from time import perf_counter
+from zoneinfo import ZoneInfo
 
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
@@ -34,6 +35,8 @@ from astock.schemas.research_acquisition import (
     ExternalResearchNeed,
 )
 from astock.settings import ProjectPaths
+
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 class CurrentResearchAcquisitionService:
@@ -102,7 +105,7 @@ class CurrentResearchAcquisitionService:
                 *([planner_plan_hash] if planner_plan_hash is not None else []),
             ],
         )
-        current_date = started_at.date()
+        current_date, daily_market_end = _shanghai_acquisition_dates(started_at)
         start = current_date - timedelta(days=resolved_lookback)
 
         financial_specs, period_discovery_reasons = self._discover_financial_periods(
@@ -132,6 +135,7 @@ class CurrentResearchAcquisitionService:
                     market,
                     start,
                     current_date,
+                    daily_market_end,
                     financial_by_capability,
                     identity_verified=identity_verified,
                 )
@@ -357,6 +361,7 @@ class CurrentResearchAcquisitionService:
         market: Market,
         start: date,
         current_date: date,
+        daily_market_end: date,
         financial_by_capability: dict[
             AcquisitionCapability, tuple[date, FinancialPeriodType]
         ],
@@ -374,7 +379,7 @@ class CurrentResearchAcquisitionService:
             return lambda: self._reference_attempt(
                 capability,
                 lambda: self._market_service().sync_daily(
-                    company_id, market, start, current_date, live=True
+                    company_id, market, start, daily_market_end, live=True
                 ),
             )
         if capability is AcquisitionCapability.CORPORATE_ACTIONS:
@@ -629,6 +634,19 @@ class CurrentResearchAcquisitionService:
                 )
             )
         return needs
+
+
+def _shanghai_acquisition_dates(started_at: datetime) -> tuple[date, date]:
+    if started_at.tzinfo is None or started_at.utcoffset() is None:
+        raise ValueError("current research clock must return a timezone-aware datetime")
+    local_started_at = started_at.astimezone(_SHANGHAI)
+    current_date = local_started_at.date()
+    daily_market_end = (
+        current_date
+        if local_started_at.time() >= time(15, 0)
+        else current_date - timedelta(days=1)
+    )
+    return current_date, daily_market_end
 
 
 def _current_financial_periods(

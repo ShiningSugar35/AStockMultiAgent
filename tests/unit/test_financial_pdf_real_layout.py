@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from astock.financial_sources.certification import (
     _field_label_pattern,
     _logical_row_values,
@@ -109,6 +111,61 @@ def test_split_exchange_effect_row_extracts_negative_current_period() -> None:
 
     assert len(rows) == 1
     assert rows[0][2] == Decimal("-6246512.14")
+
+
+@pytest.mark.parametrize(
+    ("field_code", "label", "text", "expected"),
+    [
+        (
+            FinancialFieldCode.NET_CASH_OPERATING,
+            "经营活动产生的现金流量净额",
+            "经营活动产生的现金流\n 2,128,504,212.49 2,032,230,237.01\n量净额\n",
+            Decimal("2128504212.49"),
+        ),
+        (
+            FinancialFieldCode.NET_CASH_INVESTING,
+            "投资活动产生的现金流量净额",
+            "投资活动产生的现金流\n -1,390,656,105.54 -669,335,589.16\n量净额\n",
+            Decimal("-1390656105.54"),
+        ),
+        (
+            FinancialFieldCode.NET_CASH_FINANCING,
+            "筹资活动产生的现金流量净额",
+            "筹资活动产生的现金流\n -516,861,272.54 480,383,029.69\n量净额\n",
+            Decimal("-516861272.54"),
+        ),
+        (
+            FinancialFieldCode.EXCHANGE_EFFECT,
+            "汇率变动对现金及现金等价物的影响",
+            "四、汇率变动对现金及现金等\n -163,212,077.26 129,993,370.57\n价物的影响\n",
+            Decimal("-163212077.26"),
+        ),
+        (
+            FinancialFieldCode.CASH_BEGINNING,
+            "期初现金及现金等价物余额",
+            "加：期初现金及现金等价物\n 9,104,158,718.59 7,130,887,670.48\n余额\n",
+            Decimal("9104158718.59"),
+        ),
+        (
+            FinancialFieldCode.CASH_ENDING,
+            "期末现金及现金等价物余额",
+            "六、期末现金及现金等价物余\n 9,161,933,475.74 9,104,158,718.59\n额\n",
+            Decimal("9161933475.74"),
+        ),
+    ],
+)
+def test_split_cash_flow_rows_extract_current_period(
+    field_code: FinancialFieldCode,
+    label: str,
+    text: str,
+    expected: Decimal,
+) -> None:
+    mapping = _mapping(field_code, FinancialStatementType.CASH_FLOW_STATEMENT, label)
+
+    rows = _logical_row_values(text, _field_label_pattern(mapping), 2)
+
+    assert len(rows) == 1
+    assert rows[0][2] == expected
 
 
 def test_equivalent_monetary_values_compare_after_unit_normalization() -> None:

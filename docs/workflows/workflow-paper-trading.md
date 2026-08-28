@@ -21,7 +21,7 @@ Primary skill: `$paper-trading-recovery`.
    - For each held symbol or open order, run `sync-hourly` over the missing interval.
    - Run `paper-replay` at its default `60m` resolution.
    - Hourly OHLC can show that a limit price was touched, but cannot prove queue priority or the exact intrahour price path. The replay therefore remains `PROVIDER_1H_APPROX` and uses conservative fill pricing.
-   - If the hourly bar is materially ambiguous, use `paper-replay --resolution 5m` as the explicit higher-fidelity fallback.
+   - If the hourly bar is materially ambiguous, use `paper-replay --resolution 5m` as the explicit higher-fidelity fallback. The 5m providers are isolated by the `market.raw_5m` capability breaker: one provider failure may fall back to the approved peer without poisoning unrelated capabilities. A surviving single source remains `SINGLE_SOURCE_5M`; when a previous canonical exists and any provider fails, the degraded run must preserve that canonical rather than overwrite it.
 
 4. **Keep order and fill semantics separate**
    - An accepted order is not a holding.
@@ -52,6 +52,6 @@ Show only decision-relevant account state: holdings, open orders, filled/partial
 ## Stop conditions
 
 - No direct SQLite edits.
-- No invented bars or fills.
+- No invented bars or fills. Search/Web discovery and an exact-item official document cannot substitute for continuous OHLCV or prove execution/fill paths.
 - No accepted-but-unfilled order may be reported as a position.
 - No real brokerage connection or real order submission.

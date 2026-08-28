@@ -29,6 +29,7 @@ class CandidateArtifactRole(StrEnum):
 class CandidateCoverageStatus(StrEnum):
     COMPLETE = "COMPLETE"
     PARTIAL = "PARTIAL"
+    CONFLICTED = "CONFLICTED"
     FAILED = "FAILED"
     NOT_AVAILABLE = "NOT_AVAILABLE"
 

@@ -79,6 +79,27 @@ class FinancialPdfCertifier:
             EvidenceRepository(state),
         )
 
+    def extract_values(
+        self,
+        report: OfficialFinancialReport,
+        period_end: date,
+        period_type: FinancialPeriodType,
+        mappings: list[FinancialFieldMapping],
+    ) -> tuple[list[tuple[FinancialFieldMapping, Decimal, FinancialUnit]], list[str]]:
+        """Extract uniquely identified values from an official report without secondary hints."""
+
+        values: list[tuple[FinancialFieldMapping, Decimal, FinancialUnit]] = []
+        reasons: list[str] = []
+        for mapping in mappings:
+            matches = self._exact_matches(report, mapping, period_end, period_type)
+            if len(matches) != 1:
+                code = "OFFICIAL_VALUE_NOT_FOUND" if not matches else "OFFICIAL_VALUE_AMBIGUOUS"
+                reasons.append(f"{code}:{mapping.field_code.value}")
+                continue
+            _page_id, _char_start, _char_end, value, unit = matches[0]
+            values.append((mapping, value, unit))
+        return values, list(dict.fromkeys(reasons))
+
     def certify(
         self,
         report: OfficialFinancialReport,
@@ -329,12 +350,20 @@ def _field_label_pattern(mapping: FinancialFieldMapping) -> re.Pattern[str]:
             r"\s*合\s*计"
             r"(?![\u4e00-\u9fff])"
         )
-    if mapping.field_code is FinancialFieldCode.EXCHANGE_EFFECT:
+    interleaved_cash_flow_fields = {
+        FinancialFieldCode.NET_CASH_OPERATING,
+        FinancialFieldCode.NET_CASH_INVESTING,
+        FinancialFieldCode.NET_CASH_FINANCING,
+        FinancialFieldCode.EXCHANGE_EFFECT,
+        FinancialFieldCode.CASH_BEGINNING,
+        FinancialFieldCode.CASH_ENDING,
+    }
+    if mapping.field_code in interleaved_cash_flow_fields:
+        label_re = r"[\s\d,().（）−\-]*".join(
+            re.escape(character) for character in mapping.official_label
+        )
         return re.compile(
-            r"(?<![\u4e00-\u9fff])"
-            r"汇\s*率\s*变\s*动\s*对\s*现\s*金\s*及\s*现\s*金\s*等\s*价\s*物\s*的\s*影"
-            r"[\s\d,().（）−\-]*"
-            r"响(?![\u4e00-\u9fff])"
+            rf"(?<![\u4e00-\u9fff]){label_re}(?![\u4e00-\u9fff])"
         )
     return _label_pattern(mapping.official_label)
 

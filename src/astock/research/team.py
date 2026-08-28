@@ -16,6 +16,8 @@ from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.evidence.repository import EvidenceRepository
+from astock.schemas.financial import FinancialCoverageStatus, FinancialIntegrityEvidencePack
+from astock.schemas.research_seeds import ResearchSeedReport
 from astock.schemas.research_team import (
     HardwareBudget,
     RecommendationReadinessReport,
@@ -35,6 +37,7 @@ from astock.schemas.research_team import (
     ResearchTeamTask,
     ResearchTeamTaskState,
 )
+from astock.schemas.runs import RunStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +342,26 @@ class ResearchTeamService:
             if record is None or not self.objects.verify(str(record["object_hash"])):
                 raise ValueError("role output references an unavailable member artifact")
             member_hashes.append(str(record["object_hash"]))
+        if task.role is ResearchTaskRole.UNIVERSE:
+            universe_is_full = self._universe_output_has_full_coverage(output)
+            if output.readiness_check_results.get("UNIVERSE_COVERAGE") is not universe_is_full:
+                raise ValueError(
+                    "UNIVERSE_COVERAGE must be derived from one frozen ResearchSeedReport"
+                )
+        if task.role is ResearchTaskRole.FINANCIAL_INTEGRITY:
+            financial_is_formal = self._financial_output_has_formal_coverage(output)
+            if output.readiness_check_results.get("FINANCIAL_INTEGRITY") is not financial_is_formal:
+                raise ValueError(
+                    "FINANCIAL_INTEGRITY must be derived from COMPLETE SUCCEEDED financial packs"
+                )
+        if (
+            task.role is ResearchTaskRole.VALUATION
+            and output.readiness_check_results.get("VALUATION") is True
+            and self._derived_readiness_checks(plan).get("FINANCIAL_INTEGRITY") is not True
+        ):
+            raise ValueError(
+                "precise VALUATION requires COMPLETE SUCCEEDED financial packs"
+            )
 
         evidence_hashes: list[str] = []
         evidence_repository = EvidenceRepository(self.state)
@@ -724,11 +747,63 @@ class ResearchTeamService:
                 outputs.append(output)
             if not outputs:
                 continue
+            if task.role is ResearchTaskRole.UNIVERSE:
+                derived["UNIVERSE_COVERAGE"] = all(
+                    self._universe_output_has_full_coverage(output) for output in outputs
+                )
+                continue
+            if task.role is ResearchTaskRole.FINANCIAL_INTEGRITY:
+                derived["FINANCIAL_INTEGRITY"] = all(
+                    self._financial_output_has_formal_coverage(output) for output in outputs
+                )
+                continue
             for check in task.readiness_checks:
                 derived[check] = all(
                     output.readiness_check_results.get(check) is True for output in outputs
                 )
+        if derived.get("FINANCIAL_INTEGRITY") is not True:
+            derived["VALUATION"] = False
         return derived
+
+    def _universe_output_has_full_coverage(self, output: ResearchRoleOutput) -> bool:
+        reports: list[ResearchSeedReport] = []
+        for artifact_id in output.member_artifact_ids:
+            record = self.state.artifact_record(artifact_id)
+            if record is None or str(record["type"]) != "ResearchSeedReport":
+                continue
+            object_hash = str(record["object_hash"])
+            if not self.objects.verify(object_hash):
+                return False
+            try:
+                reports.append(
+                    ResearchSeedReport.model_validate_json(self.objects.get_bytes(object_hash))
+                )
+            except ValueError:
+                return False
+        return len(reports) == 1 and reports[0].formal_full_market_coverage_allowed
+
+    def _financial_output_has_formal_coverage(self, output: ResearchRoleOutput) -> bool:
+        packs: list[FinancialIntegrityEvidencePack] = []
+        for artifact_id in output.member_artifact_ids:
+            record = self.state.artifact_record(artifact_id)
+            if record is None or str(record["type"]) != "FinancialIntegrityEvidencePack":
+                return False
+            object_hash = str(record["object_hash"])
+            if not self.objects.verify(object_hash):
+                return False
+            try:
+                packs.append(
+                    FinancialIntegrityEvidencePack.model_validate_json(
+                        self.objects.get_bytes(object_hash)
+                    )
+                )
+            except ValueError:
+                return False
+        return bool(packs) and all(
+            pack.status is RunStatus.SUCCEEDED
+            and pack.coverage_status is FinancialCoverageStatus.COMPLETE
+            for pack in packs
+        )
 
     def _validate_independence(
         self,

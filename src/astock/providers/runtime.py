@@ -8,19 +8,44 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 import yaml
 
+from astock.core.errors import AStockError
+from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.source_resilience import (
+    SourceCircuitBreaker,
+    SourceFailureClass,
+    classify_source_error,
+    load_source_resilience_policy,
+)
+from astock.core.source_router import SourceAccessRouter
 from astock.core.state import StateStore
 from astock.providers.config import get_provider, load_provider_registry
 from astock.providers.dialects import ProviderDialect
 from astock.providers.http_resilience import HttpClientLike, ResilientHttpClient
-from astock.schemas import ProviderDefinition, ProviderRegistry, ProviderTransport
+from astock.providers.self_probe import checked_capabilities as checked_capabilities_for_probe
+from astock.schemas import (
+    AccessTransport,
+    CompletenessSemantics,
+    ProviderDefinition,
+    ProviderHealthStatus,
+    ProviderProbeFailureCode,
+    ProviderProbeReport,
+    ProviderRegistry,
+    ProviderTransport,
+    SourceAccessRequest,
+    TransportCapability,
+)
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +84,304 @@ class ProviderFactory:
         self.fixture_root = fixture_root.resolve()
         self.fixture_scope = fixture_scope.resolve() if fixture_scope is not None else None
         self.dialects = dialects or {}
+        self.source_breaker = SourceCircuitBreaker(state)
         self._instances: dict[str, object] = {}
 
-    def definitions_for_capability(self, capability: str) -> list[ProviderDefinition]:
-        matches = [item for item in self.registry.providers if capability in item.capabilities]
-        return sorted(matches, key=lambda item: (-item.priority, item.provider_id))
+    def capability_health_status(
+        self,
+        provider_id: str,
+        capability: str,
+    ) -> ProviderHealthStatus:
+        """Interpret provider probes only for the capability they actually exercised."""
+
+        row, head = self.state.get_provider_probe_health_snapshot(provider_id)
+        if row is None:
+            return (
+                ProviderHealthStatus.CORRUPT
+                if head is not None
+                else ProviderHealthStatus.NOT_PROBED
+            )
+        try:
+            row_status = ProviderHealthStatus(str(row.get("status")))
+        except ValueError:
+            return ProviderHealthStatus.CORRUPT
+        if row_status is ProviderHealthStatus.CORRUPT:
+            return ProviderHealthStatus.CORRUPT
+        report_hash = str(row.get("report_object_hash") or "")
+        latest_probe_id = str(row.get("latest_probe_id") or "")
+        report_artifact_id = str(row.get("report_artifact_id") or "")
+        if not report_hash and not latest_probe_id and not report_artifact_id:
+            return (
+                ProviderHealthStatus.CORRUPT
+                if head is not None
+                else ProviderHealthStatus.NOT_PROBED
+            )
+        if not report_hash or not latest_probe_id or not report_artifact_id or head is None:
+            return ProviderHealthStatus.CORRUPT
+        if str(head.get("latest_probe_id") or "") != latest_probe_id:
+            return ProviderHealthStatus.CORRUPT
+        try:
+            artifact = self.state.artifact_record(report_artifact_id)
+            event = self.state.get_provider_probe_event(latest_probe_id)
+            if artifact is None or event is None or not self.objects.verify(report_hash):
+                return ProviderHealthStatus.CORRUPT
+            report = ProviderProbeReport.model_validate_json(self.objects.get_bytes(report_hash))
+        except (AStockError, OSError, TypeError, ValueError):
+            return ProviderHealthStatus.CORRUPT
+        provider = get_provider(self.registry, provider_id)
+        expected_checked = checked_capabilities_for_probe(provider)
+        expected_gaps = list(
+            dict.fromkeys(
+                [
+                    *self.registry.capability_gaps,
+                    *[item for item in provider.capabilities if item not in expected_checked],
+                ]
+            )
+        )
+        expected_failure_code = report.failure_code.value if report.failure_code else None
+        expected_inputs = [report.capability_hash]
+        try:
+            invalid_chain = (
+                report.probe_id != latest_probe_id
+                or report_artifact_id != f"provider-probe:{report.probe_id}"
+                or report.provider_id != provider_id
+                or report.registry_version != self.registry.registry_version
+                or report.capability_hash != content_hash(provider)
+                or report.checked_capabilities != expected_checked
+                or report.capability_gaps != expected_gaps
+                or (
+                    bool(set(provider.capabilities).difference(expected_checked))
+                    and report.status is ProviderHealthStatus.HEALTHY
+                )
+                or (
+                    report.failure_code is ProviderProbeFailureCode.CAPABILITY_NOT_PROBED
+                    and (
+                        not set(provider.capabilities).difference(expected_checked)
+                        or report.status is not ProviderHealthStatus.DEGRADED
+                    )
+                )
+                or str(row.get("capability_hash") or "") != report.capability_hash
+                or str(row.get("registry_version") or "") != report.registry_version
+                or str(row.get("probe_mode") or "") != report.probe_mode.value
+                or str(row.get("status") or "") != report.status.value
+                or str(row.get("last_probe_at") or "") != report.completed_at.isoformat()
+                or row.get("last_error_class") != expected_failure_code
+                or row.get("failure_code") != expected_failure_code
+                or int(row.get("failure_count") or 0)
+                != int(head.get("failure_count") or 0)
+                or str(artifact.get("artifact_id") or "") != report_artifact_id
+                or str(artifact.get("type") or "") != "ProviderProbeReport"
+                or str(artifact.get("schema_version") or "") != report.schema_version
+                or str(artifact.get("object_hash") or "") != report_hash
+                or artifact.get("input_hashes") != expected_inputs
+                or str(event.get("provider_id") or "") != report.provider_id
+                or str(event.get("registry_version") or "") != report.registry_version
+                or str(event.get("capability_hash") or "") != report.capability_hash
+                or str(event.get("probe_mode") or "") != report.probe_mode.value
+                or str(event.get("status") or "") != report.status.value
+                or str(event.get("completed_at") or "")
+                != report.completed_at.isoformat()
+                or event.get("failure_code") != expected_failure_code
+                or int(event.get("failure_count") or 0) != report.failure_count
+                or str(event.get("report_artifact_id") or "") != report_artifact_id
+                or str(event.get("report_object_hash") or "") != report_hash
+                or str(event.get("artifact_type") or "") != "ProviderProbeReport"
+                or str(event.get("artifact_schema_version") or "")
+                != report.schema_version
+                or str(event.get("artifact_object_hash") or "") != report_hash
+                or str(event.get("artifact_input_hashes_json") or "")
+                != json.dumps(expected_inputs, separators=(",", ":"))
+            )
+        except (TypeError, ValueError):
+            return ProviderHealthStatus.CORRUPT
+        if invalid_chain:
+            return ProviderHealthStatus.CORRUPT
+        if capability not in report.checked_capabilities:
+            return ProviderHealthStatus.NOT_PROBED
+        if (
+            report.status is ProviderHealthStatus.DEGRADED
+            and report.failure_code is ProviderProbeFailureCode.CAPABILITY_NOT_PROBED
+        ):
+            return ProviderHealthStatus.HEALTHY
+        return report.status
+
+    def catalog_capabilities(self, capability: str) -> list[TransportCapability]:
+        """Project provider-registry metadata into the shared capability-routing contract."""
+
+        return [
+            self._catalog_capability(definition, capability)
+            for definition in self.registry.providers
+            if capability in definition.capabilities
+        ]
+
+    def definitions_for_capability(
+        self,
+        capability: str,
+        *,
+        formal_use: bool = False,
+        require_complete: bool = False,
+        source_hint: str | None = None,
+    ) -> list[ProviderDefinition]:
+        """Return capability candidates ranked by SourceAccessRouter, not provider priority."""
+
+        matches = {
+            item.provider_id: item
+            for item in self.registry.providers
+            if capability in item.capabilities
+        }
+        if not matches:
+            return []
+        ranked = SourceAccessRouter(self.state).rank(
+            SourceAccessRequest(
+                source_id=source_hint,
+                requested_capability=capability,
+                formal_use=formal_use,
+                require_complete=require_complete,
+            ),
+            self.catalog_capabilities(capability),
+        )
+        return [matches[item.source_id] for item in ranked if item.available]
+
+    def create_for_capability(
+        self,
+        capability: str,
+        expected_type: type[_T],
+        *,
+        formal_use: bool = False,
+        require_complete: bool = False,
+        source_hint: str | None = None,
+    ) -> _T:
+        """Create the highest-ranked compatible adapter for one logical capability."""
+
+        definitions = self.definitions_for_capability(
+            capability,
+            formal_use=formal_use,
+            require_complete=require_complete,
+            source_hint=source_hint,
+        )
+        for definition in definitions:
+            provider = self.create(definition.provider_id)
+            if isinstance(provider, expected_type):
+                return provider
+        raise ValueError(
+            f"No available provider adapter satisfies capability {capability} "
+            f"and expected type {expected_type.__name__}"
+        )
+
+    def _catalog_capability(
+        self,
+        definition: ProviderDefinition,
+        capability: str,
+    ) -> TransportCapability:
+        health = self.capability_health_status(definition.provider_id, capability)
+        health_status = health.value
+        available = health not in {
+            ProviderHealthStatus.UNAVAILABLE,
+            ProviderHealthStatus.CORRUPT,
+        }
+        semantics = definition.completeness_semantics.get(
+            capability, CompletenessSemantics.NOT_APPLICABLE
+        )
+        completeness_score = (
+            Decimal("1")
+            if semantics
+            in {
+                CompletenessSemantics.EXACT_ITEM,
+                CompletenessSemantics.WINDOW_EXHAUSTIVE,
+                CompletenessSemantics.FULL_UNIVERSE,
+                CompletenessSemantics.CONTINUOUS_SERIES,
+            }
+            else Decimal("0.25")
+            if semantics is CompletenessSemantics.DISCOVERY_ONLY
+            else Decimal("0.5")
+        )
+        # A provider-level latest snapshot does not prove that this specific capability
+        # has a reusable local artifact. Capability services perform exact cache/release
+        # validation before setting local availability; keep the generic catalog neutral
+        # rather than letting an unrelated fresh snapshot distort routing.
+        local_score = Decimal("0")
+        freshness_score = Decimal("0.5")
+        cost_efficiency = {
+            "LOW": Decimal("1"),
+            "MEDIUM": Decimal("0.5"),
+            "HIGH": Decimal("0"),
+        }[definition.cost_class]
+        return TransportCapability(
+            source_id=definition.provider_id,
+            transport=AccessTransport.API,
+            requested_capabilities=[capability],
+            available=available,
+            reason=(
+                f"provider catalog {self.registry.registry_version}; "
+                f"completeness={semantics.value}"
+            ),
+            officiality=definition.officiality.value,
+            source_class=definition.source_class,
+            formal_eligible=capability in definition.formal_capabilities,
+            completeness_semantics=semantics,
+            completeness_score=completeness_score,
+            local_availability_score=local_score,
+            independence_score=Decimal("1"),
+            independence_group=definition.independence_group,
+            health_status=health_status,
+            freshness_score=freshness_score,
+            latency_ms=0,
+            cost_efficiency_score=cost_efficiency,
+            auth_ease_score=Decimal("1"),
+            retryable_failure=health_status == ProviderHealthStatus.DEGRADED.value,
+        )
+
+    def claim_capability_attempt(
+        self,
+        provider_id: str,
+        capability: str,
+        *,
+        live: bool,
+    ) -> bool:
+        if not live:
+            return True
+        health = self.capability_health_status(provider_id, capability)
+        if health in {
+            ProviderHealthStatus.UNAVAILABLE,
+            ProviderHealthStatus.CORRUPT,
+        }:
+            return False
+        return self.source_breaker.claim_attempt(provider_id, capability)
+
+    def record_capability_success(
+        self,
+        provider_id: str,
+        capability: str,
+        *,
+        live: bool,
+    ) -> None:
+        if live:
+            self.source_breaker.record_success(provider_id, capability)
+
+    def record_capability_failure(
+        self,
+        provider_id: str,
+        capability: str,
+        error: BaseException | SourceFailureClass,
+        *,
+        live: bool,
+    ) -> None:
+        if not live:
+            return
+        failure_class = (
+            error if isinstance(error, SourceFailureClass) else classify_source_error(error)
+        )
+        retry_after_seconds: int | None = None
+        if isinstance(error, AStockError):
+            raw_retry_after = error.details.get("retry_after_seconds")
+            if isinstance(raw_retry_after, (int, float)) and not isinstance(raw_retry_after, bool):
+                retry_after_seconds = max(0, int(raw_retry_after))
+        self.source_breaker.record_failure(
+            provider_id,
+            capability,
+            failure_class,
+            retry_after_seconds=retry_after_seconds,
+        )
 
     def create(self, provider_id: str) -> object:
         existing = self._instances.get(provider_id)
@@ -127,7 +445,12 @@ class ProviderFactory:
                 f"Unknown transport profile for {definition.provider_id}: "
                 f"{definition.transport_profile}"
             ) from exc
-        return _build_resilient_client(profile)
+        return _build_resilient_client(
+            profile,
+            elapsed_budget_seconds=float(
+                self.source_breaker.policy.default_elapsed_budget_seconds
+            ),
+        )
 
 
 def build_provider_http_client(
@@ -147,7 +470,11 @@ def build_provider_http_client(
         raise ValueError(
             f"Unknown transport profile for {provider_id}: {definition.transport_profile}"
         ) from exc
-    return _build_resilient_client(profile)
+    policy = load_source_resilience_policy(root / "configs" / "source_resilience.yaml")
+    return _build_resilient_client(
+        profile,
+        elapsed_budget_seconds=float(policy.default_elapsed_budget_seconds),
+    )
 
 
 def load_transport_profiles(path: Path) -> dict[str, TransportProfile]:
@@ -212,7 +539,11 @@ def load_transport_profiles(path: Path) -> dict[str, TransportProfile]:
     return result
 
 
-def _build_resilient_client(profile: TransportProfile) -> ResilientHttpClient:
+def _build_resilient_client(
+    profile: TransportProfile,
+    *,
+    elapsed_budget_seconds: float,
+) -> ResilientHttpClient:
     lanes = {
         "ENV_ONLY": (True,),
         "DIRECT_ONLY": (False,),
@@ -229,6 +560,7 @@ def _build_resilient_client(profile: TransportProfile) -> ResilientHttpClient:
         jitter_seconds=profile.jitter_seconds,
         retry_status_codes=profile.retry_status_codes,
         retry_methods=profile.retry_methods,
+        elapsed_budget_seconds=elapsed_budget_seconds,
     )
 
 

@@ -162,3 +162,26 @@ def test_checkpoint_drives_seven_day_overlap_request(tmp_path: Path, state) -> N
     sync.sync_5m(first_request)
     assert east_provider.requests[1].requested_start > first_request.requested_start
     assert sina_provider.requests[1].requested_start > first_request.requested_start
+
+
+def test_intraday_breaker_is_scoped_by_provider_and_frequency_capability(
+    tmp_path: Path,
+    state,
+) -> None:
+    east = make_batch("eastmoney-5m", volume_unit=VolumeUnit.LOT_100_SHARES)
+    sina = make_batch("sina-5m", volume_unit=VolumeUnit.SHARE)
+    east_provider = FakeProvider(provider_id="eastmoney-5m", fail=True)
+    sina_provider = FakeProvider(sina, provider_id="sina-5m")
+    sync = service(tmp_path, state, [east_provider, sina_provider])
+
+    for _ in range(3):
+        sync.sync_5m(east.request)
+
+    assert sync.source_breaker.status("eastmoney-5m", "market.raw_5m")["state"] == "OPEN"
+    assert sync.source_breaker.status("eastmoney-5m", "market.raw_60m")["state"] == "CLOSED"
+    assert len(east_provider.requests) == 3
+
+    degraded = sync.sync_5m(east.request)
+    assert len(east_provider.requests) == 3
+    assert degraded.failures["eastmoney-5m"] == "CIRCUIT_OPEN:market.raw_5m"
+    assert not degraded.canonical_updated

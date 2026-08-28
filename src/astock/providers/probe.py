@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from astock.core.errors import StorageError
+from astock.core.errors import AStockError, FailureClass, StorageError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
@@ -455,6 +455,17 @@ class ProviderProbeService:
     ) -> tuple[RawProbeResponse | None, ProviderProbeFailureCode | None]:
         try:
             return self.live_transport(provider), None
+        except AStockError as exc:
+            return None, _probe_failure_from_astock_error(exc)
+        except ValueError as exc:
+            # Raw-capture adapters use typed ValueError subclasses carrying a stable
+            # failure_code so captured evidence can survive normalization/schema drift.
+            # Only absorb those explicit provider-boundary errors; programming ValueError
+            # still propagates and remains visible to tests/review.
+            failure_code = getattr(exc, "failure_code", None)
+            if isinstance(failure_code, str):
+                return None, _probe_failure_from_boundary_code(failure_code)
+            raise
         except httpx.TimeoutException:
             return None, ProviderProbeFailureCode.TIMEOUT
         except httpx.HTTPError:
@@ -517,6 +528,42 @@ class ProviderProbeService:
         if not quality:
             return ProviderHealthStatus.DEGRADED, ProviderProbeFailureCode.DATA_QUALITY, safe
         return ProviderHealthStatus.HEALTHY, None, safe
+
+
+def _probe_failure_from_astock_error(error: AStockError) -> ProviderProbeFailureCode:
+    status_code = error.details.get("status_code")
+    if status_code == 401 or error.failure_class is FailureClass.AUTH_REQUIRED:
+        return ProviderProbeFailureCode.HTTP_401
+    if status_code == 403 or error.failure_class is FailureClass.ACCESS_RESTRICTED:
+        return ProviderProbeFailureCode.HTTP_403
+    if status_code == 429 or error.failure_class is FailureClass.RATE_LIMITED:
+        return ProviderProbeFailureCode.HTTP_429
+    if error.failure_class is FailureClass.TIMEOUT:
+        return ProviderProbeFailureCode.TIMEOUT
+    if error.failure_class is FailureClass.NETWORK:
+        return ProviderProbeFailureCode.NETWORK
+    if error.failure_class in {
+        FailureClass.INVALID_RESPONSE,
+        FailureClass.DATA_QUALITY,
+        FailureClass.CONFLICT,
+    }:
+        return ProviderProbeFailureCode.DATA_QUALITY
+    return ProviderProbeFailureCode.NETWORK
+
+
+def _probe_failure_from_boundary_code(failure_code: str) -> ProviderProbeFailureCode:
+    normalized = failure_code.upper()
+    if "TIMEOUT" in normalized:
+        return ProviderProbeFailureCode.TIMEOUT
+    if "429" in normalized or "RATE_LIMIT" in normalized:
+        return ProviderProbeFailureCode.HTTP_429
+    if "401" in normalized or "AUTH" in normalized:
+        return ProviderProbeFailureCode.HTTP_401
+    if "403" in normalized or "ACCESS" in normalized:
+        return ProviderProbeFailureCode.HTTP_403
+    if "NETWORK" in normalized or "HTTP_FAILED" in normalized:
+        return ProviderProbeFailureCode.NETWORK
+    return ProviderProbeFailureCode.DATA_QUALITY
 
 
 def _probe_capability_gaps(

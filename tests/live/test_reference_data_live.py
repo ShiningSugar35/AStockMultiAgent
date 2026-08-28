@@ -84,4 +84,6 @@ def test_eastmoney_explicit_bjse_and_index_boundaries_live(
     assert payload.get("rc") == 0
     data = payload.get("data")
     assert isinstance(data, dict)
-    assert isinstance(data.get("diff"), list)
+    diff = data.get("diff")
+    assert isinstance(diff, (list, dict))
+    assert diff

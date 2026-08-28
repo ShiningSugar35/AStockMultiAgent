@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
 
@@ -17,9 +17,13 @@ from astock.candidates import (
     load_candidate_scan_config,
 )
 from astock.candidates.promotion import ResearchSeedPromotionService
-from astock.candidates.seeds import ResearchSeedProviderRouter, ResearchSeedService
+from astock.candidates.seeds import (
+    ResearchSeedProviderRouter,
+    ResearchSeedService,
+    SeedSnapshotProvider,
+)
 from astock.core.hashing import content_hash
-from astock.documents.cninfo import CninfoDisclosureProvider
+from astock.documents import DisclosureEnumerationProvider
 from astock.financial_sources.service import FinancialSourceService
 from astock.financial_sources.storage import FinancialSourceParquetStore
 from astock.market_data.reference import MarketReferenceService
@@ -28,6 +32,7 @@ from astock.paper_trading.operation import load_paper_trading_rules
 from astock.research.team import detect_hardware_budget, load_research_team_policy
 from astock.schemas.candidate_promotion import SeedPromotionRequest
 from astock.schemas.candidates import CandidateInputRelease, CandidateScanRequest
+from astock.schemas.market import CompletenessSemantics
 from astock.schemas.research_seeds import ResearchSeedRequest
 
 
@@ -55,7 +60,7 @@ def register_candidate_input_commands(
         )
         return paths, service
 
-    def seed_service() -> ResearchSeedService:
+    def seed_service(*, live: bool = False) -> ResearchSeedService:
         paths, state, objects = services()
         reference = MarketReferenceService(
             state,
@@ -63,9 +68,28 @@ def register_candidate_input_commands(
             ReferenceParquetStore(paths.parquet),
             paths.root / "tests" / "fixtures" / "reference",
         )
+        seed_providers: list[SeedSnapshotProvider] = []
+        definitions = (
+            reference.provider_factory.definitions_for_capability(
+                "market.seed_snapshot",
+                require_complete=True,
+            )
+            if live
+            else [
+                definition
+                for definition in reference.provider_registry.providers
+                if "market.seed_snapshot" in definition.capabilities
+                and definition.completeness_semantics.get("market.seed_snapshot")
+                is CompletenessSemantics.FULL_UNIVERSE
+            ]
+        )
+        for definition in definitions:
+            candidate = reference.provider_factory.create(definition.provider_id)
+            fetch = getattr(candidate, "fetch_seed_snapshot", None)
+            if callable(fetch):
+                seed_providers.append(cast(SeedSnapshotProvider, candidate))
         provider = ResearchSeedProviderRouter(
-            reference.eastmoney,
-            reference.sina,
+            providers=seed_providers,
             minimum_rows_by_market=reference.config.minimum_instrument_records,
             state=state,
             objects=objects,
@@ -108,7 +132,12 @@ def register_candidate_input_commands(
                     paths.root / "configs" / "paper_trading_rules.yaml"
                 ),
             ),
-            cninfo=CninfoDisclosureProvider(objects, state),
+            cninfo=reference.provider_factory.create_for_capability(
+                "disclosure.enumerate",
+                DisclosureEnumerationProvider,
+                formal_use=True,
+                require_complete=True,
+            ),
         )
 
     @app.command("research-seeds-schema")
@@ -137,7 +166,7 @@ def register_candidate_input_commands(
             expert_overlay_max_priority_bonus=team_policy.expert_overlay_max_priority_bonus,
             created_at=timestamp,
         )
-        emit(seed_service().generate(request))
+        emit(seed_service(live=live).generate(request))
 
     @app.command("research-seeds-status")
     def research_seeds_status() -> None:

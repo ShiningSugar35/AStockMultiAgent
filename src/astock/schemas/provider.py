@@ -7,6 +7,8 @@ from enum import StrEnum
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from astock.schemas.market import CompletenessSemantics, SourceClass
+
 
 class ProviderTransport(StrEnum):
     HTTP = "HTTP"
@@ -50,6 +52,12 @@ class ProviderDefinition(_StrictModel):
     provider_id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     adapter_class: str = Field(min_length=3)
     capabilities: list[str] = Field(min_length=1)
+    source_class: SourceClass
+    formal_capabilities: list[str] = Field(default_factory=list)
+    completeness_semantics: dict[str, CompletenessSemantics] = Field(default_factory=dict)
+    independence_group: str = Field(min_length=1)
+    cache_ttl_seconds: int = Field(default=0, ge=0, le=31_536_000)
+    cost_class: str = Field(default="LOW", pattern=r"^(LOW|MEDIUM|HIGH)$")
     transport: ProviderTransport
     officiality: ProviderOfficiality
     live_supported: bool
@@ -97,6 +105,23 @@ class ProviderDefinition(_StrictModel):
         if not normalized or ".." in normalized.split("/"):
             raise ValueError("fixture_subdir must stay inside the configured fixture root")
         return normalized
+
+    @model_validator(mode="after")
+    def _source_catalog_contract(self) -> ProviderDefinition:
+        capability_set = set(self.capabilities)
+        if not set(self.formal_capabilities).issubset(capability_set):
+            raise ValueError("formal_capabilities must be a subset of capabilities")
+        if not set(self.completeness_semantics).issubset(capability_set):
+            raise ValueError("completeness_semantics keys must be provider capabilities")
+        if self.source_class is SourceClass.PRIMARY_OFFICIAL_WEB and (
+            self.officiality is not ProviderOfficiality.PRIMARY_OFFICIAL
+        ):
+            raise ValueError("PRIMARY_OFFICIAL_WEB sources must be PRIMARY_OFFICIAL")
+        if self.source_class is SourceClass.SECONDARY_STRUCTURED and (
+            self.officiality is not ProviderOfficiality.SECONDARY_STRUCTURED
+        ):
+            raise ValueError("SECONDARY_STRUCTURED sources must use matching officiality")
+        return self
 
 
 class ProviderRegistry(_StrictModel):

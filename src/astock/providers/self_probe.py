@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from astock.core.hashing import canonical_json_bytes
-from astock.providers.runtime import ProviderFactory
 from astock.schemas import (
     BarRequest,
     DisclosureCategory,
@@ -18,6 +18,9 @@ from astock.schemas import (
     Market,
     ProviderDefinition,
 )
+
+if TYPE_CHECKING:
+    from astock.providers.runtime import ProviderFactory
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +199,7 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
             if item.startswith("financial.") and item != "financial.report_period_index"
         ]
     elif operation == "disclosure-search":
-        selected = [item for item in capabilities if item == "disclosures.search"]
+        selected = [item for item in capabilities if item == "disclosure.discover"]
     else:
         selected = []
     return list(dict.fromkeys(selected))

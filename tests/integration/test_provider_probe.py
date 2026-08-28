@@ -13,10 +13,12 @@ import pytest
 from typer.testing import CliRunner
 
 from astock.cli import app
+from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.providers import ProviderProbeService, RawProbeResponse, load_provider_registry
+from astock.providers.financial_base import FinancialRawCaptureError
 from astock.providers.probe import _parse_datetime
 from astock.schemas import (
     ProviderHealthStatus,
@@ -63,8 +65,8 @@ def test_cninfo_probe_is_honest_about_unchecked_download_capability(tmp_path: Pa
 
     assert recorded.status == ProviderHealthStatus.DEGRADED
     assert recorded.failure_code == ProviderProbeFailureCode.CAPABILITY_NOT_PROBED
-    assert recorded.checked_capabilities == ["disclosures.search"]
-    assert "disclosures.download" in recorded.capability_gaps
+    assert recorded.checked_capabilities == ["disclosure.discover"]
+    assert "disclosure.document" in recorded.capability_gaps
 
     live_calls = 0
 
@@ -78,8 +80,8 @@ def test_cninfo_probe_is_honest_about_unchecked_download_capability(tmp_path: Pa
     assert live_calls == 1
     assert live.status == ProviderHealthStatus.DEGRADED
     assert live.failure_code == ProviderProbeFailureCode.CAPABILITY_NOT_PROBED
-    assert live.checked_capabilities == ["disclosures.search"]
-    assert "disclosures.download" in live.capability_gaps
+    assert live.checked_capabilities == ["disclosure.discover"]
+    assert "disclosure.document" in live.capability_gaps
 
 
 def test_object_written_before_sql_failure_is_recoverable(
@@ -176,6 +178,61 @@ def test_missing_health_or_incomplete_latest_pointer_is_corrupt(tmp_path: Path) 
             "UPDATE provider_health SET report_artifact_id=NULL WHERE provider_id='sina-5m'"
         )
     assert incomplete.status("sina-5m").status == ProviderHealthStatus.CORRUPT
+
+
+def test_live_provider_error_is_captured_as_structured_health_result(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    def denied(_provider: object) -> RawProbeResponse:
+        raise ProviderError(
+            "provider denied access",
+            failure_class=FailureClass.ACCESS_RESTRICTED,
+            retryable=False,
+            details={"status_code": 403},
+        )
+
+    service.live_transport = denied
+    result = service.probe("sina-5m", live=True, probe_key="sina-denied")
+
+    assert result.status is ProviderHealthStatus.UNAVAILABLE
+    assert result.failure_code is ProviderProbeFailureCode.HTTP_403
+    assert result.last_probe_at is not None
+
+
+def test_live_raw_capture_schema_drift_is_structured_degraded_health(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    def schema_drift(_provider: object) -> RawProbeResponse:
+        raise FinancialRawCaptureError("FINANCIAL_RAW_NORMALIZATION_FAILED", [])
+
+    service.live_transport = schema_drift
+    result = service.probe(
+        "eastmoney-financial",
+        live=True,
+        probe_key="financial-schema-drift",
+    )
+
+    assert result.status is ProviderHealthStatus.DEGRADED
+    assert result.failure_code is ProviderProbeFailureCode.DATA_QUALITY
+    assert result.last_probe_at is not None
+
+
+def test_live_raw_capture_network_failure_is_structured_unavailable_health(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    def network_failure(_provider: object) -> RawProbeResponse:
+        raise FinancialRawCaptureError("FINANCIAL_NETWORK_FAILED", [])
+
+    service.live_transport = network_failure
+    result = service.probe(
+        "eastmoney-financial",
+        live=True,
+        probe_key="financial-network-failure",
+    )
+
+    assert result.status is ProviderHealthStatus.UNAVAILABLE
+    assert result.failure_code is ProviderProbeFailureCode.NETWORK
+    assert result.last_probe_at is not None
 
 
 def test_consistently_rolled_back_health_pointer_is_corrupt(tmp_path: Path) -> None:

@@ -1,8 +1,8 @@
 # 全市场专业投研团队工作流与正式荐股治理 v1
 
-> 状态：IMPLEMENTATION CONTRACT（P0 → P1 → P2）
+> 状态：RELEASED（软件实现提交 `7bb7288`；External Dependency Resilience 安全门增强发布中）
 >
-> 日期：2026-08-24
+> 日期：2026-08-24；现行集成校正：2026-08-27
 >
 > 适用范围：AStockMultiAgent 当前主线；默认运行入口为 ChatGPT/Codex Chat 会话唤醒，不依赖后台常驻 LLM 服务。
 >
@@ -147,8 +147,9 @@ NIST AI RMF / GenAI Profile 强调将可信度与风险管理纳入设计、开�
 15. `INDEPENDENT_REVIEW`
 16. `COMMITTEE`
 17. `PORTFOLIO_CONSTRUCTION`
+18. `TEAM_DAG_COMPLETE`
 
-缺任何一个：只能输出 `OBSERVATION_ONLY`，禁止出现正式 BUY/加仓排序。
+缺任何一个：只能输出 `OBSERVATION_ONLY`，禁止出现正式 BUY/加仓排序。Role 文本或自报布尔值不能独立证明 readiness：Universe 必须绑定一个 ObjectStore 可验证、`formal_full_market_coverage_allowed=true` 的 typed `ResearchSeedReport`；Financial 必须绑定 ObjectStore 可验证且 `status=SUCCEEDED / coverage_status=COMPLETE` 的 typed `FinancialIntegrityEvidencePack`。当 `FINANCIAL_INTEGRITY=false` 时，精确 `VALUATION=true` 也必须被确定性拒绝。
 
 ### 4.2 Candidate fail-open 禁止
 
@@ -394,4 +395,12 @@ A 股公告优先入口包括上海证券交易所最新公告和巨潮资讯。
 | TEST | 定向 + 全仓 + Ruff + Pyright + diff + integrity | PASS |
 | RELEASE | CLI/Workflow 启用、验收文档迁移 | RELEASED |
 
-软件实现发布提交 `7bb7288` 已成功推送 `origin/main`。发布状态以本节测试证据为准；人工 / live 长时间观察保持 `SKIPPED_MANUAL`，不得反向改写为已验收事实。
+软件实现发布提交 `7bb7288` 已成功推送 `origin/main`。发布状态以本节历史测试证据为准；当时的人工 / live 长时间观察保持 `SKIPPED_MANUAL`，不得反向改写为该次发布已经验收。
+
+## 11. External Dependency Resilience 现行集成校正
+
+- 全市场正式 FULL 现以每个 XSHG / XSHE / BJSE 市场可审计 `coverage_ratio >= 99.5%` 为必要条件；旧 row floor 只抓明显截断。PARTIAL Universe 可继续 observation/research discovery，但不能形成全市场正式推荐。
+- `UNIVERSE_COVERAGE` 由 typed `ResearchSeedReport` 派生，`FINANCIAL_INTEGRITY` 由 typed `FinancialIntegrityEvidencePack` 派生；任意 Role 文本、自报 check 或错误 artifact type 都不能提升 gate。
+- CNINFO、交易所 exact-item、secondary financial 的降级链遵循 typed official lineage。Official Web exact-item 只能恢复已知报告，不能证明 exhaustive enumeration；恢复为 PARTIAL 时精确估值和正式推荐继续关闭。
+- Provider health/breaker 按 capability 隔离；EastMoney 5m 的真实 NETWORK 失败不污染 Sina 5m 的 HEALTHY 状态，也不允许聊天 Agent手工补位成为正式候选。
+- 2026-08-27 的真实 CNINFO、官方日历、5m fallback 与组合故障注入证据记录于《验收报告》和唯一 durable run `lr_mtb4gekw_ff5540ff05d2`。这些增强仍须通过 External Dependency Resilience 的独立冻结树与远端 release 门，完成前不改写 `7bb7288` 的历史发布身份。

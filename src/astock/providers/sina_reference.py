@@ -98,6 +98,8 @@ class SinaReferenceProvider(HttpProviderBase):
 
         page_snapshot_ids: list[str] = []
         rows: list[dict[str, object]] = []
+        seen_page_signatures: set[tuple[str, ...]] = set()
+        seen_market_symbols: set[str] = set()
         complete = False
         for page in range(1, self.market_center_max_pages + 1):
             response, _ = self._get(
@@ -118,9 +120,19 @@ class SinaReferenceProvider(HttpProviderBase):
             if not page_rows:
                 complete = True
                 break
+            page_signature = tuple(str(item.get("symbol") or "") for item in page_rows)
+            if page_signature in seen_page_signatures:
+                raise ValueError("Sina market-center repeated a pagination page")
+            seen_page_signatures.add(page_signature)
             matching = [
                 item for item in page_rows if str(item.get("symbol") or "").startswith(prefix)
             ]
+            matching_symbols = [str(item.get("symbol") or "") for item in matching]
+            if len(matching_symbols) != len(set(matching_symbols)) or any(
+                symbol in seen_market_symbols for symbol in matching_symbols
+            ):
+                raise ValueError("Sina market-center returned duplicate market symbols")
+            seen_market_symbols.update(matching_symbols)
             rows.extend(matching)
             if market is Market.BJSE:
                 if rows and len(matching) < len(page_rows):

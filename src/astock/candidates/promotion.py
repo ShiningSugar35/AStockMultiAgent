@@ -9,12 +9,13 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow.parquet as pq
 
+from astock.candidates.financial_policy import financial_pack_is_candidate_eligible
 from astock.candidates.service import CandidateScanService
 from astock.core.errors import AStockError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.documents.cninfo import CninfoDisclosureProvider
+from astock.documents import DisclosureEnumerationProvider
 from astock.financial_integrity.repository import FinancialIntegrityRepository
 from astock.financial_sources.service import FinancialSourceService
 from astock.market_data.reference import MarketReferenceService
@@ -75,7 +76,6 @@ from astock.schemas.reference_data import (
     TradingSession,
 )
 from astock.schemas.research_seeds import ResearchSeed, ResearchSeedOrigin, ResearchSeedReport
-from astock.schemas.runs import RunStatus
 
 if TYPE_CHECKING:
     from astock.research.trading_classification import TradingClassificationService
@@ -104,7 +104,7 @@ class ResearchSeedPromotionService:
         candidates: CandidateScanService,
         financial_sources: FinancialSourceService,
         trading_classification: TradingClassificationService,
-        cninfo: CninfoDisclosureProvider,
+        cninfo: DisclosureEnumerationProvider,
     ) -> None:
         self.project_root = project_root
         self.state = state
@@ -360,10 +360,13 @@ class ResearchSeedPromotionService:
                 [],
                 retryable=False,
             )
+        effective_as_of = promotion_as_of
         instrument_manifest, instrument_artifact = instrument_cache.get(
             seed.market
-        ) or self._reference_instruments(seed.market, promotion_as_of, request.live)
+        ) or self._reference_instruments(seed.market, effective_as_of, request.live)
         instrument_cache[seed.market] = (instrument_manifest, instrument_artifact)
+        if request.live:
+            effective_as_of = max(effective_as_of, instrument_artifact.available_to_system_at)
         instrument = self._instrument_record(instrument_manifest, seed)
         instrument_artifact = self._instrument_subset_proof(
             seed,
@@ -372,27 +375,31 @@ class ResearchSeedPromotionService:
             parent_artifact=instrument_artifact,
             seed_report_artifact_id=seed_report_artifact_id,
             seed_report_object_hash=seed_report_object_hash,
-            as_of=promotion_as_of,
+            as_of=effective_as_of,
         )
 
-        start_date = promotion_as_of.date() - timedelta(days=request.reference_lookback_days)
-        end_date = promotion_as_of.date()
+        start_date = effective_as_of.date() - timedelta(days=request.reference_lookback_days)
+        end_date = effective_as_of.date()
         calendar_manifest, calendar_artifact = calendar_cache.get(
             seed.market
         ) or self._reference_calendar(
-            seed.market, start_date, end_date, promotion_as_of, request.live
+            seed.market, start_date, end_date, effective_as_of, request.live
         )
         calendar_cache[seed.market] = (calendar_manifest, calendar_artifact)
+        if request.live:
+            effective_as_of = max(effective_as_of, calendar_artifact.available_to_system_at)
         self._require_calendar(calendar_manifest, start_date, end_date)
 
         daily_manifest, daily_artifact = self._reference_daily(
-            seed, start_date, end_date, promotion_as_of, request.live
+            seed, start_date, end_date, effective_as_of, request.live
         )
+        if request.live:
+            effective_as_of = max(effective_as_of, daily_artifact.available_to_system_at)
         daily_records = [
             item
             for item in self._records(daily_manifest, DailyBarObservation)
             if item.instrument_id == instrument.instrument_id
-            and item.available_to_system_at <= promotion_as_of
+            and item.available_to_system_at <= effective_as_of
         ]
         if len(daily_records) < 20:
             raise _PromotionBlocked(
@@ -400,18 +407,24 @@ class ResearchSeedPromotionService:
                 ["PROMOTION_DAILY_HISTORY_INSUFFICIENT"],
                 [daily_artifact.artifact_id],
             )
-        quality, quality_artifact = self._daily_quality(seed, daily_records, promotion_as_of)
+        quality, quality_artifact = self._daily_quality(seed, daily_records, effective_as_of)
 
         corporate_artifact = self._corporate_absence(seed, request.live)
+        if request.live:
+            effective_as_of = max(effective_as_of, corporate_artifact.available_to_system_at)
         announcement_pack, announcement_artifact = self._announcement_pack(
             seed,
-            as_of=promotion_as_of,
+            as_of=effective_as_of,
             lookback_days=request.announcement_lookback_days,
             live=request.live,
         )
+        if request.live:
+            effective_as_of = max(effective_as_of, announcement_artifact.available_to_system_at)
         financial_pack, financial_artifact = self._financial_pack(
-            seed, promotion_as_of, request.live
+            seed, effective_as_of, request.live
         )
+        if request.live:
+            effective_as_of = max(effective_as_of, financial_artifact.available_to_system_at)
 
         daily_points = [
             CandidateDailyPoint(
@@ -423,7 +436,7 @@ class ResearchSeedPromotionService:
                 observed_at=item.session_close_at,
                 available_to_system_at=item.available_to_system_at,
                 pit_status=daily_artifact.pit_status,
-                created_at=promotion_as_of,
+                created_at=effective_as_of,
             )
             for item in sorted(daily_records, key=lambda record: record.session_date)
         ]
@@ -451,7 +464,7 @@ class ResearchSeedPromotionService:
             daily_points=daily_points,
             announcement_events=announcement_pack.events,
             financial_flags=financial_flags,
-            created_at=promotion_as_of,
+            created_at=effective_as_of,
         )
         return (
             company,
@@ -517,6 +530,7 @@ class ResearchSeedPromotionService:
         coverage = {
             ReferenceCoverageStatus.COMPLETE: CandidateCoverageStatus.COMPLETE,
             ReferenceCoverageStatus.PARTIAL: CandidateCoverageStatus.PARTIAL,
+            ReferenceCoverageStatus.CONFLICTED: CandidateCoverageStatus.CONFLICTED,
             ReferenceCoverageStatus.FAILED: CandidateCoverageStatus.FAILED,
             ReferenceCoverageStatus.EMPTY: CandidateCoverageStatus.NOT_AVAILABLE,
         }[manifest.coverage.status]
@@ -670,16 +684,20 @@ class ResearchSeedPromotionService:
             reasons.append("daily amount missing")
         if future:
             reasons.append("future daily observations")
+        source_snapshot_ids = sorted({item.source_snapshot_id for item in records})
         payload = {
             "symbol": seed.company_id,
             "sessions": [item.session_date.isoformat() for item in records],
+            "source_snapshot_ids": source_snapshot_ids,
+            "as_of": as_of.isoformat(),
             "duplicates": duplicates,
             "missing_amount": missing_amount,
             "future": future,
         }
+        report_hash = content_hash(payload)
         report = DataQualityReport(
-            report_id=content_hash(payload),
-            batch_ids=["candidate-promotion-daily:" + content_hash(payload)],
+            report_id=report_hash,
+            batch_ids=["candidate-promotion-daily:" + report_hash],
             symbol=seed.company_id,
             frequency=Frequency.D1,
             requested_start=records[0].session_close_at,
@@ -706,7 +724,7 @@ class ResearchSeedPromotionService:
             artifact_type="DataQualityReport",
             schema_version=report.schema_version,
             object_hash=ref.sha256,
-            input_hashes=sorted({item.source_snapshot_id for item in records}),
+            input_hashes=source_snapshot_ids,
         )
         artifact = CandidateInputArtifact(
             artifact_id=artifact_id,
@@ -784,7 +802,7 @@ class ResearchSeedPromotionService:
             )
         exchange = DisclosureExchange.SSE if seed.market is Market.XSHG else DisclosureExchange.SZSE
         start = as_of.date() - timedelta(days=lookback_days)
-        first = self.cninfo.search(
+        batches = self.cninfo.search_all(
             DisclosureSearchRequest(
                 symbol=seed.company_id,
                 exchange=exchange,
@@ -796,12 +814,16 @@ class ResearchSeedPromotionService:
                 created_at=as_of,
             )
         )
-        batches = [first]
-        for page in range(2, first.total_pages + 1):
-            batches.append(
-                self.cninfo.search(first.request.model_copy(update={"page_number": page}))
-            )
-        if sum(len(item.announcements) for item in batches) < first.total_count:
+        first = batches[0]
+        announcement_ids = [
+            announcement.announcement_id
+            for batch in batches
+            for announcement in batch.announcements
+        ]
+        if (
+            len(announcement_ids) != len(set(announcement_ids))
+            or len(announcement_ids) != first.total_count
+        ):
             raise _PromotionBlocked(
                 "ANNOUNCEMENT_ENUMERATION_REQUIRED",
                 ["CNINFO_PAGINATION_INCOMPLETE"],
@@ -905,7 +927,7 @@ class ResearchSeedPromotionService:
                     )
             except (AStockError, OSError, RuntimeError, ValueError):
                 pack = None
-        if pack is None or pack.status is not RunStatus.SUCCEEDED:
+        if pack is None or not financial_pack_is_candidate_eligible(pack):
             raise _PromotionBlocked(
                 "FINANCIAL_INTEGRITY_REQUIRED",
                 ["NO_SUCCEEDED_FINANCIAL_INTEGRITY_PACK"],

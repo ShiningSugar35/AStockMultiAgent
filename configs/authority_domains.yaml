@@ -1,0 +1,44 @@
+schema_version: authority-domains-v1
+sources:
+  - source_id: sse-official-web
+    domains: [sse.com.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [instrument.identity, market.calendar, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
+    formal_capabilities: [instrument.identity, market.calendar, disclosure.document, financial.official_document, web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: SSE_OFFICIAL
+  - source_id: szse-official-web
+    domains: [szse.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [instrument.identity, market.calendar, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
+    formal_capabilities: [instrument.identity, market.calendar, disclosure.document, financial.official_document, web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: SZSE_OFFICIAL
+  - source_id: bse-official-web
+    domains: [bse.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [instrument.identity, market.calendar, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
+    formal_capabilities: [instrument.identity, market.calendar, disclosure.document, financial.official_document, web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: BSE_OFFICIAL
+  - source_id: cninfo-official-web
+    domains: [cninfo.com.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [instrument.identity, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
+    formal_capabilities: [instrument.identity, disclosure.document, financial.official_document, web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: CNINFO_OFFICIAL
+  - source_id: csrc-official-web
+    domains: [csrc.gov.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [web.authoritative_fact, disclosure.discover]
+    formal_capabilities: [web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: CSRC_OFFICIAL
+  - source_id: government-official-web
+    domains: [gov.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [web.authoritative_fact]
+    formal_capabilities: [web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: GOVERNMENT_OFFICIAL

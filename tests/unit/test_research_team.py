@@ -14,6 +14,21 @@ from astock.research.team import (
     detect_hardware_budget,
     load_research_team_policy,
 )
+from astock.schemas.financial import (
+    FinancialCoverageStatus,
+    FinancialEvidenceGap,
+    FinancialFieldCode,
+    FinancialGapType,
+    FinancialIndustryProfile,
+    FinancialIntegrityEvidencePack,
+    FinancialRiskLevel,
+)
+from astock.schemas.market import Market
+from astock.schemas.research_seeds import (
+    ResearchSeedReport,
+    ResearchSeedStatus,
+    ResearchUniverseCoverageStatus,
+)
 from astock.schemas.research_team import (
     RecommendationReadinessRequest,
     RecommendationReadinessStatus,
@@ -24,6 +39,7 @@ from astock.schemas.research_team import (
     ResearchTaskRole,
     ResearchTeamTaskState,
 )
+from astock.schemas.runs import RunStatus
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 8, 24, 5, 0, tzinfo=UTC)
@@ -51,6 +67,103 @@ def _register_output(state: StateStore, objects: ObjectStore, artifact_id: str) 
     )
 
 
+def _register_seed_report(
+    state: StateStore,
+    objects: ObjectStore,
+    *,
+    artifact_id: str,
+    full: bool,
+) -> None:
+    ratios = (
+        {Market.XSHG: 1.0, Market.XSHE: 1.0, Market.BJSE: 1.0}
+        if full
+        else {Market.XSHG: 0.99, Market.XSHE: 1.0, Market.BJSE: 1.0}
+    )
+    report = ResearchSeedReport(
+        report_id=artifact_id.removeprefix("ResearchSeedReport:"),
+        as_of=NOW,
+        data_cutoff_at=NOW,
+        status=(ResearchSeedStatus.EMPTY if full else ResearchSeedStatus.NEEDS_INFO),
+        profiles=[],
+        seeds=[],
+        source_snapshot_ids=[],
+        source_object_hashes=[],
+        warning_codes=[],
+        market_coverage_ratios=ratios,
+        universe_coverage_status=(
+            ResearchUniverseCoverageStatus.FULL
+            if full
+            else ResearchUniverseCoverageStatus.PARTIAL
+        ),
+        formal_full_market_coverage_allowed=full,
+        market_seed_count=0,
+        expert_seed_count=0,
+        existing_candidate_seed_count=0,
+        created_at=NOW,
+    )
+    ref = objects.put_json(report.model_dump(mode="json"))
+    state.register_artifact(
+        artifact_id=artifact_id,
+        artifact_type="ResearchSeedReport",
+        schema_version=report.schema_version,
+        object_hash=ref.sha256,
+        input_hashes=[],
+    )
+
+
+def _register_financial_pack(
+    state: StateStore,
+    objects: ObjectStore,
+    *,
+    artifact_id: str,
+    complete: bool,
+) -> None:
+    gaps = []
+    if not complete:
+        gaps = [
+            FinancialEvidenceGap(
+                gap_id="gap:partial",
+                gap_type=FinancialGapType.MISSING_FACT,
+                detail_code="FORMAL_FINANCIAL_COMPLETENESS_REQUIRED",
+                period_end=None,
+                field_codes=[FinancialFieldCode.NET_PROFIT_CASH_FLOW],
+                related_rule_ids=[],
+            )
+        ]
+    pack = FinancialIntegrityEvidencePack(
+        audit_run_id=artifact_id.removeprefix("FinancialIntegrityEvidencePack:"),
+        request_hash="f" * 64,
+        status=RunStatus.SUCCEEDED if complete else RunStatus.NEEDS_INFO,
+        coverage_status=(
+            FinancialCoverageStatus.COMPLETE if complete else FinancialCoverageStatus.PARTIAL
+        ),
+        company_id="600000",
+        as_of=NOW,
+        industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+        periods=[],
+        input_fact_ids=[],
+        source_snapshot_ids=[],
+        pit_ids=[],
+        verified_numbers=[],
+        recalculated_metrics=[],
+        rule_findings=[],
+        evidence_gaps=gaps,
+        risk_level=FinancialRiskLevel.LOW,
+        rule_versions={},
+        model_versions={},
+        capability_status={},
+        created_at=NOW,
+    )
+    ref = objects.put_json(pack.model_dump(mode="json"))
+    state.register_artifact(
+        artifact_id=artifact_id,
+        artifact_type="FinancialIntegrityEvidencePack",
+        schema_version=pack.schema_version,
+        object_hash=ref.sha256,
+        input_hashes=[],
+    )
+
+
 def _register_role_output(
     service: ResearchTeamService,
     state: StateStore,
@@ -63,8 +176,35 @@ def _register_role_output(
     plan = service.get_plan(plan_id)
     assert plan is not None
     task = next(item for item in plan.tasks if item.task_id == task_id)
-    member_artifact_id = f"test-member:{plan_id}:{task_id}"
-    _register_output(state, objects, member_artifact_id)
+    if task.role is ResearchTaskRole.UNIVERSE:
+        universe_full = (
+            readiness_check_results.get("UNIVERSE_COVERAGE", True)
+            if readiness_check_results is not None
+            else True
+        )
+        member_artifact_id = f"ResearchSeedReport:test-member:{plan_id}:{task_id}"
+        _register_seed_report(
+            state,
+            objects,
+            artifact_id=member_artifact_id,
+            full=universe_full,
+        )
+    elif task.role is ResearchTaskRole.FINANCIAL_INTEGRITY:
+        financial_complete = (
+            readiness_check_results.get("FINANCIAL_INTEGRITY", True)
+            if readiness_check_results is not None
+            else True
+        )
+        member_artifact_id = f"FinancialIntegrityEvidencePack:test-member:{plan_id}:{task_id}"
+        _register_financial_pack(
+            state,
+            objects,
+            artifact_id=member_artifact_id,
+            complete=financial_complete,
+        )
+    else:
+        member_artifact_id = f"test-member:{plan_id}:{task_id}"
+        _register_output(state, objects, member_artifact_id)
     output_result = service.register_role_output(
         ResearchRoleOutput(
             plan_id=plan_id,
@@ -250,6 +390,159 @@ def test_readiness_fails_closed_even_when_checks_claim_pass_without_team(tmp_pat
     assert report.status is RecommendationReadinessStatus.OBSERVATION_ONLY
     assert not report.formal_recommendation_allowed
     assert "TEAM_DAG_COMPLETE" in report.missing_or_failed_checks
+
+
+def test_universe_role_cannot_self_attest_with_arbitrary_member_artifact(tmp_path: Path) -> None:
+    service, state, objects = _service(tmp_path)
+    plan = service.create_full_market_plan(as_of=NOW)
+    task = next(item for item in plan.tasks if item.task_id == "universe-acquisition")
+    artifact_id = f"test-member:{plan.plan_id}:universe-acquisition"
+    _register_output(state, objects, artifact_id)
+
+    with pytest.raises(ValueError, match="UNIVERSE_COVERAGE must be derived"):
+        service.register_role_output(
+            ResearchRoleOutput(
+                plan_id=plan.plan_id,
+                task_id=task.task_id,
+                output_contract=task.output_contract,
+                member_artifact_ids=[artifact_id],
+                readiness_check_results={"UNIVERSE_COVERAGE": True},
+                summary="self-attested universe",
+                created_at=NOW,
+            )
+        )
+
+
+def test_partial_universe_cannot_gain_formal_recommendation_authority(tmp_path: Path) -> None:
+    service, state, objects = _service(tmp_path)
+    plan = service.create_full_market_plan(as_of=NOW)
+
+    for task in plan.tasks:
+        if task.task_id == "recommendation-gate":
+            continue
+        context_id = None
+        if task.task_id == "bull-case":
+            context_id = "bull-independent"
+        elif task.task_id == "bear-case":
+            context_id = "bear-independent"
+        readiness = (
+            {"UNIVERSE_COVERAGE": False}
+            if task.task_id == "universe-acquisition"
+            else None
+        )
+        _complete_task(
+            service,
+            state,
+            objects,
+            plan_id=plan.plan_id,
+            task_id=task.task_id,
+            context_id=context_id,
+            readiness_check_results=readiness,
+        )
+
+    claimed = {check: True for check in service.policy.required_checks}
+    report = service.evaluate_readiness(
+        RecommendationReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
+    )
+
+    assert report.status is RecommendationReadinessStatus.OBSERVATION_ONLY
+    assert not report.formal_recommendation_allowed
+    assert "UNIVERSE_COVERAGE" in report.missing_or_failed_checks
+    assert "TEAM_DAG_COMPLETE" in report.passed_checks
+
+
+def test_partial_financial_pack_cannot_open_precise_valuation_or_recommendation(
+    tmp_path: Path,
+) -> None:
+    service, state, objects = _service(tmp_path)
+    plan = service.create_full_market_plan(as_of=NOW)
+
+    for task in plan.tasks:
+        if task.task_id == "valuation":
+            break
+        if task.task_id == "recommendation-gate":
+            continue
+        readiness = (
+            {"FINANCIAL_INTEGRITY": False}
+            if task.task_id == "company-financial-integrity"
+            else None
+        )
+        _complete_task(
+            service,
+            state,
+            objects,
+            plan_id=plan.plan_id,
+            task_id=task.task_id,
+            readiness_check_results=readiness,
+        )
+
+    status = service.status(plan.plan_id)
+    ready_tasks = status["ready_tasks"]
+    assert isinstance(ready_tasks, list)
+    assert "valuation" in ready_tasks
+    with pytest.raises(
+        ValueError,
+        match="precise VALUATION requires COMPLETE SUCCEEDED financial packs",
+    ):
+        _register_role_output(
+            service,
+            state,
+            objects,
+            plan_id=plan.plan_id,
+            task_id="valuation",
+            readiness_check_results={"VALUATION": True},
+        )
+
+    valuation_artifact_id = _register_role_output(
+        service,
+        state,
+        objects,
+        plan_id=plan.plan_id,
+        task_id="valuation",
+        readiness_check_results={"VALUATION": False},
+    )
+    service.register_role_result(
+        ResearchRoleResult(
+            plan_id=plan.plan_id,
+            task_id="valuation",
+            state=ResearchTeamTaskState.COMPLETE,
+            independent_context_id="observation-only-valuation",
+            output_artifact_ids=[valuation_artifact_id],
+            evidence_ids=[],
+            created_at=NOW,
+        )
+    )
+
+    after_valuation = False
+    for task in plan.tasks:
+        if task.task_id == "valuation":
+            after_valuation = True
+            continue
+        if not after_valuation or task.task_id == "recommendation-gate":
+            continue
+        context_id = None
+        if task.task_id == "bull-case":
+            context_id = "bull-independent"
+        elif task.task_id == "bear-case":
+            context_id = "bear-independent"
+        _complete_task(
+            service,
+            state,
+            objects,
+            plan_id=plan.plan_id,
+            task_id=task.task_id,
+            context_id=context_id,
+        )
+
+    claimed = {check: True for check in service.policy.required_checks}
+    report = service.evaluate_readiness(
+        RecommendationReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
+    )
+
+    assert report.status is RecommendationReadinessStatus.OBSERVATION_ONLY
+    assert not report.formal_recommendation_allowed
+    assert report.missing_or_failed_checks == ["FINANCIAL_INTEGRITY", "VALUATION"]
+    assert "TEAM_DAG_COMPLETE" in report.passed_checks
 
 
 def test_bull_bear_independence_and_complete_gate(tmp_path: Path) -> None:

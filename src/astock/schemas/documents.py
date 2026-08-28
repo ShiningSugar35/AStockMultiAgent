@@ -98,6 +98,7 @@ class DisclosureSearchBatch(AStockModel):
     announcements: list[DisclosureAnnouncement]
     total_count: int = Field(ge=0)
     total_pages: int = Field(ge=0)
+    has_more: bool = False
     raw_snapshot_id: str
     resolution_snapshot_ids: list[str] = Field(default_factory=list)
     provider_latency_ms: int = Field(ge=0)

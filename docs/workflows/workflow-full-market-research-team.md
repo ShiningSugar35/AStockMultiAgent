@@ -29,7 +29,8 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
    - CIO intent freezes scope/horizon.
    - Macro, Policy, Liquidity/Risk and current A-share Universe acquisition may run in parallel after CIO intent.
    - XSHG/XSHE/BJSE market snapshots are fetched on demand with `market_fetch_workers` selected from the hardware profile.
-   - One provider/market failure must not cancel independent tasks, but unproven market-wide Universe coverage blocks formal stock-picking.
+   - One provider/market failure must not cancel independent tasks. Formal FULL coverage requires **each** XSHG/XSHE/BJSE market to have an auditable `coverage_ratio >= 99.5%`; legacy row-count floors only detect obvious truncation and never prove FULL by themselves.
+   - PARTIAL Universe may continue into observation/research discovery, but `formal_full_market_coverage_allowed=false`; a complete scan that yields zero eligible candidates is a valid zero-result state and must not be rewritten as Universe unavailable.
 
 4. **Stage 2 — blind discovery first**
    - Run `research-seeds --live`, promotion and Candidate Scan.
@@ -47,9 +48,10 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
    - Only the bounded shortlist proceeds.
    - Fundamental, Financial Integrity, Catalyst/Disclosure and Market Context work may run in parallel per company after their common evidence scope is frozen.
    - The canonical institutional path remains evidence sufficiency → industry/company economics → driver tree → Bull/Base/Bear forecast → valuation/sensitivity → decision context.
+   - Official financial recovery must preserve typed lineage and exact authority semantics. A frozen exact-item report may restore a limited `NEEDS_INFO / PARTIAL` pack, but cannot self-upgrade to COMPLETE.
 
 7. **Stage 5/6 — valuation and independent debate**
-   - Valuation follows the canonical forecast/model artifacts.
+   - Precise valuation follows the canonical forecast/model artifacts only after an ObjectStore-verified typed `FinancialIntegrityEvidencePack` proves `status=SUCCEEDED / coverage_status=COMPLETE`. With PARTIAL financial coverage, only an explicitly observation-only valuation result may be registered and the `VALUATION` readiness check remains false.
    - Bull and Bear read the same frozen inputs but **must use different `independent_context_id` values and must not read each other's draft**.
 
 8. **Stage 7/8 — reviewer and committee**

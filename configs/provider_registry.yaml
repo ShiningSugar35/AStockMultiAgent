@@ -1,4 +1,4 @@
-registry_version: provider-registry-v4
+registry_version: provider-registry-v5
 capability_gaps:
   - corporate_actions.ledger_ready
   - model.inference
@@ -6,6 +6,12 @@ providers:
   - provider_id: eastmoney-5m
     adapter_class: astock.providers.eastmoney:EastMoney5mProvider
     capabilities: [market.raw_5m]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: [market.raw_5m]
+    completeness_semantics: {market.raw_5m: CONTINUOUS_SERIES}
+    independence_group: EASTMONEY
+    cache_ttl_seconds: 0
+    cost_class: LOW
     transport: HTTP
     transport_profile: eastmoney-browser-v1
     officiality: SECONDARY_STRUCTURED
@@ -18,6 +24,12 @@ providers:
   - provider_id: sina-5m
     adapter_class: astock.providers.sina:Sina5mProvider
     capabilities: [market.raw_5m]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: [market.raw_5m]
+    completeness_semantics: {market.raw_5m: CONTINUOUS_SERIES}
+    independence_group: SINA
+    cache_ttl_seconds: 0
+    cost_class: LOW
     transport: HTTP
     transport_profile: public-json-v1
     officiality: SECONDARY_STRUCTURED
@@ -29,7 +41,17 @@ providers:
     recorded_fixture: tests/fixtures/providers/sina-5m-success.json
   - provider_id: cninfo-disclosures
     adapter_class: astock.documents.cninfo:CninfoDisclosureProvider
-    capabilities: [disclosures.search, disclosures.download, corporate_actions.official_evidence, official.identity]
+    capabilities: [disclosure.discover, disclosure.enumerate, disclosure.document, corporate_actions.official_evidence]
+    source_class: PRIMARY_OFFICIAL_WEB
+    formal_capabilities: [disclosure.enumerate, disclosure.document, corporate_actions.official_evidence]
+    completeness_semantics:
+      disclosure.discover: DISCOVERY_ONLY
+      disclosure.enumerate: WINDOW_EXHAUSTIVE
+      disclosure.document: EXACT_ITEM
+      corporate_actions.official_evidence: WINDOW_EXHAUSTIVE
+    independence_group: CNINFO_OFFICIAL
+    cache_ttl_seconds: 86400
+    cost_class: LOW
     transport: HTTP
     transport_profile: cninfo-official-v1
     officiality: PRIMARY_OFFICIAL
@@ -41,12 +63,18 @@ providers:
     recorded_fixture: tests/fixtures/providers/cninfo-disclosures-success.json
   - provider_id: baostock-reference
     adapter_class: astock.providers.baostock:BaoStockReferenceProvider
-    capabilities:
-      - instrument.master
-      - instrument.identity
-      - market.calendar
-      - market.daily_unadjusted
-      - corporate_actions.structured_hint
+    capabilities: [instrument.master, instrument.identity, market.calendar, market.daily_unadjusted, corporate_actions.structured_hint]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: [instrument.master, instrument.identity, market.calendar, market.daily_unadjusted]
+    completeness_semantics:
+      instrument.master: FULL_UNIVERSE
+      instrument.identity: EXACT_ITEM
+      market.calendar: WINDOW_EXHAUSTIVE
+      market.daily_unadjusted: CONTINUOUS_SERIES
+      corporate_actions.structured_hint: DISCOVERY_ONLY
+    independence_group: BAOSTOCK
+    cache_ttl_seconds: 86400
+    cost_class: LOW
     transport: SDK_TCP
     officiality: SECONDARY_STRUCTURED
     live_supported: true
@@ -58,11 +86,18 @@ providers:
     recorded_fixture: tests/fixtures/providers/baostock-reference-success.json
   - provider_id: eastmoney-reference
     adapter_class: astock.providers.eastmoney_reference:EastMoneyReferenceProvider
-    capabilities:
-      - instrument.master
-      - instrument.identity
-      - market.daily_unadjusted
-      - instrument.bjse_coverage
+    capabilities: [instrument.master, instrument.identity, market.daily_unadjusted, instrument.bjse_coverage, market.seed_snapshot]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: [instrument.master, instrument.identity, market.daily_unadjusted, instrument.bjse_coverage]
+    completeness_semantics:
+      instrument.master: FULL_UNIVERSE
+      instrument.identity: EXACT_ITEM
+      market.daily_unadjusted: CONTINUOUS_SERIES
+      instrument.bjse_coverage: FULL_UNIVERSE
+      market.seed_snapshot: FULL_UNIVERSE
+    independence_group: EASTMONEY
+    cache_ttl_seconds: 86400
+    cost_class: LOW
     transport: HTTP
     transport_profile: eastmoney-browser-v1
     officiality: SECONDARY_STRUCTURED
@@ -75,11 +110,18 @@ providers:
     recorded_fixture: tests/fixtures/providers/eastmoney-reference-success.json
   - provider_id: sina-reference
     adapter_class: astock.providers.sina_reference:SinaReferenceProvider
-    capabilities:
-      - instrument.master
-      - instrument.identity
-      - market.daily_unadjusted
-      - instrument.bjse_coverage
+    capabilities: [instrument.master, instrument.identity, market.daily_unadjusted, instrument.bjse_coverage, market.seed_snapshot]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: [instrument.master, instrument.identity, market.daily_unadjusted, instrument.bjse_coverage]
+    completeness_semantics:
+      instrument.master: FULL_UNIVERSE
+      instrument.identity: EXACT_ITEM
+      market.daily_unadjusted: CONTINUOUS_SERIES
+      instrument.bjse_coverage: FULL_UNIVERSE
+      market.seed_snapshot: FULL_UNIVERSE
+    independence_group: SINA
+    cache_ttl_seconds: 86400
+    cost_class: LOW
     transport: HTTP
     transport_profile: public-json-v1
     officiality: SECONDARY_STRUCTURED
@@ -92,10 +134,17 @@ providers:
     recorded_fixture: tests/fixtures/providers/sina-reference-success.json
   - provider_id: eastmoney-financial
     adapter_class: astock.providers.eastmoney_financial:EastMoneyFinancialProvider
-    capabilities:
-      - financial.balance_sheet.secondary
-      - financial.income_statement.secondary
-      - financial.cash_flow_statement.secondary
+    capabilities: [financial.balance_sheet.secondary, financial.income_statement.secondary, financial.cash_flow_statement.secondary, financial.statement_values]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics:
+      financial.balance_sheet.secondary: EXACT_ITEM
+      financial.income_statement.secondary: EXACT_ITEM
+      financial.cash_flow_statement.secondary: EXACT_ITEM
+      financial.statement_values: EXACT_ITEM
+    independence_group: EASTMONEY
+    cache_ttl_seconds: 86400
+    cost_class: LOW
     transport: HTTP
     transport_profile: financial-public-v1
     officiality: SECONDARY_STRUCTURED
@@ -108,11 +157,18 @@ providers:
     recorded_fixture: tests/fixtures/providers/eastmoney-financial-success.json
   - provider_id: sina-financial
     adapter_class: astock.providers.sina_financial:SinaFinancialProvider
-    capabilities:
-      - financial.balance_sheet.secondary
-      - financial.income_statement.secondary
-      - financial.cash_flow_statement.secondary
-      - financial.report_period_index
+    capabilities: [financial.balance_sheet.secondary, financial.income_statement.secondary, financial.cash_flow_statement.secondary, financial.report_period_index, financial.statement_values]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics:
+      financial.balance_sheet.secondary: EXACT_ITEM
+      financial.income_statement.secondary: EXACT_ITEM
+      financial.cash_flow_statement.secondary: EXACT_ITEM
+      financial.report_period_index: DISCOVERY_ONLY
+      financial.statement_values: EXACT_ITEM
+    independence_group: SINA
+    cache_ttl_seconds: 86400
+    cost_class: LOW
     transport: HTTP
     transport_profile: financial-public-v1
     officiality: SECONDARY_STRUCTURED

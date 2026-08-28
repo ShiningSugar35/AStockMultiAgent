@@ -30,6 +30,13 @@ class FinancialSourceReleaseStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class OfficialFinancialLineageKind(StrEnum):
+    CNINFO_EXHAUSTIVE_ENUMERATION = "CNINFO_EXHAUSTIVE_ENUMERATION"
+    OFFICIAL_WEB_EXACT_ITEM_ADMISSION = "OFFICIAL_WEB_EXACT_ITEM_ADMISSION"
+    RECORDED_EXACT_ITEM_FIXTURE = "RECORDED_EXACT_ITEM_FIXTURE"
+    LEGACY_UNVERIFIED = "LEGACY_UNVERIFIED"
+
+
 class FinancialSourceObservation(AStockModel):
     observation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     company_id: str = Field(pattern=r"^\d{6}$")
@@ -135,7 +142,7 @@ class FinancialSourceCoverage(AStockModel):
 
 
 class FinancialSourceReleaseManifest(AStockModel):
-    schema_version: str = "financial-source-release-v1"
+    schema_version: str = "financial-source-release-v2"
     release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     company_id: str = Field(pattern=r"^\d{6}$")
     instrument_id: str = Field(pattern=r"^(XSHG|XSHE|BJSE):\d{6}$")
@@ -156,6 +163,11 @@ class FinancialSourceReleaseManifest(AStockModel):
     raw_snapshot_ids: list[str] = Field(min_length=1)
     official_document_id: str
     official_index_snapshot_id: str
+    official_lineage_kind: OfficialFinancialLineageKind = (
+        OfficialFinancialLineageKind.LEGACY_UNVERIFIED
+    )
+    official_lineage_snapshot_ids: list[str] = Field(default_factory=list)
+    official_exhaustive_proof_allowed: bool = False
     official_snapshot_id: str
     official_pit_id: str
     source_files: list[FinancialSourceFileDescriptor] = Field(min_length=1)
@@ -177,9 +189,39 @@ class FinancialSourceReleaseManifest(AStockModel):
         for values, label in (
             (self.provider_ids, "provider_ids"),
             (self.raw_snapshot_ids, "raw_snapshot_ids"),
+            (self.official_lineage_snapshot_ids, "official_lineage_snapshot_ids"),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"{label} must be unique")
+        if self.schema_version == "financial-source-release-v1":
+            if (
+                self.official_lineage_kind is not OfficialFinancialLineageKind.LEGACY_UNVERIFIED
+                or self.official_lineage_snapshot_ids
+                or self.official_exhaustive_proof_allowed
+            ):
+                raise ValueError("v1 financial releases cannot assert typed official lineage")
+        elif self.schema_version == "financial-source-release-v2":
+            if self.official_lineage_kind is OfficialFinancialLineageKind.LEGACY_UNVERIFIED:
+                raise ValueError("v2 financial releases require typed official lineage")
+            if (
+                not self.official_lineage_snapshot_ids
+                or self.official_index_snapshot_id not in self.official_lineage_snapshot_ids
+            ):
+                raise ValueError("v2 financial releases require complete official lineage ids")
+            exhaustive = (
+                self.official_lineage_kind
+                is OfficialFinancialLineageKind.CNINFO_EXHAUSTIVE_ENUMERATION
+            )
+            if self.official_exhaustive_proof_allowed is not exhaustive:
+                raise ValueError("official exhaustive-proof flag conflicts with lineage kind")
+            if (
+                self.official_lineage_kind
+                is OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION
+                and len(self.official_lineage_snapshot_ids) != 1
+            ):
+                raise ValueError("exact-item admission must contain exactly one admission snapshot")
+        else:
+            raise ValueError("unsupported financial source release schema")
         paths = [item.path for item in [*self.source_files, *self.certified_files]]
         if len(paths) != len(set(paths)):
             raise ValueError("release file paths must be unique")
@@ -224,4 +266,5 @@ __all__ = [
     "FinancialSourceReleaseStatus",
     "FinancialSourceSyncReport",
     "FinancialStatementScope",
+    "OfficialFinancialLineageKind",
 ]

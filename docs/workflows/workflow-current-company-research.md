@@ -23,7 +23,10 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
    - Execute the frozen `CurrentResearchSchedule` stage-by-stage; only same-stage tasks run in parallel.
    - Acquire current daily market data, optional corporate-action evidence, latest annual financial hints and the **latest actually disclosed** interim/quarterly period according to the schedule; do not guess the latest report solely from the calendar month.
    - Provider candidates come from capability registry + active provider health/route policy. A preferred-provider failure must not stop independent downstream collection; UNAVAILABLE/CORRUPT live providers are skipped.
-   - Retry only retryable transient failures; use bounded retry/circuit breaking rather than indefinite waiting.
+   - Current daily OHLCV uses the existing canonical/local chain first and capability-routed structured fallback. The latest key trading day is shadow-checked against an independent source when available; normalized value disagreement is `CONFLICTED` and must not silently publish/overwrite the canonical release.
+   - If secondary financial providers are unavailable, a named-company run may recover from the exact official annual/interim/quarterly report. CNINFO report discovery must exhaust pagination (`search_all`) before treating the exact report as unavailable; first-page search is never negative proof. A CNINFO `ProviderError` is recorded once for that recovery attempt, then the workflow moves to an approved exact-item source rather than repeatedly hitting the same failed capability.
+   - The resulting financial release must carry typed official lineage. `CNINFO_EXHAUSTIVE_ENUMERATION` may support all-page proof; `OFFICIAL_WEB_EXACT_ITEM_ADMISSION` proves only the admitted known document and must keep `official_exhaustive_proof_allowed=false`.
+   - Retry only retryable transient failures; use one acquisition-boundary retry layer, provider+capability circuit breaking and the versioned total elapsed-time budget rather than indefinite waiting. OPEN or an active HALF_OPEN claim immediately moves this task to an approved fallback without contaminating other capabilities of the same Provider.
 
 4. **Resolve unresolved capabilities automatically**
    - Use the active Current Research policy's automatic resolution budget (currently 1800 seconds) before considering manual help.
@@ -37,6 +40,7 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
    - Reuse valid frozen evidence, FinancialIntegrity, BaseCase, specialist, memo and institutional artifacts when applicable.
    - Build missing evidence, then the institutional chain when formal certification is required:
      `EvidenceSufficiencyReport → IndustryProfile / CompanyEconomicsProfile → DriverTree → ForecastPack → ValuationPack → FundamentalModelBundle → InstitutionalDecisionContext`.
+   - A research-safe `NEEDS_INFO / PARTIAL` financial pack may support a bounded qualitative view, but it cannot set `FINANCIAL_INTEGRITY=true`, cannot open precise `VALUATION=true`, and cannot enable formal recommendation. Those checks require an ObjectStore-verified typed `FinancialIntegrityEvidencePack` with `status=SUCCEEDED / coverage_status=COMPLETE`.
 
 6. **Build one common research case**
    - Build BaseCase once.

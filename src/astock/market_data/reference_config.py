@@ -7,7 +7,15 @@ from pathlib import Path
 
 import yaml
 
-from astock.schemas import Market, ProviderRegistry
+from astock.schemas import CompletenessSemantics, Market, ProviderRegistry
+
+_FORMAL_ROUTE_COMPLETENESS = {
+    "instrument.master": CompletenessSemantics.FULL_UNIVERSE,
+    "instrument.identity": CompletenessSemantics.EXACT_ITEM,
+    "market.calendar": CompletenessSemantics.WINDOW_EXHAUSTIVE,
+    "market.daily_unadjusted": CompletenessSemantics.CONTINUOUS_SERIES,
+    "corporate_actions.official_evidence": CompletenessSemantics.WINDOW_EXHAUSTIVE,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +32,6 @@ class MarketReferenceConfig:
     retry_backoff_seconds: float
     identity_search_max_pages: int
     minimum_instrument_records: dict[Market, int]
-    circuit_breaker_cooldown_seconds: dict[str, int]
     official_market_coverage: dict[str, dict[Market, str]]
 
     def route(self, capability: str) -> tuple[ReferenceRouteStep, ...]:
@@ -47,6 +54,11 @@ def load_market_reference_config(
         raise ValueError(f"Invalid market reference configuration: {path}") from exc
     if not isinstance(raw, dict) or raw.get("config_version") != "market-reference-v2":
         raise ValueError("Unsupported market reference configuration")
+    if "circuit_breakers" in raw:
+        raise ValueError(
+            "Provider-wide market reference circuit breakers are unsupported; "
+            "use source_resilience provider+capability policy"
+        )
     provider_by_id = {item.provider_id: item for item in registry.providers}
     raw_routes = raw.get("routes")
     if not isinstance(raw_routes, dict) or not raw_routes:
@@ -77,6 +89,17 @@ def load_market_reference_config(
                 raise ValueError(
                     f"Provider {provider_id} does not declare route capability {base_capability}"
                 )
+            required_semantics = _FORMAL_ROUTE_COMPLETENESS.get(base_capability)
+            if required_semantics is not None:
+                if base_capability not in definition.formal_capabilities:
+                    raise ValueError(
+                        f"Provider {provider_id} is not formally eligible for {base_capability}"
+                    )
+                if definition.completeness_semantics.get(base_capability) is not required_semantics:
+                    raise ValueError(
+                        f"Provider {provider_id} has invalid completeness semantics for "
+                        f"{base_capability}"
+                    )
             steps.append(ReferenceRouteStep(provider_id=provider_id, operation=operation))
         if len({(item.provider_id, item.operation) for item in steps}) != len(steps):
             raise ValueError(f"Market reference route contains duplicate steps: {capability}")
@@ -87,8 +110,10 @@ def load_market_reference_config(
     max_attempts = int(retry.get("max_attempts", 2))
     backoff = float(retry.get("backoff_seconds", 0.25))
     identity_search_max_pages = int(raw.get("identity_search_max_pages", 50))
-    if not 1 <= max_attempts <= 5 or not 0 <= backoff <= 10:
-        raise ValueError("Market reference retry policy is outside safe bounds")
+    if max_attempts != 1 or not 0 <= backoff <= 10:
+        raise ValueError(
+            "Market reference retry must stay at one attempt; HTTP retry belongs to transport"
+        )
     if not 1 <= identity_search_max_pages <= 200:
         raise ValueError("Identity search page bound must be in 1..200")
     raw_minimum_records = raw.get("minimum_instrument_records")
@@ -106,19 +131,6 @@ def load_market_reference_config(
         minimum_records[parsed_market] = count
     if set(minimum_records) != required_markets:
         raise ValueError("minimum_instrument_records must cover XSHG/XSHE/BJSE")
-    raw_breakers = raw.get("circuit_breakers", {})
-    if not isinstance(raw_breakers, dict):
-        raise ValueError("Market reference circuit breakers must be an object")
-    breakers: dict[str, int] = {}
-    for provider_id, value in raw_breakers.items():
-        if str(provider_id) not in provider_by_id:
-            raise ValueError(f"Unknown circuit-breaker provider: {provider_id}")
-        if not isinstance(value, dict):
-            raise ValueError("Circuit-breaker policy must be an object")
-        seconds = int(value.get("cooldown_seconds", 0))
-        if seconds < 0 or seconds > 86400:
-            raise ValueError("Circuit-breaker cooldown must be in 0..86400 seconds")
-        breakers[str(provider_id)] = seconds
     raw_coverage = raw.get("official_market_coverage", {})
     if not isinstance(raw_coverage, dict):
         raise ValueError("Official market coverage must be an object")
@@ -141,7 +153,6 @@ def load_market_reference_config(
         retry_backoff_seconds=backoff,
         identity_search_max_pages=identity_search_max_pages,
         minimum_instrument_records=minimum_records,
-        circuit_breaker_cooldown_seconds=breakers,
         official_market_coverage=coverage,
     )
 

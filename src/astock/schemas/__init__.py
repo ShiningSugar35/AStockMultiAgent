@@ -314,6 +314,7 @@ from astock.schemas.financial_sources import (
     FinancialSourceReleaseStatus,
     FinancialSourceSyncReport,
     FinancialStatementScope,
+    OfficialFinancialLineageKind,
 )
 from astock.schemas.institutional_research import (
     CompanyArchetype,
@@ -472,6 +473,7 @@ from astock.schemas.market import (
     AdjustmentMode,
     AmountUnit,
     BarRequest,
+    CompletenessSemantics,
     DataProviderCapability,
     DataQualityReport,
     Frequency,
@@ -485,6 +487,7 @@ from astock.schemas.market import (
     ReplayQuality,
     SourceAccessDecision,
     SourceAccessRequest,
+    SourceClass,
     TimestampSemantics,
     TransportCapability,
     VolumeUnit,
@@ -729,6 +732,12 @@ from astock.schemas.shadow import (
     ShadowStudyPlan,
     ShadowThesisStatus,
 )
+from astock.schemas.source_access import (
+    AgentSourceProposal,
+    OfficialWebDocumentCapture,
+    SourceAdmissionStatus,
+    SourcePolicyDecision,
+)
 from astock.schemas.temporal_validity import (
     KnowledgeCutoffAlphaPeriod,
     KnowledgeCutoffDiagnosticReport,
@@ -751,6 +760,8 @@ __all__ = [
     "AdaptiveResearchStatusReport",
     "AgentDataAlignmentSummary",
     "AgentObservabilityReport",
+    "AgentSourceProposal",
+    "OfficialWebDocumentCapture",
     "AgentSkillRoutingSummary",
     "AgentTaskObservation",
     "AgentTaskObservationRequest",
@@ -759,6 +770,7 @@ __all__ = [
     "AdjustmentDirection",
     "AdjustmentMode",
     "AmountUnit",
+    "CompletenessSemantics",
     "AuthorCollectionCoverageReport",
     "AuthorDraftGenerationReport",
     "AuthorDistillationReport",
@@ -1020,6 +1032,7 @@ __all__ = [
     "FinancialSourceReleaseStatus",
     "FinancialSourceSyncReport",
     "FinancialStatementScope",
+    "OfficialFinancialLineageKind",
     "CompanyArchetype",
     "CompanyEconomicsDraft",
     "CompanyEconomicsProfile",
@@ -1248,6 +1261,9 @@ __all__ = [
     "StructuredResearchMemoV2",
     "SourceAccessDecision",
     "SourceAccessRequest",
+    "SourceAdmissionStatus",
+    "SourceClass",
+    "SourcePolicyDecision",
     "SourceSnapshot",
     "ShadowAction",
     "ShadowArmDefinition",

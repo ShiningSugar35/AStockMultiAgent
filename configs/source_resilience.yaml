@@ -1,0 +1,21 @@
+schema_version: source-resilience-v1
+default_elapsed_budget_seconds: 30
+breaker:
+  failure_threshold: 3
+  cooldown_seconds: 300
+  half_open_max_probes: 1
+  retry_after_cap_seconds: 1800
+  immediate_open_failure_classes:
+    - RATE_LIMITED
+    - AUTH_CONFIG
+    - SCHEMA_DRIFT
+    - INVALID_PAYLOAD
+    - COVERAGE_INCOMPLETE
+  counted_failure_classes:
+    - TRANSIENT_NETWORK
+    - REMOTE_5XX
+    - RATE_LIMITED
+    - AUTH_CONFIG
+    - SCHEMA_DRIFT
+    - INVALID_PAYLOAD
+    - COVERAGE_INCOMPLETE

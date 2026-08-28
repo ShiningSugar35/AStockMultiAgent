@@ -48,7 +48,7 @@ NOW = datetime(2026, 8, 22, 8, 0, tzinfo=UTC)
 
 def _repo(tmp_path: Path) -> ContinuousMonitorRepository:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
-    assert state.migrate()[-1] == "0059"
+    assert state.migrate()[-1] == "0060"
     return ContinuousMonitorRepository(state, ObjectStore(tmp_path / "objects"))
 
 
@@ -222,6 +222,63 @@ def test_cycle_isolates_one_source_failure_and_continues_other_sources(
     assert report.source_success[MonitorSource.GDELT] == 1
     assert report.source_success[MonitorSource.PAPER] == 1
     assert any("MARKET_60M" in finding for finding in report.findings)
+
+
+def test_cycle_isolates_gdelt_failure_and_keeps_other_sources_running(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = tmp_path / "runtime"
+    paths = ProjectPaths(
+        root=PROJECT_ROOT,
+        runtime=runtime,
+        objects=runtime / "objects" / "sha256",
+        parquet=runtime / "data" / "parquet",
+        manifests=runtime / "manifests",
+        state_db=runtime / "state.sqlite",
+    )
+    paths.ensure_directories()
+    state = StateStore(paths.state_db, PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(paths.objects)
+    service = ContinuousMonitorService(
+        paths,
+        state,
+        objects,
+        load_continuous_monitor_config(PROJECT_ROOT / "configs" / "continuous_monitor.yaml"),
+    )
+    service.repo.enroll(
+        MonitorTargetEnrollRequest(
+            symbol="600519",
+            market=Market.XSHG,
+            company_id="600519",
+            display_name="贵州茅台",
+            reason=MonitorTargetReason.ANALYZED,
+            aliases=["茅台"],
+            created_at=NOW,
+        )
+    )
+    monkeypatch.setattr(service, "sync_paper_targets", lambda at: [])
+
+    def fail_news(*args, **kwargs):
+        raise RuntimeError("gdelt source unavailable")
+
+    def succeed(*args, **kwargs):
+        return 0, 0, NOW.isoformat()
+
+    monkeypatch.setattr(service, "_process_market", succeed)
+    monkeypatch.setattr(service, "_process_disclosures", succeed)
+    monkeypatch.setattr(service, "_process_news", fail_news)
+    monkeypatch.setattr(service, "_process_catalysts", succeed)
+    monkeypatch.setattr(service, "_process_schedule", succeed)
+    monkeypatch.setattr(service, "_process_paper", succeed)
+
+    report = service.run_cycle(live=True, owner_id="test-owner", now=NOW)
+    assert report.status.value == "PARTIAL"
+    assert report.source_failure[MonitorSource.GDELT] == 1
+    assert report.source_success[MonitorSource.MARKET_60M] == 1
+    assert report.source_success[MonitorSource.CNINFO] == 1
+    assert report.source_success[MonitorSource.PAPER] == 1
+    assert any("GDELT" in finding for finding in report.findings)
 
 
 def test_daemon_lease_rejects_parallel_owner_and_recovers_stale_lease(tmp_path: Path) -> None:

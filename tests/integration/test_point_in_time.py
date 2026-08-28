@@ -55,6 +55,39 @@ def test_pit_timeline_validation_rejects_impossible_availability() -> None:
         )
 
 
+def test_certified_fetch_observed_uses_snapshot_lineage_without_fake_publication_time() -> None:
+    observed = datetime(2026, 1, 10, tzinfo=UTC)
+    metadata = PointInTimeMetadata(
+        pit_id="pit:fetch-observed",
+        source_id="official-index-snapshot",
+        source_snapshot_id="snapshot:official-index",
+        ingested_at=observed,
+        available_to_system_at=observed,
+        point_in_time_status=PointInTimeStatus.CERTIFIED,
+        availability_basis=AvailabilityBasis.FETCH_OBSERVED,
+    )
+    assert metadata.published_at is None
+
+    with pytest.raises(ValidationError, match="source_snapshot_id"):
+        PointInTimeMetadata(
+            pit_id="pit:fetch-missing-snapshot",
+            source_id="official-index-snapshot",
+            ingested_at=observed,
+            available_to_system_at=observed,
+            point_in_time_status=PointInTimeStatus.CERTIFIED,
+            availability_basis=AvailabilityBasis.FETCH_OBSERVED,
+        )
+    with pytest.raises(ValidationError, match="published_at"):
+        PointInTimeMetadata(
+            pit_id="pit:publication-missing-time",
+            source_id="official-filing",
+            ingested_at=observed,
+            available_to_system_at=observed,
+            point_in_time_status=PointInTimeStatus.CERTIFIED,
+            availability_basis=AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP,
+        )
+
+
 def test_revision_chain_is_append_only_and_point_in_time_safe(tmp_path: Path, state) -> None:
     service = _service(tmp_path, state)
     first_time = datetime(2026, 1, 10, tzinfo=UTC)

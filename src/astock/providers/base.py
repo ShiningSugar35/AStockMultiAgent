@@ -11,6 +11,7 @@ import httpx
 from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.source_resilience import parse_retry_after_seconds
 from astock.core.state import StateStore
 from astock.providers.http_resilience import HttpClientLike
 from astock.providers.runtime import build_provider_http_client
@@ -64,11 +65,17 @@ class HttpProviderBase:
             ) from exc
         latency_ms = round((time.perf_counter() - started) * 1000)
         if response.status_code == 429:
+            retry_after = response.extensions.get("astock_retry_after_seconds")
+            if not isinstance(retry_after, (int, float)) or isinstance(retry_after, bool):
+                retry_after = parse_retry_after_seconds(response.headers.get("Retry-After"))
+            details: dict[str, object] = {"status_code": 429}
+            if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
+                details["retry_after_seconds"] = max(0, int(retry_after))
             raise ProviderError(
                 f"{self.provider_id} rate limited the request",
                 failure_class=FailureClass.RATE_LIMITED,
                 retryable=False,
-                details={"status_code": 429},
+                details=details,
             )
         if response.status_code in {401, 403}:
             raise ProviderError(

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from astock.core.state import StateStore
+from astock.core.state import StateStore, _migration_checksum
 from astock.schemas import (
     CollectionCheckpoint,
     CollectionTerminalCondition,
@@ -80,6 +80,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0057",
         "0058",
         "0059",
+        "0060",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -117,6 +118,15 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='knowledge_reviewed_skill'"
         ).fetchone()
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_circuit_breaker'"
+        ).fetchone()
+        source_access_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(source_access_decision)")
+        }
+        assert {"selected_source_id", "fallback_source_chain_json"}.issubset(
+            source_access_columns
+        )
         for table in (
             "knowledge_direct_run",
             "knowledge_direct_source",
@@ -152,6 +162,36 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             ).fetchone()
+
+
+def test_source_resilience_migration_upgrades_cleanly_from_0059(tmp_path: Path) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for version in range(1, 60):
+        source = next((PROJECT_ROOT / "migrations").glob(f"{version:04d}_*.sql"))
+        shutil.copy(source, migrations / source.name)
+    state = StateStore(tmp_path / "state.sqlite", migrations)
+    assert state.migrate()[-1] == "0059"
+
+    migration = PROJECT_ROOT / "migrations" / "0060_source_resilience.sql"
+    shutil.copy(migration, migrations / migration.name)
+    assert state.migrate() == ["0060"]
+    assert state.migrate() == []
+    assert state.integrity_check() == "ok"
+    with state.connect() as connection:
+        row = connection.execute(
+            "SELECT checksum FROM schema_migration WHERE version='0060'"
+        ).fetchone()
+        assert row is not None
+        assert row["checksum"] == _migration_checksum(migration.read_text(encoding="utf-8"))
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_circuit_breaker'"
+        ).fetchone()
+        columns = {
+            str(item["name"])
+            for item in connection.execute("PRAGMA table_info(source_access_decision)")
+        }
+        assert {"selected_source_id", "fallback_source_chain_json"} <= columns
 
 
 def test_book_visual_semantics_migration_upgrades_cleanly_from_0042(

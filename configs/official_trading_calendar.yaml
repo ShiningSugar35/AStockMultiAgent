@@ -1,0 +1,33 @@
+schema_version: official-trading-calendar-v1
+calendar_family: CN_A_SHARE
+policy:
+  runtime_priority: LOCAL_OFFICIAL_FIRST
+  search_refresh_allowed: true
+  api_fallback_allowed: true
+  search_must_use_authoritative_domains: true
+  configured_year_missing_action: SEARCH_OFFICIAL_THEN_API_FALLBACK
+years:
+  "2026":
+    published_at: "2025-12-22T00:00:00+08:00"
+    verified_at: "2026-08-25T10:55:00+08:00"
+    sources:
+      XSHG:
+        authority: 上海证券交易所
+        title: 关于上海证券交易所2026年部分节假日休市安排的通知
+        url: https://www.sse.com.cn/disclosure/announcement/general/c/c_20251222_10802507.shtml
+      XSHE:
+        authority: 深圳证券交易所
+        title: 关于2026年部分节假日休市安排的通知
+        url: https://www.szse.cn/disclosure/notice/general/t20251222_618087.html
+      BJSE:
+        authority: 北京证券交易所
+        title: 关于2026年部分节假日休市安排的公告
+        url: https://www.bse.cn/important_news/200027428.html
+    closures:
+      - {name: 元旦, start: "2026-01-01", end: "2026-01-03"}
+      - {name: 春节, start: "2026-02-15", end: "2026-02-23"}
+      - {name: 清明节, start: "2026-04-04", end: "2026-04-06"}
+      - {name: 劳动节, start: "2026-05-01", end: "2026-05-05"}
+      - {name: 端午节, start: "2026-06-19", end: "2026-06-21"}
+      - {name: 中秋节, start: "2026-09-25", end: "2026-09-27"}
+      - {name: 国庆节, start: "2026-10-01", end: "2026-10-07"}

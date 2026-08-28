@@ -1,7 +1,7 @@
 # Provider Resilience v1 — 按需数据平面、代理隔离与 Universe Fallback
 
-状态：DESIGN_APPROVED / IMPLEMENTATION_IN_PROGRESS  
-日期：2026-08-25
+状态：RELEASED（软件实现提交 `ed0c970`；External Dependency Resilience 集成增强发布中）
+日期：2026-08-25；现行集成校正：2026-08-27
 
 ## 1. 背景与事故复盘
 
@@ -128,19 +128,21 @@ Candidate Seed 不再直接 new EastMoney adapter。必须使用 ProviderFactory
 
 ## 7. Universe Completeness Gate
 
-`market_reference.yaml` 增加保守最低完整性 floor：
+`market_reference.yaml` 保留保守最低完整性 floor：
 
 - XSHG >= 1500 stocks
 - XSHE >= 2000 stocks
 - BJSE >= 150 stocks
 
-这些值不是“当前精确上市数量”，而是只用于抓住明显残缺/截断响应的保守下界。任何 provider 返回记录低于 floor：
+这些 floor 不是“当前精确上市数量”，只用于抓住明显残缺/截断响应。现行正式 FULL 门已由 `external-dependency-resilience-v1.md` 收紧为：XSHG / XSHE / BJSE **每个市场**均须有可审计 `coverage_ratio >= 99.5%`，且 release/manifest/object/snapshot identity 全链可验证。floor 单独通过不能证明 FULL。
+
+任何 provider 返回低于 floor、coverage ratio 不足或 lineage 校验失败时：
 
 - 不发布 COMPLETE Instrument Master；
-- 继续下一个 provider；
-- 所有 provider 均不足则 FAIL CLOSED。
+- 继续下一个 capability-compatible、health-eligible provider 或经验证的本地 COMPLETE release；
+- 所有路径均不足时返回 PARTIAL/NEEDS_INFO 并关闭 full-market Recommendation Gate，禁止把 Provider failure 解释成 0 candidates。
 
-Seed snapshot 同样必须经过 per-market minimum row gate，避免一页/半页行情被当成全市场。
+Seed snapshot 同样先做 market/prefix/code/name 边界与明显截断 floor，再继承正式 Universe coverage 状态；Web/Search 不能补足该完整性证明。
 
 ## 8. 可观测性与错误语义
 
@@ -238,3 +240,12 @@ Seed snapshot 同样必须经过 per-market minimum row gate，避免一页/半�
 | Code review & rework | PASS |
 | Test | PASS |
 | Release | RELEASED |
+
+## 12. External Dependency Resilience 现行集成校正
+
+- `ed0c970` 的 Provider Resilience v1 仍是已发布事实；本节记录 2026-08-27 候选树对其进行的兼容增强，不改写历史发布测试数字，也不把增强候选提前称为已发布。
+- Provider 资格不再使用 provider-wide 单一健康值。health、breaker、Retry-After、HALF_OPEN claim 均以 `provider/source + capability` 为键；identity 的 403/网络失败不能污染 daily、5m 或其他独立 capability。
+- HALF_OPEN single-probe claim 持久化并带 TTL；owner 崩溃后的 stale claim 可回收，同时仍禁止并发双 probe。
+- Provider probe health 只接受 pointer → event → artifact → object → typed report 全链校验通过的结果；任一层损坏或身份矛盾均 fail closed。
+- 真实 5m smoke 中 EastMoney 请求实际发出后为 `UNAVAILABLE / NETWORK`，Sina 为 `HEALTHY`。真实 `sync-5m` 由 Sina fallback 返回 48 bars，但因仅单源而 `canonical_updated=false`，保留旧的双源验证 canonical；这证明 resilience 正确，不证明 EastMoney 已连通。
+- 本节增强随 `external-dependency-resilience-v1.md` 的独立远端 tag/GitHub Release 门发布；在该门完成前，External Dependency 集成状态保持 `IMPLEMENTATION_IN_PROGRESS`。

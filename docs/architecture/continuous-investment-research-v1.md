@@ -1,7 +1,7 @@
 # 持续投研与模拟交易生命周期架构 v1
 
-> 状态：RELEASED（migration 0059 与 Continuous Monitor 已进入 `main`；External Dependency Resilience 集成增强发布中）
-> 日期：2026-08-22；现行集成校正：2026-08-27
+> 状态：RELEASED（migration 0059 与 Continuous Monitor 已进入 `main`；External Dependency Resilience v0.1.0 已完成正式集成发布）
+> 日期：2026-08-22；现行集成校正：2026-08-28
 > 适用范围：AStockMultiAgent 当前主线
 > 安全边界：仅自动化投研、监控、模拟账户与模拟调仓；`broker_execution_allowed=false` 永久保持，真实交易继续由用户在券商端人工执行。
 
@@ -371,4 +371,4 @@ continuous-monitor-tasks [--pending-only]
 - 单 source/capability 故障只产生结构化 `DATA_SOURCE_DEGRADED` 与 bounded backoff，不阻塞其他 source/target。OPEN 或有效 HALF_OPEN claim 时不重复撞击同一失败 capability；stale claim 可恢复。
 - CNINFO known-item/disclosure discovery 可经正式官方 exact-item 路恢复；公告“没有发生”的 negative proof 仍必须依赖 exhaustive pagination，Search/Web 未命中没有该权限。
 - 5m 仅在 paper path ambiguity 时按需使用。单一备用源成功不能覆盖已有双源 canonical，也不能伪造成交；所有 Paper Ledger 与 `broker_execution_allowed=false` 边界保持不变。
-- 本轮 External Dependency 增强发布前状态仍为 `IMPLEMENTATION_IN_PROGRESS`；其冻结树和远端 release 证据由《验收报告》及唯一 durable run `lr_mtb4gekw_ff5540ff05d2` 维护。
+- External Dependency Resilience v0.1.0 已通过冻结树、实现提交 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc`、annotated tag 与 GitHub Release 远端门；本节集成校正随 release-state 文档提交进入 `main`，历史 Continuous Monitor 发布身份不变。

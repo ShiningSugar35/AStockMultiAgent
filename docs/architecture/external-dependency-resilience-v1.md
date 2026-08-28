@@ -1,8 +1,8 @@
 # External Dependency Resilience v1 — 能力路由、权威证据与低 API 依赖数据平面
 
-状态：DESIGN_APPROVED / IMPLEMENTATION_IN_PROGRESS
-日期：2026-08-27
-发布状态约束：只有本轮冻结树门、远端 commit/tag/GitHub Release 验证全部成功后，才允许迁移为 `RELEASED`。
+状态：RELEASED
+日期：2026-08-28
+发布证据：实现提交 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc` 已推送 `origin/main`；正式 annotated tag `v0.1.0` 与非草稿、非预发布 GitHub Release 均已创建，Release target 精确指向该实现提交。后续状态文档提交只追加到 `main`，不移动已发布 tag。
 
 ## 1. 审核来源与优先级
 
@@ -399,9 +399,9 @@ Search 结果在未冻结/验源前不能直接成为正式数据库事实。
 - 架构状态迁移为 `RELEASED` 的提交也已推送；
 - worktree clean，且唯一 durable run 最终 review/complete 成功。
 
-## 18. 当前实现与发布前 Code Review 结论
+## 18. 当前实现与正式发布 Code Review 结论
 
-本轮未建立第二套 `src/astock/sources/`。既有 `SourceAccessRouter / ProviderFactory / provider_registry / Adaptive Edge / ObjectStore / Evidence` 继续作为单一事实源，P0/P1 已按本文件合同落地；以下为当前候选树已验证事实，但在远端 tag/GitHub Release 成功前不等价于正式发布：
+本轮未建立第二套 `src/astock/sources/`。既有 `SourceAccessRouter / ProviderFactory / provider_registry / Adaptive Edge / ObjectStore / Evidence` 继续作为单一事实源，P0/P1 已按本文件合同落地并正式发布；以下为冻结发布树及其远端 release 已验证事实：
 
 1. `SourceAccessRequest.source_id` 已降为可空兼容 hint；Router 以 capability 为主键，按 formal eligibility、官方性、完整性、本地可用性、health、freshness、independence 等排序，transport 只保留弱 tie-breaker。
 2. `provider_registry-v5` 已扩展为 capability-aware Source Catalog，声明 source class、formal capabilities、completeness semantics、independence group、cache TTL、transport profile；业务链通过 Factory/Router 消费，不再以具体 Provider 名作为研究资格。
@@ -419,7 +419,8 @@ Search 结果在未冻结/验源前不能直接成为正式数据库事实。
 14. 正式官方财务 release 持久化 typed lineage；CNINFO 全分页与 Official Web exact-item 的 authority 明确分离。CNINFO `ProviderError` 后不会在同一恢复链重复撞击，已冻结 exact-item 只能恢复有限字段。
 15. `ResearchSeedReport` 与 `FinancialIntegrityEvidencePack` 已成为 Universe/Financial readiness 的 typed member artifact；Role 文本或布尔值不能自证 FULL/COMPLETE。财务 PARTIAL 强制 `VALUATION=false`，正式推荐保持 observation-only。
 16. 真实 live 没有掩盖第三方状态：EastMoney 5m 为 `UNAVAILABLE / NETWORK`，Sina 5m 为 `HEALTHY`；真实 fallback 由 Sina 返回 48 bars，但未覆盖旧 canonical。CNINFO 本次真实连通并冻结 3 条公告索引与 1 份官方 PDF；2026 年 XSHG 日历直接命中本地官方配置。
-17. s6 定向 resilience 矩阵为 `206 passed / 0 failed`；s7 迁移与最终独立 Review 又发现并修复 migration 0060 缺少显式 `0059 → 0060`/checksum 回归，以及 raw 5m/60m 同步仍写 provider-wide health、未消费 capability breaker 的双轨语义。修复后的最终冻结树真实门为：Ruff=`PASS`；Pyright=`0 errors / 0 warnings / 0 informations`；`git diff --check`=`exit 0`（仅 CRLF→LF 提示，无 whitespace error）；`uv run pytest` 收集 `1072` 项，结果 **`1054 passed / 18 skipped / 0 failed`，1162.11s**；只读 `state-integrity-audit`=`PASS / integrity_check=ok / read_only=true`。18 个 skip 均为既有显式 opt-in 的 OCR/private/live 项，本轮真实 live 证据已另行执行并记录。该冻结树已满足 s7 工程与 Review 门，但远端 commit/tag/GitHub Release 尚未完成，因此架构状态仍保持 `IMPLEMENTATION_IN_PROGRESS`。
+17. s6 定向 resilience 矩阵为 `206 passed / 0 failed`；s7 迁移与最终独立 Review 又发现并修复 migration 0060 缺少显式 `0059 → 0060`/checksum 回归，以及 raw 5m/60m 同步仍写 provider-wide health、未消费 capability breaker 的双轨语义。修复后的最终冻结树真实门为：Ruff=`PASS`；Pyright=`0 errors / 0 warnings / 0 informations`；`git diff --check`=`exit 0`（仅 CRLF→LF 提示，无 whitespace error）；`uv run pytest` 收集 `1072` 项，结果 **`1054 passed / 18 skipped / 0 failed`，1162.11s**；只读 `state-integrity-audit`=`PASS / integrity_check=ok / read_only=true`。18 个 skip 均为既有显式 opt-in 的 OCR/private/live 项，本轮真实 live 证据已另行执行并记录。
+18. s8 发布门已完成：91 个显式 staged 路径经最终 diff Review、secret/private/runtime、binary、private absolute path 与 broker authority 复扫均无阻断；实现提交 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc` 已推送并与远端 `main` 一致；`v0.1.0` annotated tag 与 GitHub Release 已创建，Release 为正式非草稿、非预发布状态，target 精确绑定该实现提交。
 
 Code Review 实际发生多轮打回返工，包括：CNINFO 财报首页误作 negative proof、elapsed budget 只解析未消费、完整扫描 0 candidates 与 Universe unavailable 混淆、OHLCV 多源冲突 silent-first-win、generic local cache 误把不相关快照算作 capability cache、EastMoney/Sina 日线 fallback 永久 `complete=false` 造成 BaoStock 隐性单点、Provider 排序把 EastMoney bulk fallback 提前到 Sina exact 之前、live probe 对 ProviderError/raw schema drift 异常穿透、官方 Web 稳定 source id 未进入财务白名单、财务 PARTIAL 可自报精确估值、migration 0060 缺少升级/checksum 专项门，以及 legacy intraday sync 继续写 provider-wide health。上述问题均已修复并增加回归/故障注入测试；最终独立 Review 对 capability 隔离、完整性、lineage、PIT/ObjectStore/Evidence/Paper/broker 边界、migration 与文档职责逐项复核后通过。
 

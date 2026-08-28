@@ -1,7 +1,7 @@
 # Provider Resilience v1 — 按需数据平面、代理隔离与 Universe Fallback
 
-状态：RELEASED（软件实现提交 `ed0c970`；External Dependency Resilience 集成增强发布中）
-日期：2026-08-25；现行集成校正：2026-08-27
+状态：RELEASED（软件实现提交 `ed0c970`；External Dependency Resilience v0.1.0 集成增强已正式发布）
+日期：2026-08-25；现行集成校正：2026-08-28
 
 ## 1. 背景与事故复盘
 
@@ -243,9 +243,9 @@ Seed snapshot 同样先做 market/prefix/code/name 边界与明显截断 floor�
 
 ## 12. External Dependency Resilience 现行集成校正
 
-- `ed0c970` 的 Provider Resilience v1 仍是已发布事实；本节记录 2026-08-27 候选树对其进行的兼容增强，不改写历史发布测试数字，也不把增强候选提前称为已发布。
+- `ed0c970` 的 Provider Resilience v1 仍是已发布事实；本节记录随后由 External Dependency Resilience v0.1.0 正式发布的兼容增强，不改写 `ed0c970` 的历史发布身份或测试数字。
 - Provider 资格不再使用 provider-wide 单一健康值。health、breaker、Retry-After、HALF_OPEN claim 均以 `provider/source + capability` 为键；identity 的 403/网络失败不能污染 daily、5m 或其他独立 capability。
 - HALF_OPEN single-probe claim 持久化并带 TTL；owner 崩溃后的 stale claim 可回收，同时仍禁止并发双 probe。
 - Provider probe health 只接受 pointer → event → artifact → object → typed report 全链校验通过的结果；任一层损坏或身份矛盾均 fail closed。
 - 真实 5m smoke 中 EastMoney 请求实际发出后为 `UNAVAILABLE / NETWORK`，Sina 为 `HEALTHY`。真实 `sync-5m` 由 Sina fallback 返回 48 bars，但因仅单源而 `canonical_updated=false`，保留旧的双源验证 canonical；这证明 resilience 正确，不证明 EastMoney 已连通。
-- 本节增强随 `external-dependency-resilience-v1.md` 的独立远端 tag/GitHub Release 门发布；在该门完成前，External Dependency 集成状态保持 `IMPLEMENTATION_IN_PROGRESS`。
+- 本节增强已随 `external-dependency-resilience-v1.md` 的 v0.1.0 完成独立远端 tag/GitHub Release 门；Release target 为 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc`，Provider Resilience 的历史实现提交 `ed0c970` 不改写。

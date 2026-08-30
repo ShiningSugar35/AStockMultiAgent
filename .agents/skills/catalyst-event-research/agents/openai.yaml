@@ -1,0 +1,4 @@
+interface:
+  display_name: "催化剂与风险事件研究"
+  short_description: "Build primary-source event timelines and conditional impacts"
+  default_prompt: "Use $catalyst-event-research to build a dated catalyst/risk ledger with primary evidence, probabilities, dependencies, and falsifiers."

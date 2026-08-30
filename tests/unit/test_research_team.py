@@ -24,6 +24,13 @@ from astock.schemas.financial import (
     FinancialRiskLevel,
 )
 from astock.schemas.market import Market
+from astock.schemas.research_acquisition import (
+    AcquisitionCapability,
+    CurrentResearchAcquisitionReport,
+    CurrentResearchAcquisitionStatus,
+    ExternalAuthority,
+    ExternalResearchNeed,
+)
 from astock.schemas.research_seeds import (
     ResearchSeedReport,
     ResearchSeedStatus,
@@ -37,6 +44,7 @@ from astock.schemas.research_team import (
     ResearchRoleOutput,
     ResearchRoleResult,
     ResearchTaskRole,
+    ResearchTeamScope,
     ResearchTeamTaskState,
 )
 from astock.schemas.runs import RunStatus
@@ -91,9 +99,7 @@ def _register_seed_report(
         warning_codes=[],
         market_coverage_ratios=ratios,
         universe_coverage_status=(
-            ResearchUniverseCoverageStatus.FULL
-            if full
-            else ResearchUniverseCoverageStatus.PARTIAL
+            ResearchUniverseCoverageStatus.FULL if full else ResearchUniverseCoverageStatus.PARTIAL
         ),
         formal_full_market_coverage_allowed=full,
         market_seed_count=0,
@@ -162,6 +168,49 @@ def _register_financial_pack(
         object_hash=ref.sha256,
         input_hashes=[],
     )
+
+
+def _register_acquisition_report(
+    state: StateStore,
+    objects: ObjectStore,
+    *,
+    company_id: str = "600000",
+    ready: bool = True,
+) -> tuple[str, str]:
+    report_id = f"current-research-acquisition:test:{company_id}:{'ready' if ready else 'gapped'}"
+    needs = []
+    if not ready:
+        needs = [
+            ExternalResearchNeed(
+                capability=AcquisitionCapability.FINANCIAL_ANNUAL,
+                research_question="Find the issuer annual report from an official source.",
+                preferred_authorities=[ExternalAuthority.ISSUER_IR],
+            )
+        ]
+    report = CurrentResearchAcquisitionReport(
+        report_id=report_id,
+        company_id=company_id,
+        market=Market.XSHG,
+        started_at=NOW,
+        decision_as_of=NOW,
+        status=(
+            CurrentResearchAcquisitionStatus.READY
+            if ready
+            else CurrentResearchAcquisitionStatus.NEEDS_EXTERNAL_RESEARCH
+        ),
+        attempts=[],
+        external_research_needs=needs,
+        created_at=NOW,
+    )
+    ref = objects.put_json(report.model_dump(mode="json"))
+    state.register_artifact(
+        artifact_id=report_id,
+        artifact_type="CurrentResearchAcquisitionReport",
+        schema_version=report.schema_version,
+        object_hash=ref.sha256,
+        input_hashes=[],
+    )
+    return report_id, ref.sha256
 
 
 def _register_role_output(
@@ -263,6 +312,7 @@ def test_research_team_cli_is_discoverable() -> None:
         "industry-research-archetypes",
         "industry-research-resolve",
         "research-team-plan",
+        "research-team-company-plan",
         "research-coverage-score",
         "research-team-status",
         "research-team-role-output",
@@ -316,6 +366,44 @@ def test_full_market_plan_has_team_roles_and_hard_order(tmp_path: Path) -> None:
     assert by_id["portfolio-construction"].dependencies == ["committee"]
     assert by_id["recommendation-gate"].role is ResearchTaskRole.RECOMMENDATION_GATE
     assert not by_id["recommendation-gate"].required_for_recommendation
+
+
+def test_company_plan_requires_resolved_acquisition_and_binds_lineage(tmp_path: Path) -> None:
+    service, state, objects = _service(tmp_path)
+    gapped_artifact_id, _ = _register_acquisition_report(state, objects, ready=False)
+
+    with pytest.raises(ValueError, match="acquisition gaps are resolved"):
+        service.create_company_plan(
+            company_id="600000",
+            acquisition_report_artifact_id=gapped_artifact_id,
+            as_of=NOW,
+        )
+
+    report_artifact_id, report_hash = _register_acquisition_report(state, objects, ready=True)
+    plan = service.create_company_plan(
+        company_id="600000",
+        acquisition_report_artifact_id=report_artifact_id,
+        as_of=NOW,
+        cpu_count=4,
+        memory_gib=8,
+    )
+    by_id = {item.task_id: item for item in plan.tasks}
+
+    assert plan.scope is ResearchTeamScope.COMPANY
+    assert plan.company_id == "600000"
+    assert plan.acquisition_report_artifact_id == report_artifact_id
+    assert by_id["governance-management-quality"].role is ResearchTaskRole.GOVERNANCE
+    assert by_id["model-risk-validation"].role is ResearchTaskRole.MODEL_RISK
+    assert set(by_id["committee"].dependencies) == {
+        "investment-red-team",
+        "model-risk-validation",
+    }
+    mapped_checks = {check for task in plan.tasks for check in task.readiness_checks}
+    assert mapped_checks == set(service.policy.company_required_checks) - {"TEAM_DAG_COMPLETE"}
+
+    record = state.artifact_record(f"ResearchTeamPlan:{plan.plan_id}")
+    assert record is not None
+    assert report_hash in record["input_hashes"]
 
 
 def test_same_as_of_and_hardware_produce_same_plan_identity(tmp_path: Path) -> None:
@@ -425,11 +513,7 @@ def test_partial_universe_cannot_gain_formal_recommendation_authority(tmp_path: 
             context_id = "bull-independent"
         elif task.task_id == "bear-case":
             context_id = "bear-independent"
-        readiness = (
-            {"UNIVERSE_COVERAGE": False}
-            if task.task_id == "universe-acquisition"
-            else None
-        )
+        readiness = {"UNIVERSE_COVERAGE": False} if task.task_id == "universe-acquisition" else None
         _complete_task(
             service,
             state,

@@ -43,7 +43,9 @@ class ResearchTaskRole(StrEnum):
     FINANCIAL_INTEGRITY = "FINANCIAL_INTEGRITY"
     CATALYST = "CATALYST"
     MARKET_CONTEXT = "MARKET_CONTEXT"
+    GOVERNANCE = "GOVERNANCE"
     VALUATION = "VALUATION"
+    MODEL_RISK = "MODEL_RISK"
     BULL = "BULL"
     BEAR = "BEAR"
     REVIEWER = "REVIEWER"
@@ -96,9 +98,11 @@ class ResearchTeamTask(AStockModel):
 
 
 class ResearchTeamPlan(AStockModel):
-    schema_version: str = "research-team-plan-v1"
+    schema_version: str = "research-team-plan-v2"
     plan_id: str = Field(min_length=1)
     scope: ResearchTeamScope
+    company_id: str | None = Field(default=None, pattern=r"^\d{6}$")
+    acquisition_report_artifact_id: str | None = Field(default=None, min_length=1)
     depth: ResearchTeamDepth
     backend: ResearchExecutionBackend
     as_of: AwareDatetime
@@ -113,6 +117,13 @@ class ResearchTeamPlan(AStockModel):
 
     @model_validator(mode="after")
     def validate_dag(self) -> ResearchTeamPlan:
+        if self.scope is ResearchTeamScope.COMPANY:
+            if self.company_id is None or self.acquisition_report_artifact_id is None:
+                raise ValueError(
+                    "COMPANY research-team plan requires company_id and acquisition report lineage"
+                )
+        elif self.company_id is not None or self.acquisition_report_artifact_id is not None:
+            raise ValueError("FULL_MARKET research-team plan cannot carry company-only lineage")
         task_ids = [item.task_id for item in self.tasks]
         if len(task_ids) != len(set(task_ids)):
             raise ValueError("research-team task ids must be unique")

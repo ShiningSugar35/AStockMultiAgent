@@ -70,3 +70,41 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
 - Never fabricate BUY authority, target price, position weight, stop, or entry range to hide uncertainty.
 - Never turn a backend state into the headline of a normal investor answer.
 - **No real brokerage execution**.
+
+## Same-request automatic continuation
+
+The current-company workflow is one durable request, not a sequence of user prompts.
+
+- Start or recover it with `uv run astock research-current-continuation-start REQUEST.json` and
+  `uv run astock research-current-continuation-status <continuation_id>`.
+- `AUTO_RESOLUTION_REQUIRED`: the Agent automatically discovers and freezes exact official
+  evidence, submits a typed automatic-resolution artifact through
+  `uv run astock research-current-continuation-resolve RESOLUTION.json`, and resumes. Public
+  captures are validated and bound atomically; search snippets and secondary summaries are never
+  accepted as the fact artifact.
+- `TEAM_RESEARCH_REQUIRED`: the Agent runs all ready research-team tasks in DAG waves and
+  advances the gate without returning an interim investment conclusion.
+- `READY_FOR_INVESTOR_VIEW`: the complete lineage supports a formal recommendation.
+- `OBSERVATION_ONLY_FOR_INVESTOR_VIEW`: the complete lineage supports an explicitly labelled
+  observation view, but at least one formal recommendation gate failed.
+- `NEEDS_USER_INPUT`: only bounded automatic-channel exhaustion or genuinely private source material may trigger a user request. User-supplied material resumes the same continuation.
+
+Every internal continuation status must preserve `investment_conclusion_blocked=true`,
+`same_request_continuation_required=true`, and `broker_execution_allowed=false`; normal investor answers must not expose those backend fields. Public-source
+work must never be delegated back to the user merely because one provider or page failed.
+
+## Required specialist Skills
+
+The team DAG must dispatch the following canonical Repo Skills when their corresponding roles
+become ready; role labels alone are not an implementation:
+
+- `.agents/skills/macro-policy-regime/SKILL.md` for `macro` and `policy`.
+- `.agents/skills/industry-value-chain/SKILL.md` for `industry`.
+- `.agents/skills/catalyst-event-research/SKILL.md` for `catalyst`.
+- `.agents/skills/governance-management-quality/SKILL.md` for `governance`.
+- Existing `bull` and `bear` tasks remain separate, independent contexts; `.agents/skills/investment-red-team/SKILL.md` is dispatched only for the downstream `reviewer` after both complete.
+- `.agents/skills/model-risk-backtest-validation/SKILL.md` for `model-risk`.
+
+Each Skill returns the exact typed role output, freezes its evidence lineage, records
+contradictions and abstains when its formal gate cannot be supported. The committee may consume
+only registered typed outputs from completed dependencies.

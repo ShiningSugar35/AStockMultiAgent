@@ -8,7 +8,12 @@ from pydantic import ValidationError
 
 from astock.core.object_store import ObjectStore
 from astock.pit import PointInTimeRepository, PointInTimeService
-from astock.schemas import AvailabilityBasis, PointInTimeMetadata, PointInTimeStatus
+from astock.schemas import (
+    AvailabilityBasis,
+    PointInTimeMetadata,
+    PointInTimeStatus,
+    SourceSnapshot,
+)
 
 
 def _service(tmp_path: Path, state) -> PointInTimeService:
@@ -105,6 +110,79 @@ def test_revision_chain_is_append_only_and_point_in_time_safe(tmp_path: Path, st
     assert service.assert_usable(revised, datetime(2026, 2, 2, tzinfo=UTC)) == revised
     with state.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM point_in_time_metadata").fetchone()[0] == 2
+
+
+def test_identical_content_refetch_reuses_earliest_pit_identity(tmp_path: Path, state) -> None:
+    objects = ObjectStore(tmp_path / "objects")
+    service = PointInTimeService(PointInTimeRepository(state), state, objects)
+    first_time = datetime(2026, 1, 10, tzinfo=UTC)
+    second_time = datetime(2026, 1, 11, tzinfo=UTC)
+    raw = objects.put_bytes(b"same official filing")
+    first_snapshot = SourceSnapshot(
+        snapshot_id="snapshot:first",
+        source_id="official-filing",
+        object_sha256=raw.sha256,
+        fetched_at=first_time,
+        available_to_system_at=first_time,
+        source_url="https://example.com/filing.pdf",
+        mime="application/pdf",
+        byte_size=raw.byte_size,
+        rights_status="PUBLIC_DISCLOSURE",
+    )
+    state.register_snapshot(first_snapshot)
+
+    first = service.create(
+        source_id="filing:stable",
+        source_document_id=None,
+        source_snapshot_id=first_snapshot.snapshot_id,
+        period_end=None,
+        published_at=first_time,
+        effective_at=first_time,
+        ingested_at=first_time,
+        available_to_system_at=first_time,
+        point_in_time_status=PointInTimeStatus.CERTIFIED,
+        availability_basis=AvailabilityBasis.FETCH_OBSERVED,
+    )
+    repeated = service.create(
+        source_id="filing:stable",
+        source_document_id=None,
+        source_snapshot_id=first_snapshot.snapshot_id,
+        period_end=date(2025, 12, 31),
+        published_at=first_time,
+        effective_at=first_time,
+        ingested_at=second_time,
+        available_to_system_at=second_time,
+        point_in_time_status=PointInTimeStatus.CERTIFIED,
+        availability_basis=AvailabilityBasis.FETCH_OBSERVED,
+    )
+
+    assert repeated == first
+    assert repeated.source_snapshot_id == first_snapshot.snapshot_id
+    with state.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM point_in_time_metadata").fetchone()[0] == 1
+
+    changed = objects.put_bytes(b"changed filing bytes")
+    changed_snapshot = first_snapshot.model_copy(
+        update={
+            "snapshot_id": "snapshot:changed",
+            "object_sha256": changed.sha256,
+            "byte_size": changed.byte_size,
+        }
+    )
+    state.register_snapshot(changed_snapshot)
+    with pytest.raises(ValueError, match="PIT source identity collision"):
+        service.create(
+            source_id="filing:stable",
+            source_document_id=None,
+            source_snapshot_id=changed_snapshot.snapshot_id,
+            period_end=date(2025, 12, 31),
+            published_at=first_time,
+            effective_at=first_time,
+            ingested_at=second_time,
+            available_to_system_at=second_time,
+            point_in_time_status=PointInTimeStatus.CERTIFIED,
+            availability_basis=AvailabilityBasis.FETCH_OBSERVED,
+        )
 
 
 def test_unknown_revision_predecessor_is_rejected(tmp_path: Path, state) -> None:

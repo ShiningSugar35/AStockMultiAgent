@@ -5,7 +5,7 @@ description: Ingest an approved local document or allowlisted author's accessibl
 
 # 知识采集
 
-1. Run `uv run astock probe`, then confirm the source is local private material or an allowlisted author the user can access.
+1. Confirm the source is approved local private material or an allowlisted author the user can access; use `uv run astock probe` only for explicit capability diagnostics, not as an unconditional ingest prerequisite.
 2. Prefer a verified structured request, then MCP, then the logged-in browser, then manual HTML/Markdown.
 3. Save every raw response to ObjectStore before advancing a checkpoint.
 4. Enumerate each content type from its first page to an explicit terminal condition.

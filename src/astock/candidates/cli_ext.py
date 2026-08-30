@@ -21,6 +21,7 @@ from astock.candidates.seeds import (
     ResearchSeedProviderRouter,
     ResearchSeedService,
     SeedSnapshotProvider,
+    UniverseCoverageProvider,
 )
 from astock.core.hashing import content_hash
 from astock.documents import DisclosureEnumerationProvider
@@ -32,7 +33,7 @@ from astock.paper_trading.operation import load_paper_trading_rules
 from astock.research.team import detect_hardware_budget, load_research_team_policy
 from astock.schemas.candidate_promotion import SeedPromotionRequest
 from astock.schemas.candidates import CandidateInputRelease, CandidateScanRequest
-from astock.schemas.market import CompletenessSemantics
+from astock.schemas.market import CompletenessSemantics, Market
 from astock.schemas.research_seeds import ResearchSeedRequest
 
 
@@ -88,11 +89,20 @@ def register_candidate_input_commands(
             fetch = getattr(candidate, "fetch_seed_snapshot", None)
             if callable(fetch):
                 seed_providers.append(cast(SeedSnapshotProvider, candidate))
+        coverage_providers: dict[Market, UniverseCoverageProvider] = {}
+        if live:
+            official_bjse = reference.provider_factory.create("bse-official-reference")
+            if callable(getattr(official_bjse, "fetch_master", None)):
+                coverage_providers[Market.BJSE] = cast(
+                    UniverseCoverageProvider,
+                    official_bjse,
+                )
         provider = ResearchSeedProviderRouter(
             providers=seed_providers,
             minimum_rows_by_market=reference.config.minimum_instrument_records,
             state=state,
             objects=objects,
+            coverage_providers=coverage_providers,
         )
         return ResearchSeedService(
             project_root=paths.root,

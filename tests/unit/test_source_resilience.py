@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
+
 from astock.core.source_resilience import (
     CircuitState,
     SourceCircuitBreaker,
@@ -260,12 +262,20 @@ def test_raw_capture_failure_codes_preserve_network_vs_schema_breaker_semantics(
     )
 
 
+def test_raw_httpx_failures_preserve_transport_and_status_semantics() -> None:
+    request = httpx.Request("GET", "https://example.test/")
+    timeout = httpx.ReadTimeout("timed out", request=request)
+    assert classify_source_error(timeout) is SourceFailureClass.TRANSIENT_NETWORK
+
+    response = httpx.Response(503, request=request)
+    server_error = httpx.HTTPStatusError("server error", request=request, response=response)
+    assert classify_source_error(server_error) is SourceFailureClass.REMOTE_5XX
+
+
 def test_source_resilience_v1_rejects_unimplemented_multi_probe_configuration(
     tmp_path: Path,
 ) -> None:
-    source = (PROJECT_ROOT / "configs" / "source_resilience.yaml").read_text(
-        encoding="utf-8"
-    )
+    source = (PROJECT_ROOT / "configs" / "source_resilience.yaml").read_text(encoding="utf-8")
     config = tmp_path / "source_resilience.yaml"
     config.write_text(
         source.replace("half_open_max_probes: 1", "half_open_max_probes: 2", 1),

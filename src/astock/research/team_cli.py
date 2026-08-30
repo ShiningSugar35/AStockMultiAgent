@@ -76,6 +76,25 @@ def register_research_team_commands(
         timestamp = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
         emit(team().create_full_market_plan(as_of=timestamp, backend=backend, depth=depth))
 
+    @app.command("research-team-company-plan")
+    def research_team_company_plan(
+        company_id: Annotated[str, typer.Argument()],
+        acquisition_report_artifact_id: Annotated[str, typer.Argument()],
+        as_of: Annotated[str | None, typer.Option("--as-of")] = None,
+        backend: Annotated[ResearchExecutionBackend | None, typer.Option()] = None,
+        depth: Annotated[ResearchTeamDepth, typer.Option()] = ResearchTeamDepth.INSTITUTIONAL,
+    ) -> None:
+        timestamp = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+        emit(
+            team().create_company_plan(
+                company_id=company_id,
+                acquisition_report_artifact_id=acquisition_report_artifact_id,
+                as_of=timestamp,
+                backend=backend,
+                depth=depth,
+            )
+        )
+
     @app.command("research-coverage-score")
     def research_coverage_score(
         request_file: Annotated[

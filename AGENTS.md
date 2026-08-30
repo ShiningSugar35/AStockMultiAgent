@@ -72,6 +72,12 @@
 - 候选/观察名单：`$candidate-scan`
 - 单公司深度研究：`$company-deep-research`
 - 财务可信度：`$financial-integrity-audit`
+- 宏观状态、政策传导与数据 vintage：`$macro-policy-regime`
+- 行业价值链、盈利池与可比公司：`$industry-value-chain`
+- 催化剂与风险事件时间线：`$catalyst-event-research`
+- 控制、激励、资本配置与披露质量：`$governance-management-quality`
+- 独立多空之后的假设、反证与决策脆弱性复核：`$investment-red-team`
+- 模型、预测、因子与回测的泄漏/多重检验/成本验证：`$model-risk-backtest-validation`
 - 持仓变化与失效：`$holding-monitor`
 - 已分析/推荐标的的持续观察、事件增量与入场/退出条件跟踪：`$continuous-investment-monitor`
 - 组合评估、风险贡献与约束配置：`$portfolio-manager`

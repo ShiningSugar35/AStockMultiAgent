@@ -14,6 +14,12 @@ EXPECTED = {
     "candidate-scan": ("candidate", "watchlist"),
     "company-deep-research": ("company", "deep"),
     "financial-integrity-audit": ("financial", "audit"),
+    "macro-policy-regime": ("macro", "policy"),
+    "industry-value-chain": ("industry", "peer"),
+    "catalyst-event-research": ("catalyst", "event"),
+    "governance-management-quality": ("governance", "management"),
+    "investment-red-team": ("independently", "challenge"),
+    "model-risk-backtest-validation": ("model", "backtest"),
     "holding-monitor": ("holding", "positions"),
     "continuous-investment-monitor": ("continuous", "monitoring"),
     "paper-trading-recovery": ("paper", "recovery"),
@@ -48,6 +54,49 @@ def test_all_repo_skills_have_valid_trigger_metadata_and_ui() -> None:
         ui = yaml.safe_load((folder / "agents" / "openai.yaml").read_text(encoding="utf-8"))
         assert 25 <= len(ui["interface"]["short_description"]) <= 64
         assert f"${name}" in ui["interface"]["default_prompt"]
+
+
+def test_method_skills_bind_existing_team_contracts_and_abstention() -> None:
+    contracts = {
+        "macro-policy-regime": (
+            "macro-regime",
+            "MacroRegimeProfile",
+            "MACRO_REGIME",
+        ),
+        "industry-value-chain": (
+            "industry-value-chain",
+            "IndustryValueChainProfile",
+            "INDUSTRY_PROFILE",
+        ),
+        "catalyst-event-research": (
+            "company-catalyst",
+            "CatalystRiskPack",
+            "CATALYST_RISK",
+        ),
+        "governance-management-quality": (
+            "governance-management-quality",
+            "GovernanceManagementQualityPack",
+            "GOVERNANCE_QUALITY",
+        ),
+        "investment-red-team": (
+            "investment-red-team",
+            "InvestmentRedTeamReport",
+            "INDEPENDENT_REVIEW",
+        ),
+        "model-risk-backtest-validation": (
+            "model-risk-validation",
+            "ModelRiskValidationReport",
+            "MODEL_RISK_VALIDATION",
+        ),
+    }
+    for name, required_terms in contracts.items():
+        body = (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
+        assert all(term in body for term in required_terms)
+        assert "uv run astock research-team-status" in body
+        assert "uv run astock research-team-role-output" in body
+        assert "uv run astock research-team-task-result" in body
+        assert "abstain" in body.lower()
+        assert "parallel plan" in body.lower() or "existing `ResearchTeamPlan`" in body
 
 
 def test_agents_file_discovers_every_repo_skill() -> None:
@@ -85,12 +134,12 @@ def test_phase4_repo_skill_commands_exist_and_use_strict_codex_binding() -> None
         body = (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
         assert "--require-registered-output" in body
         assert "codex-run-audit" in body
-    assert "research-chain-audit" in (
-        SKILLS_ROOT / "company-deep-research" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    assert "holding-review-run" in (
-        SKILLS_ROOT / "holding-monitor" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    assert "research-chain-audit" in (SKILLS_ROOT / "company-deep-research" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "holding-review-run" in (SKILLS_ROOT / "holding-monitor" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_phase6_repo_skill_commands_exist_and_keep_committee_offline() -> None:
@@ -116,9 +165,9 @@ def test_phase6_repo_skill_commands_exist_and_keep_committee_offline() -> None:
         body = (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
         assert "committee-" in body
         assert "Do not" in body
-    orchestrator = (
-        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    orchestrator = (SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
     assert "The committee never performs the search itself" in orchestrator
 
 
@@ -141,31 +190,27 @@ def test_phase7_repo_skill_commands_exist_and_keep_shadow_isolated() -> None:
         "adaptive-research-status",
     }
     assert expected_commands <= command_names
-    orchestrator = (
-        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    orchestrator = (SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
     assert "ELIGIBLE_RULE_STATE_MACHINE_RESEARCH" in orchestrator
     assert "Do not change weights or the paper ledger" in orchestrator
     assert "AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL" in orchestrator
     assert "explicit rule-research approval" in orchestrator
-    recovery = (SKILLS_ROOT / "paper-trading-recovery" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
+    recovery = (SKILLS_ROOT / "paper-trading-recovery" / "SKILL.md").read_text(encoding="utf-8")
     assert "Shadow studies and their observations must never" in recovery
     assert "Do not write shadow-study results" in recovery
     assert "adaptive-research-status" in recovery
     assert "ledger-write command" in recovery
 
 
-
-def test_current_investor_skills_exhaust_policy_driven_automatic_fallback_before_manual_help(
-) -> None:
-    orchestrator = (
-        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    company = (SKILLS_ROOT / "company-deep-research" / "SKILL.md").read_text(
+def test_current_investor_skills_exhaust_policy_driven_automatic_fallback_before_manual_help() -> (
+    None
+):
+    orchestrator = (SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    company = (SKILLS_ROOT / "company-deep-research" / "SKILL.md").read_text(encoding="utf-8")
     investigation = (SKILLS_ROOT / "evidence-investigation" / "SKILL.md").read_text(
         encoding="utf-8"
     )
@@ -183,8 +228,7 @@ def test_current_investor_skills_exhaust_policy_driven_automatic_fallback_before
     assert "current-research-policy" in orchestrator
     assert (
         "Only after allowlisted automated/provider paths **and** authoritative Web "
-        "search are exhausted"
-        in orchestrator
+        "search are exhausted" in orchestrator
     )
     assert "research-investor-answer-audit" in orchestrator
     assert "never become the investor answer" in orchestrator
@@ -234,12 +278,10 @@ def test_continuous_monitor_skill_and_commands_are_discoverable() -> None:
     monitor = (SKILLS_ROOT / "continuous-investment-monitor" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    orchestrator = (
-        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    company = (SKILLS_ROOT / "company-deep-research" / "SKILL.md").read_text(
+    orchestrator = (SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    company = (SKILLS_ROOT / "company-deep-research" / "SKILL.md").read_text(encoding="utf-8")
     candidate = (SKILLS_ROOT / "candidate-scan" / "SKILL.md").read_text(encoding="utf-8")
     assert "continuous-monitor-task-claim" in monitor
     assert "broker_execution_allowed=false" in monitor
@@ -262,12 +304,10 @@ def test_session_portfolio_commands_keep_orders_and_fills_separate() -> None:
         "paper-replay",
     } <= command_names
     assert "local-portfolio-trade" not in command_names
-    orchestrator = (
-        SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-    recovery = (SKILLS_ROOT / "paper-trading-recovery" / "SKILL.md").read_text(
+    orchestrator = (SKILLS_ROOT / "astock-research-orchestrator" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    recovery = (SKILLS_ROOT / "paper-trading-recovery" / "SKILL.md").read_text(encoding="utf-8")
     assert (
         "A submitted order is never called a position until the fill ledger confirms it"
         in orchestrator

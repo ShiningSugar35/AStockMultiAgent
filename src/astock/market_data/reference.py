@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 from zoneinfo import ZoneInfo
 
+import httpx
 from pydantic import ValidationError
 
 from astock.core.errors import AStockError, StorageError
@@ -23,6 +24,7 @@ from astock.core.source_resilience import (
     SourceCircuitBreaker,
     SourceFailureClass,
     classify_source_error,
+    scoped_source_capability,
 )
 from astock.core.state import StateStore
 from astock.documents import DisclosureEnumerationProvider
@@ -37,6 +39,7 @@ from astock.market_data.reference_config import (
 )
 from astock.market_data.reference_storage import ReferenceParquetStore
 from astock.providers.baostock import BaoStockCaptureError, BaoStockReferenceProvider
+from astock.providers.bse_official_reference import BseOfficialReferenceProvider
 from astock.providers.config import load_provider_registry
 from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
 from astock.providers.runtime import ProviderFactory, load_transport_profiles
@@ -72,6 +75,8 @@ _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _EARLIEST_UTC = datetime.min.replace(tzinfo=UTC)
 _FULL_MARKET_COVERAGE_RATIO = 0.995
 _ROUTE_FAILURE_CODES = {
+    "bse-official-exact": "BSE_OFFICIAL_EXACT_IDENTITY_FAILED",
+    "bse-official-master": "BSE_OFFICIAL_MASTER_FAILED",
     "eastmoney-exact": "EASTMONEY_EXACT_IDENTITY_FAILED",
     "sina-exact": "SINA_EXACT_IDENTITY_FAILED",
     "eastmoney-paginated-master": "EASTMONEY_FALLBACK_FAILED",
@@ -81,6 +86,8 @@ _ROUTE_FAILURE_CODES = {
     "sina-daily": "SINA_FALLBACK_FAILED",
 }
 _ROUTE_FALLBACK_CODES = {
+    "bse-official-exact": "BSE_OFFICIAL_USED",
+    "bse-official-master": "BSE_OFFICIAL_USED",
     "eastmoney-exact": "EASTMONEY_FALLBACK_USED",
     "sina-exact": "SINA_FALLBACK_USED",
     "eastmoney-paginated-master": "EASTMONEY_FALLBACK_USED",
@@ -152,10 +159,14 @@ class MarketReferenceService:
         live: bool,
         formal_use: bool = False,
         require_complete: bool = False,
+        market: Market | None = None,
     ) -> list[ReferenceRouteStep]:
         """Keep recorded replay deterministic; route live acquisition by capability policy."""
 
-        configured = self.config.route(capability)
+        configured = tuple(step for step in self.config.route(capability) if step.supports(market))
+        if not configured:
+            scope = market.value if market is not None else "GLOBAL"
+            raise ValueError(f"No market-reference route for {capability}:{scope}")
         if not live or len(configured) <= 1:
             return list(configured)
         ranked = self.provider_factory.definitions_for_capability(
@@ -189,6 +200,7 @@ class MarketReferenceService:
         capability: str,
         *,
         live: bool,
+        breaker_scope: str | None = None,
     ) -> str | None:
         if not live:
             return None
@@ -199,13 +211,24 @@ class MarketReferenceService:
         }:
             token = provider_id.upper().replace("-", "_")
             return f"{token}_HEALTH_{health.value}"
-        if not self.source_breaker.claim_attempt(provider_id, capability):
+        breaker_capability = scoped_source_capability(capability, breaker_scope)
+        if not self.source_breaker.claim_attempt(provider_id, breaker_capability):
             return f"{provider_id.upper().replace('-', '_')}_CIRCUIT_OPEN"
         return None
 
-    def _source_success(self, provider_id: str, capability: str, *, live: bool) -> None:
+    def _source_success(
+        self,
+        provider_id: str,
+        capability: str,
+        *,
+        live: bool,
+        breaker_scope: str | None = None,
+    ) -> None:
         if live:
-            self.source_breaker.record_success(provider_id, capability)
+            self.source_breaker.record_success(
+                provider_id,
+                scoped_source_capability(capability, breaker_scope),
+            )
 
     def _source_failure(
         self,
@@ -214,6 +237,7 @@ class MarketReferenceService:
         error: BaseException | SourceFailureClass,
         *,
         live: bool,
+        breaker_scope: str | None = None,
     ) -> None:
         if not live:
             return
@@ -227,7 +251,7 @@ class MarketReferenceService:
                 retry_after_seconds = max(0, int(raw_retry_after))
         self.source_breaker.record_failure(
             provider_id,
-            capability,
+            scoped_source_capability(capability, breaker_scope),
             failure_class,
             retry_after_seconds=retry_after_seconds,
         )
@@ -276,6 +300,22 @@ class MarketReferenceService:
         live: bool,
     ) -> tuple[list[InstrumentRecord], list[str], datetime, list[str]]:
         provider = self._route_provider(step, "instrument.identity", live=live)
+        if step.operation == "bse-official-exact":
+            if not isinstance(provider, BseOfficialReferenceProvider):
+                raise ValueError("bse-official-exact requires a BSE official adapter")
+            if market is not Market.BJSE:
+                raise ValueError("bse-official-exact is scoped to BJSE")
+            payload, snapshot = self._retry_reference_call(
+                lambda: provider.fetch_identity(symbol, market, live=live),
+                live=live,
+            )
+            record = _parse_bse_official_identity(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+                symbol,
+            )
+            return [record], [snapshot.snapshot_id], snapshot.available_to_system_at, []
         if step.operation == "baostock-identity":
             if not isinstance(provider, BaoStockReferenceProvider):
                 raise ValueError("baostock-identity requires a BaoStock adapter")
@@ -285,9 +325,12 @@ class MarketReferenceService:
                 live=live,
             )
             if not envelope.complete:
-                return [], [snapshot.snapshot_id], snapshot.available_to_system_at, [
-                    "BAOSTOCK_INCOMPLETE"
-                ]
+                return (
+                    [],
+                    [snapshot.snapshot_id],
+                    snapshot.available_to_system_at,
+                    ["BAOSTOCK_INCOMPLETE"],
+                )
             parsed = _parse_baostock_instruments(envelope, snapshot.snapshot_id, market)
             records = [
                 item
@@ -401,9 +444,13 @@ class MarketReferenceService:
                 live=live,
             )
             if not envelope.complete:
-                return [], [snapshot.snapshot_id], snapshot.available_to_system_at, [
-                    "BAOSTOCK_INCOMPLETE"
-                ], False
+                return (
+                    [],
+                    [snapshot.snapshot_id],
+                    snapshot.available_to_system_at,
+                    ["BAOSTOCK_INCOMPLETE"],
+                    False,
+                )
             records = _parse_baostock_daily(
                 envelope, snapshot.snapshot_id, symbol, market, start, end
             )
@@ -617,15 +664,64 @@ class MarketReferenceService:
         live: bool,
     ) -> tuple[list[InstrumentRecord], list[str], datetime, list[str], bool]:
         provider = self._route_provider(step, "instrument.master", live=live)
+        if step.operation == "bse-official-master":
+            if not isinstance(provider, BseOfficialReferenceProvider):
+                raise ValueError("bse-official-master requires a BSE official adapter")
+            if market is not Market.BJSE:
+                raise ValueError("bse-official-master is scoped to BJSE")
+            payload, snapshot = provider.fetch_master(market, live=live)
+            records = _parse_bse_official_master(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+            )
+            page_snapshot_ids = payload.get("page_snapshot_ids")
+            snapshots = [snapshot.snapshot_id]
+            available_at = snapshot.available_to_system_at
+            if live:
+                if not isinstance(page_snapshot_ids, list) or len(page_snapshot_ids) != int(
+                    str(payload.get("page_count", -1))
+                ):
+                    raise ValueError("BSE official master page lineage is incomplete")
+                verified: list[str] = []
+                for raw_snapshot_id in page_snapshot_ids:
+                    if not isinstance(raw_snapshot_id, str):
+                        raise ValueError("BSE official master page lineage is malformed")
+                    page_snapshot = self.state.get_snapshot(raw_snapshot_id)
+                    if (
+                        page_snapshot is None
+                        or page_snapshot.source_id != provider.provider_id
+                        or not self.objects.verify(page_snapshot.object_sha256)
+                    ):
+                        raise ValueError("BSE official master page snapshot failed verification")
+                    verified.append(raw_snapshot_id)
+                    available_at = max(available_at, page_snapshot.available_to_system_at)
+                snapshots = [*verified, snapshot.snapshot_id]
+            complete = (
+                payload.get("complete") is True
+                and int(str(payload.get("coverage_denominator", -1))) == len(records)
+                and int(str(payload.get("total", -1))) == len(records)
+            )
+            return (
+                records,
+                snapshots,
+                available_at,
+                ["BSE_OFFICIAL_UNIVERSE_PROOF_USED"],
+                complete,
+            )
         if step.operation == "baostock-master":
             if not isinstance(provider, BaoStockReferenceProvider):
                 raise ValueError("baostock-master requires a BaoStock adapter")
             request = {"market": market.value} if market else {}
             envelope, snapshot = provider.fetch("instrument.master", request, live=live)
             if not envelope.complete:
-                return [], [snapshot.snapshot_id], snapshot.available_to_system_at, [
-                    "BAOSTOCK_INCOMPLETE"
-                ], False
+                return (
+                    [],
+                    [snapshot.snapshot_id],
+                    snapshot.available_to_system_at,
+                    ["BAOSTOCK_INCOMPLETE"],
+                    False,
+                )
             records = _parse_baostock_instruments(envelope, snapshot.snapshot_id, market)
             return records, [snapshot.snapshot_id], snapshot.available_to_system_at, [], True
         if step.operation == "eastmoney-master":
@@ -642,10 +738,7 @@ class MarketReferenceService:
                 market,
             )
             coverage_ratio = _eastmoney_master_coverage_ratio(payload, len(records))
-            complete = (
-                coverage_ratio is not None
-                and coverage_ratio >= _FULL_MARKET_COVERAGE_RATIO
-            )
+            complete = coverage_ratio is not None and coverage_ratio >= _FULL_MARKET_COVERAGE_RATIO
             reasons = [] if complete else ["EASTMONEY_MASTER_COVERAGE_UNPROVEN"]
             return (
                 records,
@@ -667,10 +760,7 @@ class MarketReferenceService:
                 market,
             )
             coverage_ratio = _sina_master_coverage_ratio(payload, len(records))
-            complete = (
-                coverage_ratio is not None
-                and coverage_ratio >= _FULL_MARKET_COVERAGE_RATIO
-            )
+            complete = coverage_ratio is not None and coverage_ratio >= _FULL_MARKET_COVERAGE_RATIO
             reasons = [] if complete else ["SINA_MASTER_COVERAGE_UNPROVEN"]
             return (
                 records,
@@ -721,7 +811,11 @@ class MarketReferenceService:
         self, market: Market | None = None, *, live: bool = False
     ) -> ReferenceSyncReport:
         route = self._capability_route(
-            "instrument.master", live=live, formal_use=True, require_complete=True
+            "instrument.master",
+            live=live,
+            formal_use=True,
+            require_complete=True,
+            market=market,
         )
         records: list[InstrumentRecord] = []
         reasons: list[str] = []
@@ -731,12 +825,14 @@ class MarketReferenceService:
         selected_provider_id = provider_id
         selected_step_index = 0
         complete = False
+        breaker_scope = market.value if market is not None else "ALL"
         for step_index, step in enumerate(route):
             provider_id = step.provider_id
             block_reason = self._source_attempt_block_reason(
                 provider_id,
                 "instrument.master",
                 live=live,
+                breaker_scope=breaker_scope,
             )
             if block_reason is not None:
                 reasons.append(block_reason)
@@ -748,6 +844,7 @@ class MarketReferenceService:
             except (
                 AStockError,
                 BaoStockCaptureError,
+                httpx.HTTPError,
                 KeyError,
                 OSError,
                 ValueError,
@@ -766,7 +863,13 @@ class MarketReferenceService:
                         f"{step.operation.upper().replace('-', '_')}_FAILED",
                     )
                 )
-                self._source_failure(provider_id, "instrument.master", exc, live=live)
+                self._source_failure(
+                    provider_id,
+                    "instrument.master",
+                    exc,
+                    live=live,
+                    breaker_scope=breaker_scope,
+                )
                 continue
             snapshot_ids.extend(step_snapshots)
             available_at = max(available_at, step_available)
@@ -781,6 +884,7 @@ class MarketReferenceService:
                         "instrument.master",
                         SourceFailureClass.COVERAGE_INCOMPLETE,
                         live=live,
+                        breaker_scope=breaker_scope,
                     )
                     continue
             if step_records:
@@ -790,13 +894,19 @@ class MarketReferenceService:
                         "instrument.master",
                         SourceFailureClass.COVERAGE_INCOMPLETE,
                         live=live,
+                        breaker_scope=breaker_scope,
                     )
                     if len(step_records) > len(records):
                         records = step_records
                         selected_provider_id = provider_id
                         selected_step_index = step_index
                     continue
-                self._source_success(provider_id, "instrument.master", live=live)
+                self._source_success(
+                    provider_id,
+                    "instrument.master",
+                    live=live,
+                    breaker_scope=breaker_scope,
+                )
                 records = step_records
                 selected_provider_id = provider_id
                 selected_step_index = step_index
@@ -837,7 +947,11 @@ class MarketReferenceService:
         if market is Market.INDEX:
             raise ValueError("instrument identity requires an equity market")
         route = self._capability_route(
-            "instrument.identity", live=live, formal_use=True, require_complete=True
+            "instrument.identity",
+            live=live,
+            formal_use=True,
+            require_complete=True,
+            market=market,
         )
         records: list[InstrumentRecord] = []
         reasons: list[str] = []
@@ -850,6 +964,7 @@ class MarketReferenceService:
                 provider_id,
                 "instrument.identity",
                 live=live,
+                breaker_scope=step.operation,
             )
             if block_reason is not None:
                 reasons.append(block_reason)
@@ -879,13 +994,24 @@ class MarketReferenceService:
                         f"{step.operation.upper().replace('-', '_')}_FAILED",
                     )
                 )
-                self._source_failure(provider_id, "instrument.identity", exc, live=live)
+                self._source_failure(
+                    provider_id,
+                    "instrument.identity",
+                    exc,
+                    live=live,
+                    breaker_scope=step.operation,
+                )
                 continue
             snapshot_ids.extend(step_snapshots)
             available_at = max(available_at, step_available)
             reasons.extend(step_reasons)
             if step_records:
-                self._source_success(provider_id, "instrument.identity", live=live)
+                self._source_success(
+                    provider_id,
+                    "instrument.identity",
+                    live=live,
+                    breaker_scope=step.operation,
+                )
                 records = step_records
                 if step_index > 0:
                     reasons.append(
@@ -984,7 +1110,11 @@ class MarketReferenceService:
                     failed=True,
                 )
         route = self._capability_route(
-            "market.calendar", live=live, formal_use=True, require_complete=True
+            "market.calendar",
+            live=live,
+            formal_use=True,
+            require_complete=True,
+            market=exchange,
         )
         reasons: list[str] = []
         snapshot_ids: list[str] = []
@@ -1074,7 +1204,11 @@ class MarketReferenceService:
         live: bool = False,
     ) -> ReferenceSyncReport:
         route = self._capability_route(
-            "market.daily_unadjusted", live=live, formal_use=True, require_complete=True
+            "market.daily_unadjusted",
+            live=live,
+            formal_use=True,
+            require_complete=True,
+            market=market,
         )
         records: list[DailyBarObservation] = []
         reasons: list[str] = []
@@ -1104,9 +1238,7 @@ class MarketReferenceService:
                     step_available,
                     step_reasons,
                     step_complete,
-                ) = self._run_daily_route_step(
-                    step, symbol, market, start, end, live=live
-                )
+                ) = self._run_daily_route_step(step, symbol, market, start, end, live=live)
             except (
                 AStockError,
                 BaoStockCaptureError,
@@ -1318,16 +1450,15 @@ class MarketReferenceService:
         official_step = self.config.route("corporate_actions.official_evidence")[0]
         if market is Market.INDEX:
             reasons.append("CORPORATE_ACTION_NOT_APPLICABLE_TO_INDEX")
-        elif self.config.official_coverage(
-            "corporate_actions.official_evidence", market
-        ) != "AVAILABLE":
+        elif (
+            self.config.official_coverage("corporate_actions.official_evidence", market)
+            != "AVAILABLE"
+        ):
             reasons.append("OFFICIAL_EVIDENCE_UNAVAILABLE")
         else:
             try:
                 official_candidates, official_snapshot_ids, official_available = (
-                    self._official_actions_live(
-                        official_step, symbol, market, start, end
-                    )
+                    self._official_actions_live(official_step, symbol, market, start, end)
                     if live
                     else self._official_actions_recorded(symbol, market)
                 )
@@ -1468,9 +1599,7 @@ class MarketReferenceService:
         if any(snapshot is None for snapshot in index_snapshots):
             raise ValueError("official corporate-action enumeration snapshot is unavailable")
         available = max(
-            snapshot.available_to_system_at
-            for snapshot in index_snapshots
-            if snapshot is not None
+            snapshot.available_to_system_at for snapshot in index_snapshots if snapshot is not None
         )
         candidates = [
             item
@@ -1798,9 +1927,7 @@ class MarketReferenceService:
                     ReferenceCoverageStatus.PARTIAL
                     if records
                     else (
-                        ReferenceCoverageStatus.FAILED
-                        if failed
-                        else ReferenceCoverageStatus.EMPTY
+                        ReferenceCoverageStatus.FAILED if failed else ReferenceCoverageStatus.EMPTY
                     )
                 )
             )
@@ -1991,6 +2118,102 @@ def _parse_baostock_instruments(
     return result
 
 
+def _parse_bse_official_master(
+    payload: dict[str, object],
+    snapshot_id: str,
+    available: datetime,
+) -> list[InstrumentRecord]:
+    if payload.get("_astock_source") != "BSE_OFFICIAL_LIST":
+        raise ValueError("BSE official master source provenance mismatch")
+    request = payload.get("_astock_request")
+    if (
+        not isinstance(request, dict)
+        or request.get("purpose") != "INSTRUMENT_MASTER"
+        or request.get("market") != Market.BJSE.value
+    ):
+        raise ValueError("BSE official master request provenance mismatch")
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or any(not isinstance(item, dict) for item in rows):
+        raise ValueError("BSE official master rows are malformed")
+    try:
+        total = int(str(payload["total"]))
+        denominator = int(str(payload["coverage_denominator"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("BSE official master total is malformed") from exc
+    if payload.get("complete") is not True or total != denominator or total != len(rows):
+        raise ValueError("BSE official master completeness proof failed")
+    result: list[InstrumentRecord] = []
+    for item in rows:
+        assert isinstance(item, dict)
+        symbol = str(item.get("code") or "")
+        name = str(item.get("name") or "").strip()
+        if len(symbol) != 6 or not symbol.isdigit() or not name:
+            raise ValueError("BSE official master row identity is malformed")
+        raw_listing = item.get("listing_date")
+        listing_date = date.fromisoformat(str(raw_listing)) if raw_listing else None
+        result.append(
+            InstrumentRecord(
+                created_at=available,
+                instrument_id=f"{Market.BJSE.value}:{symbol}",
+                market=Market.BJSE,
+                symbol=symbol,
+                name=name,
+                instrument_type=InstrumentType.STOCK,
+                tradable=bool(item.get("tradable")),
+                status_date=available.astimezone(_SHANGHAI).date(),
+                is_st=_is_st_name(name),
+                listing_date=listing_date,
+                source_snapshot_id=snapshot_id,
+                available_to_system_at=available,
+            )
+        )
+    if len({item.instrument_id for item in result}) != len(result):
+        raise ValueError("BSE official master contains duplicate instruments")
+    if [item.symbol for item in result] != sorted(item.symbol for item in result):
+        raise ValueError("BSE official master is not sorted by symbol")
+    return result
+
+
+def _parse_bse_official_identity(
+    payload: dict[str, object],
+    snapshot_id: str,
+    available: datetime,
+    requested_symbol: str,
+) -> InstrumentRecord:
+    if payload.get("_astock_source") != "BSE_OFFICIAL_LIST":
+        raise ValueError("BSE official identity source provenance mismatch")
+    request = payload.get("_astock_request")
+    if (
+        not isinstance(request, dict)
+        or request.get("purpose") != "INSTRUMENT_IDENTITY_EXACT"
+        or request.get("market") != Market.BJSE.value
+        or request.get("symbol") != requested_symbol
+    ):
+        raise ValueError("BSE official identity request boundary mismatch")
+    if payload.get("provider_symbol") != f"bj{requested_symbol}":
+        raise ValueError("BSE official identity provider symbol mismatch")
+    symbol = str(payload.get("code") or "")
+    name = str(payload.get("name") or "").strip()
+    if symbol != requested_symbol or not name:
+        raise ValueError("BSE official identity does not match the requested stock")
+    raw_listing = payload.get("listing_date")
+    listing_date = date.fromisoformat(str(raw_listing)) if raw_listing else None
+    return InstrumentRecord(
+        created_at=available,
+        instrument_id=f"{Market.BJSE.value}:{symbol}",
+        market=Market.BJSE,
+        symbol=symbol,
+        name=name,
+        instrument_type=InstrumentType.STOCK,
+        tradable=bool(payload.get("tradable")),
+        status_date=available.astimezone(_SHANGHAI).date(),
+        is_st=_is_st_name(name),
+        listing_date=listing_date,
+        source_snapshot_id=snapshot_id,
+        available_to_system_at=available,
+    )
+
+
 def _parse_sina_master(
     payload: dict[str, object],
     snapshot_id: str,
@@ -2043,6 +2266,7 @@ def _parse_sina_master(
     if len({item.instrument_id for item in result}) != len(result):
         raise ValueError("Sina master contains duplicate instruments")
     return result
+
 
 def _parse_sina_identity(
     payload: dict[str, object],
@@ -2660,10 +2884,7 @@ def _daily_bars_conflict(
     if (
         primary.amount is not None
         and secondary.amount is not None
-        and (
-            primary.amount != secondary.amount
-            or primary.amount_unit is not secondary.amount_unit
-        )
+        and (primary.amount != secondary.amount or primary.amount_unit is not secondary.amount_unit)
     ):
         return True
     return False

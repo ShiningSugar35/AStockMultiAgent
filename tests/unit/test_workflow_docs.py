@@ -14,6 +14,12 @@ EXPECTED_WORKFLOWS = {
     "workflow-candidate-discovery.md",
     "workflow-evidence-recovery.md",
     "workflow-financial-integrity.md",
+    "workflow-macro-policy-regime.md",
+    "workflow-industry-value-chain.md",
+    "workflow-catalyst-event-research.md",
+    "workflow-governance-management-quality.md",
+    "workflow-investment-red-team.md",
+    "workflow-model-risk-backtest-validation.md",
     "workflow-committee-trade-plan.md",
     "workflow-portfolio-construction.md",
     "workflow-holding-monitoring.md",
@@ -73,6 +79,8 @@ def test_current_company_and_evidence_workflows_lock_policy_web_manual_order() -
     assert "authoritative Web" in current
     assert "research-investor-answer-audit" in current
     assert "SourceAccessRouter" in current
+    assert "research-current-continuation-resolve" in current
+    assert "normal investor answers must not expose those backend fields" in current
     assert "active Current Research policy" in evidence
     assert "Authoritative Web fallback" in evidence
     assert "Manual intervention is last" in evidence

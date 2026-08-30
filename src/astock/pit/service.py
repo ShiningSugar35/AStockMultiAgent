@@ -59,7 +59,18 @@ class PointInTimeService:
         pit_id = f"pit:{sha256_bytes(canonical_json_bytes(identity))}"
         existing = self.repository.get_by_source(source_id)
         if existing is not None:
-            if existing.pit_id != pit_id:
+            if existing.pit_id != pit_id and not self._same_content_recapture(
+                existing,
+                source_document_id=source_document_id,
+                source_snapshot_id=source_snapshot_id,
+                period_end=period_end,
+                published_at=published_at,
+                effective_at=effective_at,
+                revised_at=revised_at,
+                supersedes_source_id=supersedes_source_id,
+                point_in_time_status=point_in_time_status,
+                availability_basis=availability_basis,
+            ):
                 raise ValueError(f"PIT source identity collision: {source_id}")
             self._register_artifact(existing)
             return existing
@@ -67,6 +78,41 @@ class PointInTimeService:
         stored = self.repository.register(metadata)
         self._register_artifact(stored)
         return stored
+
+    def _same_content_recapture(
+        self,
+        existing: PointInTimeMetadata,
+        *,
+        source_document_id: str | None,
+        source_snapshot_id: str | None,
+        period_end: date | None,
+        published_at: datetime | None,
+        effective_at: datetime | None,
+        revised_at: datetime | None,
+        supersedes_source_id: str | None,
+        point_in_time_status: PointInTimeStatus,
+        availability_basis: AvailabilityBasis,
+    ) -> bool:
+        if source_snapshot_id is None or existing.source_snapshot_id is None:
+            return False
+        if (
+            existing.source_document_id not in {None, source_document_id}
+            or existing.period_end not in {None, period_end}
+            or existing.published_at not in {None, published_at}
+            or existing.effective_at not in {None, effective_at}
+            or existing.revised_at != revised_at
+            or existing.supersedes_source_id != supersedes_source_id
+            or existing.point_in_time_status is not point_in_time_status
+            or existing.availability_basis is not availability_basis
+        ):
+            return False
+        previous_snapshot = self.state.get_snapshot(existing.source_snapshot_id)
+        current_snapshot = self.state.get_snapshot(source_snapshot_id)
+        return (
+            previous_snapshot is not None
+            and current_snapshot is not None
+            and previous_snapshot.object_sha256 == current_snapshot.object_sha256
+        )
 
     @staticmethod
     def assert_usable(

@@ -1,0 +1,4 @@
+interface:
+  display_name: "行业价值链与可比公司"
+  short_description: "Map industry economics and defensible peer sets"
+  default_prompt: "Use $industry-value-chain to map the value chain, normalize peers, and identify falsifiable company drivers."

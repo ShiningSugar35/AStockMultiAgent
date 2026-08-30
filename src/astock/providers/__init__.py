@@ -1,6 +1,7 @@
 """External market-data provider adapters."""
 
 from astock.providers.baostock import BaoStockReferenceProvider
+from astock.providers.bse_official_reference import BseOfficialReferenceProvider
 from astock.providers.config import get_provider, load_provider_registry
 from astock.providers.eastmoney import EastMoney5mProvider
 from astock.providers.eastmoney_financial import EastMoneyFinancialProvider
@@ -16,6 +17,7 @@ __all__ = [
     "EastMoneyFinancialProvider",
     "EastMoneyReferenceProvider",
     "BaoStockReferenceProvider",
+    "BseOfficialReferenceProvider",
     "ProviderFactory",
     "ProviderProbeService",
     "RawProbeResponse",

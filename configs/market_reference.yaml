@@ -9,10 +9,12 @@ minimum_instrument_records:
   BJSE: 150
 routes:
   instrument.master:
+    - {provider_id: bse-official-reference, operation: bse-official-master, markets: [BJSE]}
     - {provider_id: baostock-reference, operation: baostock-master}
     - {provider_id: eastmoney-reference, operation: eastmoney-master}
     - {provider_id: sina-reference, operation: sina-master}
   instrument.identity:
+    - {provider_id: bse-official-reference, operation: bse-official-exact, markets: [BJSE]}
     - {provider_id: baostock-reference, operation: baostock-identity}
     - {provider_id: eastmoney-reference, operation: eastmoney-exact}
     - {provider_id: sina-reference, operation: sina-exact}

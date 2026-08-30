@@ -136,12 +136,20 @@ class FinancialSourceParquetStore:
             raise ValueError("Cannot persist an empty financial source file")
         payloads = [item.model_dump(mode="json", exclude={"created_at"}) for item in records]
         logical_hash = _logical_hash(payloads)
+        storage_identity = sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "logical_content_hash": logical_hash,
+                    "available_to_system_at": available_at,
+                }
+            )
+        )
         path = (
             self.root
             / dataset
             / f"company={_safe(company_id)}"
             / f"period={period_end.isoformat()}"
-            / f"{logical_hash}.parquet"
+            / f"{storage_identity}.parquet"
         )
         if not path.is_file():
             rows = []

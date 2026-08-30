@@ -52,9 +52,7 @@ ORIGINAL_AS_OF = datetime(2026, 7, 22, 12, tzinfo=UTC)
 CORRECTION_AS_OF = datetime(2026, 7, 23, 12, tzinfo=UTC)
 
 
-def _service(
-    tmp_path: Path, instrument_market: Market = Market.XSHE
-) -> FinancialSourceService:
+def _service(tmp_path: Path, instrument_market: Market = Market.XSHE) -> FinancialSourceService:
     state = StateStore(tmp_path / "状态.sqlite", PROJECT_ROOT / "migrations")
     state.migrate()
     objects = ObjectStore(tmp_path / "对象" / "sha256")
@@ -80,9 +78,7 @@ def _payload_at(
     available_at: datetime,
 ) -> FinancialProviderPayload:
     original = payload.snapshots[0]
-    request_hash = content_hash(
-        {"old": original.snapshot_id, "available_at": available_at}
-    )
+    request_hash = content_hash({"old": original.snapshot_id, "available_at": available_at})
     snapshot = SourceSnapshot(
         created_at=available_at,
         snapshot_id=f"test-financial:{request_hash}",
@@ -142,9 +138,7 @@ def test_live_financial_route_does_not_readd_health_excluded_provider(
 ) -> None:
     service = _service(tmp_path)
     sina_definition = next(
-        item
-        for item in service.provider_registry.providers
-        if item.provider_id == "sina-financial"
+        item for item in service.provider_registry.providers if item.provider_id == "sina-financial"
     )
     monkeypatch.setattr(
         service.provider_factory,
@@ -226,8 +220,9 @@ def test_cninfo_and_secondary_outage_recovers_limited_frozen_exchange_report(
 ) -> None:
     service = _service(tmp_path)
     fixture = json.loads(
-        (PROJECT_ROOT / "tests" / "fixtures" / "financial_sources" / "cninfo_reports_000001.json")
-        .read_text(encoding="utf-8")
+        (
+            PROJECT_ROOT / "tests" / "fixtures" / "financial_sources" / "cninfo_reports_000001.json"
+        ).read_text(encoding="utf-8")
     )
     pdf = base64.b64decode(fixture["reports"][0]["pdf_base64"], validate=True)
     observed = datetime(2026, 8, 27, 8, 0, tzinfo=UTC)
@@ -333,9 +328,7 @@ def test_cninfo_and_secondary_outage_recovers_limited_frozen_exchange_report(
     assert "OFFICIAL_DOCUMENT_RECOVERY_USED" in report.reason_codes
     assert capture.snapshot_id in report.raw_snapshot_ids
     assert capture.admission_snapshot_id in report.raw_snapshot_ids
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     manifest = service._verified_manifest(row)
     assert (
@@ -370,9 +363,7 @@ def test_recorded_financial_source_reaches_existing_audit_contract(tmp_path: Pat
     assert report.status is FinancialSourceReleaseStatus.CERTIFIED
     assert report.coverage.certified_fact_count == 18
     assert report.provider_ids == ["sina-financial"]
-    assert service.status(
-        "000001", PERIOD_END, FinancialPeriodType.ANNUAL
-    )["status"] == "AVAILABLE"
+    assert service.status("000001", PERIOD_END, FinancialPeriodType.ANNUAL)["status"] == "AVAILABLE"
 
     pack = service.run_audit(
         "000001",
@@ -494,9 +485,7 @@ def test_live_default_cutoff_includes_completed_capture(tmp_path: Path, monkeypa
     )
     assert report.status is FinancialSourceReleaseStatus.CERTIFIED
     assert observed_cutoffs[0] >= capture_finished
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     manifest = service._verified_manifest(row)
     assert manifest.available_to_system_at >= capture_finished
@@ -519,9 +508,7 @@ def test_instrument_market_binding_and_official_index_lineage(tmp_path: Path) ->
         FinancialPeriodType.ANNUAL,
         as_of=ORIGINAL_AS_OF,
     )
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None and report.release_id == row["release_id"]
     manifest = service._verified_manifest(row)
     assert manifest.instrument_id == "XSHE:000001"
@@ -533,7 +520,7 @@ def test_instrument_market_binding_and_official_index_lineage(tmp_path: Path) ->
 def test_market_without_official_financial_coverage_is_blocked_by_config(tmp_path: Path) -> None:
     service = _service(tmp_path, Market.BJSE)
     report = service.sync(
-        "920015",
+        "920000",
         Market.BJSE,
         PERIOD_END,
         FinancialPeriodType.ANNUAL,
@@ -751,9 +738,7 @@ def test_pdf_evidence_covers_table_period_unit_subject_and_value(tmp_path: Path)
         FinancialPeriodType.ANNUAL,
         as_of=ORIGINAL_AS_OF,
     )
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     manifest = service._verified_manifest(row)
     facts = service.parquet.read_facts(manifest.certified_files[0])
@@ -812,9 +797,7 @@ def test_pdf_unit_ambiguity_blocks_affected_statement(tmp_path: Path) -> None:
         as_of=ORIGINAL_AS_OF,
     )
     assert "OFFICIAL_VALUE_NOT_FOUND:TOTAL_ASSETS" in report.reason_codes
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     manifest = service._verified_manifest(row)
     facts = service.parquet.read_facts(manifest.certified_files[0])
@@ -846,9 +829,7 @@ def test_pdf_value_in_parent_company_table_is_not_certified(tmp_path: Path) -> N
         as_of=ORIGINAL_AS_OF,
     )
     assert "OFFICIAL_VALUE_NOT_FOUND:TOTAL_ASSETS" in report.reason_codes
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     manifest = service._verified_manifest(row)
     facts = service.parquet.read_facts(manifest.certified_files[0])
@@ -879,9 +860,7 @@ def test_pdf_missing_target_period_blocks_affected_statement(tmp_path: Path) -> 
         as_of=ORIGINAL_AS_OF,
     )
     assert "OFFICIAL_VALUE_NOT_FOUND:TOTAL_ASSETS" in report.reason_codes
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     manifest = service._verified_manifest(row)
     facts = service.parquet.read_facts(manifest.certified_files[0])
@@ -905,9 +884,7 @@ def test_legal_parent_and_foreign_currency_subjects_do_not_reject_consolidated_t
     text = service.objects.get_bytes(page.text_object_sha256).decode("utf-8")
     changed_text = text.replace(
         "所有者权益合计 400",
-        "所有者权益合计 400\n\n"
-        "归属于母公司所有者权益合计 400\n\n"
-        "外币报表折算差额 0",
+        "所有者权益合计 400\n\n归属于母公司所有者权益合计 400\n\n外币报表折算差额 0",
         1,
     )
     _replace_page_text(service, page, changed_text)
@@ -1038,9 +1015,7 @@ def test_observation_identity_includes_request_and_instrument_lineage(
 ) -> None:
     service = _service(tmp_path)
     payload = service.providers["eastmoney-financial"].fetch("000001", Market.XSHE, PERIOD_END)
-    binding = service.instruments.resolve(
-        "000001", Market.XSHE, as_of=ORIGINAL_AS_OF
-    )
+    binding = service.instruments.resolve("000001", Market.XSHE, as_of=ORIGINAL_AS_OF)
     baseline, _ = _parse_provider(
         payload,
         service.mappings,
@@ -1082,12 +1057,8 @@ def test_observation_identity_includes_request_and_instrument_lineage(
         as_of=ORIGINAL_AS_OF,
     )
     baseline_ids = {item.observation_id for item in baseline}
-    assert baseline_ids.isdisjoint(
-        item.observation_id for item in request_observations
-    )
-    assert baseline_ids.isdisjoint(
-        item.observation_id for item in instrument_observations
-    )
+    assert baseline_ids.isdisjoint(item.observation_id for item in request_observations)
+    assert baseline_ids.isdisjoint(item.observation_id for item in instrument_observations)
 
 
 def test_parquet_tamper_is_reported_as_corrupt(tmp_path: Path) -> None:
@@ -1099,9 +1070,7 @@ def test_parquet_tamper_is_reported_as_corrupt(tmp_path: Path) -> None:
         FinancialPeriodType.ANNUAL,
         as_of=ORIGINAL_AS_OF,
     )
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     manifest = service._verified_manifest(row)
     descriptor = manifest.certified_files[0]
@@ -1128,9 +1097,7 @@ def test_pit_corruption_is_not_downgraded_to_needs_info(tmp_path: Path) -> None:
         FinancialPeriodType.ANNUAL,
         as_of=ORIGINAL_AS_OF,
     )
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     manifest = service._verified_manifest(row)
     with service.state.transaction() as connection:
@@ -1157,14 +1124,10 @@ def test_manifest_corruption_is_not_downgraded_to_needs_info(tmp_path: Path) -> 
         FinancialPeriodType.ANNUAL,
         as_of=ORIGINAL_AS_OF,
     )
-    row = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
     service.objects.path_for(str(row["manifest_object_hash"])).write_bytes(b"tampered")
-    assert service.status(
-        "000001", PERIOD_END, FinancialPeriodType.ANNUAL
-    )["status"] == "CORRUPT"
+    assert service.status("000001", PERIOD_END, FinancialPeriodType.ANNUAL)["status"] == "CORRUPT"
     with pytest.raises(StorageError):
         service.run_audit(
             "000001",
@@ -1175,9 +1138,7 @@ def test_manifest_corruption_is_not_downgraded_to_needs_info(tmp_path: Path) -> 
         )
 
 
-def test_publish_crash_leaves_no_head_and_retry_succeeds(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_publish_crash_leaves_no_head_and_retry_succeeds(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     publish = service.repository.publish
 
@@ -1193,9 +1154,10 @@ def test_publish_crash_leaves_no_head_and_retry_succeeds(
             FinancialPeriodType.ANNUAL,
             as_of=ORIGINAL_AS_OF,
         )
-    assert service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    ) is None
+    assert (
+        service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
+        is None
+    )
     monkeypatch.setattr(service.repository, "publish", publish)
     retry = service.sync(
         "000001",

@@ -1,0 +1,4 @@
+interface:
+  display_name: "治理与管理层质量"
+  short_description: "Audit control, incentives, allocation, and disclosure"
+  default_prompt: "Use $governance-management-quality to assess governance facts and their quantified thesis impact without personality inference."

@@ -22,6 +22,10 @@ _FORMAL_ROUTE_COMPLETENESS = {
 class ReferenceRouteStep:
     provider_id: str
     operation: str
+    markets: frozenset[Market] | None = None
+
+    def supports(self, market: Market | None) -> bool:
+        return self.markets is None or (market is not None and market in self.markets)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +77,17 @@ def load_market_reference_config(
                 raise ValueError("Market reference route step must be an object")
             provider_id = str(value["provider_id"])
             operation = str(value["operation"])
+            raw_markets = value.get("markets")
+            markets: frozenset[Market] | None = None
+            if raw_markets is not None:
+                if not isinstance(raw_markets, list) or not raw_markets:
+                    raise ValueError("Market-scoped route markets must be a non-empty list")
+                parsed_markets = frozenset(Market(str(item)) for item in raw_markets)
+                if Market.INDEX in parsed_markets:
+                    raise ValueError("Market-scoped provider routes support equity markets only")
+                if len(parsed_markets) != len(raw_markets):
+                    raise ValueError("Market-scoped provider route contains duplicate markets")
+                markets = parsed_markets
             definition = provider_by_id.get(provider_id)
             if definition is None:
                 raise ValueError(f"Unknown market reference provider: {provider_id}")
@@ -100,8 +115,10 @@ def load_market_reference_config(
                         f"Provider {provider_id} has invalid completeness semantics for "
                         f"{base_capability}"
                     )
-            steps.append(ReferenceRouteStep(provider_id=provider_id, operation=operation))
-        if len({(item.provider_id, item.operation) for item in steps}) != len(steps):
+            steps.append(
+                ReferenceRouteStep(provider_id=provider_id, operation=operation, markets=markets)
+            )
+        if len({(item.provider_id, item.operation, item.markets) for item in steps}) != len(steps):
             raise ValueError(f"Market reference route contains duplicate steps: {capability}")
         routes[str(capability)] = tuple(steps)
     retry = raw.get("retry", {})

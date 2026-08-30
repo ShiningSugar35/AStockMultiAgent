@@ -17,6 +17,10 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.evidence.repository import EvidenceRepository
 from astock.schemas.financial import FinancialCoverageStatus, FinancialIntegrityEvidencePack
+from astock.schemas.research_acquisition import (
+    CurrentResearchAcquisitionReport,
+    CurrentResearchAcquisitionStatus,
+)
 from astock.schemas.research_seeds import ResearchSeedReport
 from astock.schemas.research_team import (
     HardwareBudget,
@@ -48,6 +52,7 @@ class ResearchTeamPolicy:
     background_service_required: bool
     on_demand_only: bool
     required_checks: tuple[str, ...]
+    company_required_checks: tuple[str, ...]
     hardware: dict[ResearchResourceClass, dict[str, int]]
     manual_candidate_fallback_allowed: bool
     broker_execution_allowed: bool
@@ -81,11 +86,16 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
     assert isinstance(gate, dict)
     assert isinstance(safety, dict)
 
-    required_checks = tuple(str(item) for item in gate.get("required_checks", []))
-    if not required_checks or len(required_checks) != len(set(required_checks)):
-        raise ValueError("recommendation gate checks must be non-empty and unique")
-    if "TEAM_DAG_COMPLETE" not in required_checks:
-        required_checks = (*required_checks, "TEAM_DAG_COMPLETE")
+    def validated_checks(key: str) -> tuple[str, ...]:
+        checks = tuple(str(item) for item in gate.get(key, []))
+        if not checks or len(checks) != len(set(checks)):
+            raise ValueError(f"recommendation gate {key} must be non-empty and unique")
+        if "TEAM_DAG_COMPLETE" not in checks:
+            checks = (*checks, "TEAM_DAG_COMPLETE")
+        return checks
+
+    required_checks = validated_checks("required_checks")
+    company_required_checks = validated_checks("company_required_checks")
 
     resource_fields = {
         "provider_workers": "market_fetch_workers_by_resource",
@@ -116,6 +126,7 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
         background_service_required=bool(execution.get("background_service_required")),
         on_demand_only=bool(execution.get("on_demand_only")),
         required_checks=required_checks,
+        company_required_checks=company_required_checks,
         hardware=hardware,
         manual_candidate_fallback_allowed=bool(safety.get("manual_candidate_fallback_allowed")),
         broker_execution_allowed=bool(safety.get("broker_execution_allowed")),
@@ -279,10 +290,7 @@ class ResearchTeamService:
             created_at=timestamp,
         )
         tasks = self._full_market_tasks(timestamp)
-        mapped_checks = {check for task in tasks for check in task.readiness_checks}
-        expected_checks = set(self.policy.required_checks) - {"TEAM_DAG_COMPLETE"}
-        if mapped_checks != expected_checks:
-            raise ValueError("research-team readiness check ownership does not match policy")
+        self._validate_readiness_ownership(tasks, self.policy.required_checks)
         identity = {
             "scope": ResearchTeamScope.FULL_MARKET.value,
             "depth": depth.value,
@@ -295,6 +303,76 @@ class ResearchTeamService:
         plan = ResearchTeamPlan(
             plan_id="research-team:" + content_hash(identity),
             scope=ResearchTeamScope.FULL_MARKET,
+            depth=depth,
+            backend=selected_backend,
+            as_of=timestamp,
+            policy_version=self.policy.policy_version,
+            hardware_budget=budget,
+            tasks=tasks,
+            automatic_resolution_budget_seconds=self.policy.automatic_resolution_budget_seconds,
+            created_at=timestamp,
+        )
+        self._persist_plan(plan)
+        return plan
+
+    def create_company_plan(
+        self,
+        *,
+        company_id: str,
+        acquisition_report_artifact_id: str,
+        as_of: datetime | None = None,
+        backend: ResearchExecutionBackend | None = None,
+        depth: ResearchTeamDepth = ResearchTeamDepth.INSTITUTIONAL,
+        cpu_count: int | None = None,
+        memory_gib: float | None = None,
+    ) -> ResearchTeamPlan:
+        report_record = self.state.artifact_record(acquisition_report_artifact_id)
+        if (
+            report_record is None
+            or str(report_record["type"]) != "CurrentResearchAcquisitionReport"
+            or not self.objects.verify(str(report_record["object_hash"]))
+        ):
+            raise ValueError("company research requires an available acquisition report artifact")
+        report = CurrentResearchAcquisitionReport.model_validate_json(
+            self.objects.get_bytes(str(report_record["object_hash"]))
+        )
+        if report.company_id != company_id:
+            raise ValueError("company research acquisition report belongs to a different company")
+        if report.external_research_needs or report.manual_actions:
+            raise ValueError("company research cannot start before acquisition gaps are resolved")
+        if report.status not in {
+            CurrentResearchAcquisitionStatus.READY,
+            CurrentResearchAcquisitionStatus.DEGRADED,
+        }:
+            raise ValueError("company research acquisition report is not ready for team research")
+
+        timestamp = as_of or datetime.now(UTC)
+        selected_backend = backend or self.policy.default_backend
+        budget = detect_hardware_budget(
+            self.policy,
+            cpu_count=cpu_count,
+            memory_gib=memory_gib,
+            created_at=timestamp,
+        )
+        tasks = self._company_tasks(timestamp)
+        self._validate_readiness_ownership(tasks, self.policy.company_required_checks)
+        identity = {
+            "scope": ResearchTeamScope.COMPANY.value,
+            "company_id": company_id,
+            "acquisition_report_artifact_id": acquisition_report_artifact_id,
+            "acquisition_report_object_hash": str(report_record["object_hash"]),
+            "depth": depth.value,
+            "backend": selected_backend.value,
+            "as_of": timestamp.isoformat(),
+            "policy_version": self.policy.policy_version,
+            "hardware_budget": budget.model_dump(mode="json"),
+            "tasks": [item.model_dump(mode="json") for item in tasks],
+        }
+        plan = ResearchTeamPlan(
+            plan_id="research-team:" + content_hash(identity),
+            scope=ResearchTeamScope.COMPANY,
+            company_id=company_id,
+            acquisition_report_artifact_id=acquisition_report_artifact_id,
             depth=depth,
             backend=selected_backend,
             as_of=timestamp,
@@ -359,9 +437,7 @@ class ResearchTeamService:
             and output.readiness_check_results.get("VALUATION") is True
             and self._derived_readiness_checks(plan).get("FINANCIAL_INTEGRITY") is not True
         ):
-            raise ValueError(
-                "precise VALUATION requires COMPLETE SUCCEEDED financial packs"
-            )
+            raise ValueError("precise VALUATION requires COMPLETE SUCCEEDED financial packs")
 
         evidence_hashes: list[str] = []
         evidence_repository = EvidenceRepository(self.state)
@@ -598,7 +674,7 @@ class ResearchTeamService:
         self, request: RecommendationReadinessRequest
     ) -> RecommendationReadinessReport:
         plan = self.get_plan(request.plan_id)
-        required = sorted(self.policy.required_checks)
+        required = sorted(self._required_checks(plan))
         unknown_checks = set(request.checks) - set(required)
         if unknown_checks:
             raise ValueError("readiness request contains unknown checks")
@@ -672,15 +748,36 @@ class ResearchTeamService:
             )
         return report
 
+    def _required_checks(self, plan: ResearchTeamPlan | None) -> tuple[str, ...]:
+        if plan is not None and plan.scope is ResearchTeamScope.COMPANY:
+            return self.policy.company_required_checks
+        return self.policy.required_checks
+
+    @staticmethod
+    def _validate_readiness_ownership(
+        tasks: list[ResearchTeamTask],
+        required_checks: tuple[str, ...],
+    ) -> None:
+        mapped_checks = {check for task in tasks for check in task.readiness_checks}
+        expected_checks = set(required_checks) - {"TEAM_DAG_COMPLETE"}
+        if mapped_checks != expected_checks:
+            raise ValueError("research-team readiness check ownership does not match policy")
+
     def _persist_plan(self, plan: ResearchTeamPlan) -> None:
         ref = self.objects.put_json(plan.model_dump(mode="json"))
         artifact_id = f"ResearchTeamPlan:{plan.plan_id}"
+        input_hashes: list[str] = []
+        if plan.acquisition_report_artifact_id is not None:
+            report_record = self.state.artifact_record(plan.acquisition_report_artifact_id)
+            if report_record is None or not self.objects.verify(str(report_record["object_hash"])):
+                raise ValueError("research-team plan acquisition lineage is unavailable")
+            input_hashes.append(str(report_record["object_hash"]))
         self.state.register_artifact(
             artifact_id=artifact_id,
             artifact_type="ResearchTeamPlan",
             schema_version=plan.schema_version,
             object_hash=ref.sha256,
-            input_hashes=[],
+            input_hashes=sorted(input_hashes),
         )
         self.state.set_checkpoint(
             scope_type="research-team-plan",
@@ -710,7 +807,7 @@ class ResearchTeamService:
 
     def _derived_readiness_checks(self, plan: ResearchTeamPlan | None) -> dict[str, bool]:
         derived = {
-            check: False for check in self.policy.required_checks if check != "TEAM_DAG_COMPLETE"
+            check: False for check in self._required_checks(plan) if check != "TEAM_DAG_COMPLETE"
         }
         if plan is None:
             return derived
@@ -836,6 +933,171 @@ class ResearchTeamService:
             if checkpoint is not None and checkpoint.get("object_hash"):
                 hashes.add(str(checkpoint["object_hash"]))
         return sorted(hashes)
+
+    @staticmethod
+    def _company_tasks(created_at: datetime) -> list[ResearchTeamTask]:
+        raw = [
+            ("company-intent", ResearchTaskRole.CIO, 0, [], None, "CompanyResearchIntent"),
+            (
+                "macro-regime",
+                ResearchTaskRole.MACRO,
+                1,
+                ["company-intent"],
+                None,
+                "MacroRegimeProfile",
+            ),
+            (
+                "policy-regime",
+                ResearchTaskRole.POLICY,
+                1,
+                ["company-intent"],
+                None,
+                "PolicyRegimeProfile",
+            ),
+            (
+                "industry-value-chain",
+                ResearchTaskRole.INDUSTRY,
+                1,
+                ["company-intent"],
+                None,
+                "IndustryValueChainProfile",
+            ),
+            (
+                "governance-management-quality",
+                ResearchTaskRole.GOVERNANCE,
+                1,
+                ["company-intent"],
+                None,
+                "GovernanceManagementQualityPack",
+            ),
+            (
+                "company-financial-integrity",
+                ResearchTaskRole.FINANCIAL_INTEGRITY,
+                2,
+                ["company-intent"],
+                None,
+                "FinancialIntegrityEvidencePack",
+            ),
+            (
+                "company-fundamental",
+                ResearchTaskRole.FUNDAMENTAL,
+                3,
+                ["company-financial-integrity", "industry-value-chain"],
+                None,
+                "FundamentalModelBundle",
+            ),
+            (
+                "company-catalyst",
+                ResearchTaskRole.CATALYST,
+                3,
+                [
+                    "governance-management-quality",
+                    "industry-value-chain",
+                    "macro-regime",
+                    "policy-regime",
+                ],
+                None,
+                "CatalystRiskPack",
+            ),
+            (
+                "company-market-context",
+                ResearchTaskRole.MARKET_CONTEXT,
+                2,
+                ["company-intent"],
+                None,
+                "MarketContextPack",
+            ),
+            (
+                "valuation",
+                ResearchTaskRole.VALUATION,
+                4,
+                ["company-financial-integrity", "company-fundamental", "company-market-context"],
+                None,
+                "ValuationPack",
+            ),
+            (
+                "bull-case",
+                ResearchTaskRole.BULL,
+                5,
+                ["company-catalyst", "governance-management-quality", "valuation"],
+                None,
+                "IndependentBullCase",
+            ),
+            (
+                "bear-case",
+                ResearchTaskRole.BEAR,
+                5,
+                ["company-catalyst", "governance-management-quality", "valuation"],
+                None,
+                "IndependentBearCase",
+            ),
+            (
+                "investment-red-team",
+                ResearchTaskRole.REVIEWER,
+                6,
+                ["bear-case", "bull-case"],
+                None,
+                "InvestmentRedTeamReport",
+            ),
+            (
+                "model-risk-validation",
+                ResearchTaskRole.MODEL_RISK,
+                6,
+                ["bear-case", "bull-case", "company-financial-integrity", "valuation"],
+                None,
+                "ModelRiskValidationReport",
+            ),
+            (
+                "committee",
+                ResearchTaskRole.COMMITTEE,
+                7,
+                ["investment-red-team", "model-risk-validation"],
+                None,
+                "DecisionPack",
+            ),
+            (
+                "recommendation-gate",
+                ResearchTaskRole.RECOMMENDATION_GATE,
+                8,
+                ["committee"],
+                None,
+                "RecommendationReadinessReport",
+            ),
+        ]
+        readiness_by_task: dict[str, list[str]] = {
+            "macro-regime": ["MACRO_REGIME"],
+            "policy-regime": ["POLICY_REGIME"],
+            "industry-value-chain": ["INDUSTRY_PROFILE"],
+            "governance-management-quality": ["GOVERNANCE_QUALITY"],
+            "company-financial-integrity": ["FINANCIAL_INTEGRITY"],
+            "company-fundamental": [
+                "COMPANY_ECONOMICS",
+                "DRIVER_TREE",
+                "FORECAST_BULL_BASE_BEAR",
+            ],
+            "company-catalyst": ["CATALYST_RISK"],
+            "company-market-context": ["MARKET_PRICE_ANCHOR"],
+            "valuation": ["VALUATION"],
+            "bull-case": ["BULL_CASE"],
+            "bear-case": ["BEAR_CASE"],
+            "investment-red-team": ["INDEPENDENT_REVIEW"],
+            "model-risk-validation": ["MODEL_RISK_VALIDATION"],
+            "committee": ["COMMITTEE"],
+        }
+        return [
+            ResearchTeamTask(
+                task_id=task_id,
+                role=role,
+                stage=stage,
+                dependencies=sorted(dependencies),
+                fanout_key=fanout_key,
+                required_for_recommendation=(role is not ResearchTaskRole.RECOMMENDATION_GATE),
+                output_contract=output_contract,
+                readiness_checks=sorted(readiness_by_task.get(task_id, [])),
+                created_at=created_at,
+            )
+            for task_id, role, stage, dependencies, fanout_key, output_contract in raw
+        ]
 
     @staticmethod
     def _full_market_tasks(created_at: datetime) -> list[ResearchTeamTask]:

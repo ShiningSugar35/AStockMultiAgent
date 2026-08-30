@@ -53,6 +53,7 @@ desktop.ini
 
 # Logs, AI bridge state, and temporary files
 .ai-bridge/
+.devbridge/
 bash.cmd
 tmp/
 *.log

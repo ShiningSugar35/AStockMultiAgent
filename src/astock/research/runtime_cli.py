@@ -24,6 +24,7 @@ from astock.research.adaptation import (
     load_research_planner_policy,
     load_schema_repair_policy,
 )
+from astock.research.continuation_cli import register_current_research_continuation_commands
 from astock.research.institutional import InstitutionalResearchService
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.policy import CapabilityGraph, load_default_current_research_policy
@@ -98,6 +99,7 @@ def register_research_runtime_commands(
     register_portfolio_vnext_commands(app, services, emit)
     register_prospective_governance_commands(app, services, emit)
     register_research_production_commands(app, services, emit)
+    register_current_research_continuation_commands(app, services, emit)
     register_research_team_commands(app, services, emit)
 
     def runtime() -> ResearchRunService:

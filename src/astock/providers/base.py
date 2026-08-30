@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -47,9 +48,21 @@ class HttpProviderBase:
         self.client = client or build_provider_http_client(self.provider_id)
 
     def _get(self, url: str, *, params: dict[str, str | int]) -> tuple[httpx.Response, int]:
+        return self._request("GET", url, params=params)
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, str | int] | None = None,
+        data: Mapping[str, str] | None = None,
+    ) -> tuple[httpx.Response, int]:
+        """Execute one bounded transport request and normalize provider failures once."""
+
         started = time.perf_counter()
         try:
-            response = self.client.get(url, params=params)
+            response = self.client.request(method, url, params=params, data=data)
         except httpx.TimeoutException as exc:
             raise ProviderError(
                 f"{self.provider_id} timed out",

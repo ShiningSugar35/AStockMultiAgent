@@ -17,6 +17,7 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
         "eastmoney-5m",
         "sina-5m",
         "cninfo-disclosures",
+        "bse-official-reference",
         "baostock-reference",
         "eastmoney-reference",
         "sina-reference",

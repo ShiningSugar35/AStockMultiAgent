@@ -1,0 +1,8 @@
+{
+  "schema_version": "bse-reference-smoke-request-v1",
+  "market": "BJSE",
+  "live": true,
+  "purpose": "INSTRUMENT_MASTER",
+  "read_only": true,
+  "broker_execution_allowed": false
+}

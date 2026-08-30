@@ -8,6 +8,7 @@ from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from pathlib import Path
 
+import httpx
 import yaml
 
 from astock.core.errors import AStockError, FailureClass
@@ -30,6 +31,20 @@ class CircuitState(StrEnum):
     CLOSED = "CLOSED"
     OPEN = "OPEN"
     HALF_OPEN = "HALF_OPEN"
+
+
+def scoped_source_capability(capability: str, scope: str | None = None) -> str:
+    """Return a durable breaker key without coupling independent market scopes."""
+
+    normalized_capability = capability.strip()
+    normalized_scope = scope.strip() if scope is not None else ""
+    if not normalized_capability:
+        raise ValueError("source resilience capability must be non-empty")
+    return (
+        normalized_capability
+        if not normalized_scope
+        else f"{normalized_capability}@{normalized_scope}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,21 +74,21 @@ def load_source_resilience_policy(path: Path) -> SourceResiliencePolicy:
     half_open_max_probes = int(breaker.get("half_open_max_probes") or 0)
     retry_after_cap_seconds = int(breaker.get("retry_after_cap_seconds") or 0)
     default_elapsed_budget_seconds = int(raw.get("default_elapsed_budget_seconds") or 0)
-    if min(
-        failure_threshold,
-        cooldown_seconds,
-        half_open_max_probes,
-        retry_after_cap_seconds,
-        default_elapsed_budget_seconds,
-    ) < 1:
+    if (
+        min(
+            failure_threshold,
+            cooldown_seconds,
+            half_open_max_probes,
+            retry_after_cap_seconds,
+            default_elapsed_budget_seconds,
+        )
+        < 1
+    ):
         raise ValueError("Source resilience numeric policy values must be positive")
     if half_open_max_probes != 1:
-        raise ValueError(
-            "source-resilience-v1 supports exactly one half-open probe per capability"
-        )
+        raise ValueError("source-resilience-v1 supports exactly one half-open probe per capability")
     immediate = frozenset(
-        SourceFailureClass(str(item))
-        for item in breaker.get("immediate_open_failure_classes", [])
+        SourceFailureClass(str(item)) for item in breaker.get("immediate_open_failure_classes", [])
     )
     counted = frozenset(
         SourceFailureClass(str(item)) for item in breaker.get("counted_failure_classes", [])
@@ -351,6 +366,19 @@ def classify_http_status(status_code: int) -> SourceFailureClass | None:
 
 
 def classify_source_error(error: BaseException) -> SourceFailureClass:
+    if isinstance(error, httpx.TimeoutException):
+        return SourceFailureClass.TRANSIENT_NETWORK
+    if isinstance(error, httpx.HTTPStatusError):
+        status_code = error.response.status_code
+        if status_code == 429:
+            return SourceFailureClass.RATE_LIMITED
+        if status_code in {401, 403}:
+            return SourceFailureClass.AUTH_CONFIG
+        if status_code >= 500:
+            return SourceFailureClass.REMOTE_5XX
+        return SourceFailureClass.INVALID_PAYLOAD
+    if isinstance(error, httpx.TransportError):
+        return SourceFailureClass.TRANSIENT_NETWORK
     if isinstance(error, AStockError):
         mapping = {
             FailureClass.NETWORK: SourceFailureClass.TRANSIENT_NETWORK,

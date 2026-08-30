@@ -99,8 +99,7 @@ class CurrentResearchSchedule(AStockModel):
             if any(dependency not in stage_by_capability for dependency in step.dependencies):
                 raise ValueError("schedule dependency is absent")
             if any(
-                stage_by_capability[dependency] >= step.stage
-                for dependency in step.dependencies
+                stage_by_capability[dependency] >= step.stage for dependency in step.dependencies
             ):
                 raise ValueError("schedule dependency must be in an earlier stage")
         return self
@@ -134,6 +133,7 @@ class CurrentResearchAcquisitionReport(AStockModel):
     policy_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     schedule_artifact_id: str | None = None
     planner_plan_artifact_id: str | None = None
+    reused_report_artifact_id: str | None = None
     attempts: list[AcquisitionAttempt]
     external_research_needs: list[ExternalResearchNeed] = Field(default_factory=list)
     manual_actions: list[ManualResearchAction] = Field(default_factory=list)

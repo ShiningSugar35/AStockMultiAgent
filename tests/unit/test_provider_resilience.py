@@ -285,6 +285,7 @@ def test_project_transport_and_reference_configs_enable_bounded_resilience() -> 
         Market.BJSE: 150,
     }
     assert [item.operation for item in reference.route("instrument.master")] == [
+        "bse-official-master",
         "baostock-master",
         "eastmoney-master",
         "sina-master",
@@ -401,6 +402,34 @@ def test_provider_health_failure_is_scoped_to_the_checked_capability(tmp_path: P
         live=True,
     )
 
+    drifted_providers = [
+        item.model_copy(update={"priority": item.priority + 1})
+        if item.provider_id == "sina-reference"
+        else item
+        for item in registry.providers
+    ]
+    drifted_registry = registry.model_copy(update={"providers": drifted_providers})
+    drifted_factory = ProviderFactory(
+        drifted_registry,
+        load_transport_profiles(PROJECT_ROOT / "configs" / "transport_profiles.yaml"),
+        objects,
+        state,
+        PROJECT_ROOT / "tests" / "fixtures",
+    )
+    drifted_status = ProviderProbeService(
+        project_root=PROJECT_ROOT,
+        registry=drifted_registry,
+        state=state,
+        objects=objects,
+        live_transport=lambda provider: RawProbeResponse(200, b"{}"),
+    ).status("sina-reference")
+
+    assert (
+        drifted_factory.capability_health_status("sina-reference", "instrument.identity")
+        is ProviderHealthStatus.NOT_PROBED
+    )
+    assert drifted_status.status is ProviderHealthStatus.NOT_PROBED
+
     with state.transaction() as connection:
         connection.execute(
             "UPDATE provider_health SET latest_probe_id=? WHERE provider_id=?",
@@ -410,6 +439,7 @@ def test_provider_health_failure_is_scoped_to_the_checked_capability(tmp_path: P
         factory.capability_health_status("sina-reference", "instrument.identity")
         is ProviderHealthStatus.CORRUPT
     )
+
 
 def test_reference_route_health_blocking_is_capability_scoped(tmp_path: Path) -> None:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
@@ -715,6 +745,86 @@ def test_market_reference_breaker_failure_is_isolated_by_capability(
     )
 
 
+def test_market_reference_breaker_failure_is_isolated_by_market_scope(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+
+    service._source_failure(
+        "sina-reference",
+        "instrument.master",
+        SourceFailureClass.COVERAGE_INCOMPLETE,
+        live=True,
+        breaker_scope=Market.XSHG.value,
+    )
+
+    assert (
+        service._source_attempt_block_reason(
+            "sina-reference",
+            "instrument.master",
+            live=True,
+            breaker_scope=Market.XSHG.value,
+        )
+        == "SINA_REFERENCE_CIRCUIT_OPEN"
+    )
+    assert (
+        service._source_attempt_block_reason(
+            "sina-reference",
+            "instrument.master",
+            live=True,
+            breaker_scope=Market.XSHE.value,
+        )
+        is None
+    )
+
+
+def test_identity_exact_failure_does_not_block_paginated_fallback(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+
+    service._source_failure(
+        "eastmoney-reference",
+        "instrument.identity",
+        SourceFailureClass.COVERAGE_INCOMPLETE,
+        live=True,
+        breaker_scope="eastmoney-exact",
+    )
+
+    assert (
+        service._source_attempt_block_reason(
+            "eastmoney-reference",
+            "instrument.identity",
+            live=True,
+            breaker_scope="eastmoney-exact",
+        )
+        == "EASTMONEY_REFERENCE_CIRCUIT_OPEN"
+    )
+    assert (
+        service._source_attempt_block_reason(
+            "eastmoney-reference",
+            "instrument.identity",
+            live=True,
+            breaker_scope="eastmoney-paginated-master",
+        )
+        is None
+    )
+
+
 def test_market_reference_config_rejects_provider_wide_breaker_drift(
     tmp_path: Path,
 ) -> None:
@@ -858,11 +968,11 @@ def test_official_calendar_proves_secondary_daily_window_only_when_all_sessions_
     )
 
 
-def _instrument(symbol: str) -> InstrumentRecord:
+def _instrument(symbol: str, market: Market = Market.XSHG) -> InstrumentRecord:
     return InstrumentRecord(
         created_at=NOW,
-        instrument_id=f"XSHG:{symbol}",
-        market=Market.XSHG,
+        instrument_id=f"{market.value}:{symbol}",
+        market=market,
         symbol=symbol,
         name=f"测试{symbol}",
         instrument_type=InstrumentType.STOCK,
@@ -917,6 +1027,67 @@ def test_live_master_below_floor_continues_to_sina_fallback(
     assert "BAOSTOCK_REFERENCE_MASTER_BELOW_MINIMUM_COVERAGE" in reasons
     assert "EASTMONEY_MASTER_FAILED" in reasons
     assert "SINA_FALLBACK_USED" in reasons
+
+
+def test_bjse_official_master_kill_falls_back_without_cross_market_leakage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / "objects"),
+        ReferenceParquetStore(tmp_path / "parquet"),
+        PROJECT_ROOT / "tests" / "fixtures" / "reference",
+    )
+    service.config.minimum_instrument_records[Market.BJSE] = 2
+
+    attempted: list[str] = []
+
+    def route(step: ReferenceRouteStep, market: Market | None, *, live: bool):
+        assert market is Market.BJSE
+        assert live
+        attempted.append(step.operation)
+        if step.operation == "bse-official-master":
+            raise httpx.ReadTimeout(
+                "official provider killed",
+                request=httpx.Request("POST", "https://www.bseinfo.net/"),
+            )
+        if step.operation == "baostock-master":
+            return (
+                [
+                    _instrument("430047", Market.BJSE),
+                    _instrument("430090", Market.BJSE),
+                ],
+                ["snap:baostock"],
+                NOW,
+                [],
+                True,
+            )
+        raise AssertionError(f"unexpected fallback step: {step.operation}")
+
+    captured: dict[str, object] = {}
+
+    def release(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(status="COMPLETE")
+
+    monkeypatch.setattr(service, "_run_master_route_step", route)
+    monkeypatch.setattr(service, "_release", release)
+
+    service.sync_instruments(Market.BJSE, live=True)
+
+    assert attempted == ["bse-official-master", "baostock-master"]
+    assert captured["provider_id"] == "baostock-reference"
+    assert captured["complete"] is True
+    records = captured["records"]
+    assert isinstance(records, list)
+    assert {record.market for record in records} == {Market.BJSE}
+    reasons = captured["reasons"]
+    assert isinstance(reasons, list)
+    assert "BSE_OFFICIAL_MASTER_FAILED" in reasons
+    assert "BAOSTOCK_REFERENCE_FALLBACK_USED" in reasons
 
 
 @pytest.mark.parametrize(
@@ -1161,9 +1332,13 @@ def test_live_master_above_floor_but_unproven_continues_to_complete_provider(
         assert market is Market.XSHG
         assert live
         if step.provider_id == "eastmoney-reference":
-            return [_instrument("600000"), _instrument("600001")], ["snap:em"], NOW, [
-                "EASTMONEY_MASTER_COVERAGE_UNPROVEN"
-            ], False
+            return (
+                [_instrument("600000"), _instrument("600001")],
+                ["snap:em"],
+                NOW,
+                ["EASTMONEY_MASTER_COVERAGE_UNPROVEN"],
+                False,
+            )
         return [_instrument("600000"), _instrument("600001")], ["snap:bao"], NOW, [], True
 
     captured: dict[str, object] = {}

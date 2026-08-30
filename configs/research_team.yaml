@@ -1,5 +1,5 @@
 schema_version: research-team-policy-v1
-policy_version: research-team-policy-v1
+policy_version: research-team-policy-v2
 execution:
   default_backend: CHAT_ORCHESTRATED
   background_service_required: false
@@ -63,6 +63,24 @@ recommendation_gate:
     - INDEPENDENT_REVIEW
     - COMMITTEE
     - PORTFOLIO_CONSTRUCTION
+  company_required_checks:
+    - TEAM_DAG_COMPLETE
+    - MACRO_REGIME
+    - POLICY_REGIME
+    - INDUSTRY_PROFILE
+    - COMPANY_ECONOMICS
+    - FINANCIAL_INTEGRITY
+    - DRIVER_TREE
+    - FORECAST_BULL_BASE_BEAR
+    - GOVERNANCE_QUALITY
+    - VALUATION
+    - MARKET_PRICE_ANCHOR
+    - CATALYST_RISK
+    - BULL_CASE
+    - BEAR_CASE
+    - INDEPENDENT_REVIEW
+    - MODEL_RISK_VALIDATION
+    - COMMITTEE
   fail_closed: true
   observation_only_on_failure: true
 industry:

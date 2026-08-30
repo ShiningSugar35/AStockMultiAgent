@@ -129,37 +129,13 @@ class ProviderFactory:
         except (AStockError, OSError, TypeError, ValueError):
             return ProviderHealthStatus.CORRUPT
         provider = get_provider(self.registry, provider_id)
-        expected_checked = checked_capabilities_for_probe(provider)
-        expected_gaps = list(
-            dict.fromkeys(
-                [
-                    *self.registry.capability_gaps,
-                    *[item for item in provider.capabilities if item not in expected_checked],
-                ]
-            )
-        )
         expected_failure_code = report.failure_code.value if report.failure_code else None
         expected_inputs = [report.capability_hash]
         try:
-            invalid_chain = (
+            invalid_stored_chain = (
                 report.probe_id != latest_probe_id
                 or report_artifact_id != f"provider-probe:{report.probe_id}"
                 or report.provider_id != provider_id
-                or report.registry_version != self.registry.registry_version
-                or report.capability_hash != content_hash(provider)
-                or report.checked_capabilities != expected_checked
-                or report.capability_gaps != expected_gaps
-                or (
-                    bool(set(provider.capabilities).difference(expected_checked))
-                    and report.status is ProviderHealthStatus.HEALTHY
-                )
-                or (
-                    report.failure_code is ProviderProbeFailureCode.CAPABILITY_NOT_PROBED
-                    and (
-                        not set(provider.capabilities).difference(expected_checked)
-                        or report.status is not ProviderHealthStatus.DEGRADED
-                    )
-                )
                 or str(row.get("capability_hash") or "") != report.capability_hash
                 or str(row.get("registry_version") or "") != report.registry_version
                 or str(row.get("probe_mode") or "") != report.probe_mode.value
@@ -167,8 +143,7 @@ class ProviderFactory:
                 or str(row.get("last_probe_at") or "") != report.completed_at.isoformat()
                 or row.get("last_error_class") != expected_failure_code
                 or row.get("failure_code") != expected_failure_code
-                or int(row.get("failure_count") or 0)
-                != int(head.get("failure_count") or 0)
+                or int(row.get("failure_count") or 0) != int(head.get("failure_count") or 0)
                 or str(artifact.get("artifact_id") or "") != report_artifact_id
                 or str(artifact.get("type") or "") != "ProviderProbeReport"
                 or str(artifact.get("schema_version") or "") != report.schema_version
@@ -179,22 +154,51 @@ class ProviderFactory:
                 or str(event.get("capability_hash") or "") != report.capability_hash
                 or str(event.get("probe_mode") or "") != report.probe_mode.value
                 or str(event.get("status") or "") != report.status.value
-                or str(event.get("completed_at") or "")
-                != report.completed_at.isoformat()
+                or str(event.get("completed_at") or "") != report.completed_at.isoformat()
                 or event.get("failure_code") != expected_failure_code
                 or int(event.get("failure_count") or 0) != report.failure_count
                 or str(event.get("report_artifact_id") or "") != report_artifact_id
                 or str(event.get("report_object_hash") or "") != report_hash
                 or str(event.get("artifact_type") or "") != "ProviderProbeReport"
-                or str(event.get("artifact_schema_version") or "")
-                != report.schema_version
+                or str(event.get("artifact_schema_version") or "") != report.schema_version
                 or str(event.get("artifact_object_hash") or "") != report_hash
                 or str(event.get("artifact_input_hashes_json") or "")
                 != json.dumps(expected_inputs, separators=(",", ":"))
             )
         except (TypeError, ValueError):
             return ProviderHealthStatus.CORRUPT
-        if invalid_chain:
+        if invalid_stored_chain:
+            return ProviderHealthStatus.CORRUPT
+        if (
+            report.registry_version != self.registry.registry_version
+            or report.capability_hash != content_hash(provider)
+        ):
+            return ProviderHealthStatus.NOT_PROBED
+
+        expected_checked = checked_capabilities_for_probe(provider)
+        expected_gaps = list(
+            dict.fromkeys(
+                [
+                    *self.registry.capability_gaps,
+                    *[item for item in provider.capabilities if item not in expected_checked],
+                ]
+            )
+        )
+        if (
+            report.checked_capabilities != expected_checked
+            or report.capability_gaps != expected_gaps
+            or (
+                bool(set(provider.capabilities).difference(expected_checked))
+                and report.status is ProviderHealthStatus.HEALTHY
+            )
+            or (
+                report.failure_code is ProviderProbeFailureCode.CAPABILITY_NOT_PROBED
+                and (
+                    not set(provider.capabilities).difference(expected_checked)
+                    or report.status is not ProviderHealthStatus.DEGRADED
+                )
+            )
+        ):
             return ProviderHealthStatus.CORRUPT
         if capability not in report.checked_capabilities:
             return ProviderHealthStatus.NOT_PROBED
@@ -312,8 +316,7 @@ class ProviderFactory:
             requested_capabilities=[capability],
             available=available,
             reason=(
-                f"provider catalog {self.registry.registry_version}; "
-                f"completeness={semantics.value}"
+                f"provider catalog {self.registry.registry_version}; completeness={semantics.value}"
             ),
             officiality=definition.officiality.value,
             source_class=definition.source_class,
@@ -447,9 +450,7 @@ class ProviderFactory:
             ) from exc
         return _build_resilient_client(
             profile,
-            elapsed_budget_seconds=float(
-                self.source_breaker.policy.default_elapsed_budget_seconds
-            ),
+            elapsed_budget_seconds=float(self.source_breaker.policy.default_elapsed_budget_seconds),
         )
 
 

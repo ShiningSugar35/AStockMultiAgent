@@ -1,0 +1,4 @@
+interface:
+  display_name: "投资研究独立红队"
+  short_description: "Challenge Bull/Bear assumptions and decision fragility"
+  default_prompt: "Use $investment-red-team to independently challenge the frozen research case and return concrete defects, remediation, and confidence changes."

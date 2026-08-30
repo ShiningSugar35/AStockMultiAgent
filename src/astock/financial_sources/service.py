@@ -6,6 +6,7 @@ import json
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from pydantic import ValidationError
@@ -94,9 +95,7 @@ class FinancialSourceService:
             objects,
             state,
             self.root / "tests" / "fixtures",
-            dialects=load_provider_dialects(
-                self.root / "configs" / "provider_dialects.yaml"
-            ),
+            dialects=load_provider_dialects(self.root / "configs" / "provider_dialects.yaml"),
         )
         self.providers: dict[str, FinancialProviderBase] = {}
         for provider_id in self.config.provider_order:
@@ -105,7 +104,6 @@ class FinancialSourceService:
                 raise ValueError(f"Financial provider adapter type mismatch: {provider_id}")
             self.providers[provider_id] = provider
 
-
         self.official = OfficialFinancialReportService(
             state,
             objects,
@@ -113,11 +111,32 @@ class FinancialSourceService:
             self.provider_factory,
         )
         self.repository = FinancialSourceReleaseRepository(state)
-        self.instruments = FinancialInstrumentResolver(
-            state, objects, parquet.root.parent
-        )
+        self.instruments = FinancialInstrumentResolver(state, objects, parquet.root.parent)
+        self._sync_lock = Lock()
 
     def sync(
+        self,
+        company_id: str,
+        market: Market,
+        period_end: date,
+        period_type: FinancialPeriodType,
+        *,
+        as_of: datetime | None = None,
+        live: bool = False,
+        cross_check: bool = False,
+    ) -> FinancialSourceSyncReport:
+        with self._sync_lock:
+            return self._sync_serialized(
+                company_id,
+                market,
+                period_end,
+                period_type,
+                as_of=as_of,
+                live=live,
+                cross_check=cross_check,
+            )
+
+    def _sync_serialized(
         self,
         company_id: str,
         market: Market,
@@ -209,9 +228,7 @@ class FinancialSourceService:
         if live:
             ranked_definitions = self.provider_factory.definitions_for_capability(
                 "financial.statement_values",
-                source_hint=(
-                    self.config.provider_order[0] if self.config.provider_order else None
-                ),
+                source_hint=(self.config.provider_order[0] if self.config.provider_order else None),
             )
             provider_order = [
                 definition.provider_id
@@ -315,13 +332,9 @@ class FinancialSourceService:
         captured_snapshot_ids = list(
             dict.fromkeys(snapshot.snapshot_id for snapshot in captured_snapshots)
         )
-        raw_snapshot_ids = list(
-            dict.fromkeys(item.source_snapshot_id for item in observations)
-        )
+        raw_snapshot_ids = list(dict.fromkeys(item.source_snapshot_id for item in observations))
         provider_ids = list(dict.fromkeys(item.provider_id for item in observations))
-        observed_statements = list(
-            dict.fromkeys(item.statement_type for item in observations)
-        )
+        observed_statements = list(dict.fromkeys(item.statement_type for item in observations))
         official = self.official.get(
             company_id,
             market,
@@ -425,16 +438,12 @@ class FinancialSourceService:
                     ]
                 )
             )
-            observed_statements = list(
-                dict.fromkeys(item.statement_type for item in observations)
-            )
+            observed_statements = list(dict.fromkeys(item.statement_type for item in observations))
         provider_available = max(item.available_to_system_at for item in observations)
         _, source_hash, source_descriptor = self.parquet.write_observations(
             company_id, period_end, provider_available, observations
         )
-        facts, certification_reasons = certifier.certify(
-            official, observations, self.mappings
-        )
+        facts, certification_reasons = certifier.certify(official, observations, self.mappings)
         reasons.extend(certification_reasons)
         if not facts:
             reasons.append("NO_EXACT_OFFICIAL_FINANCIAL_FACT")
@@ -477,11 +486,7 @@ class FinancialSourceService:
             period_type.value,
             as_of=available,
         )
-        historical = (
-            self._verified_manifest(historical_row)
-            if historical_row is not None
-            else None
-        )
+        historical = self._verified_manifest(historical_row) if historical_row is not None else None
         if historical is not None and _release_matches(
             historical,
             binding,
@@ -500,9 +505,7 @@ class FinancialSourceService:
                 str(historical_row["manifest_object_hash"]),
                 [*coverage.reason_codes, "IDEMPOTENT_EXISTING_RELEASE"],
             )
-        current_row = self.repository.get(
-            company_id, period_end.isoformat(), period_type.value
-        )
+        current_row = self.repository.get(company_id, period_end.isoformat(), period_type.value)
         current = self._verified_manifest(current_row) if current_row is not None else None
         if current is not None and _release_matches(
             current,
@@ -553,9 +556,7 @@ class FinancialSourceService:
             official_index_snapshot_id=official.index_snapshot.snapshot_id,
             official_lineage_kind=official.lineage_kind,
             official_lineage_snapshot_ids=official.lineage_snapshot_ids,
-            official_exhaustive_proof_allowed=(
-                official.exhaustive_proof_allowed
-            ),
+            official_exhaustive_proof_allowed=(official.exhaustive_proof_allowed),
             official_snapshot_id=official.snapshot.snapshot_id,
             official_pit_id=official.pit.pit_id,
             source_files=[source_descriptor],
@@ -675,12 +676,16 @@ class FinancialSourceService:
             industry_profile=industry_profile,
             requested_rule_ids=requested_rule_ids,
         )
-        return FinancialIntegrityService(
-            self.state,
-            self.objects,
-            rule_config_path=self.root / "configs" / "financial_rules.yaml",
-            industry_profile_path=self.root / "configs" / "financial_industry_profiles.yaml",
-        ).run(request).pack
+        return (
+            FinancialIntegrityService(
+                self.state,
+                self.objects,
+                rule_config_path=self.root / "configs" / "financial_rules.yaml",
+                industry_profile_path=self.root / "configs" / "financial_industry_profiles.yaml",
+            )
+            .run(request)
+            .pack
+        )
 
     def audit(self) -> dict[str, object]:
         rows = self.repository.list()
@@ -745,8 +750,7 @@ class FinancialSourceService:
             or binding.manifest_artifact_id != manifest.instrument_manifest_artifact_id
             or binding.manifest_object_hash != manifest.instrument_manifest_object_hash
             or binding.content_hash != manifest.instrument_content_hash
-            or binding.available_to_system_at
-            != manifest.instrument_available_to_system_at
+            or binding.available_to_system_at != manifest.instrument_available_to_system_at
         ):
             raise ValueError("Financial release instrument chain is invalid")
         for descriptor in manifest.source_files:
@@ -859,7 +863,6 @@ class FinancialSourceService:
         )
 
 
-
 def _official_recovery_observations(
     company_id: str,
     period_end: date,
@@ -936,6 +939,7 @@ def _official_recovery_observations(
             )
         )
     return observations
+
 
 def _parse_provider(
     payload: FinancialProviderPayload,
@@ -1017,9 +1021,7 @@ def _parse_provider(
                 "instrument_manifest_object_hash": binding.manifest_object_hash,
                 "instrument_content_hash": binding.content_hash,
                 "period_start": (
-                    None
-                    if statement is FinancialStatementType.BALANCE_SHEET
-                    else period_start
+                    None if statement is FinancialStatementType.BALANCE_SHEET else period_start
                 ),
                 "period_end": period_end,
                 "period_type": period_type,
@@ -1044,9 +1046,7 @@ def _parse_provider(
                     instrument_manifest_object_hash=binding.manifest_object_hash,
                     instrument_content_hash=binding.content_hash,
                     period_start=(
-                        None
-                        if statement is FinancialStatementType.BALANCE_SHEET
-                        else period_start
+                        None if statement is FinancialStatementType.BALANCE_SHEET else period_start
                     ),
                     period_end=period_end,
                     period_type=period_type,
@@ -1072,9 +1072,7 @@ def _critical_missing(observations: list[FinancialSourceObservation]) -> bool:
         FinancialStatementType.INCOME_STATEMENT,
         FinancialStatementType.CASH_FLOW_STATEMENT,
     }
-    observed = {
-        item.statement_type for item in observations if item.reported_value is not None
-    }
+    observed = {item.statement_type for item in observations if item.reported_value is not None}
     return observed != required
 
 
@@ -1228,9 +1226,7 @@ def _verify_official_lineage(
         raise ValueError("CNINFO exhaustive lineage does not cover total_count")
 
 
-def _verify_release_row(
-    row: dict[str, Any], manifest: FinancialSourceReleaseManifest
-) -> None:
+def _verify_release_row(row: dict[str, Any], manifest: FinancialSourceReleaseManifest) -> None:
     expected = {
         "release_id": manifest.release_id,
         "company_id": manifest.company_id,
@@ -1313,8 +1309,7 @@ def _release_matches(
         and manifest.instrument_manifest_artifact_id == binding.manifest_artifact_id
         and manifest.instrument_manifest_object_hash == binding.manifest_object_hash
         and manifest.instrument_content_hash == binding.content_hash
-        and manifest.instrument_available_to_system_at
-        == binding.available_to_system_at
+        and manifest.instrument_available_to_system_at == binding.available_to_system_at
         and manifest.provider_ids == provider_ids
         and manifest.raw_snapshot_ids == raw_snapshot_ids
         and manifest.official_index_snapshot_id == official.index_snapshot.snapshot_id

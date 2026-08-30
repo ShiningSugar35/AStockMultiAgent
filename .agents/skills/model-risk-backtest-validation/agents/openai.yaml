@@ -1,0 +1,4 @@
+interface:
+  display_name: "模型风险与回测验证"
+  short_description: "Validate leakage, robustness, calibration, and execution realism"
+  default_prompt: "Use $model-risk-backtest-validation to independently validate the models and backtests supporting this research decision."

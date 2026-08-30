@@ -46,10 +46,8 @@ def test_market_reference_route_order_is_configuration_not_source_code(tmp_path:
 
     config = load_market_reference_config(path, registry)
 
-    assert [item.provider_id for item in config.route("instrument.identity")][:3] == [
-        "baostock-reference",
-        "sina-reference",
-        "eastmoney-reference",
+    assert [item.provider_id for item in config.route("instrument.identity")] == [
+        item["provider_id"] for item in identity
     ]
 
 
@@ -84,13 +82,9 @@ def test_financial_field_mapping_accepts_third_provider_without_loader_branch(
     tmp_path: Path,
 ) -> None:
     payload = yaml.safe_load(
-        (PROJECT_ROOT / "configs" / "financial_field_mappings.yaml").read_text(
-            encoding="utf-8"
-        )
+        (PROJECT_ROOT / "configs" / "financial_field_mappings.yaml").read_text(encoding="utf-8")
     )
-    payload["fields"]["TOTAL_ASSETS"]["provider_fields"]["third-financial"] = (
-        "assets_total_v3"
-    )
+    payload["fields"]["TOTAL_ASSETS"]["provider_fields"]["third-financial"] = "assets_total_v3"
     path = tmp_path / "financial-mappings-v2.yaml"
     path.write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
 

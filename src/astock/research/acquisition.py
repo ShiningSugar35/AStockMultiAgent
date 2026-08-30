@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime, time, timedelta
+from threading import Lock
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents.repository import DocumentRepository
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
+from astock.pit.repository import PointInTimeRepository
 from astock.research.policy import (
     CapabilityGraph,
     load_default_current_research_policy,
@@ -21,7 +25,9 @@ from astock.research.policy import (
 from astock.schemas import (
     FinancialPeriodType,
     FinancialSourceReleaseStatus,
+    OfficialWebDocumentCapture,
     ReferenceCoverageStatus,
+    SourceClass,
 )
 from astock.schemas.adaptation import ValidatedResearchPlan
 from astock.schemas.documents import DisclosureExchange
@@ -32,6 +38,7 @@ from astock.schemas.research_acquisition import (
     AcquisitionCapability,
     CurrentResearchAcquisitionReport,
     CurrentResearchAcquisitionStatus,
+    CurrentResearchSchedule,
     ExternalResearchNeed,
 )
 from astock.settings import ProjectPaths
@@ -57,6 +64,9 @@ class CurrentResearchAcquisitionService:
         self.policy = load_default_current_research_policy(paths.root)
         self.provider_registry = load_default_provider_registry(paths.root)
         self.capability_graph = CapabilityGraph(self.policy, self.provider_registry, state)
+        self._service_lock = Lock()
+        self._market_service_instance: MarketReferenceService | None = None
+        self._financial_service_instance: FinancialSourceService | None = None
 
     def acquire(
         self,
@@ -65,6 +75,8 @@ class CurrentResearchAcquisitionService:
         *,
         lookback_days: int | None = None,
         planner_plan_artifact_id: str | None = None,
+        reuse_report_artifact_id: str | None = None,
+        trusted_identity_capture_ids: tuple[str, ...] = (),
     ) -> CurrentResearchAcquisitionReport:
         if market not in {Market.XSHG, Market.XSHE, Market.BJSE}:
             raise ValueError("current company research requires a stock exchange")
@@ -88,9 +100,7 @@ class CurrentResearchAcquisitionService:
             lookback_days=resolved_lookback,
             planned_at=started_at,
             capability_filter=(
-                set(planner_plan.acquisition_capabilities)
-                if planner_plan is not None
-                else None
+                set(planner_plan.acquisition_capabilities) if planner_plan is not None else None
             ),
             planner_plan_artifact_id=planner_plan_artifact_id,
         )
@@ -107,20 +117,37 @@ class CurrentResearchAcquisitionService:
         )
         current_date, daily_market_end = _shanghai_acquisition_dates(started_at)
         start = current_date - timedelta(days=resolved_lookback)
-
-        financial_specs, period_discovery_reasons = self._discover_financial_periods(
-            company_id, market, current_date
+        reused_attempts, reused_report_hash = self._reusable_attempts(
+            reuse_report_artifact_id,
+            company_id=company_id,
+            market=market,
+            resolved_lookback=resolved_lookback,
+            planner_plan_artifact_id=planner_plan_artifact_id,
+            current_schedule=schedule,
+            started_at=started_at,
         )
+        reused_report_id = reuse_report_artifact_id if reused_attempts else None
+
+        financial_capabilities = {
+            AcquisitionCapability.FINANCIAL_ANNUAL,
+            AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+        }
+        if financial_capabilities.difference(reused_attempts):
+            financial_specs, period_discovery_reasons = self._discover_financial_periods(
+                company_id, market, current_date
+            )
+        else:
+            financial_specs, period_discovery_reasons = [], []
         financial_by_capability = {
             capability: (period_end, period_type)
             for capability, period_end, period_type in financial_specs
         }
-        attempts: list[AcquisitionAttempt] = []
-        attempt_by_capability: dict[AcquisitionCapability, AcquisitionAttempt] = {}
+        attempts = list(reused_attempts.values())
+        attempt_by_capability = dict(reused_attempts)
         for stage in sorted({step.stage for step in schedule.steps}):
             tasks: dict[AcquisitionCapability, Callable[[], AcquisitionAttempt]] = {}
             for step in schedule.steps:
-                if step.stage != stage:
+                if step.stage != stage or step.capability in attempt_by_capability:
                     continue
                 identity_attempt = attempt_by_capability.get(
                     AcquisitionCapability.INSTRUMENT_IDENTITY
@@ -138,6 +165,7 @@ class CurrentResearchAcquisitionService:
                     daily_market_end,
                     financial_by_capability,
                     identity_verified=identity_verified,
+                    trusted_identity_capture_ids=trusted_identity_capture_ids,
                 )
             stage_results = self._run_parallel(tasks, max_workers=schedule.max_workers)
             if period_discovery_reasons:
@@ -181,6 +209,7 @@ class CurrentResearchAcquisitionService:
             "policy_hash": schedule.policy_hash,
             "schedule_artifact_id": schedule.schedule_id,
             "planner_plan_artifact_id": planner_plan_artifact_id,
+            "reused_report_artifact_id": reused_report_id,
             "attempts": [item.model_dump(mode="json", exclude={"created_at"}) for item in attempts],
             "external_needs": [
                 item.model_dump(mode="json", exclude={"created_at"}) for item in external_needs
@@ -199,6 +228,7 @@ class CurrentResearchAcquisitionService:
             policy_hash=schedule.policy_hash,
             schedule_artifact_id=schedule.schedule_id,
             planner_plan_artifact_id=planner_plan_artifact_id,
+            reused_report_artifact_id=reused_report_id,
             automatic_resolution_budget_seconds=schedule.automatic_resolution_budget_seconds,
             attempts=attempts,
             external_research_needs=external_needs,
@@ -206,7 +236,12 @@ class CurrentResearchAcquisitionService:
             created_at=decision_as_of,
         )
         ref = self.objects.put_json(report.model_dump(mode="json"))
-        input_hashes = [schedule_ref.sha256, *self._snapshot_object_hashes(attempts)]
+        input_hashes = [
+            schedule_ref.sha256,
+            *([reused_report_hash] if reused_report_hash is not None else []),
+            *self._snapshot_object_hashes(attempts),
+        ]
+        input_hashes = list(dict.fromkeys(input_hashes))
         self.state.register_artifact(
             artifact_id=report_id,
             artifact_type="CurrentResearchAcquisitionReport",
@@ -222,6 +257,8 @@ class CurrentResearchAcquisitionService:
                 "decision_as_of": decision_as_of.isoformat(),
                 "status": status.value,
                 "external_research_need_count": len(external_needs),
+                "reused_report_artifact_id": reused_report_id,
+                "reused_capability_count": len(reused_attempts),
             },
             status="SUCCEEDED" if not external_needs else "NEEDS_EXTERNAL_RESEARCH",
             object_hash=ref.sha256,
@@ -238,6 +275,139 @@ class CurrentResearchAcquisitionService:
         return CurrentResearchAcquisitionReport.model_validate_json(
             self.objects.get_bytes(object_hash)
         )
+
+    def _reusable_attempts(
+        self,
+        report_artifact_id: str | None,
+        *,
+        company_id: str,
+        market: Market,
+        resolved_lookback: int,
+        planner_plan_artifact_id: str | None,
+        current_schedule: CurrentResearchSchedule,
+        started_at: datetime,
+    ) -> tuple[dict[AcquisitionCapability, AcquisitionAttempt], str | None]:
+        """Reuse only fresh, verified successful capabilities from this request chain."""
+
+        if report_artifact_id is None:
+            return {}, None
+        record = self.state.artifact_record(report_artifact_id)
+        if record is None or str(record["type"]) != "CurrentResearchAcquisitionReport":
+            return {}, None
+        report_hash = str(record["object_hash"])
+        if not self.objects.verify(report_hash):
+            return {}, None
+        try:
+            previous = CurrentResearchAcquisitionReport.model_validate_json(
+                self.objects.get_bytes(report_hash)
+            )
+        except ValueError:
+            return {}, None
+        if (
+            previous.report_id != report_artifact_id
+            or previous.company_id != company_id
+            or previous.market is not market
+            or previous.policy_hash != current_schedule.policy_hash
+            or previous.planner_plan_artifact_id != planner_plan_artifact_id
+            or previous.decision_as_of > started_at
+        ):
+            return {}, None
+        age_seconds = (started_at - previous.decision_as_of).total_seconds()
+        if age_seconds < 0 or age_seconds > current_schedule.automatic_resolution_budget_seconds:
+            return {}, None
+        if _shanghai_acquisition_dates(previous.started_at) != _shanghai_acquisition_dates(
+            started_at
+        ):
+            return {}, None
+
+        previous_schedule = self._load_schedule(previous.schedule_artifact_id)
+        if previous_schedule is None:
+            return {}, None
+        if (
+            previous_schedule.company_id != company_id
+            or previous_schedule.market is not market
+            or previous_schedule.lookback_days != resolved_lookback
+            or previous_schedule.policy_hash != current_schedule.policy_hash
+            or previous_schedule.planner_plan_artifact_id != planner_plan_artifact_id
+            or self._schedule_contract(previous_schedule)
+            != self._schedule_contract(current_schedule)
+        ):
+            return {}, None
+
+        previous_attempts = {item.capability: item for item in previous.attempts}
+        reusable: dict[AcquisitionCapability, AcquisitionAttempt] = {}
+        for step in sorted(
+            current_schedule.steps,
+            key=lambda item: (item.stage, item.capability.value),
+        ):
+            attempt = previous_attempts.get(step.capability)
+            if (
+                attempt is None
+                or attempt.status is not AcquisitionAttemptStatus.SUCCEEDED
+                or any(dependency not in reusable for dependency in step.dependencies)
+                or not self._attempt_snapshots_reusable(attempt, started_at)
+            ):
+                continue
+            reusable[step.capability] = attempt.model_copy(
+                update={
+                    "latency_ms": 0,
+                    "internal_reason_codes": sorted(
+                        set(attempt.internal_reason_codes) | {"SAME_REQUEST_VERIFIED_REUSE"}
+                    ),
+                    "created_at": started_at,
+                }
+            )
+        if not reusable:
+            return {}, None
+        return reusable, report_hash
+
+    def _load_schedule(self, artifact_id: str | None) -> CurrentResearchSchedule | None:
+        if artifact_id is None:
+            return None
+        record = self.state.artifact_record(artifact_id)
+        if record is None or str(record["type"]) != "CurrentResearchSchedule":
+            return None
+        object_hash = str(record["object_hash"])
+        if not self.objects.verify(object_hash):
+            return None
+        try:
+            schedule = CurrentResearchSchedule.model_validate_json(
+                self.objects.get_bytes(object_hash)
+            )
+        except ValueError:
+            return None
+        return schedule if schedule.schedule_id == artifact_id else None
+
+    @staticmethod
+    def _schedule_contract(
+        schedule: CurrentResearchSchedule,
+    ) -> tuple[tuple[object, ...], ...]:
+        return tuple(
+            (
+                step.capability,
+                step.stage,
+                step.core,
+                tuple(step.dependencies),
+            )
+            for step in schedule.steps
+        )
+
+    def _attempt_snapshots_reusable(
+        self,
+        attempt: AcquisitionAttempt,
+        started_at: datetime,
+    ) -> bool:
+        if not attempt.source_snapshot_ids:
+            return False
+        for snapshot_id in attempt.source_snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if (
+                snapshot is None
+                or snapshot.available_to_system_at > started_at
+                or not self.objects.verify(snapshot.object_sha256)
+            ):
+                return False
+        return True
 
     def _load_planner_plan(
         self,
@@ -257,20 +427,36 @@ class CurrentResearchAcquisitionService:
         return plan, object_hash
 
     def _market_service(self) -> MarketReferenceService:
-        return MarketReferenceService(
-            self.state,
-            self.objects,
-            ReferenceParquetStore(self.paths.parquet),
-            self.paths.root / "tests" / "fixtures" / "reference",
-        )
+        service = self._market_service_instance
+        if service is not None:
+            return service
+        with self._service_lock:
+            service = self._market_service_instance
+            if service is None:
+                service = MarketReferenceService(
+                    self.state,
+                    self.objects,
+                    ReferenceParquetStore(self.paths.parquet),
+                    self.paths.root / "tests" / "fixtures" / "reference",
+                )
+                self._market_service_instance = service
+        return service
 
     def _financial_service(self) -> FinancialSourceService:
-        return FinancialSourceService(
-            self.state,
-            self.objects,
-            FinancialSourceParquetStore(self.paths.parquet / "financial_sources"),
-            self.paths.root,
-        )
+        service = self._financial_service_instance
+        if service is not None:
+            return service
+        with self._service_lock:
+            service = self._financial_service_instance
+            if service is None:
+                service = FinancialSourceService(
+                    self.state,
+                    self.objects,
+                    FinancialSourceParquetStore(self.paths.parquet / "financial_sources"),
+                    self.paths.root,
+                )
+                self._financial_service_instance = service
+        return service
 
     def _discover_financial_periods(
         self,
@@ -294,9 +480,7 @@ class CurrentResearchAcquisitionService:
                 provider = candidate if hasattr(candidate, "discover_report_periods") else None
             discover = getattr(provider, "discover_report_periods", None)
             if not callable(discover):
-                reasons.append(
-                    f"REPORT_PERIOD_INDEX_UNAVAILABLE:{definition.provider_id}"
-                )
+                reasons.append(f"REPORT_PERIOD_INDEX_UNAVAILABLE:{definition.provider_id}")
                 continue
             try:
                 discovery_result = discover(company_id, market, live=True)
@@ -316,9 +500,7 @@ class CurrentResearchAcquisitionService:
             eligible = sorted({item for item in dates if item <= current}, reverse=True)
             annual_candidates = [item for item in eligible if item.month == 12]
             if not annual_candidates:
-                reasons.append(
-                    f"REPORT_PERIOD_INDEX_NO_ANNUAL:{definition.provider_id}"
-                )
+                reasons.append(f"REPORT_PERIOD_INDEX_NO_ANNUAL:{definition.provider_id}")
                 continue
             annual_date = annual_candidates[0]
             annual = (
@@ -327,9 +509,7 @@ class CurrentResearchAcquisitionService:
                 FinancialPeriodType.ANNUAL,
             )
             interim_candidates = [
-                item
-                for item in eligible
-                if item > annual_date and item.month in {3, 6, 9}
+                item for item in eligible if item > annual_date and item.month in {3, 6, 9}
             ]
             if not interim_candidates:
                 return [annual, fallback[1]], [
@@ -362,18 +542,16 @@ class CurrentResearchAcquisitionService:
         start: date,
         current_date: date,
         daily_market_end: date,
-        financial_by_capability: dict[
-            AcquisitionCapability, tuple[date, FinancialPeriodType]
-        ],
+        financial_by_capability: dict[AcquisitionCapability, tuple[date, FinancialPeriodType]],
         *,
         identity_verified: bool,
+        trusted_identity_capture_ids: tuple[str, ...],
     ) -> Callable[[], AcquisitionAttempt]:
         if capability is AcquisitionCapability.INSTRUMENT_IDENTITY:
-            return lambda: self._reference_attempt(
-                capability,
-                lambda: self._market_service().sync_instrument_identity(
-                    company_id, market, live=True
-                ),
+            return lambda: self._identity_attempt(
+                company_id,
+                market,
+                trusted_identity_capture_ids=trusted_identity_capture_ids,
             )
         if capability is AcquisitionCapability.DAILY_MARKET:
             return lambda: self._reference_attempt(
@@ -436,6 +614,154 @@ class CurrentResearchAcquisitionService:
                         source_snapshot_ids=[],
                     )
         return [results[key] for key in sorted(results, key=lambda item: item.value)]
+
+    def _identity_attempt(
+        self,
+        company_id: str,
+        market: Market,
+        *,
+        trusted_identity_capture_ids: tuple[str, ...],
+    ) -> AcquisitionAttempt:
+        structured = self._reference_attempt(
+            AcquisitionCapability.INSTRUMENT_IDENTITY,
+            lambda: self._market_service().sync_instrument_identity(
+                company_id,
+                market,
+                live=True,
+            ),
+        )
+        if structured.status is AcquisitionAttemptStatus.SUCCEEDED:
+            return structured
+
+        trusted = self._trusted_exchange_identity_capture(
+            company_id,
+            market,
+            trusted_identity_capture_ids,
+        )
+        if trusted is None:
+            return structured
+        capture, source_snapshot_ids = trusted
+        return AcquisitionAttempt(
+            capability=AcquisitionCapability.INSTRUMENT_IDENTITY,
+            status=AcquisitionAttemptStatus.SUCCEEDED,
+            provider_path=list(dict.fromkeys([*structured.provider_path, capture.source_id])),
+            fallback_used=True,
+            record_count=1,
+            latency_ms=structured.latency_ms,
+            internal_reason_codes=sorted(
+                {
+                    *structured.internal_reason_codes,
+                    "OFFICIAL_EXCHANGE_DOCUMENT_IDENTITY_FALLBACK",
+                }
+            ),
+            source_snapshot_ids=list(
+                dict.fromkeys([*structured.source_snapshot_ids, *source_snapshot_ids])
+            ),
+        )
+
+    def _trusted_exchange_identity_capture(
+        self,
+        company_id: str,
+        market: Market,
+        capture_ids: tuple[str, ...],
+    ) -> tuple[OfficialWebDocumentCapture, tuple[str, ...]] | None:
+        expected_source = {
+            Market.XSHG: "sse-official-web",
+            Market.XSHE: "szse-official-web",
+            Market.BJSE: "bse-official-web",
+        }[market]
+        documents = DocumentRepository(self.state)
+        pits = PointInTimeRepository(self.state)
+        now = self.clock()
+        freshness_floor = now - timedelta(days=180)
+        for capture_id in capture_ids:
+            artifact_id = (
+                capture_id
+                if capture_id.startswith("OfficialWebDocumentCapture:")
+                else f"OfficialWebDocumentCapture:{capture_id}"
+            )
+            artifact = self.state.artifact_record(artifact_id)
+            if (
+                artifact is None
+                or str(artifact.get("type") or "") != "OfficialWebDocumentCapture"
+                or not self.objects.verify(str(artifact.get("object_hash") or ""))
+            ):
+                continue
+            try:
+                capture = OfficialWebDocumentCapture.model_validate_json(
+                    self.objects.get_bytes(str(artifact["object_hash"]))
+                )
+            except ValueError:
+                continue
+            if (
+                capture.source_id != expected_source
+                or capture.source_class is not SourceClass.PRIMARY_OFFICIAL_WEB
+                or capture.requested_capability
+                not in {"disclosure.document", "financial.official_document"}
+            ):
+                continue
+            document = documents.get_model(capture.document_id)
+            snapshot = self.state.get_snapshot(capture.snapshot_id)
+            admission = self.state.get_snapshot(capture.admission_snapshot_id)
+            pit = pits.get(capture.pit_id)
+            if (
+                document is None
+                or company_id not in document.company_ids
+                or document.publisher != expected_source
+                or document.published_at < freshness_floor
+                or document.published_at > now
+                or document.source_url != str(capture.source_url)
+                or capture.observed_at > now
+                or snapshot is None
+                or admission is None
+                or pit is None
+                or snapshot.source_id != expected_source
+                or admission.source_id != f"{expected_source}:admission"
+                or snapshot.source_url != document.source_url
+                or admission.source_url != document.source_url
+                or snapshot.available_to_system_at > now
+                or admission.available_to_system_at > now
+                or snapshot.object_sha256 != capture.object_sha256
+                or pit.source_document_id != document.document_id
+                or pit.source_snapshot_id != snapshot.snapshot_id
+                or pit.available_to_system_at != snapshot.available_to_system_at
+                or artifact.get("input_hashes") != [snapshot.object_sha256, admission.object_sha256]
+                or not self.objects.verify(snapshot.object_sha256)
+                or not self.objects.verify(admission.object_sha256)
+            ):
+                continue
+            try:
+                admission_payload = json.loads(self.objects.get_bytes(admission.object_sha256))
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+                continue
+            proposal = (
+                admission_payload.get("proposal") if isinstance(admission_payload, dict) else None
+            )
+            decision = (
+                admission_payload.get("decision") if isinstance(admission_payload, dict) else None
+            )
+            if (
+                not isinstance(proposal, dict)
+                or not isinstance(decision, dict)
+                or admission_payload.get("schema_version") != "official-web-admission-v1"
+                or admission_payload.get("document_id") != document.document_id
+                or admission_payload.get("document_snapshot_id") != snapshot.snapshot_id
+                or admission_payload.get("document_object_sha256") != snapshot.object_sha256
+                or admission_payload.get("exhaustive_proof_allowed") is not False
+                or proposal.get("requested_capability") != capture.requested_capability
+                or proposal.get("candidate_url") != document.source_url
+                or proposal.get("formal_use") is not True
+                or proposal.get("require_complete") is not False
+                or decision.get("requested_capability") != capture.requested_capability
+                or decision.get("allowed") is not True
+                or decision.get("source_id") != expected_source
+                or decision.get("formal_eligible") is not True
+                or decision.get("exhaustive_proof_allowed") is not False
+                or decision.get("admission_status") != "ADMIT_AFTER_SNAPSHOT"
+            ):
+                continue
+            return capture, (capture.snapshot_id, capture.admission_snapshot_id)
+        return None
 
     def _reference_attempt(
         self,
@@ -547,8 +873,7 @@ class CurrentResearchAcquisitionService:
         started = perf_counter()
         financial = self._financial_service()
         providers = [
-            financial.providers[provider_id]
-            for provider_id in financial.config.provider_order
+            financial.providers[provider_id] for provider_id in financial.config.provider_order
         ]
         provider_path: list[str] = []
         snapshot_ids: list[str] = []
@@ -618,9 +943,7 @@ class CurrentResearchAcquisitionService:
             self.policy.capabilities.values(), key=lambda item: item.capability.value
         ):
             attempt = by_capability.get(capability_policy.capability)
-            status = (
-                attempt.status if attempt is not None else AcquisitionAttemptStatus.FAILED
-            )
+            status = attempt.status if attempt is not None else AcquisitionAttemptStatus.FAILED
             if status not in capability_policy.external_on:
                 continue
             needs.append(
@@ -642,9 +965,7 @@ def _shanghai_acquisition_dates(started_at: datetime) -> tuple[date, date]:
     local_started_at = started_at.astimezone(_SHANGHAI)
     current_date = local_started_at.date()
     daily_market_end = (
-        current_date
-        if local_started_at.time() >= time(15, 0)
-        else current_date - timedelta(days=1)
+        current_date if local_started_at.time() >= time(15, 0) else current_date - timedelta(days=1)
     )
     return current_date, daily_market_end
 

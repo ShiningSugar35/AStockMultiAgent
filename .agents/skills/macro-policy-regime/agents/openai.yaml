@@ -1,0 +1,4 @@
+interface:
+  display_name: "宏观与政策传导"
+  short_description: "Build PIT-safe macro and policy transmission profiles"
+  default_prompt: "Use $macro-policy-regime to map the current macro/policy regime into decision-relevant company or industry drivers."

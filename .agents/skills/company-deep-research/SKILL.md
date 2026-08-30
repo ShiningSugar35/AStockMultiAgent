@@ -37,3 +37,36 @@ Keep the investor answer compact: **结论（1–2句）→ 2–4个决定性理
 - Do not treat a submitted but unfilled paper order as a holding.
 - Do not bypass paper-account mechanics merely because the user overrode the research opinion.
 - Do not submit a real brokerage order.
+
+## Same-request automatic continuation contract
+
+For a current-company investment question, an acquisition gap is an internal workflow state,
+not a user-facing answer. The Agent must keep the original request active and drive the
+continuation until it reaches one of the explicit terminal states below.
+
+1. Start or recover the durable `CurrentResearchContinuation` for the investor request with `uv run astock research-current-continuation-start REQUEST.json` / `uv run astock research-current-continuation-status <continuation_id>`; the underlying direct acquisition entry remains `uv run astock research-acquire-current <company_id> --market <market>` for diagnostics and compatibility.
+2. While the status is `AUTO_RESOLUTION_REQUIRED`, inspect unresolved external tasks and use
+   approved Web/Search or authoritative-source adapters as discovery only. Fetch the exact
+   official document, freeze it through the official capture/ObjectStore path, emit a typed
+   `CurrentResearchAutomaticResolution`, submit it with `uv run astock research-current-continuation-resolve RESOLUTION.json`, and resume the same continuation. Public captures are validated and bound atomically; `research-current-continuation-bind` is reserved for later user-supplied private material. Never ask the user to perform public Web research on the Agent's behalf.
+3. While the status is `TEAM_RESEARCH_REQUIRED`, read `uv run astock research-team-status <plan_id>` and execute every ready non-gate task in the frozen research-team DAG. Route Macro/Policy to `$macro-policy-regime`, Industry to `$industry-value-chain`, Governance to `$governance-management-quality`, Catalyst to `$catalyst-event-research`, the independent Reviewer to `$investment-red-team`, and model/backtest validation to `$model-risk-backtest-validation`; register every typed output/result and advance the same continuation. Do not skip fundamental, financial-integrity, valuation, independent Bull/Bear, reviewer, model-risk, red-team, or committee dependencies merely to improve latency.
+4. `READY_FOR_INVESTOR_VIEW` permits a formal recommendation only when every readiness gate
+   passes. `OBSERVATION_ONLY_FOR_INVESTOR_VIEW` permits an explicitly labelled observation
+   view after the whole team has completed but a formal gate remains unsatisfied; it must not
+   be presented as a formal buy/sell recommendation.
+5. `NEEDS_USER_INPUT` is allowed only when all approved automatic public channels have
+   exhausted their bounded attempts, or when the required formal material is genuinely
+   private. Material later supplied by the user must bind to the same continuation lineage
+   and resume from the interrupted task rather than opening a new research chain.
+6. Intermediate statuses must set `investment_conclusion_blocked=true`; they are not an
+   excuse to return an incomplete conclusion. Broker execution remains forbidden in every
+   state.
+
+The runtime may use `CurrentResearchContinuationService.run_to_terminal` with an Agent-owned
+external resolver and team executor. The CLI-equivalent loop uses
+`research-current-continuation-resolve`, `research-current-continuation-resume`, typed
+`research-team-role-output` / `research-team-task-result`, and
+`research-current-continuation-advance`; `research-current-continuation-bind` resumes later
+private-material input on the same lineage. Python owns deterministic budgets, PIT, artifact
+lineage, verified same-request acquisition reuse, state validation and safety gates; the Agent
+owns discovery and research judgement.

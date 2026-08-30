@@ -1,4 +1,4 @@
-registry_version: provider-registry-v5
+registry_version: provider-registry-v6
 capability_gaps:
   - corporate_actions.ledger_ready
   - model.inference
@@ -61,6 +61,28 @@ providers:
     probe_operation: disclosure-search
     probe_target: {symbol: "600519", exchange: SSE, category: ANNUAL_REPORT}
     recorded_fixture: tests/fixtures/providers/cninfo-disclosures-success.json
+  - provider_id: bse-official-reference
+    adapter_class: astock.providers.bse_official_reference:BseOfficialReferenceProvider
+    capabilities: [instrument.master, instrument.identity, instrument.bjse_coverage]
+    source_class: PRIMARY_OFFICIAL_WEB
+    formal_capabilities: [instrument.master, instrument.identity, instrument.bjse_coverage]
+    completeness_semantics:
+      instrument.master: FULL_UNIVERSE
+      instrument.identity: EXACT_ITEM
+      instrument.bjse_coverage: FULL_UNIVERSE
+    independence_group: BSE_OFFICIAL
+    cache_ttl_seconds: 86400
+    cost_class: LOW
+    transport: HTTP
+    transport_profile: bse-official-v1
+    officiality: PRIMARY_OFFICIAL
+    live_supported: true
+    timeout_seconds: 15
+    priority: 130
+    fixture_subdir: reference/bse
+    probe_operation: reference-identity
+    probe_target: {symbol: "920000", market: BJSE}
+    recorded_fixture: tests/fixtures/providers/bse-official-reference-success.json
   - provider_id: baostock-reference
     adapter_class: astock.providers.baostock:BaoStockReferenceProvider
     capabilities: [instrument.master, instrument.identity, market.calendar, market.daily_unadjusted, corporate_actions.structured_hint]

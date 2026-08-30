@@ -21,6 +21,12 @@ AStockMultiAgent 的 canonical Agent Skills 位于 [`../.agents/skills/`](../.ag
 | `$company-deep-research` | 当前或历史单公司完整研究 | [SKILL.md](../.agents/skills/company-deep-research/SKILL.md) | [current company research](../docs/workflows/workflow-current-company-research.md) |
 | `$evidence-investigation` | 决策相关证据缺口与自动 fallback | [SKILL.md](../.agents/skills/evidence-investigation/SKILL.md) | [evidence recovery](../docs/workflows/workflow-evidence-recovery.md) |
 | `$financial-integrity-audit` | 财报口径、勾稽、异常与审计 | [SKILL.md](../.agents/skills/financial-integrity-audit/SKILL.md) | [financial integrity](../docs/workflows/workflow-financial-integrity.md) |
+| `$macro-policy-regime` | 宏观/政策状态、数据 vintage 与公司传导 | [SKILL.md](../.agents/skills/macro-policy-regime/SKILL.md) | [macro & policy regime](../docs/workflows/workflow-macro-policy-regime.md) |
+| `$industry-value-chain` | 行业价值链、盈利池与非循环可比公司 | [SKILL.md](../.agents/skills/industry-value-chain/SKILL.md) | [industry value chain](../docs/workflows/workflow-industry-value-chain.md) |
+| `$catalyst-event-research` | 主来源催化剂/风险事件时间线 | [SKILL.md](../.agents/skills/catalyst-event-research/SKILL.md) | [catalyst & event research](../docs/workflows/workflow-catalyst-event-research.md) |
+| `$governance-management-quality` | 控制、激励、资本配置与披露质量 | [SKILL.md](../.agents/skills/governance-management-quality/SKILL.md) | [governance & management quality](../docs/workflows/workflow-governance-management-quality.md) |
+| `$investment-red-team` | 独立多空后的反证、脆弱性与重复计入审查 | [SKILL.md](../.agents/skills/investment-red-team/SKILL.md) | [investment red team](../docs/workflows/workflow-investment-red-team.md) |
+| `$model-risk-backtest-validation` | 泄漏、多重检验、校准、成本与鲁棒性验证 | [SKILL.md](../.agents/skills/model-risk-backtest-validation/SKILL.md) | [model risk & backtest validation](../docs/workflows/workflow-model-risk-backtest-validation.md) |
 | `$holding-monitor` | 持仓增量证据与 thesis 复核 | [SKILL.md](../.agents/skills/holding-monitor/SKILL.md) | [holding monitoring](../docs/workflows/workflow-holding-monitoring.md) |
 | `$continuous-investment-monitor` | 已分析/推荐/持仓/开放模拟订单的持续监控、事件队列与增量研究路由 | [SKILL.md](../.agents/skills/continuous-investment-monitor/SKILL.md) | [continuous investment monitoring](../docs/workflows/workflow-continuous-investment-monitoring.md) |
 | `$portfolio-manager` | 组合风险、约束与四种构建方法 | [SKILL.md](../.agents/skills/portfolio-manager/SKILL.md) | [portfolio construction](../docs/workflows/workflow-portfolio-construction.md) |

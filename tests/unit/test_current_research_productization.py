@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -32,6 +33,7 @@ from astock.schemas.research_acquisition import (
     AcquisitionAttempt,
     AcquisitionAttemptStatus,
     AcquisitionCapability,
+    CurrentResearchAcquisitionStatus,
     InvestorGapCategory,
 )
 from astock.schemas.research_runtime import (
@@ -113,10 +115,8 @@ def _block_baostock(
     monkeypatch.setattr(
         service,
         "_source_attempt_block_reason",
-        lambda provider_id, _capability, *, live: (
-            "CIRCUIT_OPEN"
-            if live and provider_id == "baostock-reference"
-            else None
+        lambda provider_id, _capability, *, live, breaker_scope=None: (
+            "CIRCUIT_OPEN" if live and provider_id == "baostock-reference" else None
         ),
     )
 
@@ -622,6 +622,7 @@ def test_current_period_discovery_uses_actual_disclosed_period_not_month_guess(
 
     class PeriodProvider:
         provider_id = "period-index-provider"
+
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
@@ -646,9 +647,7 @@ def test_current_period_discovery_uses_actual_disclosed_period_not_month_guess(
     )
     monkeypatch.setattr(service, "_financial_service", lambda: fake_financial)
 
-    specs, reasons = service._discover_financial_periods(
-        "600989", Market.XSHG, date(2026, 8, 13)
-    )
+    specs, reasons = service._discover_financial_periods("600989", Market.XSHG, date(2026, 8, 13))
 
     assert reasons == ["REPORT_PERIOD_INDEX_USED:period-index-provider"]
     assert specs == [
@@ -700,18 +699,21 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
     monkeypatch.setattr(
         service,
         "_discover_financial_periods",
-        lambda *_args: ([
-            (
-                AcquisitionCapability.FINANCIAL_ANNUAL,
-                date(2025, 12, 31),
-                FinancialPeriodType.ANNUAL,
-            ),
-            (
-                AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
-                date(2026, 6, 30),
-                FinancialPeriodType.SEMIANNUAL,
-            ),
-        ], []),
+        lambda *_args: (
+            [
+                (
+                    AcquisitionCapability.FINANCIAL_ANNUAL,
+                    date(2025, 12, 31),
+                    FinancialPeriodType.ANNUAL,
+                ),
+                (
+                    AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+                    date(2026, 6, 30),
+                    FinancialPeriodType.SEMIANNUAL,
+                ),
+            ],
+            [],
+        ),
     )
 
     def fake_reference(capability: AcquisitionCapability, _action: object) -> AcquisitionAttempt:
@@ -744,6 +746,167 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
     assert report.parallel_acquisition_used is True
     assert report.external_research_needs == []
     assert report.manual_actions == []
+
+
+def test_same_request_reuse_reruns_only_failed_capability_and_preserves_lineage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    paths.ensure_directories()
+    state = StateStore(paths.state_db, PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(paths.objects)
+    times = iter(
+        [
+            NOW,
+            NOW + timedelta(seconds=1),
+            NOW + timedelta(seconds=2),
+            NOW + timedelta(seconds=3),
+        ]
+    )
+    service = CurrentResearchAcquisitionService(
+        paths,
+        state,
+        objects,
+        clock=lambda: next(times),
+    )
+    monkeypatch.setattr(
+        service,
+        "_discover_financial_periods",
+        lambda *_args: (
+            [
+                (
+                    AcquisitionCapability.FINANCIAL_ANNUAL,
+                    date(2025, 12, 31),
+                    FinancialPeriodType.ANNUAL,
+                ),
+                (
+                    AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+                    date(2026, 6, 30),
+                    FinancialPeriodType.SEMIANNUAL,
+                ),
+            ],
+            [],
+        ),
+    )
+    calls: list[AcquisitionCapability] = []
+    counts: dict[AcquisitionCapability, int] = {}
+
+    def fake_task(
+        capability: AcquisitionCapability,
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[], AcquisitionAttempt]:
+        def run() -> AcquisitionAttempt:
+            calls.append(capability)
+            current = counts.get(capability, 0) + 1
+            counts[capability] = current
+            ref = objects.put_json(
+                {
+                    "capability": capability.value,
+                    "attempt": current,
+                }
+            )
+            snapshot = SourceSnapshot(
+                snapshot_id=f"snapshot:reuse:{capability.value}:{current}",
+                source_id="test-current-research",
+                object_sha256=ref.sha256,
+                fetched_at=NOW,
+                available_to_system_at=NOW,
+                fetch_status=FetchStatus.SUCCEEDED,
+                source_url="https://example.invalid/current-research",
+                mime="application/json",
+                byte_size=ref.byte_size,
+                headers_hash="b" * 64,
+                rights_status="PUBLIC_REFERENCE_DATA",
+                created_at=NOW,
+            )
+            state.register_snapshot(snapshot)
+            status = AcquisitionAttemptStatus.SUCCEEDED
+            if capability is AcquisitionCapability.FINANCIAL_ANNUAL and current == 1:
+                status = AcquisitionAttemptStatus.PARTIAL
+            return AcquisitionAttempt(
+                capability=capability,
+                status=status,
+                provider_path=["test-current-research"],
+                fallback_used=False,
+                record_count=1,
+                latency_ms=10,
+                internal_reason_codes=[],
+                source_snapshot_ids=[snapshot.snapshot_id],
+                created_at=NOW,
+            )
+
+        return run
+
+    monkeypatch.setattr(service, "_task_for_capability", fake_task)
+
+    first = service.acquire("600938", Market.XSHG)
+    first_call_count = len(calls)
+    second = service.acquire(
+        "600938",
+        Market.XSHG,
+        reuse_report_artifact_id=first.report_id,
+    )
+    second_calls = calls[first_call_count:]
+
+    assert first_call_count == len(first.attempts) == 5
+    assert second_calls == [AcquisitionCapability.FINANCIAL_ANNUAL]
+    assert 1 - len(second_calls) / first_call_count >= 0.30
+    assert second.reused_report_artifact_id == first.report_id
+    assert second.status is CurrentResearchAcquisitionStatus.READY
+    reused = [
+        item
+        for item in second.attempts
+        if "SAME_REQUEST_VERIFIED_REUSE" in item.internal_reason_codes
+    ]
+    assert len(reused) == 4
+    assert all(item.latency_ms == 0 for item in reused)
+    first_record = state.artifact_record(first.report_id)
+    second_record = state.artifact_record(second.report_id)
+    assert first_record is not None and second_record is not None
+    assert str(first_record["object_hash"]) in second_record["input_hashes"]
+
+
+def test_same_request_reuse_rejects_tampered_snapshot(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.ensure_directories()
+    state = StateStore(paths.state_db, PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(paths.objects)
+    service = CurrentResearchAcquisitionService(paths, state, objects)
+    ref = objects.put_json({"capability": AcquisitionCapability.INSTRUMENT_IDENTITY.value})
+    snapshot = SourceSnapshot(
+        snapshot_id="snapshot:reuse:tampered",
+        source_id="test-current-research",
+        object_sha256=ref.sha256,
+        fetched_at=NOW,
+        available_to_system_at=NOW,
+        fetch_status=FetchStatus.SUCCEEDED,
+        source_url="https://example.invalid/current-research",
+        mime="application/json",
+        byte_size=ref.byte_size,
+        headers_hash="c" * 64,
+        rights_status="PUBLIC_REFERENCE_DATA",
+        created_at=NOW,
+    )
+    state.register_snapshot(snapshot)
+    attempt = AcquisitionAttempt(
+        capability=AcquisitionCapability.INSTRUMENT_IDENTITY,
+        status=AcquisitionAttemptStatus.SUCCEEDED,
+        provider_path=["test-current-research"],
+        fallback_used=False,
+        record_count=1,
+        latency_ms=10,
+        internal_reason_codes=[],
+        source_snapshot_ids=[snapshot.snapshot_id],
+        created_at=NOW,
+    )
+
+    assert service._attempt_snapshots_reusable(attempt, NOW + timedelta(seconds=1))
+    objects.path_for(ref.sha256).write_bytes(b"tampered")
+    assert not service._attempt_snapshots_reusable(attempt, NOW + timedelta(seconds=1))
 
 
 def test_financial_secondary_hints_prefer_source_with_native_scope_currency(

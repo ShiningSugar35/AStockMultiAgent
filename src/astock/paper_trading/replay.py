@@ -19,6 +19,7 @@ from astock.schemas import (
     AdjustmentMode,
     BarRequest,
     Frequency,
+    InstrumentType,
     Market,
     MarketBar,
     Order,
@@ -70,6 +71,11 @@ class PaperReplayService:
     ) -> ReplayExecutionReport:
         if not (Decimal("0") < maximum_participation_rate <= Decimal("1")):
             raise ValueError("maximum_participation_rate must be in (0, 1]")
+        if request.instrument_type is not InstrumentType.STOCK:
+            raise PolicyError(
+                "Paper replay currently admits STOCK instruments only",
+                failure_class=FailureClass.POLICY_REJECTED,
+            )
         if request.market not in fee_schedule.applicable_markets:
             raise PolicyError(
                 f"Fee rule {fee_schedule.rule_version} does not cover {request.market.value}",

@@ -27,9 +27,9 @@ AStockMultiAgent 的 canonical Agent Skills 位于 [`../.agents/skills/`](../.ag
 | `$governance-management-quality` | 控制、激励、资本配置与披露质量 | [SKILL.md](../.agents/skills/governance-management-quality/SKILL.md) | [governance & management quality](../docs/workflows/workflow-governance-management-quality.md) |
 | `$investment-red-team` | 独立多空后的反证、脆弱性与重复计入审查 | [SKILL.md](../.agents/skills/investment-red-team/SKILL.md) | [investment red team](../docs/workflows/workflow-investment-red-team.md) |
 | `$model-risk-backtest-validation` | 泄漏、多重检验、校准、成本与鲁棒性验证 | [SKILL.md](../.agents/skills/model-risk-backtest-validation/SKILL.md) | [model risk & backtest validation](../docs/workflows/workflow-model-risk-backtest-validation.md) |
-| `$holding-monitor` | 持仓增量证据与 thesis 复核 | [SKILL.md](../.agents/skills/holding-monitor/SKILL.md) | [holding monitoring](../docs/workflows/workflow-holding-monitoring.md) |
+| `$holding-monitor` | 外部持仓事实恢复、事件增量与目标带再平衡 | [SKILL.md](../.agents/skills/holding-monitor/SKILL.md) | [holding rebalance](../docs/workflows/workflow-holding-rebalance-decision.md) |
 | `$continuous-investment-monitor` | 已分析/推荐/持仓/开放模拟订单的持续监控、事件队列与增量研究路由 | [SKILL.md](../.agents/skills/continuous-investment-monitor/SKILL.md) | [continuous investment monitoring](../docs/workflows/workflow-continuous-investment-monitoring.md) |
-| `$portfolio-manager` | 组合风险、约束与四种构建方法 | [SKILL.md](../.agents/skills/portfolio-manager/SKILL.md) | [portfolio construction](../docs/workflows/workflow-portfolio-construction.md) |
+| `$portfolio-manager` | 组合风险、四种稳健构建、风险缺口预筛、transition/no-trade band 与 hedge 语义 | [SKILL.md](../.agents/skills/portfolio-manager/SKILL.md) | [portfolio transition](../docs/workflows/workflow-portfolio-transition-and-hedging.md) |
 | `$paper-trading-recovery` | 会话式模拟账户、订单/成交恢复、默认 60m replay + 5m fallback | [SKILL.md](../.agents/skills/paper-trading-recovery/SKILL.md) | [paper trading](../docs/workflows/workflow-paper-trading.md) |
 | `$knowledge-ingest` | 批准来源采集、覆盖与知识蒸馏前置 | [SKILL.md](../.agents/skills/knowledge-ingest/SKILL.md) | [knowledge ingest](../docs/workflows/workflow-knowledge-ingest.md) |
 | `$research-tech-scout` | 外部 GitHub/投研平台/社区技术侦察与去重 | [SKILL.md](../.agents/skills/research-tech-scout/SKILL.md) | [research tech scout](../docs/workflows/workflow-research-tech-scout.md) |

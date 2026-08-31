@@ -20,6 +20,7 @@ import yaml
 from astock.core.errors import AStockError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.project_root import resolve_project_root
 from astock.core.source_resilience import (
     SourceCircuitBreaker,
     SourceFailureClass,
@@ -459,7 +460,7 @@ def build_provider_http_client(
     *,
     project_root: Path | None = None,
 ) -> HttpClientLike:
-    root = project_root or Path(__file__).resolve().parents[3]
+    root = project_root or resolve_project_root(module_file=Path(__file__))
     registry = load_provider_registry(root / "configs" / "provider_registry.yaml")
     definition = get_provider(registry, provider_id)
     profiles = load_transport_profiles(root / "configs" / "transport_profiles.yaml")

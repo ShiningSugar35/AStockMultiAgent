@@ -19,6 +19,8 @@ Workflow 是跨 Skill 的**用户任务编排层**。它不替代 `.agents/skill
 | [Model Risk & Backtest Validation](workflow-model-risk-backtest-validation.md) | “模型/回测是否有泄漏、过拟合或成本遗漏？” | `$model-risk-backtest-validation` | ModelRiskValidationReport |
 | [Committee & Trade Plan](workflow-committee-trade-plan.md) | “研究完成后能不能模拟买？什么条件进出？” | `$company-deep-research` | DecisionPack / ClassifiedTradeProtocol / TradePlanView |
 | [Portfolio Construction](workflow-portfolio-construction.md) | “把几只研究过的股票组成组合” | `$portfolio-manager` | Risk report / 4 allocation proposals |
+| [Portfolio Transition & Hedge-Aware Completion](workflow-portfolio-transition-and-hedging.md) | “准备买 X，再配什么能降低组合风险？” | `$portfolio-manager` | CURRENT/ANCHOR/TARGET / complement screen / target bands / hedge effectiveness |
+| [Holding Rebalance Decision](workflow-holding-rebalance-decision.md) | “我已经持有 X，要不要加仓、减仓或调整组合？” | `$holding-monitor` | persisted user state / event-aware HOLD·ADD·TRIM·EXIT / target band |
 | [Holding Monitoring](workflow-holding-monitoring.md) | “持仓有什么变化，要不要加减仓？” | `$holding-monitor` | HoldingReviewPack / action proposal |
 | [Continuous Investment Monitoring](workflow-continuous-investment-monitoring.md) | “研究/荐股后继续盯着，什么时候该准备买卖？” | `$continuous-investment-monitor` | Watch target / MonitorEvent / leased research task / incremental review |
 | [Paper Trading](workflow-paper-trading.md) | “模拟盘恢复、回放、状态是否正常？” | `$paper-trading-recovery` | paper status / replay checkpoint / NAV |

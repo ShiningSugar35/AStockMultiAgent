@@ -20,6 +20,7 @@ class Market(StrEnum):
 
 class InstrumentType(StrEnum):
     STOCK = "STOCK"
+    ETF = "ETF"
     INDEX = "INDEX"
 
 

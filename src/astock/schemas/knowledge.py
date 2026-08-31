@@ -721,6 +721,18 @@ class HoldingReviewPack(AStockModel):
     next_review_conditions: list[str]
     hard_blocks: list[str] = Field(default_factory=list)
     degradation_codes: list[str] = Field(default_factory=list)
+    event_severity: str | None = None
+    portfolio_effect_codes: list[str] = Field(default_factory=list)
+    current_quantity: int | None = Field(default=None, ge=0)
+    current_weight: float | None = Field(default=None, ge=0, le=1)
+    target_weight_lower: float | None = Field(default=None, ge=0, le=1)
+    target_weight_mid: float | None = Field(default=None, ge=0, le=1)
+    target_weight_upper: float | None = Field(default=None, ge=0, le=1)
+    target_quantity_min: int | None = Field(default=None, ge=0)
+    target_quantity_max: int | None = Field(default=None, ge=0)
+    implementation_cost_fen: int | None = Field(default=None, ge=0)
+    preconditions: list[str] = Field(default_factory=list)
+    reversal_conditions: list[str] = Field(default_factory=list)
     proposal_id: str | None = None
 
     @model_validator(mode="after")
@@ -732,9 +744,25 @@ class HoldingReviewPack(AStockModel):
             ("next review condition", self.next_review_conditions),
             ("hard block", self.hard_blocks),
             ("degradation code", self.degradation_codes),
+            ("portfolio effect", self.portfolio_effect_codes),
+            ("precondition", self.preconditions),
+            ("reversal condition", self.reversal_conditions),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"holding review {label} values must be unique")
+        target_weights = (
+            self.target_weight_lower,
+            self.target_weight_mid,
+            self.target_weight_upper,
+        )
+        if any(value is not None for value in target_weights):
+            if any(value is None for value in target_weights):
+                raise ValueError("holding review target weights must be complete")
+            assert self.target_weight_lower is not None
+            assert self.target_weight_mid is not None
+            assert self.target_weight_upper is not None
+            if not (self.target_weight_lower <= self.target_weight_mid <= self.target_weight_upper):
+                raise ValueError("holding review target weights must satisfy lower<=mid<=upper")
         return self
 
 
@@ -743,6 +771,18 @@ class PositionActionProposal(AStockModel):
     position_id: str
     action: PositionAction
     qty_or_weight_limit: str | None = None
+    current_quantity: int | None = Field(default=None, ge=0)
+    current_weight: float | None = Field(default=None, ge=0, le=1)
+    target_weight_lower: float | None = Field(default=None, ge=0, le=1)
+    target_weight_mid: float | None = Field(default=None, ge=0, le=1)
+    target_weight_upper: float | None = Field(default=None, ge=0, le=1)
+    target_quantity_min: int | None = Field(default=None, ge=0)
+    target_quantity_max: int | None = Field(default=None, ge=0)
+    implementation_cost_fen: int | None = Field(default=None, ge=0)
+    portfolio_effect_codes: list[str] = Field(default_factory=list)
+    preconditions: list[str] = Field(default_factory=list)
+    reversal_conditions: list[str] = Field(default_factory=list)
+    event_severity: str | None = None
     reasons: list[str]
     evidence_ids: list[str]
     hard_blocks: list[str]
@@ -758,9 +798,25 @@ class PositionActionProposal(AStockModel):
             ("reason", self.reasons),
             ("evidence", self.evidence_ids),
             ("hard block", self.hard_blocks),
+            ("portfolio effect", self.portfolio_effect_codes),
+            ("precondition", self.preconditions),
+            ("reversal condition", self.reversal_conditions),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"position proposal {label} values must be unique")
+        target_weights = (
+            self.target_weight_lower,
+            self.target_weight_mid,
+            self.target_weight_upper,
+        )
+        if any(value is not None for value in target_weights):
+            if any(value is None for value in target_weights):
+                raise ValueError("position proposal target weights must be complete")
+            assert self.target_weight_lower is not None
+            assert self.target_weight_mid is not None
+            assert self.target_weight_upper is not None
+            if not (self.target_weight_lower <= self.target_weight_mid <= self.target_weight_upper):
+                raise ValueError("position proposal target weights must satisfy lower<=mid<=upper")
         return self
 
 

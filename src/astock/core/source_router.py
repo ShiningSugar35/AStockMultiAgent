@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import yaml
 
+from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 from astock.schemas import (
     AccessTransport,
@@ -91,7 +92,7 @@ class SourceAccessRouter:
         policy: SourceAccessPolicy | None = None,
     ) -> None:
         self.state = state
-        project_root = Path(__file__).resolve().parents[3]
+        project_root = resolve_project_root(module_file=Path(__file__))
         self.policy = policy or load_source_access_policy(
             project_root / "configs" / "source_access_policy.yaml"
         )
@@ -108,9 +109,7 @@ class SourceAccessRouter:
             for item in capabilities
             if request.requested_capability in item.requested_capabilities
         ]
-        automated = [
-            item for item in matching if item.transport is not AccessTransport.MANUAL
-        ]
+        automated = [item for item in matching if item.transport is not AccessTransport.MANUAL]
         if self.state is not None:
             from astock.core.source_resilience import SourceCircuitBreaker
 
@@ -138,9 +137,7 @@ class SourceAccessRouter:
         return sorted(
             automated,
             key=lambda item: (
-                0
-                if strong_official and item.available and self._is_primary_official(item)
-                else 1,
+                0 if strong_official and item.available and self._is_primary_official(item) else 1,
                 -self._score(item),
                 0 if request.source_id is not None and item.source_id == request.source_id else 1,
                 item.source_id,
@@ -184,8 +181,10 @@ class SourceAccessRouter:
             if "MANUAL" not in fallback_sources:
                 fallback_sources.append("MANUAL")
 
-        decision_source_id = selected_source_id or request.source_id or (
-            f"capability:{request.requested_capability}"
+        decision_source_id = (
+            selected_source_id
+            or request.source_id
+            or (f"capability:{request.requested_capability}")
         )
         decision = SourceAccessDecision(
             decision_id=uuid4().hex,
@@ -215,9 +214,7 @@ class SourceAccessRouter:
         officiality = self.policy.officiality_scores.get(officiality_key, Decimal("0"))
         health = self.policy.health_scores.get(item.health_status, Decimal("0"))
         transport = self.policy.transport_scores.get(item.transport.value, Decimal("0"))
-        latency_score = Decimal("1") / (
-            Decimal("1") + Decimal(item.latency_ms) / Decimal("1000")
-        )
+        latency_score = Decimal("1") / (Decimal("1") + Decimal(item.latency_ms) / Decimal("1000"))
         retryable_failure = Decimal("1") if item.retryable_failure else Decimal("0")
         formal_eligibility = Decimal("1") if item.formal_eligible else Decimal("0")
         return (

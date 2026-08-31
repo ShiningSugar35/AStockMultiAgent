@@ -460,8 +460,10 @@ from astock.schemas.knowledge_skill_audit import (
 )
 from astock.schemas.lifecycle import (
     DecisionReferenceStatus,
+    HoldingEventSeverity,
     HoldingReviewRequest,
     HoldingRuleSignal,
+    HoldingTargetBandInput,
     LifecycleCondition,
     LifecycleMetricDefinition,
     LifecycleSourceType,
@@ -1085,9 +1087,11 @@ __all__ = [
     "GrowthValuationDiagnosticRequest",
     "FactStatus",
     "HoldingEvidenceUpdate",
+    "HoldingEventSeverity",
     "HoldingReviewPack",
     "HoldingReviewRequest",
     "HoldingRuleSignal",
+    "HoldingTargetBandInput",
     "KnowledgeAccessStatus",
     "KnowledgeAuditStatus",
     "KnowledgeCollectionScope",

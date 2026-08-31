@@ -34,6 +34,7 @@ from astock.schemas import (
     DailyBarObservation,
     DatasetReleaseManifest,
     InstrumentRecord,
+    InstrumentType,
     Market,
     PaperCancelOrderPayload,
     PaperMarkPayload,
@@ -1020,6 +1021,11 @@ class PaperOperationService:
             or instrument.status_date > local.date()
         ):
             raise _policy("Instrument is not proven tradable for the order session")
+        if instrument.instrument_type is not InstrumentType.STOCK:
+            raise _needs_info(
+                "Paper order execution currently admits STOCK instruments only; "
+                "ETF execution is not admitted"
+            )
         classification = self.references.trading_classification(
             instrument, visible_at=request.requested_at
         )

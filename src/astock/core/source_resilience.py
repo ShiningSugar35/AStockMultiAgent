@@ -12,6 +12,7 @@ import httpx
 import yaml
 
 from astock.core.errors import AStockError, FailureClass
+from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 
 
@@ -116,7 +117,7 @@ class SourceCircuitBreaker:
         policy: SourceResiliencePolicy | None = None,
     ) -> None:
         self.state = state
-        root = Path(__file__).resolve().parents[3]
+        root = resolve_project_root(module_file=Path(__file__))
         self.policy = policy or load_source_resilience_policy(
             root / "configs" / "source_resilience.yaml"
         )

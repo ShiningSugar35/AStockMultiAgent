@@ -15,6 +15,7 @@ from astock.schemas import (
     ConflictResolutionStatus,
     DecisionReferenceStatus,
     EvidenceConflict,
+    HoldingEventSeverity,
     HoldingEvidenceUpdate,
     HoldingReviewPack,
     HoldingReviewRequest,
@@ -68,9 +69,7 @@ class PositionLifecycleService:
             rules = self.repository.get_rules(self.configured_rules.rules_version)
             assert rules is not None
             return rules, str(summary["object_hash"])
-        object_ref = self.object_store.put_json(
-            self.configured_rules.model_dump(mode="json")
-        )
+        object_ref = self.object_store.put_json(self.configured_rules.model_dump(mode="json"))
         rules = self.repository.register_rules(
             self.configured_rules,
             object_hash=object_ref.sha256,
@@ -117,9 +116,7 @@ class PositionLifecycleService:
         }
         if not metric_evidence.issubset(baseline_scope):
             raise ValueError("position plan metrics must cite evidence in the research memo")
-        evidence_pack = self.research_repository.get_evidence_pack(
-            base_case.evidence_pack_id
-        )
+        evidence_pack = self.research_repository.get_evidence_pack(base_case.evidence_pack_id)
         if evidence_pack is None or not baseline_scope.issubset(evidence_pack.evidence_ids):
             raise ValueError("position plan memo evidence is outside the frozen evidence pack")
 
@@ -140,12 +137,8 @@ class PositionLifecycleService:
             source: [] for source in LifecycleSourceType
         }
         for condition in request.conditions:
-            conditions_by_source[condition.source_type].append(
-                condition.model_dump(mode="json")
-            )
-        skill_versions = {
-            item.skill_id: item.skill_version for item in route.selected
-        }
+            conditions_by_source[condition.source_type].append(condition.model_dump(mode="json"))
+        skill_versions = {item.skill_id: item.skill_version for item in route.selected}
         skill_versions["ResearchMemoComposer"] = (
             memo.composer_version or "research-memo-composer-v1"
         )
@@ -176,9 +169,7 @@ class PositionLifecycleService:
                 *conditions_by_source[LifecycleSourceType.MANUAL],
             ],
             add_conditions=[
-                item.description
-                for item in request.conditions
-                if item.action is PositionAction.ADD
+                item.description for item in request.conditions if item.action is PositionAction.ADD
             ],
             trim_conditions=[
                 item.description
@@ -280,14 +271,10 @@ class PositionLifecycleService:
         if existing_review is None:
             latest = self.repository.latest_review_for_plan(plan.plan_id)
             expected_from = (
-                plan.as_of
-                if latest is None
-                else _parse_utc_text(str(latest["to_as_of"]))
+                plan.as_of if latest is None else _parse_utc_text(str(latest["to_as_of"]))
             )
             if request.from_as_of.astimezone(UTC) != expected_from.astimezone(UTC):
-                raise ValueError(
-                    "holding review window is not contiguous with the last checkpoint"
-                )
+                raise ValueError("holding review window is not contiguous with the last checkpoint")
         conditions = self._conditions(plan)
         condition_by_rule = {item.rule_id: item for item in conditions}
         self._validate_incremental_inputs(request, plan, condition_by_rule)
@@ -318,6 +305,53 @@ class PositionLifecycleService:
         triggered_conditions = [condition_by_rule[item.rule_id] for item in request.signals]
         hard_blocks: set[str] = set()
         candidates = {item.action for item in triggered_conditions}
+        event_severity = request.event_severity
+        event_evidence_present = bool(
+            request.added_evidence_ids or any(signal.evidence_ids for signal in request.signals)
+        )
+        event_requires_evidence = event_severity in {
+            HoldingEventSeverity.THESIS_INVALIDATING,
+            HoldingEventSeverity.THESIS_WEAKENING,
+            HoldingEventSeverity.THESIS_STRENGTHENING,
+            HoldingEventSeverity.VALUATION_ONLY,
+        }
+        if event_severity is HoldingEventSeverity.UNVERIFIED_LEAD:
+            candidates = {PositionAction.REVIEW}
+            hard_blocks.add("UNVERIFIED_LEAD_REQUIRES_EVIDENCE")
+        elif event_requires_evidence and not event_evidence_present:
+            candidates.add(PositionAction.REVIEW)
+            hard_blocks.add("MATERIAL_EVENT_EVIDENCE_REQUIRED")
+        elif event_severity is HoldingEventSeverity.THESIS_INVALIDATING:
+            candidates.add(PositionAction.EXIT)
+        elif event_severity is HoldingEventSeverity.THESIS_WEAKENING:
+            candidates.add(PositionAction.TRIM)
+        elif event_severity is HoldingEventSeverity.THESIS_STRENGTHENING:
+            candidates.add(PositionAction.ADD)
+        elif event_severity is HoldingEventSeverity.PORTFOLIO_RISK_ONLY:
+            if request.portfolio_effect_codes:
+                candidates.add(PositionAction.TRIM)
+            else:
+                candidates.add(PositionAction.REVIEW)
+                hard_blocks.add("PORTFOLIO_RISK_EVIDENCE_REQUIRED")
+        if (
+            request.target_band is not None
+            and event_severity is not HoldingEventSeverity.UNVERIFIED_LEAD
+        ):
+            band = request.target_band
+            if (
+                band.current_weight is not None
+                and band.target_weight_lower is not None
+                and band.target_weight_upper is not None
+                and band.target_weight_mid is not None
+            ):
+                if band.current_weight < band.target_weight_lower:
+                    candidates.add(PositionAction.ADD)
+                elif band.current_weight > band.target_weight_upper:
+                    candidates.add(
+                        PositionAction.EXIT
+                        if band.target_weight_mid <= 1e-12
+                        else PositionAction.TRIM
+                    )
         if request.unresolved_conflict_ids:
             candidates.add(PositionAction.REVIEW)
             hard_blocks.add(rules.conflict_hard_block_code)
@@ -327,7 +361,7 @@ class PositionLifecycleService:
         for condition in triggered_conditions:
             if condition.hard_block:
                 hard_blocks.add(condition.signal_code)
-        add_conditions = [
+        add_signal_conditions = [
             condition
             for condition in triggered_conditions
             if condition.action is PositionAction.ADD
@@ -338,7 +372,13 @@ class PositionLifecycleService:
             if condition_by_rule[signal.rule_id].action is PositionAction.ADD
             for evidence_id in signal.evidence_ids
         }
-        if add_conditions and not add_signal_evidence:
+        signal_add_missing_support = bool(add_signal_conditions) and not add_signal_evidence
+        non_signal_add_missing_support = (
+            PositionAction.ADD in candidates
+            and not add_signal_conditions
+            and not request.added_evidence_ids
+        )
+        if signal_add_missing_support or non_signal_add_missing_support:
             candidates.discard(PositionAction.ADD)
             candidates.add(PositionAction.REVIEW)
             hard_blocks.add(rules.add_support_missing_code)
@@ -371,6 +411,36 @@ class PositionLifecycleService:
             }
             for signal in request.signals
         ]
+        target_band = request.target_band
+        thesis_strength_change = (
+            "UNCHANGED"
+            if event_severity
+            in {
+                HoldingEventSeverity.PORTFOLIO_RISK_ONLY,
+                HoldingEventSeverity.VALUATION_ONLY,
+                HoldingEventSeverity.TEMPORARY_NOISE,
+            }
+            else "STRENGTHENED"
+            if action is PositionAction.ADD
+            else "WEAKENED"
+            if action in {PositionAction.TRIM, PositionAction.EXIT}
+            else "UNRESOLVED"
+            if action is PositionAction.REVIEW
+            else "UNCHANGED"
+        )
+        risk_change = (
+            "HIGHER"
+            if event_severity
+            in {
+                HoldingEventSeverity.THESIS_INVALIDATING,
+                HoldingEventSeverity.THESIS_WEAKENING,
+                HoldingEventSeverity.PORTFOLIO_RISK_ONLY,
+            }
+            or action in {PositionAction.TRIM, PositionAction.EXIT}
+            else "UNKNOWN"
+            if action is PositionAction.REVIEW
+            else "UNCHANGED"
+        )
         review = HoldingReviewPack(
             review_id=review_id,
             plan_id=plan.plan_id,
@@ -378,9 +448,7 @@ class PositionLifecycleService:
             rules_version=rules.rules_version,
             position_id=plan.position_id,
             as_of=request.to_as_of.astimezone(UTC),
-            new_market_data=self._signal_rows(
-                signal_rows, conditions, LifecycleSourceType.PRICE
-            ),
+            new_market_data=self._signal_rows(signal_rows, conditions, LifecycleSourceType.PRICE),
             new_disclosures=self._signal_rows(
                 signal_rows, conditions, LifecycleSourceType.FUNDAMENTAL
             ),
@@ -394,22 +462,8 @@ class PositionLifecycleService:
                 for evidence_id in request.added_evidence_ids
                 if not any(evidence_id in signal.evidence_ids for signal in request.signals)
             ],
-            thesis_strength_change=(
-                "STRENGTHENED"
-                if action is PositionAction.ADD
-                else "WEAKENED"
-                if action in {PositionAction.TRIM, PositionAction.EXIT}
-                else "UNRESOLVED"
-                if action is PositionAction.REVIEW
-                else "UNCHANGED"
-            ),
-            risk_change=(
-                "HIGHER"
-                if action in {PositionAction.TRIM, PositionAction.EXIT}
-                else "UNKNOWN"
-                if action is PositionAction.REVIEW
-                else "UNCHANGED"
-            ),
+            thesis_strength_change=thesis_strength_change,
+            risk_change=risk_change,
             triggered_rules=triggered_rules,
             unresolved_conflicts=sorted(request.unresolved_conflict_ids),
             recommended_action=action,
@@ -427,6 +481,18 @@ class PositionLifecycleService:
             ),
             hard_blocks=sorted(hard_blocks),
             degradation_codes=sorted(degradation_codes),
+            event_severity=event_severity.value if event_severity else None,
+            portfolio_effect_codes=sorted(request.portfolio_effect_codes),
+            current_quantity=target_band.current_quantity if target_band else None,
+            current_weight=target_band.current_weight if target_band else None,
+            target_weight_lower=target_band.target_weight_lower if target_band else None,
+            target_weight_mid=target_band.target_weight_mid if target_band else None,
+            target_weight_upper=target_band.target_weight_upper if target_band else None,
+            target_quantity_min=target_band.target_quantity_min if target_band else None,
+            target_quantity_max=target_band.target_quantity_max if target_band else None,
+            implementation_cost_fen=(target_band.implementation_cost_fen if target_band else None),
+            preconditions=target_band.preconditions if target_band else [],
+            reversal_conditions=target_band.reversal_conditions if target_band else [],
             proposal_id=proposal_id,
             created_at=request.to_as_of.astimezone(UTC),
         )
@@ -435,10 +501,24 @@ class PositionLifecycleService:
             position_id=plan.position_id,
             action=action,
             qty_or_weight_limit=None,
+            current_quantity=target_band.current_quantity if target_band else None,
+            current_weight=target_band.current_weight if target_band else None,
+            target_weight_lower=target_band.target_weight_lower if target_band else None,
+            target_weight_mid=target_band.target_weight_mid if target_band else None,
+            target_weight_upper=target_band.target_weight_upper if target_band else None,
+            target_quantity_min=target_band.target_quantity_min if target_band else None,
+            target_quantity_max=target_band.target_quantity_max if target_band else None,
+            implementation_cost_fen=(target_band.implementation_cost_fen if target_band else None),
+            portfolio_effect_codes=sorted(request.portfolio_effect_codes),
+            preconditions=target_band.preconditions if target_band else [],
+            reversal_conditions=target_band.reversal_conditions if target_band else [],
+            event_severity=event_severity.value if event_severity else None,
             reasons=sorted(
                 {
                     *(condition_by_rule[item.rule_id].signal_code for item in request.signals),
                     *hard_blocks,
+                    *request.portfolio_effect_codes,
+                    *([f"EVENT_{event_severity.value}"] if event_severity else []),
                     *([] if candidates else ["NO_HIGHER_PRIORITY_TRIGGER"]),
                 }
             ),
@@ -541,24 +621,17 @@ class PositionLifecycleService:
             }
         conditions = self._conditions(plan)
         base_case = (
-            self.research_repository.get_base_case(plan.base_case_id)
-            if plan.base_case_id
-            else None
+            self.research_repository.get_base_case(plan.base_case_id) if plan.base_case_id else None
         )
         route = (
             self.research_repository.get_route_plan(plan.route_plan_id)
             if plan.route_plan_id
             else None
         )
-        memo = (
-            self.research_repository.get_research_memo(plan.memo_id)
-            if plan.memo_id
-            else None
-        )
+        memo = self.research_repository.get_research_memo(plan.memo_id) if plan.memo_id else None
         plan_metadata_mismatch = int(
             int(str(plan_summary["condition_count"])) != len(conditions)
-            or int(str(plan_summary["baseline_evidence_count"]))
-            != len(plan.baseline_evidence_ids)
+            or int(str(plan_summary["baseline_evidence_count"])) != len(plan.baseline_evidence_ids)
         )
         lineage_mismatch = int(
             base_case is None
@@ -600,13 +673,10 @@ class PositionLifecycleService:
             proposal_missing += int(proposal is None)
             if review is not None:
                 review_metadata_mismatch += int(
-                    int(str(window["trigger_count"]))
-                    != len(review.triggered_rules)
-                    or int(str(window["hard_block_count"]))
-                    != len(review.hard_blocks)
+                    int(str(window["trigger_count"])) != len(review.triggered_rules)
+                    or int(str(window["hard_block_count"])) != len(review.hard_blocks)
                     or int(str(window["evidence_count"])) != len(review.evidence_ids)
-                    or str(window["recommended_action"])
-                    != review.recommended_action.value
+                    or str(window["recommended_action"]) != review.recommended_action.value
                 )
                 review_artifact_mismatch += self._artifact_mismatch(
                     f"HoldingReviewPack:{review.review_id}",
@@ -668,18 +738,14 @@ class PositionLifecycleService:
         plan: PositionMonitoringPlan,
         condition_by_rule: dict[str, LifecycleCondition],
     ) -> None:
-        unknown_rules = sorted(
-            {item.rule_id for item in request.signals} - set(condition_by_rule)
-        )
+        unknown_rules = sorted({item.rule_id for item in request.signals} - set(condition_by_rule))
         if unknown_rules:
             raise ValueError("holding review contains an unknown monitoring rule")
         added = set(request.added_evidence_ids)
         for signal in request.signals:
             if not set(signal.evidence_ids).issubset(added):
                 raise ValueError("holding signals can only cite this window's new evidence")
-            if not (
-                request.from_as_of < signal.occurred_at <= request.to_as_of
-            ):
+            if not (request.from_as_of < signal.occurred_at <= request.to_as_of):
                 raise ValueError("holding signal occurred outside the review window")
         for evidence_id in request.added_evidence_ids:
             evidence = self.evidence_repository.get_evidence(evidence_id)
@@ -687,11 +753,7 @@ class PositionLifecycleService:
                 raise ValueError("holding review references unknown new evidence")
             if plan.company_id not in evidence.entity_ids:
                 raise ValueError("holding review evidence belongs to another company")
-            if not (
-                request.from_as_of
-                < evidence.available_to_system_at
-                <= request.to_as_of
-            ):
+            if not (request.from_as_of < evidence.available_to_system_at <= request.to_as_of):
                 raise ValueError("holding review evidence is outside the incremental window")
         invalidated = set(request.invalidated_evidence_ids)
         if not invalidated.issubset(plan.baseline_evidence_ids):
@@ -741,9 +803,7 @@ class PositionLifecycleService:
                 if evidence.available_to_system_at > request.from_as_of:
                     new_conflict_evidence.add(evidence.evidence_id)
             if not new_conflict_evidence.issubset(added):
-                raise ValueError(
-                    "holding review conflict must declare its new window evidence"
-                )
+                raise ValueError("holding review conflict must declare its new window evidence")
 
     @staticmethod
     def _conditions(plan: PositionMonitoringPlan) -> list[LifecycleCondition]:

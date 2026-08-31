@@ -1,0 +1,31 @@
+schema_version: portfolio-decision-v1
+rebalance_band_policy:
+  schema_version: portfolio-rebalance-band-policy-v1
+  minimum_weight_band: 0.005
+  maximum_weight_band: 0.05
+  unverified_cost_weight_band: 0.02
+  cost_to_band_multiplier: 2.0
+  volatility_to_band_multiplier: 0.01
+  material_weight_change: 0.01
+stock_trading_rule:
+  buy_lot_size: 100
+  sell_lot_size: 100
+  allow_odd_lot_full_exit: true
+  tick_size_cny: "0.01"
+  settlement_cycle: T1
+  effective_from: "2026-04-24"
+  source_urls:
+    - "https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml"
+etf_default_research_rule:
+  buy_lot_size: 100
+  sell_lot_size: 100
+  allow_odd_lot_full_exit: true
+  tick_size_cny: "0.001"
+  source_urls:
+    - "https://www.sse.com.cn/assortment/fund/etf/question/"
+hedge_effectiveness:
+  minimum_gross_risk_reduction_fraction: 0.05
+  maximum_round_trip_cost_bps_for_formal_hedge: 50.0
+  stress_tail_fraction: 0.20
+  maximum_stress_correlation: 0.50
+  minimum_common_sessions: 40

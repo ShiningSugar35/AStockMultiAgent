@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
+from astock.core.project_root import resolve_project_root
 from astock.schemas import (
     CollectionCheckpoint,
     DatasetReleaseManifest,
@@ -35,7 +36,7 @@ class StateStore:
         self.migrations_dir = (
             migrations_dir.resolve()
             if migrations_dir is not None
-            else Path(__file__).resolve().parents[3] / "migrations"
+            else resolve_project_root(module_file=Path(__file__)) / "migrations"
         )
 
     def connect(self) -> sqlite3.Connection:
@@ -393,9 +394,7 @@ class StateStore:
         }
         if comment_parent_id is not None:
             identity["comment_parent_id"] = comment_parent_id
-        return sha256_bytes(
-            canonical_json_bytes(identity)
-        )
+        return sha256_bytes(canonical_json_bytes(identity))
 
     def set_cursor(
         self,
@@ -823,8 +822,7 @@ class StateStore:
 
         with closing(self.connect()) as connection:
             target = connection.execute(
-                "SELECT completed_at FROM provider_probe_event "
-                "WHERE provider_id=? AND probe_id=?",
+                "SELECT completed_at FROM provider_probe_event WHERE provider_id=? AND probe_id=?",
                 (provider_id, probe_id),
             ).fetchone()
             if target is None:
@@ -1049,9 +1047,12 @@ class StateStore:
                 return False
 
             for snapshot_id in manifest.raw_snapshot_ids:
-                if connection.execute(
-                    "SELECT 1 FROM source_snapshot_index WHERE snapshot_id=?", (snapshot_id,)
-                ).fetchone() is None:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM source_snapshot_index WHERE snapshot_id=?", (snapshot_id,)
+                    ).fetchone()
+                    is None
+                ):
                     raise ValueError(f"Unknown market-reference snapshot: {snapshot_id}")
 
             head = connection.execute(

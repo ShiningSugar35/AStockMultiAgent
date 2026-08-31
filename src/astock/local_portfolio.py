@@ -14,6 +14,7 @@ import yaml
 from astock.core.atomic import atomic_write_text
 from astock.core.hashing import content_hash
 from astock.core.state import StateStore
+from astock.schemas.portfolio_decision import ValidatedExternalTradeImport
 
 _PORTFOLIO_SCHEMA = "astock-local-portfolio-v1"
 _TRADES_SCHEMA = "astock-local-trades-v1"
@@ -128,6 +129,75 @@ class LocalPortfolioService:
         self._write_trades(proposed)
         self._write_portfolio(replayed, settings=current.get("settings", self._default_settings()))
         return {"status": "RECORDED", "trade": trade, "positions": replayed}
+
+    def record_validated_external_trade(
+        self,
+        trade: ValidatedExternalTradeImport,
+    ) -> dict[str, object]:
+        """Exactly-once import of one user-declared external trade fact.
+
+        User-declared broker facts remain outside the paper ledger. An exact duplicate
+        imported previously is idempotent; an economic collision with a PAPER_FILL is
+        blocked so the same real-world event cannot silently enter two fact lanes.
+        """
+
+        self.initialize()
+        economic_key = self._external_trade_key(
+            market=trade.market.value,
+            symbol=trade.symbol,
+            side=trade.side,
+            quantity=trade.quantity,
+            price_cny=trade.price_cny,
+            occurred_at=trade.occurred_at,
+        )
+        for existing in self._load_trades():
+            existing_key = self._external_trade_key(
+                market=str(existing["market"]),
+                symbol=str(existing["symbol"]),
+                side=str(existing["side"]),
+                quantity=int(existing["quantity"]),
+                price_cny=existing["price_cny"],
+                occurred_at=datetime.fromisoformat(str(existing["occurred_at"])),
+            )
+            if existing_key != economic_key:
+                continue
+            if str(existing["source"]).upper() == "PAPER_FILL":
+                raise ValueError("external trade conflicts with an existing paper fill")
+            return {
+                "status": "DUPLICATE",
+                "trade": existing,
+                "positions": self.status()["positions"],
+            }
+        result = self.record_trade(
+            market=trade.market.value,
+            symbol=trade.symbol,
+            side=trade.side,
+            quantity=trade.quantity,
+            price_cny=trade.price_cny,
+            source="IMPORT",
+            note=f"user-declared:{trade.capture_artifact_id}",
+            occurred_at=trade.occurred_at,
+        )
+        return result
+
+    @staticmethod
+    def _external_trade_key(
+        *,
+        market: str,
+        symbol: str,
+        side: str,
+        quantity: int,
+        price_cny: object,
+        occurred_at: datetime,
+    ) -> tuple[str, str, str, int, str, str]:
+        return (
+            market.strip().upper(),
+            symbol.strip(),
+            side.strip().upper(),
+            int(quantity),
+            LocalPortfolioService._decimal_text(LocalPortfolioService._decimal(price_cny)),
+            occurred_at.astimezone(UTC).isoformat(),
+        )
 
     def record_review(
         self,

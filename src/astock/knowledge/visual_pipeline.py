@@ -23,6 +23,7 @@ import httpx
 from astock.core.errors import StorageError
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
+from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 from astock.documents.ocr import OcrResult, RapidOcrEngine
 from astock.knowledge.adapter import _ZhihuArticleHtmlParser
@@ -185,9 +186,7 @@ class ZhihuVisualPipelineService:
             "pipeline_version": _VISUAL_PIPELINE_VERSION,
             "author_source_id": author_source_id,
             "semantic_run_id": semantic_run_id,
-            "entries": [
-                item.model_dump(mode="json", exclude={"created_at"}) for item in entries
-            ],
+            "entries": [item.model_dump(mode="json", exclude={"created_at"}) for item in entries],
         }
         identity = sha256_bytes(canonical_json_bytes(payload))
         run_id = f"zhihu-visual-run:{identity}"
@@ -250,18 +249,14 @@ class ZhihuVisualPipelineService:
         try:
             raw_source = self.objects.get_bytes(source_hash)
         except StorageError as exc:
-            raise ValueError(
-                f"VISUAL_SOURCE_SNAPSHOT_OBJECT_MISSING:{source_snapshot_id}"
-            ) from exc
+            raise ValueError(f"VISUAL_SOURCE_SNAPSHOT_OBJECT_MISSING:{source_snapshot_id}") from exc
         html = self._content_html(str(item["content_type"]), raw_source)
         parser = _ContentImageParser()
         parser.feed(html)
         parser.close()
         images = parser.images
         placeholder_rows = [
-            row
-            for row in paragraphs
-            if str(row["text_object_hash"]) == _PLACEHOLDER_OBJECT_HASH
+            row for row in paragraphs if str(row["text_object_hash"]) == _PLACEHOLDER_OBJECT_HASH
         ]
         if len(images) != len(placeholder_rows):
             raise ValueError(
@@ -300,9 +295,8 @@ class ZhihuVisualPipelineService:
                     "preceding_paragraph_id": str(preceding["paragraph_id"]),
                     "following_paragraph_id": str(following["paragraph_id"]),
                 }
-                synthetic_id = (
-                    "visual-context-argument:"
-                    + sha256_bytes(canonical_json_bytes(synthetic_seed))
+                synthetic_id = "visual-context-argument:" + sha256_bytes(
+                    canonical_json_bytes(synthetic_seed)
                 )
                 synthetic_payload = {
                     "schema_version": "zhihu-visual-context-anchor-v1",
@@ -329,9 +323,8 @@ class ZhihuVisualPipelineService:
                 "placeholder_paragraph_id": str(placeholder["paragraph_id"]),
                 "image_url_hash": image_url_hash,
             }
-            placement_id = (
-                "zhihu-visual-placement:"
-                + sha256_bytes(canonical_json_bytes(placement_seed))
+            placement_id = "zhihu-visual-placement:" + sha256_bytes(
+                canonical_json_bytes(placement_seed)
             )
             result.append(
                 ZhihuVisualInventoryEntry(
@@ -569,9 +562,7 @@ class ZhihuVisualPipelineService:
             fetch_reasons,
         )
         checkpoint_status = (
-            "SUCCEEDED"
-            if pack.status is ZhihuVisualPackStatus.READY
-            else pack.status.value
+            "SUCCEEDED" if pack.status is ZhihuVisualPackStatus.READY else pack.status.value
         )
         self._checkpoint(
             manifest,
@@ -627,10 +618,7 @@ class ZhihuVisualPipelineService:
             max_workers=workers,
             thread_name_prefix="zhihu-visual-fetch",
         ) as pool:
-            futures = [
-                (index, pool.submit(self._fetch_visual, entry))
-                for index, entry in batch
-            ]
+            futures = [(index, pool.submit(self._fetch_visual, entry)) for index, entry in batch]
             for index, future in futures:
                 try:
                     fetched_items.append((index, future.result()))
@@ -675,10 +663,7 @@ class ZhihuVisualPipelineService:
         if not items:
             return {}
         if self._ocr_engine is not None:
-            return {
-                item.entry.placement_id: self._ocr(item.fetched.image_bytes)
-                for item in items
-            }
+            return {item.entry.placement_id: self._ocr(item.fetched.image_bytes) for item in items}
         windows_results = self._windows_ocr_batch(items)
         result: dict[str, ZhihuOcrAttempt] = {}
         for item in items:
@@ -689,7 +674,9 @@ class ZhihuVisualPipelineService:
         return result
 
     def _windows_ocr_batch(self, items: list[_FetchedVisual]) -> dict[str, ZhihuOcrAttempt]:
-        script = Path(__file__).resolve().parents[3] / "scripts" / "windows_ocr_batch.ps1"
+        script = (
+            resolve_project_root(module_file=Path(__file__)) / "scripts" / "windows_ocr_batch.ps1"
+        )
         if not script.is_file():
             return {}
         manifest = [
@@ -1028,11 +1015,7 @@ class ZhihuVisualPipelineService:
             raise ValueError(
                 f"VISUAL_PIPELINE_FORBIDS_NEEDS_REVIEW:{manifest.author_source_id}:{needs_review}"
             )
-        status = (
-            ZhihuVisualPackStatus.NEEDS_INFO
-            if missing_count
-            else ZhihuVisualPackStatus.READY
-        )
+        status = ZhihuVisualPackStatus.NEEDS_INFO if missing_count else ZhihuVisualPackStatus.READY
         seed = {
             "schema_version": "visual-evidence-pack-v1",
             "run_id": manifest.run_id,
@@ -1201,21 +1184,25 @@ def _image_dimensions(data: bytes) -> tuple[int | None, int | None]:
             segment_length = int.from_bytes(data[index : index + 2], "big")
             if segment_length < 2 or index + segment_length > len(data):
                 break
-            if marker in {
-                0xC0,
-                0xC1,
-                0xC2,
-                0xC3,
-                0xC5,
-                0xC6,
-                0xC7,
-                0xC9,
-                0xCA,
-                0xCB,
-                0xCD,
-                0xCE,
-                0xCF,
-            } and segment_length >= 7:
+            if (
+                marker
+                in {
+                    0xC0,
+                    0xC1,
+                    0xC2,
+                    0xC3,
+                    0xC5,
+                    0xC6,
+                    0xC7,
+                    0xC9,
+                    0xCA,
+                    0xCB,
+                    0xCD,
+                    0xCE,
+                    0xCF,
+                }
+                and segment_length >= 7
+            ):
                 height = int.from_bytes(data[index + 3 : index + 5], "big")
                 width = int.from_bytes(data[index + 5 : index + 7], "big")
                 return width, height

@@ -14,6 +14,7 @@ import numpy as np
 from astock.core.errors import PolicyError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
+from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 from astock.market_data.reference import MarketReferenceService
 from astock.paper_trading.ledger import LedgerService
@@ -31,6 +32,7 @@ from astock.portfolio.analytics import (
     minimum_variance_weights,
     portfolio_risk_statistics,
 )
+from astock.portfolio.total_return import build_total_return_research_series
 from astock.schemas.committee import CommitteeRuleConfig, TradeProtocolOutcome
 from astock.schemas.market import Market
 from astock.schemas.portfolio import (
@@ -44,7 +46,7 @@ from astock.schemas.portfolio import (
     PortfolioHoldingInput,
     PortfolioRiskMetrics,
 )
-from astock.schemas.reference_data import ReferenceCoverageStatus
+from astock.schemas.reference_data import ReferenceCoverageStatus, ReferenceDatasetKind
 from astock.schemas.research_runtime import ClassifiedTradeProtocol, TradingClassificationRelease
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -61,6 +63,11 @@ class _History:
     release_id: str
     release_object_hash: str
     cutoff_at: datetime
+    average_daily_amount_cny: float | None = None
+    research_closes_by_date: dict[str, float] | None = None
+    corporate_action_release_id: str | None = None
+    corporate_action_release_object_hash: str | None = None
+    research_series_warning_codes: tuple[str, ...] = ()
 
 
 _Aligned = AlignedPortfolioData
@@ -87,7 +94,9 @@ class PortfolioService:
         self.ledger = LedgerService(state, objects)
         self.allocator_registry = allocator_registry or default_portfolio_allocator_registry()
         policy_path = allocator_policy_path or (
-            Path(__file__).resolve().parents[3] / "configs" / "portfolio_allocators.yaml"
+            resolve_project_root(module_file=Path(__file__))
+            / "configs"
+            / "portfolio_allocators.yaml"
         )
         self.allocator_policy = load_portfolio_allocator_policy(policy_path)
         missing_methods = set(self.allocator_policy.enabled_methods) - set(
@@ -152,6 +161,12 @@ class PortfolioService:
                 histories.append(history)
                 source_ids.append(f"market-reference:{history.release_id}")
                 source_hashes.append(history.release_object_hash)
+                if (
+                    history.corporate_action_release_id
+                    and history.corporate_action_release_object_hash
+                ):
+                    source_ids.append(f"market-reference:{history.corporate_action_release_id}")
+                    source_hashes.append(history.corporate_action_release_object_hash)
             benchmark = self._history(
                 request.benchmark_symbol,
                 request.benchmark_market,
@@ -270,6 +285,13 @@ class PortfolioService:
                 histories.append(history)
                 source_ids.append(f"market-reference:{history.release_id}")
                 source_hashes.append(history.release_object_hash)
+                if (
+                    history.corporate_action_release_id
+                    and history.corporate_action_release_object_hash
+                ):
+                    source_ids.append(f"market-reference:{history.corporate_action_release_id}")
+                    source_hashes.append(history.corporate_action_release_object_hash)
+                warnings.update(history.research_series_warning_codes)
             benchmark = self._history(
                 request.benchmark_symbol,
                 request.benchmark_market,
@@ -289,7 +311,8 @@ class PortfolioService:
             )
             if np.max(np.abs(aligned.asset_returns)) > 0.35:
                 raise ValueError(
-                    "unadjusted history contains a material corporate-action-like jump"
+                    "research return history contains a material residual jump requiring "
+                    "data/corporate-action review"
                 )
             groups = {company_id: group for company_id, _, group in admitted}
             target = min(
@@ -506,9 +529,7 @@ class PortfolioService:
                 raise
             report = self.reference.sync_daily(company_id, market, start, end, live=True)
             if report.status is ReferenceCoverageStatus.FAILED or report.release_id is None:
-                raise ValueError(
-                    "live daily synchronization did not publish a release"
-                ) from None
+                raise ValueError("live daily synchronization did not publish a release") from None
             cutoff = datetime.now(UTC)
             bars, release_id = self.verifier.visible_daily_history(
                 market,
@@ -551,6 +572,37 @@ class PortfolioService:
         if not self.objects.verify(object_hash):
             raise ValueError("daily reference release object is unavailable")
         closes = {item.session_date.isoformat(): float(item.close) for item in bars}
+        amounts = [float(item.amount) for item in bars if item.amount is not None]
+        average_daily_amount_cny = float(np.mean(amounts)) if amounts else None
+        research_closes = dict(closes)
+        corporate_action_release_id: str | None = None
+        corporate_action_release_hash: str | None = None
+        research_warnings: set[str] = set()
+        if market is not Market.INDEX:
+            action_release = self.state.get_market_reference_release(
+                ReferenceDatasetKind.CORPORATE_ACTION.value,
+                f"{market.value}:{company_id}",
+                as_of=cutoff,
+            )
+            if action_release is None:
+                research_warnings.add("CORPORATE_ACTION_RELEASE_UNAVAILABLE_FOR_TOTAL_RETURN")
+            else:
+                corporate_action_release_id = str(action_release["release_id"])
+                corporate_action_release_hash = str(action_release["artifact_object_hash"])
+                if not self.objects.verify(corporate_action_release_hash):
+                    raise ValueError("corporate-action reference release object is unavailable")
+                actions = self.verifier.corporate_actions(
+                    market,
+                    corporate_action_release_id,
+                    visible_at=cutoff,
+                )
+                total_return = build_total_return_research_series(
+                    closes,
+                    actions,
+                    as_of=cutoff,
+                )
+                research_closes = total_return.closes_by_date
+                research_warnings.update(total_return.warning_codes)
         return _History(
             company_id=company_id,
             market=market,
@@ -559,6 +611,11 @@ class PortfolioService:
             release_id=release_id,
             release_object_hash=object_hash,
             cutoff_at=cutoff,
+            average_daily_amount_cny=average_daily_amount_cny,
+            research_closes_by_date=research_closes,
+            corporate_action_release_id=corporate_action_release_id,
+            corporate_action_release_object_hash=corporate_action_release_hash,
+            research_series_warning_codes=tuple(sorted(research_warnings)),
         )
 
     @staticmethod
@@ -578,8 +635,8 @@ class PortfolioService:
     ) -> _Aligned:
         return align_return_histories(
             [item.company_id for item in histories],
-            [item.closes_by_date for item in histories],
-            benchmark.closes_by_date,
+            [item.research_closes_by_date or item.closes_by_date for item in histories],
+            benchmark.research_closes_by_date or benchmark.closes_by_date,
             lookback_sessions=lookback_sessions,
             minimum_sessions=minimum_sessions,
         )
@@ -605,12 +662,17 @@ class PortfolioService:
         benchmark_returns = aligned.benchmark_returns
         contribution_fractions = stats.risk_contribution_fractions
         top_risk = (
-            float(np.max(np.abs(contribution_fractions)))
-            if len(contribution_fractions)
-            else 0.0
+            float(np.max(np.abs(contribution_fractions))) if len(contribution_fractions) else 0.0
         )
         industries: dict[str, float] = {}
-        warnings: set[str] = {"UNADJUSTED_DAILY_RETURN_SERIES"}
+        research_warning_codes = {
+            code for history in histories for code in history.research_series_warning_codes
+        }
+        warnings: set[str] = set(research_warning_codes)
+        if research_warning_codes:
+            warnings.add("TOTAL_RETURN_RESEARCH_SERIES_PARTIAL")
+        else:
+            warnings.add("TOTAL_RETURN_RESEARCH_SERIES")
         for holding in holdings:
             tag = holding.industry_tag or "UNVERIFIED"
             industries[tag] = industries.get(tag, 0.0) + float(holding.weight or 0)
@@ -632,9 +694,7 @@ class PortfolioService:
             > float(self.committee_rules.max_industry_exposure) + 1e-9
         ):
             hard.add("MAX_INDUSTRY_EXPOSURE_BREACH")
-        if stats.max_abs_pair_correlation > float(
-            self.committee_rules.max_abs_correlation
-        ) + 1e-9:
+        if stats.max_abs_pair_correlation > float(self.committee_rules.max_abs_correlation) + 1e-9:
             hard.add("MAX_CORRELATION_BREACH")
         if stats.max_drawdown > float(self.committee_rules.max_portfolio_drawdown) + 1e-9:
             hard.add("MAX_DRAWDOWN_BREACH")

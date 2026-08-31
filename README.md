@@ -217,12 +217,12 @@ uv run astock portfolio-construct portfolio-construction.json
 - `$company-deep-research`：单公司完整投研；
 - `$financial-integrity-audit`：财务可信度；
 - `$evidence-investigation`：关键证据补全；
-- `$holding-monitor`：持仓增量复核；
-- `$portfolio-manager`：组合评估与受约束构建；
+- `$holding-monitor`：外部持仓事实恢复、事件驱动增量复核与目标带再平衡；
+- `$portfolio-manager`：组合评估、计划买入后的组合补全、风险缺口预筛、成本/no-trade band 与对冲语义；
 - `$paper-trading-recovery`：模拟盘恢复；
 - `$knowledge-ingest`：批准来源的知识采集。
 
-人类可见能力目录见 [`skills/README.md`](skills/README.md)；canonical Skill 仍位于 `.agents/skills/`，避免复制第二套 `SKILL.md`。跨 Skill 的完整任务链统一记录在 [`docs/workflows/README.md`](docs/workflows/README.md)，当前覆盖单股研究、候选发现、证据补全、财务审计、投委会/交易计划、组合、持仓、模拟盘、知识采集和前瞻评估。
+人类可见能力目录见 [`skills/README.md`](skills/README.md)；canonical Skill 仍位于 `.agents/skills/`，避免复制第二套 `SKILL.md`。跨 Skill 的完整任务链统一记录在 [`docs/workflows/README.md`](docs/workflows/README.md)，当前覆盖单股研究、候选发现、证据补全、财务审计、投委会/交易计划、组合构建、计划买入后的组合迁移/对冲评估、持仓再平衡、模拟盘、知识采集和前瞻评估。
 
 Agent 的默认低 token 工作方式是：先读最终压缩工件，再按 evidence locator 精确打开必要证据。不要让多个 Agent 重复读取同一批原文。
 

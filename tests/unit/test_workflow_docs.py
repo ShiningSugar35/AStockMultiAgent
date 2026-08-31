@@ -22,6 +22,8 @@ EXPECTED_WORKFLOWS = {
     "workflow-model-risk-backtest-validation.md",
     "workflow-committee-trade-plan.md",
     "workflow-portfolio-construction.md",
+    "workflow-portfolio-transition-and-hedging.md",
+    "workflow-holding-rebalance-decision.md",
     "workflow-holding-monitoring.md",
     "workflow-paper-trading.md",
     "workflow-knowledge-ingest.md",

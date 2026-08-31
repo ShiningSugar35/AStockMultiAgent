@@ -24,6 +24,16 @@ class LifecycleSourceType(StrEnum):
     MANUAL = "MANUAL"
 
 
+class HoldingEventSeverity(StrEnum):
+    THESIS_INVALIDATING = "THESIS_INVALIDATING"
+    THESIS_WEAKENING = "THESIS_WEAKENING"
+    THESIS_STRENGTHENING = "THESIS_STRENGTHENING"
+    VALUATION_ONLY = "VALUATION_ONLY"
+    PORTFOLIO_RISK_ONLY = "PORTFOLIO_RISK_ONLY"
+    TEMPORARY_NOISE = "TEMPORARY_NOISE"
+    UNVERIFIED_LEAD = "UNVERIFIED_LEAD"
+
+
 class LifecycleCondition(AStockModel):
     rule_id: str = Field(min_length=1)
     signal_code: str = Field(min_length=1)
@@ -158,6 +168,48 @@ class HoldingRuleSignal(AStockModel):
         return self
 
 
+class HoldingTargetBandInput(AStockModel):
+    current_quantity: int | None = Field(default=None, ge=0)
+    current_weight: float | None = Field(default=None, ge=0, le=1)
+    target_weight_lower: float | None = Field(default=None, ge=0, le=1)
+    target_weight_mid: float | None = Field(default=None, ge=0, le=1)
+    target_weight_upper: float | None = Field(default=None, ge=0, le=1)
+    target_quantity_min: int | None = Field(default=None, ge=0)
+    target_quantity_max: int | None = Field(default=None, ge=0)
+    implementation_cost_fen: int | None = Field(default=None, ge=0)
+    preconditions: list[str] = Field(default_factory=list)
+    reversal_conditions: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_target_band(self) -> HoldingTargetBandInput:
+        weights = (
+            self.target_weight_lower,
+            self.target_weight_mid,
+            self.target_weight_upper,
+        )
+        if any(value is not None for value in weights):
+            if any(value is None for value in weights):
+                raise ValueError("holding target weight band must provide lower/mid/upper together")
+            assert self.target_weight_lower is not None
+            assert self.target_weight_mid is not None
+            assert self.target_weight_upper is not None
+            if not (self.target_weight_lower <= self.target_weight_mid <= self.target_weight_upper):
+                raise ValueError("holding target weights must satisfy lower<=mid<=upper")
+        if (
+            self.target_quantity_min is not None
+            and self.target_quantity_max is not None
+            and self.target_quantity_min > self.target_quantity_max
+        ):
+            raise ValueError("holding target quantity minimum cannot exceed maximum")
+        for label, values in (
+            ("precondition", self.preconditions),
+            ("reversal condition", self.reversal_conditions),
+        ):
+            if values != sorted(set(values)):
+                raise ValueError(f"holding target {label}s must be sorted and unique")
+        return self
+
+
 class HoldingReviewRequest(AStockModel):
     plan_id: str = Field(min_length=1)
     from_as_of: AwareDatetime
@@ -167,6 +219,9 @@ class HoldingReviewRequest(AStockModel):
     invalidated_evidence_ids: list[str]
     unresolved_conflict_ids: list[str]
     signals: list[HoldingRuleSignal]
+    event_severity: HoldingEventSeverity | None = None
+    portfolio_effect_codes: list[str] = Field(default_factory=list)
+    target_band: HoldingTargetBandInput | None = None
 
     @model_validator(mode="after")
     def validate_review_window_and_sets(self) -> HoldingReviewRequest:
@@ -177,6 +232,7 @@ class HoldingReviewRequest(AStockModel):
             ("changed claim", self.changed_claim_ids),
             ("invalidated evidence", self.invalidated_evidence_ids),
             ("unresolved conflict", self.unresolved_conflict_ids),
+            ("portfolio effect", self.portfolio_effect_codes),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"holding review {label} ids must be unique")
@@ -188,8 +244,10 @@ class HoldingReviewRequest(AStockModel):
 
 __all__ = [
     "DecisionReferenceStatus",
+    "HoldingEventSeverity",
     "HoldingReviewRequest",
     "HoldingRuleSignal",
+    "HoldingTargetBandInput",
     "LifecycleCondition",
     "LifecycleMetricDefinition",
     "LifecycleSourceType",

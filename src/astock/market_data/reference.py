@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from astock.core.errors import AStockError, StorageError
 from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.project_root import resolve_project_root
 from astock.core.source_resilience import (
     SourceCircuitBreaker,
     SourceFailureClass,
@@ -124,7 +125,7 @@ class MarketReferenceService:
         self.objects = objects
         self.parquet = parquet
         self.fixture_root = fixture_root.resolve()
-        self.project_root = Path(__file__).resolve().parents[3]
+        self.project_root = resolve_project_root(module_file=Path(__file__))
         self.provider_registry = load_provider_registry(
             self.project_root / "configs" / "provider_registry.yaml"
         )

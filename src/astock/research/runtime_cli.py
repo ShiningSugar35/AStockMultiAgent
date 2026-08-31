@@ -15,6 +15,7 @@ from astock.market_data.storage import CanonicalMarketStore
 from astock.monitoring.cli import register_continuous_monitor_commands
 from astock.portfolio.allocators import load_portfolio_allocator_policy
 from astock.portfolio.cli import register_portfolio_commands
+from astock.portfolio.decision_cli import register_portfolio_decision_commands
 from astock.portfolio.vnext_cli import register_portfolio_vnext_commands
 from astock.providers.dialects import load_provider_dialects
 from astock.providers.runtime import load_transport_profiles
@@ -96,6 +97,7 @@ def register_research_runtime_commands(
     register_candidate_input_commands(app, services, emit)
     register_continuous_monitor_commands(app, services, emit)
     register_portfolio_commands(app, services, emit)
+    register_portfolio_decision_commands(app, services, emit)
     register_portfolio_vnext_commands(app, services, emit)
     register_prospective_governance_commands(app, services, emit)
     register_research_production_commands(app, services, emit)

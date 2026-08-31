@@ -5,11 +5,12 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+from astock.core.project_root import resolve_project_root
 from astock.providers.config import load_provider_registry
 
 
 def internal_vocabulary_terms(project_root: Path | None = None) -> set[str]:
-    root = project_root or Path(__file__).resolve().parents[3]
+    root = project_root or resolve_project_root(module_file=Path(__file__))
     terms: set[str] = set()
     try:
         registry = load_provider_registry(root / "configs" / "provider_registry.yaml")

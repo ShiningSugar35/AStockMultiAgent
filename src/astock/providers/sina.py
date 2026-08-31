@@ -38,7 +38,7 @@ class Sina5mProvider(HttpProviderBase):
         return DataProviderCapability(
             provider_id=self.provider_id,
             markets=[Market.XSHG, Market.XSHE, Market.BJSE, Market.INDEX],
-            instrument_types=[InstrumentType.STOCK, InstrumentType.INDEX],
+            instrument_types=[InstrumentType.STOCK, InstrumentType.ETF, InstrumentType.INDEX],
             frequencies=[Frequency.M5, Frequency.H1],
             adjustment_modes=[AdjustmentMode.NONE],
             amount_supported=False,

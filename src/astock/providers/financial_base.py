@@ -11,6 +11,7 @@ import httpx
 
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 from astock.providers.dialects import ProviderDialect, load_provider_dialects
 from astock.providers.runtime import build_provider_http_client
@@ -29,9 +30,7 @@ class FinancialProviderPayload:
 
     @property
     def snapshots(self) -> list[SourceSnapshot]:
-        by_id = {
-            item.snapshot_id: item for item in self.snapshots_by_statement.values()
-        }
+        by_id = {item.snapshot_id: item for item in self.snapshots_by_statement.values()}
         return list(by_id.values())
 
 
@@ -60,7 +59,9 @@ class FinancialProviderBase:
         self.fixture_root = fixture_root.resolve()
         if dialect is None:
             dialects = load_provider_dialects(
-                Path(__file__).resolve().parents[3] / "configs" / "provider_dialects.yaml"
+                resolve_project_root(module_file=Path(__file__))
+                / "configs"
+                / "provider_dialects.yaml"
             )
             try:
                 dialect = dialects[self.provider_id]
@@ -108,9 +109,7 @@ class FinancialProviderBase:
             if not isinstance(payload, dict):
                 raise ValueError
         except (json.JSONDecodeError, TypeError, UnicodeError, ValueError) as exc:
-            raise FinancialRawCaptureError(
-                "FINANCIAL_RAW_INVALID", [snapshot]
-            ) from exc
+            raise FinancialRawCaptureError("FINANCIAL_RAW_INVALID", [snapshot]) from exc
         return payload, snapshot
 
     def _capture_json(
@@ -154,9 +153,7 @@ class FinancialProviderBase:
     ) -> SourceSnapshot:
         object_ref = self.objects.put_bytes(raw)
         request_hash = content_hash(request)
-        snapshot_identity = content_hash(
-            {"raw": object_ref.sha256, "request": request}
-        )
+        snapshot_identity = content_hash({"raw": object_ref.sha256, "request": request})
         snapshot_id = f"{self.provider_id}:{snapshot_identity}"
         existing = self.state.get_snapshot(snapshot_id)
         if existing is not None:
@@ -173,9 +170,7 @@ class FinancialProviderBase:
             source_url=source_url,
             mime=content_type.split(";", maxsplit=1)[0],
             byte_size=object_ref.byte_size,
-            headers_hash=content_hash(
-                {"content_type": content_type, "request": request}
-            ),
+            headers_hash=content_hash({"content_type": content_type, "request": request}),
             fetch_status=FetchStatus.SUCCEEDED if succeeded else FetchStatus.FETCH_FAILED,
             rights_status="PUBLIC_REFERENCE_DATA",
         )

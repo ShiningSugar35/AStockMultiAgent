@@ -12,6 +12,7 @@ import yaml
 
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 from astock.research.repository import ResearchRepository
 from astock.research.resource_policy import load_specialist_resource_policy
@@ -59,7 +60,7 @@ def default_research_production_policy(
     created_at: datetime | None = None,
     project_root: Path | None = None,
 ) -> ResearchProductionPolicy:
-    root = project_root or Path(__file__).resolve().parents[3]
+    root = project_root or resolve_project_root(module_file=Path(__file__))
     path = root / "configs" / "research_production_policy.yaml"
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))

@@ -15,6 +15,7 @@ from astock.paper_trading import LedgerService, PaperReplayService, load_fee_sch
 from astock.paper_trading.ledger import ReplayFillPlan
 from astock.schemas import (
     Frequency,
+    InstrumentType,
     Market,
     OrderSide,
     OrderStatus,
@@ -639,3 +640,22 @@ def test_formal_fifo_lots_preserve_exact_remainder_cost(state, object_store) -> 
         ]
         == "HEALTHY_NOOP"
     )
+
+
+def test_replay_rejects_etf_until_instrument_specific_execution_is_admitted(
+    tmp_path: Path, state, object_store
+) -> None:
+    batch = make_batch("eastmoney-5m", volume_unit=VolumeUnit.LOT_100_SHARES)
+    request = batch.request.model_copy(update={"instrument_type": InstrumentType.ETF})
+    ledger = LedgerService(state, object_store)
+    ledger.initialize_account("paper-etf", 1_000_000)
+    store = CanonicalMarketStore(tmp_path / "data", tmp_path / "manifests")
+    service = PaperReplayService(ledger, store, _CalendarFixture())
+    fee_schedule = load_fee_schedule(PROJECT_ROOT / "configs" / "fee_rules.yaml")
+    with pytest.raises(PolicyError, match="STOCK instruments only"):
+        service.replay(
+            account_id="paper-etf",
+            request=request,
+            requested_cursor=batch.bars[0].timestamp,
+            fee_schedule=fee_schedule,
+        )

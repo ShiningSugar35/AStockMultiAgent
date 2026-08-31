@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from astock.core.project_root import resolve_project_root
 from astock.schemas import SourceClass
 from astock.schemas.source_access import (
     AgentSourceProposal,
@@ -87,7 +88,7 @@ class SourcePolicyGate:
     """Validate one Agent source proposal without turning discovery into evidence."""
 
     def __init__(self, registry: AuthorityDomainRegistry | None = None) -> None:
-        root = Path(__file__).resolve().parents[3]
+        root = resolve_project_root(module_file=Path(__file__))
         self.registry = registry or load_authority_domain_registry(
             root / "configs" / "authority_domains.yaml"
         )
@@ -195,9 +196,7 @@ class SourcePolicyGate:
             source_id=authority.source_id,
             domain=domain,
             source_class=authority.source_class,
-            formal_eligible=(
-                proposal.requested_capability in authority.formal_capabilities
-            ),
+            formal_eligible=(proposal.requested_capability in authority.formal_capabilities),
             exhaustive_proof_allowed=(
                 proposal.requested_capability in authority.exhaustive_capabilities
             ),
@@ -216,8 +215,7 @@ class SourcePolicyGate:
     def _authority_for(self, domain: str) -> AuthoritySource | None:
         for source in self.registry.sources:
             if any(
-                domain == allowed or domain.endswith(f".{allowed}")
-                for allowed in source.domains
+                domain == allowed or domain.endswith(f".{allowed}") for allowed in source.domains
             ):
                 return source
         return None

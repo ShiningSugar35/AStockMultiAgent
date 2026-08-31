@@ -105,19 +105,25 @@ Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`pr
 
 ## 强制开发工作流与恢复契约
 
-- 所有开发任务必须依次执行：`需求分析 → 根因定位与量化/权威研究 → 架构设计 → 性能与可落地性评估 → 开发 → 独立 Code Review → 专业测试 → 文档迁移 → 发布`。任何阶段不通过都必须返回对应开发阶段返工，禁止绕过 Review、测试或发布门。
+- 所有正式开发任务统一压缩为 5 个门：`范围/根因与必要研究 → 架构与实施方案 → 实现 + defect-first Review + 分级验证 → 按风险发布 → 文档归档 + 临时文件清理 + 终局 Review/complete`。详细要求仍由下列条款展开；任何门失败都返回受影响阶段返工。**发布不是最后一步，发布后归档/清理/终局核验才是闭环终点**。
 - 开工前必须以需求分析师身份明确需求、问题边界、不可改变约束和验收口径；先使用代码、日志、数据库、运行工件和测试定位根因，不得凭聊天印象直接改代码。涉及投研策略、数据源、算法、外部规范或安全治理时，优先检索官方文档、原始论文、监管机构或高认可度资料，并记录采用与不采用的理由。
 - 架构师与算法工程师必须评估算法复杂度、CPU、内存、I/O、并发、故障恢复、兼容性、风险与回滚；禁止为了实现功能建立第二套事实源、平行 Router/Evidence/Paper 架构或可漂移状态副本。
 - `开发计划.md` 只保存当前未完成任务。新任务编码前必须写入需求、根因、权威依据、方案、实施步骤、验收标准、测试与 Review 门、风险和回滚；已经完成且验收通过的子任务不得继续保留在计划中。长任务必须同步维护唯一 durable run，记录步骤状态、故障断点和真实证据；未验证的中间进度不得冒充验收事实。
-- 开发完成后必须按开发计划执行独立 Code Review；不符合架构、安全、性能或验收标准时，附明确意见打回返工，返工后重新 Review。Review 通过后按验收标准执行定向、集成、故障注入、静态检查和全仓测试；任何失败必须返回开发返工，禁止带失败发布。
-- 每个子任务 Review 和测试通过后，立即从 `开发计划.md` 删除，并将实现内容、代码修改、测试数字、Review、性能、迁移和发布证据写入 `验收报告.md`。`docs/architecture/` 只维护当前真实架构；过时、重复或被替代内容必须同步修正或删除。仓库已有 `docs/architecture/`，不得仅为恢复流程另建重复的 `项目架构.md`。
-- 最终发布必须完成显式路径暂存、staged diff 审核、secret/private/runtime 审计、commit、push、tag/release、远端验证和 clean worktree；禁止无审计的全量暂存、带失败发布或把本地候选状态预写成已发布。
+- 开发完成后必须按开发计划执行独立 Code Review；不符合架构、安全、性能或验收标准时，附明确意见打回返工，返工后重新 Review。验证按风险分级：**L0 文档/流程/注释**只跑文档合同/文本检查（若存在）、必要格式/静态检查和 `git diff --check`；**L1 单模块低风险代码**跑 targeted regression + 受影响 lint/typecheck；**L2 跨模块/状态/数据库/API/运行态**增加相关集成/负向与必要 smoke；**L3 PIT/Universe/财务/估值/账本/安全/迁移/正式发布**才要求完整专业门、全仓测试与真实/发布级验证。命中多个等级取最高级；Review 发现影响面扩大时必须升级，禁止为 L0/L1 机械跑全仓 pytest，也禁止以提速为由削弱 L3。
+- **发布前文档迁移**：每个子任务 Review 和测试通过后，立即从 `开发计划.md` 删除对应实现任务，并将当时已经成立的实现内容、代码修改、测试、Review、性能、迁移事实写入 `验收报告.md`；`docs/architecture/`、`docs/workflows/` 与 canonical Skills 同步维护当前真实结构。此阶段不得预写尚未发生的 commit SHA、tag/Release、remote digest、clean worktree 或“已发布”等未来事实。
+- **release baseline 发布**：完成显式路径暂存、staged diff 审核、secret/private/runtime 审计、release baseline commit、push、annotated tag/GitHub Release、构建资产上传与远端校验。已发布 tag 是不可变 release baseline；禁止为了后续文档收尾移动、重打或强推该 tag。
+- **发布后文档归档与终局核验是强制阶段，不得省略**：release baseline 远端验证完成后，必须重新读取 `开发计划.md`、`验收报告.md`、相关 `docs/architecture/`、`docs/workflows/`、Repo Skills 和根文档合同测试，再执行第二遍状态迁移。`验收报告.md` 必须回写只有发布后才成立的最终 frozen-tree 测试数字、release baseline SHA、tag/Release、资产 digest、真实 smoke、远端验证和安全边界；architecture/Workflow/Skill 中的“待发布/仍需发布/候选基线”等发布前措辞必须改为真实发布后状态。
+- **开发计划零残留规则**：准备终局 Review 前，必须针对当前 durable run 的 `run title`、所有 step id/step title、当前版本主线名称、release label，以及 `DONE / COMPLETE / 已完成 / 发布过程` 等完成态上下文做一次搜索。除仍未完成并被明确重新分类为“长期运行/数据义务”的事项外，`开发计划.md` 中这些当前主线的任务、完成清单、进度、历史发布过程和“当前状态里列举已完成项目名”的文字必须为零；当前状态只能说明是否存在未完成代码主线和真正未完成的义务。
+- **临时文件清理硬门**：终局 diff 审计前必须清理仅由本任务生成且可证明可再生的临时脚本/patch helper、一次性测试日志/XML、临时 build/smoke 目录、工具缓存和已被正式证据替代的编排副产物；清理后重新查看 worktree。禁止自动删除 `runtime/` 正式对象/数据库、`user_state/`、私有材料、正式构建/Release 资产、未知来源文件或其它会话/用户已有未提交改动；无法证明归属的文件一律保留并说明。
+- **发布后 docs-only closeout commit**：发布后回写 tracked Markdown/合同测试属于独立 docs-only closeout revision，必须按其实际 L0/L1 风险运行文档合同、必要静态检查和 `git diff --check`，并在 commit **之前**完成一次 defect-first closeout diff Review，再显式暂存、commit、push；不因“发布收尾”机械重跑全仓 pytest。此提交不得修改 release 代码、版本号、已发布 tag 或 Release 资产。最终一致性语义固定为：`tag commit == release baseline commit`；`origin/main == closeout commit`；`closeout commit` 必须是 release baseline/tag 的后代；不得再要求发布后 `HEAD == tag commit`。
+- **终局 durable completion**：closeout push 后只做远端关系、worktree、后台 task 与 durable state 的终局核验；若 commit 后 tracked 内容没有再变化，不重复审查同一份 diff。发布前的 PASS Review 不能覆盖新的 closeout 内容，但 commit 前完成的 closeout diff Review 可以作为内容审查依据；随后用 `long_run_review(pass)` 固化最终 revision。只有在“计划零残留、验收/架构/Workflow/Skill 已处于最终事实状态、release baseline/tag 未被移动、closeout commit 已推送、main/远端关系正确、worktree clean、无 running/unknown task”全部成立后，才允许调用 `long_run_complete`。任何 final receipt/最终回复在此之前不得声称 COMPLETE。
+- **无 GitHub Release / 纯文档流程任务不得形成自引用提交循环**：如果任务本身不创建产品 tag/Release，必须在最终 commit **之前**完成计划清理、验收/架构/Workflow/Skill 归档、文档合同和 defect-first diff Review；随后一次 final closeout commit/push 即可。push 后只验证远端/clean/durable completion，不要求再次修改 tracked Markdown写回自身 SHA，也不重复内容 Review，除非 commit 后内容又发生变化。该提交自身 SHA 只记录在 durable evidence/最终回复。
 - MCP 断连、新会话或上下文丢失后，恢复事实源顺序固定为：`AGENTS.md → docs/architecture/ 现行架构合同 → 开发计划.md → 验收报告.md → 唯一 durable run → Git/测试/运行工件`。禁止依赖聊天记忆、创建平行 long-run，或重新编写超长接管提示词替代仓库事实。
 
 ## 工程约定
 
 - Python 版本固定为 `>=3.12,<3.13`，依赖以 `uv.lock` 为准。
-- 修改后运行 `uv run pytest`、`uv run ruff check .`、`uv run pyright`。
+- 修改后的验证集合由上述 L0–L3 决定；文档/流程类 L0 默认只跑文档合同/文本检查、必要格式/静态检查和 `git diff --check`，不机械运行全仓 `uv run pytest`。运行时代码、高风险数据/PIT/账本/安全/发布任务再按 L1–L3 升级到 targeted、全仓、真实 smoke 或发布级验证。
 - 外部 Provider 同时维护 recorded fixture 和低频 live smoke；日常测试不得依赖外网。
 - Windows 路径、UTF-8 中文文件名、原子写入和崩溃恢复必须有测试。
 - 不提交 `runtime/`、密钥、Cookie、浏览器 Profile、私有 PDF、`.ai-bridge/` 或缓存工件。

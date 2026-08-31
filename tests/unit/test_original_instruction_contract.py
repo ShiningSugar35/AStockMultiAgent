@@ -27,9 +27,7 @@ def _fields(model: type) -> set[str]:
 
 
 def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
-    design = (PROJECT_ROOT / "低成本A股多Agent投研系统方案.md").read_text(
-        encoding="utf-8"
-    )
+    design = (PROJECT_ROOT / "低成本A股多Agent投研系统方案.md").read_text(encoding="utf-8")
     plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
     acceptance = (PROJECT_ROOT / "验收报告.md").read_text(encoding="utf-8")
     for required in (
@@ -91,6 +89,30 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     assert "K5-D4-R：" not in plan
     assert "2P + A + 14" not in plan
     assert "旧段落级链" not in design
+
+
+def test_release_closeout_workflow_is_machine_enforced() -> None:
+    agents = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
+    acceptance = (PROJECT_ROOT / "验收报告.md").read_text(encoding="utf-8")
+    for required in (
+        "发布后文档归档与终局核验是强制阶段",
+        "开发计划零残留规则",
+        "发布后 docs-only closeout commit",
+        "tag commit == release baseline commit",
+        "origin/main == closeout commit",
+        "不得再要求发布后 `HEAD == tag commit`",
+        "才允许调用 `long_run_complete`",
+        "无 GitHub Release / 纯文档流程任务不得形成自引用提交循环",
+        "一次 final closeout commit/push 即可",
+        "临时文件清理硬门",
+        "L0 文档/流程/注释",
+        "禁止为 L0/L1 机械跑全仓 pytest",
+    ):
+        assert required in agents
+    assert "正式 release 结束后还必须执行一次发布后归档" in plan
+    assert "v0.2.0 最终正式发布仍必须" not in acceptance
+    assert "**发布终态**" in acceptance
 
 
 def test_original_instruction_public_schemas_keep_all_required_fields() -> None:

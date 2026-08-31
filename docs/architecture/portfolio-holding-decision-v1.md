@@ -1,6 +1,6 @@
 # Portfolio & Holding Decision Architecture v1
 
-> 状态：v0.2.0 tracked 发布基线；最终 Git tag/Release/commit 一致性以发布动作后的远端与 durable final evidence 为准
+> 状态：v0.2.0 已正式发布；release baseline 为 commit `b776d0054b60d96f5c4da41b10926c1e583bc699`，annotated tag `v0.2.0` 与 GitHub Release 均指向该提交；后续纯文档收尾提交不改变该发布基线
 > 日期：2026-08-31
 > 边界：A 股 long-only 投研、组合研究、持仓复核和模拟交易建议；真实券商执行永久关闭。ETF 当前只开放研究/组合评估基础，paper order/replay 未准入。
 

@@ -43,12 +43,15 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     for required in (
         "本文件只保存当前未完成任务",
         "维护契约",
-        "External Dependency Resilience v1",
         "当前没有未完成的代码发布主线",
         "独立长期运行/数据义务",
     ):
         assert required in plan
     for completed_history in (
+        "External Dependency Resilience v1",
+        "Portfolio & Holding Decision Skills v1",
+        "PHD-1",
+        "PHD-7",
         "s8 — 显式提交、推送、Tag/GitHub Release 与 clean worktree",
         "当前未完成主线：External Dependency Resilience v1",
         "Phase 5：COMPLETE",

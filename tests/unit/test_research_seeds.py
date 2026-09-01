@@ -99,7 +99,7 @@ class _FakeSeedProvider:
                         "f3": pct_change,
                     }
                     for symbol, name, price, amount, turnover, float_cap, pct_change in rows
-                ]
+                ],
             },
             "_astock_request": {"market": market.value, "purpose": "RESEARCH_SEED_ONLY"},
         }
@@ -318,7 +318,9 @@ def test_research_seed_report_merges_market_and_expert_sources_and_audits(
     assert report.market_seed_count > 0
     assert report.expert_seed_count > 0
     assert report.universe_coverage_status is ResearchUniverseCoverageStatus.FULL
-    assert report.formal_full_market_coverage_allowed
+    assert report.universe_coverage_level.value == "ENGINEERING_HIGH_COVERAGE"
+    assert not report.formal_full_market_coverage_allowed
+    assert "FORMAL_UNIVERSE_DENOMINATOR_NOT_RECONCILED" in report.warning_codes
     assert report.market_coverage_ratios == {
         Market.XSHG: 1.0,
         Market.XSHE: 1.0,
@@ -351,8 +353,7 @@ def test_partial_market_coverage_is_observation_only(tmp_path: Path) -> None:
     assert not report.formal_full_market_coverage_allowed
     assert report.market_coverage_ratios[Market.XSHG] == 2 / 3
     assert any(
-        item.startswith("MARKET_SEED_UNIVERSE_PARTIAL:XSHG:")
-        for item in report.warning_codes
+        item.startswith("MARKET_SEED_UNIVERSE_PARTIAL:XSHG:") for item in report.warning_codes
     )
 
 
@@ -371,7 +372,8 @@ def test_full_universe_with_zero_eligible_market_candidates_is_not_unavailable(
 
     assert report.status is ResearchSeedStatus.EMPTY
     assert report.universe_coverage_status is ResearchUniverseCoverageStatus.FULL
-    assert report.formal_full_market_coverage_allowed
+    assert report.universe_coverage_level.value == "ENGINEERING_HIGH_COVERAGE"
+    assert not report.formal_full_market_coverage_allowed
     assert report.market_seed_count == 0
     assert "CURRENT_MARKET_SCAN_ZERO_ELIGIBLE_CANDIDATES" in report.warning_codes
     assert "CURRENT_MARKET_SEED_UNIVERSE_UNAVAILABLE" not in report.warning_codes

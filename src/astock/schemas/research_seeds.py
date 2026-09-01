@@ -9,6 +9,7 @@ from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.market import Market
+from astock.schemas.universe_coverage import UniverseCoverageLevel, UniverseCoverageProof
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -127,7 +128,7 @@ class ResearchSeedRequest(AStockModel):
 
 
 class ResearchSeedReport(AStockModel):
-    schema_version: str = "research-seed-report-v1"
+    schema_version: str = "research-seed-report-v2"
     report_id: str = Field(min_length=1)
     as_of: AwareDatetime
     data_cutoff_at: AwareDatetime
@@ -140,6 +141,8 @@ class ResearchSeedReport(AStockModel):
     source_object_hashes: list[str]
     warning_codes: list[str]
     market_coverage_ratios: dict[Market, float] = Field(default_factory=dict)
+    universe_coverage_level: UniverseCoverageLevel = UniverseCoverageLevel.UNAVAILABLE
+    universe_coverage_proof: UniverseCoverageProof | None = None
     universe_coverage_status: ResearchUniverseCoverageStatus = (
         ResearchUniverseCoverageStatus.UNAVAILABLE
     )
@@ -159,6 +162,54 @@ class ResearchSeedReport(AStockModel):
             raise ValueError("research-seed report lists must be sorted and unique")
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def derive_coverage_authority(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        proof = payload.get("universe_coverage_proof")
+        if proof is None:
+            raw_ratios = payload.get("market_coverage_ratios")
+            ratios: dict[str, float] = {}
+            if isinstance(raw_ratios, dict):
+                for key, raw in raw_ratios.items():
+                    try:
+                        ratios[str(key)] = float(raw)
+                    except (TypeError, ValueError):
+                        continue
+            equity = {Market.XSHG.value, Market.XSHE.value, Market.BJSE.value}
+            level = (
+                UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE
+                if set(ratios) == equity and all(item >= 0.995 for item in ratios.values())
+                else (
+                    UniverseCoverageLevel.PARTIAL if ratios else UniverseCoverageLevel.UNAVAILABLE
+                )
+            )
+            payload["universe_coverage_level"] = level.value
+            # v1 allowed callers to persist this boolean. Missing typed denominator
+            # evidence always downgrades the claim instead of upgrading it.
+            payload["formal_full_market_coverage_allowed"] = False
+            return payload
+        proof_level = (
+            proof.coverage_level
+            if isinstance(proof, UniverseCoverageProof)
+            else (
+                proof.get("coverage_level")
+                if isinstance(proof, dict)
+                else UniverseCoverageLevel.UNAVAILABLE
+            )
+        )
+        try:
+            normalized = UniverseCoverageLevel(str(proof_level))
+        except ValueError:
+            normalized = UniverseCoverageLevel.UNAVAILABLE
+        payload["universe_coverage_level"] = normalized.value
+        payload["formal_full_market_coverage_allowed"] = (
+            normalized is UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED
+        )
+        return payload
+
     @model_validator(mode="after")
     def validate_counts(self) -> ResearchSeedReport:
         market = sum(ResearchSeedOrigin.MARKET in item.origins for item in self.seeds)
@@ -177,27 +228,80 @@ class ResearchSeedReport(AStockModel):
         if any(value < 0 or value > 1 for value in self.market_coverage_ratios.values()):
             raise ValueError("market coverage ratios must stay in [0,1]")
         equity_markets = {Market.XSHG, Market.XSHE, Market.BJSE}
-        full = (
-            set(self.market_coverage_ratios) == equity_markets
-            and all(value >= 0.995 for value in self.market_coverage_ratios.values())
+        engineering_full = set(self.market_coverage_ratios) == equity_markets and all(
+            value >= 0.995 for value in self.market_coverage_ratios.values()
         )
+        if self.universe_coverage_proof is not None:
+            if self.universe_coverage_level is not self.universe_coverage_proof.coverage_level:
+                raise ValueError("research-seed coverage level must match typed proof")
+            if self.universe_coverage_proof.as_of > self.data_cutoff_at:
+                raise ValueError("Universe coverage proof cannot postdate the report data cutoff")
+            proof_ratios = {
+                item.market: item.coverage_ratio
+                for item in self.universe_coverage_proof.market_reconciliations
+                if item.coverage_ratio is not None
+            }
+            if proof_ratios != self.market_coverage_ratios:
+                raise ValueError("legacy market coverage ratios must match typed proof")
+            proof_snapshot_ids = {
+                snapshot_id
+                for item in self.universe_coverage_proof.market_reconciliations
+                for snapshot_id in item.source_snapshot_ids
+            }
+            if not proof_snapshot_ids.issubset(self.source_snapshot_ids):
+                raise ValueError("Universe coverage proof snapshots must be report inputs")
+            proof_hashes = {
+                object_hash
+                for item in self.universe_coverage_proof.market_reconciliations
+                for object_hash in (item.denominator_object_hash, item.numerator_object_hash)
+                if object_hash is not None
+            }
+            if not proof_hashes.issubset(self.source_object_hashes):
+                raise ValueError("Universe coverage proof hashes must be report inputs")
+        elif self.universe_coverage_level is UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED:
+            raise ValueError("formal Universe coverage requires a typed denominator proof")
+        expected_level = (
+            UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE
+            if engineering_full
+            else (
+                UniverseCoverageLevel.PARTIAL
+                if self.market_coverage_ratios
+                else UniverseCoverageLevel.UNAVAILABLE
+            )
+        )
+        if (
+            self.universe_coverage_proof is None
+            and self.universe_coverage_level is not expected_level
+        ):
+            raise ValueError("legacy Universe coverage level does not match market ratios")
         expected_status = (
             ResearchUniverseCoverageStatus.FULL
-            if full
+            if self.universe_coverage_level
+            in {
+                UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE,
+                UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED,
+            }
             else (
                 ResearchUniverseCoverageStatus.PARTIAL
-                if self.market_coverage_ratios
+                if self.universe_coverage_level is UniverseCoverageLevel.PARTIAL
                 else ResearchUniverseCoverageStatus.UNAVAILABLE
             )
         )
         if self.universe_coverage_status is not expected_status:
-            raise ValueError("research-seed universe coverage status does not match ratios")
-        if self.status is ResearchSeedStatus.EMPTY and not full:
-            raise ValueError("EMPTY research-seed status requires a proven FULL universe")
-        if self.status is ResearchSeedStatus.NEEDS_INFO and full and not self.seeds:
-            raise ValueError("proven FULL zero-result reports must use EMPTY status")
-        if self.formal_full_market_coverage_allowed != full:
-            raise ValueError("formal full-market coverage authority must match >=99.5% per market")
+            raise ValueError("research-seed universe coverage status does not match proof level")
+        full_scan = expected_status is ResearchUniverseCoverageStatus.FULL
+        if self.status is ResearchSeedStatus.EMPTY and not full_scan:
+            raise ValueError(
+                "EMPTY research-seed status requires high engineering Universe coverage"
+            )
+        if self.status is ResearchSeedStatus.NEEDS_INFO and full_scan and not self.seeds:
+            raise ValueError("high-coverage zero-result reports must use EMPTY status")
+        formal = (
+            self.universe_coverage_proof is not None
+            and self.universe_coverage_proof.formal_full_market_coverage_allowed
+        )
+        if self.formal_full_market_coverage_allowed != formal:
+            raise ValueError("formal full-market authority must derive from typed coverage proof")
         return self
 
 
@@ -210,4 +314,6 @@ __all__ = [
     "ResearchSeedRequest",
     "ResearchSeedStatus",
     "ResearchUniverseCoverageStatus",
+    "UniverseCoverageLevel",
+    "UniverseCoverageProof",
 ]

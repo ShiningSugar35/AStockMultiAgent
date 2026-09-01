@@ -805,6 +805,12 @@ from astock.schemas.temporal_validity import (
     TemporalPipelineNode,
     TruncationInvarianceResult,
 )
+from astock.schemas.universe_coverage import (
+    MarketCoverageReconciliation,
+    UniverseCoverageLevel,
+    UniverseCoverageProof,
+    UniverseDenominatorAuthority,
+)
 
 __all__ = [
     "AccessTransport",
@@ -1445,6 +1451,10 @@ __all__ = [
     "ProviderRegistry",
     "ProviderStatusReport",
     "ProviderTransport",
+    "MarketCoverageReconciliation",
+    "UniverseCoverageLevel",
+    "UniverseCoverageProof",
+    "UniverseDenominatorAuthority",
     "ReviewApplicationStatus",
     "ReviewArgumentTarget",
     "ReviewDecision",

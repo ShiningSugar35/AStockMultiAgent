@@ -11,6 +11,7 @@ from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.market import AdjustmentMode, AmountUnit, InstrumentType, Market, VolumeUnit
+from astock.schemas.universe_coverage import MarketCoverageReconciliation
 
 
 class ReferenceDatasetKind(StrEnum):
@@ -276,6 +277,8 @@ class ReferenceFileDescriptor(AStockModel):
 
 
 class DatasetReleaseManifest(AStockModel):
+    # Omitted schema_version retains the legacy wire contract. New publishing
+    # code opts into v3 explicitly so old cached fixtures remain readable.
     schema_version: str = "market-reference-release-v2"
     release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -288,6 +291,9 @@ class DatasetReleaseManifest(AStockModel):
     observation_files: list[ReferenceFileDescriptor] = Field(min_length=1)
     canonical_files: list[ReferenceFileDescriptor] = Field(min_length=1)
     coverage: ReferenceCoverage
+    market_coverage_reconciliations: list[MarketCoverageReconciliation] = Field(
+        default_factory=list
+    )
     pit_status: ReferencePitStatus
     available_to_system_at: AwareDatetime
 
@@ -299,10 +305,48 @@ class DatasetReleaseManifest(AStockModel):
             raise ValueError("release file paths must be unique")
         if any(item.logical_content_hash != self.content_hash for item in files):
             raise ValueError("release file logical hashes must match content_hash")
+        reconciliations = self.market_coverage_reconciliations
+        if self.dataset_kind is not ReferenceDatasetKind.INSTRUMENT_MASTER:
+            if reconciliations:
+                raise ValueError(
+                    "only Instrument Master releases may carry Universe reconciliation"
+                )
+            return self
+        if self.schema_version == "market-reference-release-v3" and self.coverage.record_count:
+            if not reconciliations:
+                raise ValueError("v3 Instrument Master release requires market reconciliation")
+        if reconciliations != sorted(reconciliations, key=lambda item: item.market.value):
+            raise ValueError("market reconciliations must use deterministic market order")
+        markets = [item.market for item in reconciliations]
+        if len(set(markets)) != len(markets):
+            raise ValueError("market reconciliations must contain each market at most once")
+        if reconciliations:
+            equity_scopes = {market.value for market in (Market.XSHG, Market.XSHE, Market.BJSE)}
+            numerator_total = sum(item.numerator_count for item in reconciliations)
+            if self.scope_key in equity_scopes:
+                if markets != [Market(self.scope_key)]:
+                    raise ValueError("market reconciliation does not match release scope")
+                if numerator_total != self.coverage.record_count:
+                    raise ValueError("scoped market numerator must match release records")
+            elif numerator_total > self.coverage.record_count:
+                raise ValueError("market reconciliation numerators exceed release records")
+        raw_ids = set(self.raw_snapshot_ids)
+        canonical_hashes = {item.sha256 for item in self.canonical_files}
+        for item in reconciliations:
+            if item.available_to_system_at is not None and (
+                item.available_to_system_at > self.available_to_system_at
+            ):
+                raise ValueError("market reconciliation cannot postdate release availability")
+            if not set(item.source_snapshot_ids).issubset(raw_ids):
+                raise ValueError("market reconciliation snapshots must be release inputs")
+            if item.numerator_object_hash not in canonical_hashes:
+                raise ValueError("market reconciliation numerator must be a canonical file")
         return self
 
 
 class ReferenceSyncReport(AStockModel):
+    # Omitted schema_version retains the v1 read contract. New service output
+    # declares v2 explicitly rather than silently upgrading legacy payloads.
     schema_version: str = "reference-sync-report-v1"
     command: str
     status: ReferenceCoverageStatus
@@ -313,8 +357,33 @@ class ReferenceSyncReport(AStockModel):
     manifest_object_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     raw_snapshot_ids: list[str] = Field(default_factory=list)
     coverage: ReferenceCoverage
+    market_coverage_reconciliations: list[MarketCoverageReconciliation] = Field(
+        default_factory=list
+    )
     pit_status: ReferencePitStatus
     reason_codes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _coverage_scope(self) -> ReferenceSyncReport:
+        reconciliations = self.market_coverage_reconciliations
+        if self.dataset_kind is not ReferenceDatasetKind.INSTRUMENT_MASTER:
+            if reconciliations:
+                raise ValueError(
+                    "only Instrument Master sync reports may carry Universe reconciliation"
+                )
+            return self
+        if reconciliations != sorted(reconciliations, key=lambda item: item.market.value):
+            raise ValueError("sync-report market reconciliations must be deterministically ordered")
+        if len({item.market for item in reconciliations}) != len(reconciliations):
+            raise ValueError("sync-report market reconciliations must be unique")
+        if reconciliations:
+            numerator_total = sum(item.numerator_count for item in reconciliations)
+            equity_scopes = {market.value for market in (Market.XSHG, Market.XSHE, Market.BJSE)}
+            if self.scope_key in equity_scopes and numerator_total != self.coverage.record_count:
+                raise ValueError("scoped sync-report market numerator must match record count")
+            if self.scope_key not in equity_scopes and numerator_total > self.coverage.record_count:
+                raise ValueError("sync-report market numerators exceed coverage record count")
+        return self
 
 
 __all__ = [

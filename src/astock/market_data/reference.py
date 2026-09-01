@@ -49,6 +49,7 @@ from astock.providers.symbols import market_from_baostock_code
 from astock.schemas import (
     AdjustmentMode,
     AmountUnit,
+    CompletenessSemantics,
     CorporateActionObservation,
     CorporateActionStatus,
     DailyBarObservation,
@@ -60,6 +61,7 @@ from astock.schemas import (
     InstrumentRecord,
     InstrumentType,
     Market,
+    MarketCoverageReconciliation,
     ReferenceBatch,
     ReferenceCoverage,
     ReferenceCoverageStatus,
@@ -68,9 +70,11 @@ from astock.schemas import (
     ReferenceSyncReport,
     SourceSnapshot,
     TradingSession,
+    UniverseCoverageLevel,
+    UniverseDenominatorAuthority,
     VolumeUnit,
 )
-from astock.schemas.provider import ProviderHealthStatus
+from astock.schemas.provider import ProviderHealthStatus, ProviderOfficiality
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _EARLIEST_UTC = datetime.min.replace(tzinfo=UTC)
@@ -1870,6 +1874,174 @@ class MarketReferenceService:
             ):
                 raise ValueError("legacy market-reference raw snapshot chain is invalid")
 
+    def _instrument_master_reconciliations(
+        self,
+        *,
+        scope_key: str,
+        provider_id: str,
+        raw_snapshot_ids: list[str],
+        records: list[Any],
+        available_at: datetime,
+        canonical_object_hash: str,
+    ) -> list[MarketCoverageReconciliation]:
+        equity_records = [
+            item
+            for item in records
+            if isinstance(item, InstrumentRecord)
+            and item.market in {Market.XSHG, Market.XSHE, Market.BJSE}
+        ]
+        counts = {
+            market: sum(1 for item in equity_records if item.market is market)
+            for market in (Market.XSHG, Market.XSHE, Market.BJSE)
+        }
+        markets = [market for market, count in counts.items() if count]
+        if not markets:
+            return []
+
+        selected_snapshots: list[SourceSnapshot] = []
+        payloads: list[tuple[SourceSnapshot, dict[str, object]]] = []
+        for snapshot_id in raw_snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if (
+                snapshot is None
+                or snapshot.source_id != provider_id
+                or not self.objects.verify(snapshot.object_sha256)
+            ):
+                continue
+            selected_snapshots.append(snapshot)
+            try:
+                payload = json.loads(self.objects.get_bytes(snapshot.object_sha256))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if isinstance(payload, dict):
+                payloads.append((snapshot, payload))
+
+        denominator_count: int | None = None
+        denominator_snapshot: SourceSnapshot | None = None
+        for snapshot, payload in reversed(payloads):
+            candidates: list[object] = [
+                payload.get("coverage_denominator"),
+                payload.get("total"),
+            ]
+            data = payload.get("data")
+            if isinstance(data, dict):
+                candidates.append(data.get("total"))
+            for raw_count in candidates:
+                try:
+                    if isinstance(raw_count, bool):
+                        continue
+                    parsed = int(str(raw_count))
+                except (TypeError, ValueError):
+                    continue
+                if parsed > 0:
+                    denominator_count = parsed
+                    denominator_snapshot = snapshot
+                    break
+            if denominator_count is not None:
+                break
+
+        definition = next(
+            (item for item in self.provider_registry.providers if item.provider_id == provider_id),
+            None,
+        )
+        formally_authoritative = bool(
+            definition is not None
+            and definition.officiality is ProviderOfficiality.PRIMARY_OFFICIAL
+            and "instrument.master" in definition.capabilities
+            and "instrument.master" in definition.formal_capabilities
+            and definition.completeness_semantics.get("instrument.master")
+            is CompletenessSemantics.FULL_UNIVERSE
+        )
+        authority = (
+            UniverseDenominatorAuthority.PRIMARY_OFFICIAL
+            if formally_authoritative
+            else UniverseDenominatorAuthority.SECONDARY_SELF_REPORTED
+        )
+        observed_at = max(
+            (snapshot.fetched_at for snapshot in selected_snapshots),
+            default=available_at,
+        )
+        lineage_available = max(
+            (snapshot.available_to_system_at for snapshot in selected_snapshots),
+            default=available_at,
+        )
+        source_ids = sorted(snapshot.snapshot_id for snapshot in selected_snapshots)
+
+        result: list[MarketCoverageReconciliation] = []
+        for market in sorted(markets, key=lambda item: item.value):
+            numerator = counts[market]
+            market_denominator: int | None = None
+            market_denominator_snapshot = denominator_snapshot
+            if scope_key == market.value and denominator_count is not None:
+                market_denominator = denominator_count
+
+            # A transport/parser `complete` flag proves only that the response
+            # was consumed as intended. It cannot manufacture an authoritative
+            # denominator by setting denominator=numerator, even when registry
+            # metadata labels the provider official. Formal coverage requires a
+            # positive denominator carried by a verified raw input.
+            reason_codes: set[str] = set()
+            if market_denominator is None:
+                level = UniverseCoverageLevel.PARTIAL
+                ratio = None
+                missing_count = None
+                extra_count = None
+                reason_codes.add("DENOMINATOR_UNAVAILABLE")
+            else:
+                ratio = min(1.0, numerator / market_denominator)
+                missing_count = max(market_denominator - numerator, 0)
+                extra_count = max(numerator - market_denominator, 0)
+                if extra_count:
+                    level = UniverseCoverageLevel.PARTIAL
+                    reason_codes.add("MARKET_UNIVERSE_EXTRA_ROWS")
+                elif ratio >= _FULL_MARKET_COVERAGE_RATIO:
+                    level = (
+                        UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED
+                        if formally_authoritative
+                        else UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE
+                    )
+                    reason_codes.add(
+                        "PRIMARY_OFFICIAL_DENOMINATOR_RECONCILED"
+                        if formally_authoritative
+                        else "SECONDARY_DENOMINATOR_SELF_REPORTED"
+                    )
+                else:
+                    level = UniverseCoverageLevel.PARTIAL
+                    reason_codes.add("MARKET_UNIVERSE_PARTIAL")
+            result.append(
+                MarketCoverageReconciliation(
+                    created_at=available_at,
+                    market=market,
+                    coverage_level=level,
+                    denominator_source_id=provider_id,
+                    denominator_capability=(
+                        "instrument.master" if market_denominator is not None else None
+                    ),
+                    denominator_authority=(
+                        authority
+                        if market_denominator is not None
+                        else UniverseDenominatorAuthority.UNKNOWN
+                    ),
+                    denominator_count=market_denominator,
+                    numerator_count=numerator,
+                    missing_count=missing_count,
+                    extra_count=extra_count,
+                    coverage_ratio=ratio,
+                    source_version=self.provider_registry.registry_version,
+                    observed_at=observed_at,
+                    available_to_system_at=lineage_available,
+                    denominator_object_hash=(
+                        market_denominator_snapshot.object_sha256
+                        if market_denominator_snapshot is not None
+                        else None
+                    ),
+                    numerator_object_hash=canonical_object_hash,
+                    source_snapshot_ids=source_ids,
+                    reason_codes=sorted(reason_codes),
+                )
+            )
+        return result
+
     def _verified_manifest(self, row: dict[str, Any]) -> DatasetReleaseManifest:
         raw = self.objects.get_bytes(str(row["manifest_object_hash"]))
         manifest = DatasetReleaseManifest.model_validate_json(raw)
@@ -1879,6 +2051,7 @@ class MarketReferenceService:
         )
         if row["input_hashes_json"] != expected_inputs:
             raise ValueError("market-reference artifact inputs do not match manifest")
+        raw_hashes: set[str] = set()
         for snapshot_id in manifest.raw_snapshot_ids:
             snapshot = self.state.get_snapshot(snapshot_id)
             if (
@@ -1887,6 +2060,13 @@ class MarketReferenceService:
                 or not self.objects.verify(snapshot.object_sha256)
             ):
                 raise ValueError("market-reference raw snapshot chain is invalid")
+            raw_hashes.add(snapshot.object_sha256)
+        for reconciliation in manifest.market_coverage_reconciliations:
+            if (
+                reconciliation.denominator_object_hash is not None
+                and reconciliation.denominator_object_hash not in raw_hashes
+            ):
+                raise ValueError("Universe denominator hash is not a raw release input")
         for descriptor in [*manifest.observation_files, *manifest.canonical_files]:
             if not self.parquet.verify_descriptor(
                 descriptor,
@@ -1946,6 +2126,7 @@ class MarketReferenceService:
         pit = ReferencePitStatus.RECONSTRUCTED
         if not records or conflicted:
             return ReferenceSyncReport(
+                schema_version="reference-sync-report-v2",
                 created_at=available_at,
                 command=command,
                 status=status,
@@ -2002,6 +2183,18 @@ class MarketReferenceService:
                 expected_row_count=len(records),
             ):
                 raise ValueError("Reference Parquet failed pre-publish verification")
+        market_reconciliations = (
+            self._instrument_master_reconciliations(
+                scope_key=scope_key,
+                provider_id=provider_id,
+                raw_snapshot_ids=raw_snapshot_ids,
+                records=records,
+                available_at=available_at,
+                canonical_object_hash=canonical_descriptor.sha256,
+            )
+            if dataset_kind is ReferenceDatasetKind.INSTRUMENT_MASTER
+            else []
+        )
         current = self.state.get_market_reference_release(dataset_kind.value, scope_key)
         if current is not None:
             if _is_legacy_release_row(current):
@@ -2015,11 +2208,13 @@ class MarketReferenceService:
                     and current_manifest.raw_snapshot_ids == raw_snapshot_ids
                     and current_manifest.available_to_system_at == available_at
                     and current_manifest.coverage == coverage
+                    and current_manifest.market_coverage_reconciliations == market_reconciliations
                     and current_manifest.pit_status is pit
                     and current_manifest.observation_files == [observation_descriptor]
                     and current_manifest.canonical_files == [canonical_descriptor]
                 ):
                     return ReferenceSyncReport(
+                        schema_version="reference-sync-report-v2",
                         created_at=current_manifest.available_to_system_at,
                         command=command,
                         status=current_manifest.coverage.status,
@@ -2030,6 +2225,9 @@ class MarketReferenceService:
                         manifest_object_hash=str(current["manifest_object_hash"]),
                         raw_snapshot_ids=current_manifest.raw_snapshot_ids,
                         coverage=current_manifest.coverage,
+                        market_coverage_reconciliations=(
+                            current_manifest.market_coverage_reconciliations
+                        ),
                         pit_status=current_manifest.pit_status,
                         reason_codes=[
                             *current_manifest.coverage.reason_codes,
@@ -2048,6 +2246,7 @@ class MarketReferenceService:
         }
         release_id = content_hash(identity)
         manifest = DatasetReleaseManifest(
+            schema_version="market-reference-release-v3",
             created_at=available_at,
             release_id=release_id,
             content_hash=records_hash,
@@ -2060,6 +2259,7 @@ class MarketReferenceService:
             observation_files=[observation_descriptor],
             canonical_files=[canonical_descriptor],
             coverage=coverage,
+            market_coverage_reconciliations=market_reconciliations,
             pit_status=pit,
             available_to_system_at=available_at,
         )
@@ -2068,6 +2268,7 @@ class MarketReferenceService:
             raise RuntimeError("market-reference manifest object verification failed")
         self.state.publish_market_reference_release(manifest, object_ref.sha256)
         return ReferenceSyncReport(
+            schema_version="reference-sync-report-v2",
             created_at=available_at,
             command=command,
             status=status,
@@ -2078,6 +2279,7 @@ class MarketReferenceService:
             manifest_object_hash=object_ref.sha256,
             raw_snapshot_ids=raw_snapshot_ids,
             coverage=coverage,
+            market_coverage_reconciliations=market_reconciliations,
             pit_status=pit,
             reason_codes=coverage.reason_codes,
         )

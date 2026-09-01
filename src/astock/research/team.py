@@ -885,7 +885,59 @@ class ResearchTeamService:
                 )
             except ValueError:
                 return False
-        return len(reports) == 1 and reports[0].formal_full_market_coverage_allowed
+        return len(reports) == 1 and self._universe_report_has_verified_formal_coverage(
+            reports[0]
+        )
+
+    def _universe_report_has_verified_formal_coverage(
+        self,
+        report: ResearchSeedReport,
+    ) -> bool:
+        proof = report.universe_coverage_proof
+        if (
+            proof is None
+            or not proof.formal_full_market_coverage_allowed
+            or not report.formal_full_market_coverage_allowed
+        ):
+            return False
+        report_snapshot_ids = set(report.source_snapshot_ids)
+        report_object_hashes = set(report.source_object_hashes)
+        for reconciliation in proof.market_reconciliations:
+            reconciliation_snapshot_ids = set(reconciliation.source_snapshot_ids)
+            if (
+                not reconciliation_snapshot_ids
+                or not reconciliation_snapshot_ids.issubset(report_snapshot_ids)
+                or reconciliation.denominator_object_hash is None
+                or reconciliation.numerator_object_hash is None
+                or reconciliation.source_version not in reconciliation_snapshot_ids
+            ):
+                return False
+            snapshots = {}
+            for snapshot_id in reconciliation_snapshot_ids:
+                snapshot = self.state.get_snapshot(snapshot_id)
+                if (
+                    snapshot is None
+                    or snapshot.available_to_system_at > proof.as_of
+                    or snapshot.object_sha256 not in report_object_hashes
+                    or not self.objects.verify(snapshot.object_sha256)
+                ):
+                    return False
+                snapshots[snapshot_id] = snapshot
+            snapshot_hashes = {item.object_sha256 for item in snapshots.values()}
+            if not {
+                reconciliation.denominator_object_hash,
+                reconciliation.numerator_object_hash,
+            }.issubset(snapshot_hashes):
+                return False
+            denominator_snapshot = snapshots.get(reconciliation.source_version)
+            if (
+                denominator_snapshot is None
+                or denominator_snapshot.source_id != reconciliation.denominator_source_id
+                or denominator_snapshot.object_sha256
+                != reconciliation.denominator_object_hash
+            ):
+                return False
+        return True
 
     def _financial_output_has_formal_coverage(self, output: ResearchRoleOutput) -> bool:
         packs: list[FinancialIntegrityEvidencePack] = []

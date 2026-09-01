@@ -28,8 +28,10 @@ from astock.core.source_resilience import (
 )
 from astock.core.state import StateStore
 from astock.knowledge.visual_skill_repository import VisualSkillRepository
+from astock.providers.config import load_provider_registry
 from astock.schemas.evidence import FetchStatus, SourceSnapshot
-from astock.schemas.market import Market
+from astock.schemas.market import CompletenessSemantics, Market
+from astock.schemas.provider import ProviderOfficiality, ProviderRegistry
 from astock.schemas.reference_data import (
     DatasetReleaseManifest,
     ReferenceCoverageStatus,
@@ -45,10 +47,21 @@ from astock.schemas.research_seeds import (
     ResearchSeedStatus,
     ResearchUniverseCoverageStatus,
 )
+from astock.schemas.universe_coverage import (
+    MarketCoverageReconciliation,
+    UniverseCoverageLevel,
+    UniverseCoverageProof,
+    UniverseDenominatorAuthority,
+    universe_coverage_proof_id,
+)
 
 _CURRENT_LIVE_TOLERANCE = timedelta(minutes=15)
 _FULL_MARKET_COVERAGE_RATIO = 0.995
 _EQUITY_MARKETS = (Market.XSHG, Market.XSHE, Market.BJSE)
+
+
+def _coverage_capability_for_market(market: Market) -> str:
+    return "instrument.bjse_coverage" if market is Market.BJSE else "instrument.master"
 
 
 class SeedSnapshotProvider(Protocol):
@@ -201,9 +214,7 @@ class ResearchSeedProviderRouter:
             cached = self._coverage_cache.get(market)
             if cached is not None:
                 return cached
-            capability = (
-                "instrument.bjse_coverage" if market is Market.BJSE else "instrument.master"
-            )
+            capability = _coverage_capability_for_market(market)
             provider_id = provider.provider_id
             if (
                 live
@@ -285,6 +296,7 @@ class ResearchSeedProviderRouter:
                 "market_snapshot_id": snapshot.snapshot_id,
                 "market_snapshot_object_hash": snapshot.object_sha256,
                 "coverage_proof_source_id": proof_snapshot.source_id,
+                "coverage_proof_capability": _coverage_capability_for_market(market),
                 "coverage_proof_snapshot_ids": proof_ids,
                 "coverage_proof_object_hashes": proof_hashes,
                 "coverage_proof_complete": True,
@@ -566,8 +578,8 @@ def _seed_payload_coverage_ratio(payload: dict[str, object], market: Market) -> 
         except (KeyError, TypeError, ValueError):
             return None
         if (
-            market is not Market.BJSE
-            or payload.get("coverage_proof_source_id") != "bse-official-reference"
+            not isinstance(payload.get("coverage_proof_source_id"), str)
+            or payload.get("coverage_proof_capability") != _coverage_capability_for_market(market)
             or not isinstance(raw_ids, list)
             or not raw_ids
             or not isinstance(raw_hashes, list)
@@ -619,6 +631,298 @@ def _seed_payload_coverage_ratio(payload: dict[str, object], market: Market) -> 
     if total <= 0 or observed > total:
         return None
     return min(1.0, valid_rows / total)
+
+
+def _seed_payload_coverage_counts(
+    payload: dict[str, object], market: Market
+) -> tuple[int, int] | None:
+    request = payload.get("_astock_request")
+    if not isinstance(request, dict) or request.get("market") != market.value:
+        return None
+    numerator = _seed_payload_row_count(payload)
+    raw_denominator: object | None = None
+    if payload.get("coverage_proof_complete") is True:
+        raw_numerator = payload.get("coverage_numerator")
+        raw_denominator = payload.get("coverage_denominator")
+        try:
+            if isinstance(raw_numerator, bool) or int(str(raw_numerator)) != numerator:
+                return None
+        except (TypeError, ValueError):
+            return None
+    elif payload.get("_astock_source") == "SINA_MARKET_CENTER":
+        if payload.get("complete") is not True:
+            return None
+        raw_denominator = payload.get("coverage_denominator")
+    else:
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return None
+        raw_denominator = data.get("total")
+    try:
+        if isinstance(raw_denominator, bool):
+            return None
+        denominator = int(raw_denominator)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if denominator <= 0:
+        return None
+    return numerator, denominator
+
+
+def _provider_denominator_authority(
+    registry: ProviderRegistry,
+    provider_id: str,
+    capability: str,
+) -> UniverseDenominatorAuthority:
+    definition = next(
+        (item for item in registry.providers if item.provider_id == provider_id),
+        None,
+    )
+    if definition is None:
+        return UniverseDenominatorAuthority.UNKNOWN
+    formally_declared = (
+        capability in definition.capabilities
+        and capability in definition.formal_capabilities
+        and definition.completeness_semantics.get(capability) is CompletenessSemantics.FULL_UNIVERSE
+    )
+    if definition.officiality is ProviderOfficiality.PRIMARY_OFFICIAL and formally_declared:
+        return UniverseDenominatorAuthority.PRIMARY_OFFICIAL
+    return UniverseDenominatorAuthority.SECONDARY_SELF_REPORTED
+
+
+def _market_coverage_reconciliation(
+    payload: dict[str, object],
+    snapshot: SourceSnapshot,
+    market: Market,
+    *,
+    state: StateStore,
+    objects: ObjectStore,
+    registry: ProviderRegistry,
+) -> MarketCoverageReconciliation:
+    counts = _seed_payload_coverage_counts(payload, market)
+    numerator = _seed_payload_row_count(payload)
+    source_ids = {snapshot.snapshot_id}
+    available_at = snapshot.available_to_system_at
+    observed_at = snapshot.fetched_at
+    denominator_source_id = snapshot.source_id
+    denominator_capability: str | None = None
+    denominator_object_hash: str | None = None
+    source_version = snapshot.snapshot_id
+    numerator_object_hash = (
+        snapshot.object_sha256 if objects.verify(snapshot.object_sha256) else None
+    )
+    authority = UniverseDenominatorAuthority.UNKNOWN
+    reason_codes: set[str] = set()
+
+    if payload.get("coverage_proof_complete") is True:
+        proof_source_id = payload.get("coverage_proof_source_id")
+        proof_capability = payload.get("coverage_proof_capability")
+        raw_ids = payload.get("coverage_proof_snapshot_ids")
+        raw_hashes = payload.get("coverage_proof_object_hashes")
+        market_snapshot_id = payload.get("market_snapshot_id")
+        market_snapshot_object_hash = payload.get("market_snapshot_object_hash")
+        if (
+            not isinstance(proof_source_id, str)
+            or proof_capability != _coverage_capability_for_market(market)
+            or not isinstance(raw_ids, list)
+            or not isinstance(raw_hashes, list)
+            or not raw_ids
+            or len(raw_ids) != len(raw_hashes)
+            or not isinstance(market_snapshot_id, str)
+            or not isinstance(market_snapshot_object_hash, str)
+        ):
+            counts = None
+            reason_codes.add("COVERAGE_PROOF_LINEAGE_MALFORMED")
+        else:
+            denominator_source_id = proof_source_id
+            denominator_capability = str(proof_capability)
+            registered_derived = state.get_snapshot(snapshot.snapshot_id)
+            registered_market = state.get_snapshot(market_snapshot_id)
+            if (
+                registered_derived is None
+                or registered_derived.object_sha256 != snapshot.object_sha256
+                or not objects.verify(snapshot.object_sha256)
+                or registered_market is None
+                or registered_market.object_sha256 != market_snapshot_object_hash
+                or registered_market.source_id != snapshot.source_id
+                or not objects.verify(market_snapshot_object_hash)
+            ):
+                counts = None
+                reason_codes.add("MARKET_NUMERATOR_LINEAGE_UNVERIFIED")
+            else:
+                source_ids.add(registered_market.snapshot_id)
+                numerator_object_hash = registered_market.object_sha256
+                available_at = max(available_at, registered_market.available_to_system_at)
+                observed_at = max(observed_at, registered_market.fetched_at)
+
+            proof_snapshots: list[SourceSnapshot] = []
+            for raw_id, raw_hash in zip(raw_ids, raw_hashes, strict=True):
+                if not isinstance(raw_id, str) or not isinstance(raw_hash, str):
+                    proof_snapshots = []
+                    break
+                registered = state.get_snapshot(raw_id)
+                if (
+                    registered is None
+                    or registered.object_sha256 != raw_hash
+                    or not objects.verify(raw_hash)
+                ):
+                    proof_snapshots = []
+                    break
+                proof_snapshots.append(registered)
+            if not proof_snapshots:
+                counts = None
+                reason_codes.add("COVERAGE_PROOF_LINEAGE_UNVERIFIED")
+            else:
+                source_ids.update(item.snapshot_id for item in proof_snapshots)
+                available_at = max(
+                    [available_at, *(item.available_to_system_at for item in proof_snapshots)]
+                )
+                observed_at = max([observed_at, *(item.fetched_at for item in proof_snapshots)])
+                denominator_candidates = [
+                    item for item in proof_snapshots if item.source_id == proof_source_id
+                ]
+                if denominator_candidates:
+                    denominator_snapshot = denominator_candidates[-1]
+                    denominator_object_hash = denominator_snapshot.object_sha256
+                    source_version = denominator_snapshot.snapshot_id
+                else:
+                    counts = None
+                    reason_codes.add("DENOMINATOR_SOURCE_LINEAGE_MISSING")
+                authority = _provider_denominator_authority(
+                    registry,
+                    proof_source_id,
+                    str(proof_capability),
+                )
+                if authority is UniverseDenominatorAuthority.PRIMARY_OFFICIAL:
+                    reason_codes.add("PRIMARY_OFFICIAL_DENOMINATOR_RECONCILED")
+                else:
+                    reason_codes.add("DECORATED_DENOMINATOR_NOT_OFFICIAL")
+    elif counts is not None:
+        # A total embedded in the same market payload is self-reported. Provider
+        # metadata alone cannot turn it into an independently reconciled denominator.
+        authority = UniverseDenominatorAuthority.SECONDARY_SELF_REPORTED
+        denominator_capability = "market.seed_snapshot"
+        denominator_object_hash = snapshot.object_sha256
+        reason_codes.add("SECONDARY_DENOMINATOR_SELF_REPORTED")
+    else:
+        reason_codes.add("DENOMINATOR_UNAVAILABLE")
+
+    if counts is None:
+        return MarketCoverageReconciliation(
+            created_at=available_at,
+            market=market,
+            coverage_level=(
+                UniverseCoverageLevel.PARTIAL if numerator else UniverseCoverageLevel.UNAVAILABLE
+            ),
+            denominator_source_id=denominator_source_id,
+            denominator_capability=denominator_capability,
+            denominator_authority=authority,
+            numerator_count=numerator,
+            source_version=source_version,
+            observed_at=observed_at,
+            available_to_system_at=available_at,
+            numerator_object_hash=numerator_object_hash,
+            source_snapshot_ids=sorted(source_ids),
+            reason_codes=sorted(reason_codes),
+        )
+
+    numerator, denominator = counts
+    ratio = min(1.0, numerator / denominator)
+    missing_count = max(denominator - numerator, 0)
+    extra_count = max(numerator - denominator, 0)
+    if extra_count:
+        level = UniverseCoverageLevel.PARTIAL
+        reason_codes.add("MARKET_UNIVERSE_EXTRA_ROWS")
+    elif ratio >= _FULL_MARKET_COVERAGE_RATIO:
+        level = (
+            UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED
+            if authority
+            in {
+                UniverseDenominatorAuthority.PRIMARY_OFFICIAL,
+                UniverseDenominatorAuthority.QUALIFIED_AUTHORIZED_MASTER,
+            }
+            and denominator_object_hash is not None
+            else UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE
+        )
+    else:
+        level = UniverseCoverageLevel.PARTIAL
+        reason_codes.add("MARKET_UNIVERSE_PARTIAL")
+    return MarketCoverageReconciliation(
+        created_at=available_at,
+        market=market,
+        coverage_level=level,
+        denominator_source_id=denominator_source_id,
+        denominator_capability=denominator_capability,
+        denominator_authority=authority,
+        denominator_count=denominator,
+        numerator_count=numerator,
+        missing_count=missing_count,
+        extra_count=extra_count,
+        coverage_ratio=ratio,
+        source_version=source_version,
+        observed_at=observed_at,
+        available_to_system_at=available_at,
+        denominator_object_hash=denominator_object_hash,
+        numerator_object_hash=numerator_object_hash,
+        source_snapshot_ids=sorted(source_ids),
+        reason_codes=sorted(reason_codes),
+    )
+
+
+def _universe_coverage_proof(
+    *,
+    as_of: datetime,
+    reconciliations: dict[Market, MarketCoverageReconciliation],
+) -> UniverseCoverageProof:
+    complete: list[MarketCoverageReconciliation] = []
+    for market in _EQUITY_MARKETS:
+        item = reconciliations.get(market)
+        if item is None:
+            item = MarketCoverageReconciliation(
+                created_at=as_of,
+                market=market,
+                coverage_level=UniverseCoverageLevel.UNAVAILABLE,
+                numerator_count=0,
+                reason_codes=["MARKET_UNIVERSE_UNAVAILABLE"],
+            )
+        complete.append(item)
+    complete.sort(key=lambda item: item.market.value)
+    levels = {item.coverage_level for item in complete}
+    aggregate = (
+        UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED
+        if levels == {UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED}
+        else (
+            UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE
+            if all(
+                item.coverage_level
+                in {
+                    UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE,
+                    UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED,
+                }
+                for item in complete
+            )
+            else (
+                UniverseCoverageLevel.UNAVAILABLE
+                if levels == {UniverseCoverageLevel.UNAVAILABLE}
+                else UniverseCoverageLevel.PARTIAL
+            )
+        )
+    )
+    reasons = sorted({code for item in complete for code in item.reason_codes})
+    proof_id = universe_coverage_proof_id(
+        as_of=as_of,
+        coverage_level=aggregate,
+        market_reconciliations=complete,
+        reason_codes=reasons,
+    )
+    return UniverseCoverageProof(
+        created_at=as_of,
+        proof_id=proof_id,
+        as_of=as_of,
+        coverage_level=aggregate,
+        market_reconciliations=complete,
+        reason_codes=reasons,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -688,6 +992,9 @@ class ResearchSeedService:
         self.state = state
         self.objects = objects
         self.provider = provider
+        self.provider_registry = load_provider_registry(
+            project_root / "configs" / "provider_registry.yaml"
+        )
         self.candidates = CandidateRepository(state)
         self.visual_skills = VisualSkillRepository(state)
         self.alias_groups = self._load_alias_groups(
@@ -716,8 +1023,16 @@ class ResearchSeedService:
 
         def fetch_market(
             market: Market,
-        ) -> tuple[Market, dict[str, object], Any, list[_MarketRow], bool, float | None]:
-            payload, snapshot = self.provider.fetch_seed_snapshot(market, live=request.live)
+        ) -> tuple[
+            Market,
+            dict[str, object],
+            SourceSnapshot,
+            list[_MarketRow],
+            bool,
+            MarketCoverageReconciliation,
+        ]:
+            payload, raw_snapshot = self.provider.fetch_seed_snapshot(market, live=request.live)
+            snapshot = cast(SourceSnapshot, raw_snapshot)
             raw = self._parse_market_rows(payload, market, snapshot.snapshot_id)
             sina_activity_proxy = request.live and _sina_activity_unavailable(payload)
             scored = self._score_market_rows(
@@ -725,47 +1040,65 @@ class ResearchSeedService:
                 minimum_amount=0.0 if sina_activity_proxy else request.minimum_amount_cny,
                 minimum_float_cap=request.minimum_float_market_cap_cny,
             )
-            return (
-                market,
+            reconciliation = _market_coverage_reconciliation(
                 payload,
                 snapshot,
-                scored,
-                sina_activity_proxy,
-                _seed_payload_coverage_ratio(payload, market),
+                market,
+                state=self.state,
+                objects=self.objects,
+                registry=self.provider_registry,
             )
+            return market, payload, snapshot, scored, sina_activity_proxy, reconciliation
 
         workers = min(request.market_fetch_workers, len(_EQUITY_MARKETS))
         market_coverage_ratios: dict[Market, float] = {}
+        market_reconciliations: dict[Market, MarketCoverageReconciliation] = {}
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(fetch_market, market): market for market in _EQUITY_MARKETS}
             for future in as_completed(futures):
                 market = futures[future]
                 try:
-                    _, payload, snapshot, scored, activity_proxy, coverage_ratio = future.result()
-                    cutoff = max(cutoff, snapshot.available_to_system_at)
-                    source_snapshots[snapshot.snapshot_id] = snapshot.object_sha256
-                    source_hashes.add(snapshot.object_sha256)
-                    proof_ids = payload.get("coverage_proof_snapshot_ids")
-                    proof_hashes = payload.get("coverage_proof_object_hashes")
-                    if isinstance(proof_ids, list) and isinstance(proof_hashes, list):
-                        for proof_id, proof_hash in zip(proof_ids, proof_hashes, strict=True):
-                            if isinstance(proof_id, str) and isinstance(proof_hash, str):
-                                source_snapshots[proof_id] = proof_hash
-                                source_hashes.add(proof_hash)
+                    _, payload, snapshot, scored, activity_proxy, reconciliation = future.result()
+                    market_reconciliations[market] = reconciliation
+                    cutoff = max(
+                        cutoff,
+                        reconciliation.available_to_system_at or snapshot.available_to_system_at,
+                    )
+                    for source_snapshot_id in reconciliation.source_snapshot_ids:
+                        registered = self.state.get_snapshot(source_snapshot_id)
+                        if registered is None or not self.objects.verify(registered.object_sha256):
+                            continue
+                        source_snapshots[source_snapshot_id] = registered.object_sha256
+                        source_hashes.add(registered.object_sha256)
                     market_rows.update({item.company_id: item for item in scored})
+                    coverage_ratio = reconciliation.coverage_ratio
                     if coverage_ratio is not None:
                         market_coverage_ratios[market] = coverage_ratio
-                        if coverage_ratio < _FULL_MARKET_COVERAGE_RATIO:
-                            warnings.add(
-                                f"MARKET_SEED_UNIVERSE_PARTIAL:{market.value}:{coverage_ratio:.6f}"
-                            )
-                    else:
+                    if (
+                        reconciliation.coverage_level
+                        is UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE
+                    ):
+                        warnings.add(f"MARKET_SEED_ENGINEERING_COVERAGE_ONLY:{market.value}")
+                    elif reconciliation.coverage_level is UniverseCoverageLevel.PARTIAL:
+                        suffix = f":{coverage_ratio:.6f}" if coverage_ratio is not None else ""
+                        warnings.add(f"MARKET_SEED_UNIVERSE_PARTIAL:{market.value}{suffix}")
+                    elif reconciliation.coverage_level is UniverseCoverageLevel.UNAVAILABLE:
                         warnings.add(f"MARKET_SEED_COVERAGE_UNPROVEN:{market.value}")
                     if activity_proxy:
                         activity_proxy_markets.add(market)
                         warnings.add(f"SINA_ACTIVITY_PROXY_USED:{market.value}")
                 except (AStockError, OSError, RuntimeError, ValueError):
                     warnings.add(f"MARKET_SEED_SNAPSHOT_UNAVAILABLE:{market.value}")
+
+        universe_coverage_proof = _universe_coverage_proof(
+            as_of=cutoff,
+            reconciliations=market_reconciliations,
+        )
+        if (
+            universe_coverage_proof.coverage_level
+            is UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE
+        ):
+            warnings.add("FORMAL_UNIVERSE_DENOMINATOR_NOT_RECONCILED")
 
         for row in sorted(
             market_rows.values(),
@@ -859,26 +1192,33 @@ class ResearchSeedService:
         fill = [item for item in all_seeds if item.seed_id not in selected_ids]
         seeds = [*blind, *fill[: max(0, request.max_total_seeds - len(blind))]]
         seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
-        full_universe = set(market_coverage_ratios) == set(_EQUITY_MARKETS) and all(
-            ratio >= _FULL_MARKET_COVERAGE_RATIO for ratio in market_coverage_ratios.values()
-        )
+        coverage_level = universe_coverage_proof.coverage_level
+        engineering_full_universe = coverage_level in {
+            UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE,
+            UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED,
+        }
+        formal_full_universe = universe_coverage_proof.formal_full_market_coverage_allowed
         universe_coverage_status = (
             ResearchUniverseCoverageStatus.FULL
-            if full_universe
+            if engineering_full_universe
             else (
                 ResearchUniverseCoverageStatus.PARTIAL
-                if market_coverage_ratios
+                if coverage_level is UniverseCoverageLevel.PARTIAL
                 else ResearchUniverseCoverageStatus.UNAVAILABLE
             )
         )
         status = (
             ResearchSeedStatus.READY
             if seeds
-            else (ResearchSeedStatus.EMPTY if full_universe else ResearchSeedStatus.NEEDS_INFO)
+            else (
+                ResearchSeedStatus.EMPTY
+                if engineering_full_universe
+                else ResearchSeedStatus.NEEDS_INFO
+            )
         )
         if universe_coverage_status is ResearchUniverseCoverageStatus.UNAVAILABLE:
             warnings.add("CURRENT_MARKET_SEED_UNIVERSE_UNAVAILABLE")
-        elif not market_rows and full_universe:
+        elif not market_rows and engineering_full_universe:
             warnings.add("CURRENT_MARKET_SCAN_ZERO_ELIGIBLE_CANDIDATES")
         elif not market_rows:
             warnings.add("CURRENT_MARKET_PARTIAL_UNIVERSE_NO_ELIGIBLE_OBSERVATIONS")
@@ -895,6 +1235,8 @@ class ResearchSeedService:
                     market.value: market_coverage_ratios[market]
                     for market in sorted(market_coverage_ratios, key=lambda item: item.value)
                 },
+                "universe_coverage_proof_id": universe_coverage_proof.proof_id,
+                "universe_coverage_level": coverage_level.value,
                 "universe_coverage_status": universe_coverage_status.value,
                 "seed_ids": [item.seed_id for item in seeds],
                 "profiles": [item.model_dump(mode="json") for item in profiles],
@@ -913,8 +1255,10 @@ class ResearchSeedService:
             source_object_hashes=sorted(source_hashes),
             warning_codes=sorted(warnings),
             market_coverage_ratios=market_coverage_ratios,
+            universe_coverage_level=coverage_level,
+            universe_coverage_proof=universe_coverage_proof,
             universe_coverage_status=universe_coverage_status,
-            formal_full_market_coverage_allowed=full_universe,
+            formal_full_market_coverage_allowed=formal_full_universe,
             market_seed_count=sum(ResearchSeedOrigin.MARKET in item.origins for item in seeds),
             expert_seed_count=sum(
                 ResearchSeedOrigin.EXPERT_SKILL in item.origins for item in seeds
@@ -953,6 +1297,30 @@ class ResearchSeedService:
         else:
             report = ResearchSeedReport.model_validate_json(self.objects.get_bytes(object_hash))
         if report is not None:
+            proof = report.universe_coverage_proof
+            if proof is not None:
+                expected_proof_id = universe_coverage_proof_id(
+                    as_of=proof.as_of,
+                    coverage_level=proof.coverage_level,
+                    market_reconciliations=proof.market_reconciliations,
+                    reason_codes=proof.reason_codes,
+                    policy_version=proof.policy_version,
+                    engineering_min_ratio=proof.engineering_min_ratio,
+                )
+                if proof.proof_id != expected_proof_id:
+                    findings.add("UNIVERSE_COVERAGE_PROOF_ID_DRIFT")
+                for reconciliation in proof.market_reconciliations:
+                    linked_hashes: set[str] = set()
+                    for proof_snapshot_id in reconciliation.source_snapshot_ids:
+                        proof_snapshot = self.state.get_snapshot(proof_snapshot_id)
+                        if proof_snapshot is not None:
+                            linked_hashes.add(proof_snapshot.object_sha256)
+                    for proof_hash in (
+                        reconciliation.denominator_object_hash,
+                        reconciliation.numerator_object_hash,
+                    ):
+                        if proof_hash is not None and proof_hash not in linked_hashes:
+                            findings.add("UNIVERSE_COVERAGE_PROOF_HASH_LINEAGE_DRIFT")
             for snapshot_id in report.source_snapshot_ids:
                 snapshot = self.state.get_snapshot(snapshot_id)
                 if snapshot is None:

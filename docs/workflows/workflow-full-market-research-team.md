@@ -29,8 +29,8 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
    - CIO intent freezes scope/horizon.
    - Macro, Policy, Liquidity/Risk and current A-share Universe acquisition may run in parallel after CIO intent.
    - XSHG/XSHE/BJSE market snapshots are fetched on demand with `market_fetch_workers` selected from the hardware profile.
-   - One provider/market failure must not cancel independent tasks. Formal FULL coverage requires **each** XSHG/XSHE/BJSE market to have an auditable `coverage_ratio >= 99.5%`; legacy row-count floors only detect obvious truncation and never prove FULL by themselves.
-   - PARTIAL Universe may continue into observation/research discovery, but `formal_full_market_coverage_allowed=false`; a complete scan that yields zero eligible candidates is a valid zero-result state and must not be rewritten as Universe unavailable.
+   - One provider/market failure must not cancel independent tasks. `coverage_ratio >= 99.5%` is only the engineering high-coverage threshold. Formal FULL requires a typed `UniverseCoverageProof` whose XSHG/XSHE/BJSE market reconciliations each reach `OFFICIAL_DENOMINATOR_RECONCILED` with verified denominator/numerator hashes and source snapshots no later than the research cutoff. A secondary source's self-reported 100% remains `ENGINEERING_HIGH_COVERAGE`.
+   - PARTIAL and engineering-high-coverage Universes may continue into observation/research discovery, but `formal_full_market_coverage_allowed=false`; a complete high-coverage scan that yields zero eligible candidates is a valid zero-result state and must not be rewritten as Universe unavailable.
 
 4. **Stage 2 — blind discovery first**
    - Run `research-seeds --live`, promotion and Candidate Scan.

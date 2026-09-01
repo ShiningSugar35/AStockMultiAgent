@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from astock.candidates.seeds import _universe_coverage_proof
 from astock.cli import app
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
@@ -14,6 +15,7 @@ from astock.research.team import (
     detect_hardware_budget,
     load_research_team_policy,
 )
+from astock.schemas.evidence import SourceSnapshot
 from astock.schemas.financial import (
     FinancialCoverageStatus,
     FinancialEvidenceGap,
@@ -48,6 +50,11 @@ from astock.schemas.research_team import (
     ResearchTeamTaskState,
 )
 from astock.schemas.runs import RunStatus
+from astock.schemas.universe_coverage import (
+    MarketCoverageReconciliation,
+    UniverseCoverageLevel,
+    UniverseDenominatorAuthority,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 8, 24, 5, 0, tzinfo=UTC)
@@ -81,12 +88,80 @@ def _register_seed_report(
     *,
     artifact_id: str,
     full: bool,
+    register_lineage: bool = True,
 ) -> None:
     ratios = (
         {Market.XSHG: 1.0, Market.XSHE: 1.0, Market.BJSE: 1.0}
         if full
         else {Market.XSHG: 0.99, Market.XSHE: 1.0, Market.BJSE: 1.0}
     )
+    source_snapshot_ids: list[str] = []
+    source_object_hashes: list[str] = []
+    proof = None
+    if full:
+        reconciliations: dict[Market, MarketCoverageReconciliation] = {}
+        for market in (Market.XSHG, Market.XSHE, Market.BJSE):
+            denominator_ref = objects.put_json(
+                {"kind": "official-denominator", "market": market.value, "symbols": ["000001"]}
+            )
+            numerator_ref = objects.put_json(
+                {"kind": "market-numerator", "market": market.value, "symbols": ["000001"]}
+            )
+            denominator_snapshot = SourceSnapshot(
+                snapshot_id=f"official-denominator:{market.value}:{denominator_ref.sha256}",
+                source_id=f"official-{market.value.lower()}",
+                object_sha256=denominator_ref.sha256,
+                fetched_at=NOW,
+                available_to_system_at=NOW,
+                source_url=f"https://example.invalid/official/{market.value}",
+                mime="application/json",
+                byte_size=denominator_ref.byte_size,
+                rights_status="PUBLIC_RESEARCH_FIXTURE",
+                created_at=NOW,
+            )
+            numerator_snapshot = SourceSnapshot(
+                snapshot_id=f"market-numerator:{market.value}:{numerator_ref.sha256}",
+                source_id=f"market-{market.value.lower()}",
+                object_sha256=numerator_ref.sha256,
+                fetched_at=NOW,
+                available_to_system_at=NOW,
+                source_url=f"https://example.invalid/market/{market.value}",
+                mime="application/json",
+                byte_size=numerator_ref.byte_size,
+                rights_status="PUBLIC_RESEARCH_FIXTURE",
+                created_at=NOW,
+            )
+            if register_lineage:
+                state.register_snapshot(denominator_snapshot)
+                state.register_snapshot(numerator_snapshot)
+            snapshots = sorted([denominator_snapshot.snapshot_id, numerator_snapshot.snapshot_id])
+            source_snapshot_ids.extend(snapshots)
+            source_object_hashes.extend(
+                [denominator_snapshot.object_sha256, numerator_snapshot.object_sha256]
+            )
+            reconciliations[market] = MarketCoverageReconciliation(
+                market=market,
+                coverage_level=UniverseCoverageLevel.OFFICIAL_DENOMINATOR_RECONCILED,
+                denominator_source_id=denominator_snapshot.source_id,
+                denominator_capability=(
+                    "instrument.bjse_coverage" if market is Market.BJSE else "instrument.master"
+                ),
+                denominator_authority=UniverseDenominatorAuthority.PRIMARY_OFFICIAL,
+                denominator_count=1,
+                numerator_count=1,
+                missing_count=0,
+                extra_count=0,
+                coverage_ratio=1.0,
+                source_version=denominator_snapshot.snapshot_id,
+                observed_at=NOW,
+                available_to_system_at=NOW,
+                denominator_object_hash=denominator_snapshot.object_sha256,
+                numerator_object_hash=numerator_snapshot.object_sha256,
+                source_snapshot_ids=snapshots,
+                reason_codes=["PRIMARY_OFFICIAL_DENOMINATOR_RECONCILED"],
+                created_at=NOW,
+            )
+        proof = _universe_coverage_proof(as_of=NOW, reconciliations=reconciliations)
     report = ResearchSeedReport(
         report_id=artifact_id.removeprefix("ResearchSeedReport:"),
         as_of=NOW,
@@ -94,14 +169,14 @@ def _register_seed_report(
         status=(ResearchSeedStatus.EMPTY if full else ResearchSeedStatus.NEEDS_INFO),
         profiles=[],
         seeds=[],
-        source_snapshot_ids=[],
-        source_object_hashes=[],
+        source_snapshot_ids=sorted(set(source_snapshot_ids)),
+        source_object_hashes=sorted(set(source_object_hashes)),
         warning_codes=[],
         market_coverage_ratios=ratios,
+        universe_coverage_proof=proof,
         universe_coverage_status=(
             ResearchUniverseCoverageStatus.FULL if full else ResearchUniverseCoverageStatus.PARTIAL
         ),
-        formal_full_market_coverage_allowed=full,
         market_seed_count=0,
         expert_seed_count=0,
         existing_candidate_seed_count=0,
@@ -496,6 +571,88 @@ def test_universe_role_cannot_self_attest_with_arbitrary_member_artifact(tmp_pat
                 member_artifact_ids=[artifact_id],
                 readiness_check_results={"UNIVERSE_COVERAGE": True},
                 summary="self-attested universe",
+                created_at=NOW,
+            )
+        )
+
+
+def test_legacy_v1_full_boolean_cannot_uplift_universe_readiness(tmp_path: Path) -> None:
+    service, state, objects = _service(tmp_path)
+    plan = service.create_full_market_plan(as_of=NOW)
+    task = next(item for item in plan.tasks if item.task_id == "universe-acquisition")
+    artifact_id = f"ResearchSeedReport:legacy-v1:{plan.plan_id}"
+    legacy_payload = {
+        "schema_version": "research-seed-report-v1",
+        "created_at": NOW.isoformat(),
+        "report_id": "legacy-v1",
+        "as_of": NOW.isoformat(),
+        "data_cutoff_at": NOW.isoformat(),
+        "status": ResearchSeedStatus.EMPTY.value,
+        "profiles": [],
+        "seeds": [],
+        "source_snapshot_ids": [],
+        "source_object_hashes": [],
+        "warning_codes": [],
+        "market_coverage_ratios": {
+            Market.XSHG.value: 1.0,
+            Market.XSHE.value: 1.0,
+            Market.BJSE.value: 1.0,
+        },
+        "universe_coverage_status": ResearchUniverseCoverageStatus.FULL.value,
+        "formal_full_market_coverage_allowed": True,
+        "market_seed_count": 0,
+        "expert_seed_count": 0,
+        "existing_candidate_seed_count": 0,
+        "recommendation_allowed": False,
+        "candidate_record_write_allowed": False,
+        "paper_ledger_write_allowed": False,
+        "broker_execution_allowed": False,
+    }
+    ref = objects.put_json(legacy_payload)
+    state.register_artifact(
+        artifact_id=artifact_id,
+        artifact_type="ResearchSeedReport",
+        schema_version="research-seed-report-v1",
+        object_hash=ref.sha256,
+        input_hashes=[],
+    )
+
+    with pytest.raises(ValueError, match="UNIVERSE_COVERAGE must be derived"):
+        service.register_role_output(
+            ResearchRoleOutput(
+                plan_id=plan.plan_id,
+                task_id=task.task_id,
+                output_contract=task.output_contract,
+                member_artifact_ids=[artifact_id],
+                readiness_check_results={"UNIVERSE_COVERAGE": True},
+                summary="legacy v1 cannot self-upgrade",
+                created_at=NOW,
+            )
+        )
+
+
+def test_formal_universe_requires_registered_snapshot_lineage(tmp_path: Path) -> None:
+    service, state, objects = _service(tmp_path)
+    plan = service.create_full_market_plan(as_of=NOW)
+    task = next(item for item in plan.tasks if item.task_id == "universe-acquisition")
+    artifact_id = f"ResearchSeedReport:missing-lineage:{plan.plan_id}"
+    _register_seed_report(
+        state,
+        objects,
+        artifact_id=artifact_id,
+        full=True,
+        register_lineage=False,
+    )
+
+    with pytest.raises(ValueError, match="UNIVERSE_COVERAGE must be derived"):
+        service.register_role_output(
+            ResearchRoleOutput(
+                plan_id=plan.plan_id,
+                task_id=task.task_id,
+                output_contract=task.output_contract,
+                member_artifact_ids=[artifact_id],
+                readiness_check_results={"UNIVERSE_COVERAGE": True},
+                summary="unregistered Universe lineage cannot open the gate",
                 created_at=NOW,
             )
         )

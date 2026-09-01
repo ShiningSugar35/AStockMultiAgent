@@ -131,6 +131,7 @@ from astock.providers import (
     Sina5mProvider,
     load_provider_registry,
 )
+from astock.reports.cli import register_report_commands
 from astock.research import (
     EvidenceCollectionRunService,
     EvidenceCollectionTaskService,
@@ -235,6 +236,7 @@ def _configure_cli_operation(
         paths.root,
         paths.runtime,
         create_log_dir=create_log_dir,
+        console_sink=False,
     )
     return context.correlation_id
 
@@ -400,6 +402,7 @@ def _jsonable(value: Any) -> Any:
 register_knowledge_completion_commands(app, _services, _emit)
 register_knowledge_storage_commands(app, _services, _emit)
 register_local_portfolio_commands(app, _services)
+register_report_commands(app, _services, _emit)
 register_research_runtime_commands(
     app,
     _services,

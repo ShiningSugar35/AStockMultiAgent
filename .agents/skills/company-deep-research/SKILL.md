@@ -18,6 +18,7 @@ description: Build a cited current or historical deep A-share company research c
 11. Require `research-chain-audit` and final runtime/committee audits for a formal certified chain. For durable internal provenance use `uv run astock codex-run-init <request> --artifact-id <artifact_id> --require-registered-output`, `codex-run-import`, and `codex-run-audit`; these identities stay internal.
 12. After a formal current opinion is complete, invoke `$continuous-investment-monitor`: enroll the resolved stock as `ANALYZED`, and persist only evidence-backed typed entry/review/exit thresholds that already exist in structured outputs. This enrollment is required even when the conclusion is WATCH or the stock is not held, so later price, disclosure, news-lead and catalyst changes can be reviewed incrementally.
 13. Build one canonical `ResearchNarrativeBundle` and render public output through `ResponseGateway`. The stable machine commands `research-investor-view` and `research-acquisition-investor-view` remain JSON contracts; use `research-public-view` or `research-acquisition-public-view` for audited public presentation. Never delete the subject, conclusion strength, valuation/odds, largest risk, change condition, data cutoff, required citations, or safe report reference merely to meet a length budget.
+14. After a completed deep-research task, publish a formal report from the same frozen narrative and registered input artifacts. Default to DOCX, use Markdown only as deterministic fallback, and generate PDF only when an available converter succeeds validation. Return only the safe report reference in the investor answer; report generation must never become a second research fact source.
 
 ## Workflows
 
@@ -26,6 +27,7 @@ description: Build a cited current or historical deep A-share company research c
 - [`docs/workflows/workflow-paper-trading.md`](../../../docs/workflows/workflow-paper-trading.md)
 - [`docs/workflows/workflow-adaptive-edge.md`](../../../docs/workflows/workflow-adaptive-edge.md)
 - [`docs/architecture/public-response-contract-v1.md`](../../../docs/architecture/public-response-contract-v1.md)
+- [`docs/architecture/formal-reporting-v1.md`](../../../docs/architecture/formal-reporting-v1.md)
 
 ## Output
 

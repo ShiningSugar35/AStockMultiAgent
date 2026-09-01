@@ -1,0 +1,30 @@
+schema_version: report-policy-v1
+default_format: DOCX
+renderer_order: [DOCX, MD]
+template_version: report-template-v1
+directory_policy:
+  windows_known_folder: DESKTOP
+  server_report_root: null
+  fallback: CONTROLLED_DIRECTORY
+  allow_env_override: true
+  report_root_env: ASTOCK_REPORT_ROOT
+pdf:
+  enabled: true
+  converter: external_cli
+  command: libreoffice
+  cli_args: ["--headless", "--convert-to", "pdf", "--outdir"]
+  command_env: ASTOCK_PDF_CONVERTER
+  probe_timeout_seconds: 30
+  convert_timeout_seconds: 120
+defaults:
+  privacy_level: INTERNAL_PRIVATE
+  citation_level: SUMMARY
+  include_assets: false
+assets:
+  max_assets: 64
+  max_total_bytes: 20971520
+  max_asset_bytes: 5242880
+  allowed_media_types: ["image/png", "image/jpeg", "image/webp"]
+  unknown_rights: EXCLUDE
+staging:
+  keep_on_error: false

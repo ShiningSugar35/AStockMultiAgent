@@ -319,8 +319,9 @@ def configure_logging(
     log_dir: Path | None = None,
     policy_path: Path | None = None,
     create_log_dir: bool = True,
+    console_sink: bool = True,
 ) -> LoggingConfiguration:
-    """Configure the ``astock`` logger with safe stderr and an optional file sink."""
+    """Configure the ``astock`` logger with optional stderr and file sinks."""
 
     global _CONFIGURED_KEY, _EVENT_QUEUE, _LISTENER, _QUEUE_HANDLER, _SINKS
     policy = load_logging_policy(policy_path) if policy_path is not None else None
@@ -337,6 +338,7 @@ def configure_logging(
         str(resolved_policy_path) if resolved_policy_path is not None else None,
         resolved_level,
         file_sink_enabled,
+        console_sink,
         policy,
     )
     with _CONFIG_LOCK:
@@ -352,7 +354,8 @@ def configure_logging(
         formatter = JsonFormatter(policy)
         stderr = _DynamicStderrHandler()
         stderr.setFormatter(formatter)
-        sinks: list[logging.Handler] = [stderr]
+        sinks: list[logging.Handler] = [stderr] if console_sink else []
+        overflow_fallback: logging.Handler = stderr if console_sink else logging.NullHandler()
         log_file: Path | None = None
 
         if file_sink_enabled:
@@ -371,7 +374,7 @@ def configure_logging(
         event_queue: queue.Queue[logging.LogRecord] = queue.Queue(
             maxsize=policy.queue_size if policy is not None else 1024
         )
-        queue_handler = BoundedQueueHandler(event_queue, stderr)
+        queue_handler = BoundedQueueHandler(event_queue, overflow_fallback)
         logger = logging.getLogger(_LOGGER_NAME)
         logger.handlers.clear()
         logger.addHandler(queue_handler)
@@ -398,6 +401,7 @@ def configure_project_logging(
     runtime_root: Path,
     *,
     create_log_dir: bool,
+    console_sink: bool = True,
 ) -> LoggingConfiguration:
     """Load the project policy and configure the standard runtime log location."""
 
@@ -405,6 +409,7 @@ def configure_project_logging(
         log_dir=runtime_root / "logs",
         policy_path=project_root / "configs" / "logging_policy.yaml",
         create_log_dir=create_log_dir,
+        console_sink=console_sink,
     )
 
 

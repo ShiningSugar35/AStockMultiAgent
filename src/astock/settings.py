@@ -52,6 +52,18 @@ class ProjectPaths:
     def logging_policy(self) -> Path:
         return self.root / "configs" / "logging_policy.yaml"
 
+    @property
+    def reports(self) -> Path:
+        return self.runtime / "reports"
+
+    @property
+    def report_staging(self) -> Path:
+        return self.reports / "_staging"
+
+    @property
+    def report_policy(self) -> Path:
+        return self.root / "configs" / "report_policy.yaml"
+
     def ensure_directories(self) -> None:
         for path in (
             self.runtime,
@@ -61,6 +73,8 @@ class ProjectPaths:
             self.runtime / "artifacts",
             self.runtime / "codex_runs",
             self.runtime / "checkpoints",
+            self.reports,
+            self.report_staging,
             self.logs,
         ):
             path.mkdir(parents=True, exist_ok=True)

@@ -66,6 +66,13 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
    - Preserve the stable machine contracts `research-investor-view` and `research-acquisition-investor-view`. Public rendering uses `research-public-view` or `research-acquisition-public-view`.
    - Before sending, apply `research-investor-answer-audit` and `docs/architecture/public-response-contract-v1.md`. A failed audit means **safe rewrite/fallback**, not “show the audit”, “show the backend blockers”, or echo the rejected draft.
 
+10. **Publish the formal report from the same frozen facts**
+   - A completed deep-research request builds `ReportRequest` from the same `ResearchNarrativeBundle` and registered input artifacts; the report layer does not refetch or reinterpret research facts.
+   - DOCX is the default renderer, Markdown is the deterministic fallback, and PDF is optional only when the configured converter succeeds output validation.
+   - Bind citation/asset manifests, privacy level, input hashes, renderer/converter version and output SHA-256 in `ReportManifest`; unsupported asset rights are recorded and excluded rather than silently embedded.
+   - Publish through staging, integrity validation and atomic replace. Matching idempotency checkpoints recover the existing report instead of republishing it.
+   - The investor answer returns only the safe report reference together with the core conclusion and limitations; private absolute report paths remain internal.
+
 ## Stop conditions
 
 - Automatic provider/endpoint/Web paths must be exhausted before requesting user material.

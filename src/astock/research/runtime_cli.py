@@ -30,9 +30,11 @@ from astock.research.institutional import InstitutionalResearchService
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.policy import CapabilityGraph, load_default_current_research_policy
 from astock.research.presentation import (
+    ResponseGateway,
     audit_investor_answer,
     investor_view_from_acquisition,
     investor_view_from_run,
+    narrative_from_investor_view,
 )
 from astock.research.production_cli import register_research_production_commands
 from astock.research.resource_policy import load_specialist_resource_policy
@@ -64,6 +66,7 @@ from astock.schemas.institutional_research import (
     MarketPriceAnchor,
     ValuationScenarioAssumption,
 )
+from astock.schemas.presentation import ResponseChannel, ResponseTaskType
 from astock.schemas.reference_data import Market
 from astock.schemas.research_runtime import (
     ResearchRunFrozenInputs,
@@ -117,6 +120,18 @@ def register_research_runtime_commands(
     def current_acquisition() -> CurrentResearchAcquisitionService:
         paths, state, objects = services()
         return CurrentResearchAcquisitionService(paths, state, objects)
+
+    def public_investor_payload(view: Any) -> Any:
+        gateway = ResponseGateway()
+        rendered = gateway.render(
+            gateway.context(
+                "",
+                task_type=ResponseTaskType.COMPANY_QUICK_VIEW,
+                channel=ResponseChannel.CLI,
+            ),
+            narrative=narrative_from_investor_view(view),
+        )
+        return rendered.payload
 
     def readiness() -> ResearchRuntimeReadinessService:
         paths, state, objects = services()
@@ -210,17 +225,33 @@ def register_research_runtime_commands(
     def research_acquisition_investor_view(
         report_id: Annotated[str, typer.Argument()],
     ) -> None:
+        """Return the stable investor-research-view-v1 machine contract."""
+
         report = current_acquisition().get(report_id)
         if report is None:
             emit({"status": "NOT_FOUND"})
             raise typer.Exit(code=2)
         emit(investor_view_from_acquisition(report))
 
+    @app.command("research-acquisition-public-view")
+    def research_acquisition_public_view(
+        report_id: Annotated[str, typer.Argument()],
+    ) -> None:
+        """Return the audited public presentation projection."""
+
+        report = current_acquisition().get(report_id)
+        if report is None:
+            emit({"status": "NOT_FOUND"})
+            raise typer.Exit(code=2)
+        emit(public_investor_payload(investor_view_from_acquisition(report)))
+
     @app.command("research-investor-view")
     def research_investor_view(
         run_id: Annotated[str, typer.Argument()],
         include_execution_readiness: Annotated[bool, typer.Option()] = False,
     ) -> None:
+        """Return the stable investor-research-view-v1 machine contract."""
+
         report = runtime().status(run_id)
         if report is None:
             emit({"status": "NOT_RUN"})
@@ -229,6 +260,26 @@ def register_research_runtime_commands(
             investor_view_from_run(
                 report,
                 include_execution_readiness=include_execution_readiness,
+            )
+        )
+
+    @app.command("research-public-view")
+    def research_public_view(
+        run_id: Annotated[str, typer.Argument()],
+        include_execution_readiness: Annotated[bool, typer.Option()] = False,
+    ) -> None:
+        """Return the audited public presentation projection."""
+
+        report = runtime().status(run_id)
+        if report is None:
+            emit({"status": "NOT_RUN"})
+            raise typer.Exit(code=2)
+        emit(
+            public_investor_payload(
+                investor_view_from_run(
+                    report,
+                    include_execution_readiness=include_execution_readiness,
+                )
             )
         )
 

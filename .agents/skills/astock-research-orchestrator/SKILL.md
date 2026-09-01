@@ -28,6 +28,7 @@ description: Route broad or multi-step A-share research requests across candidat
 16. 对 material formal decision 保持 registered/audited path；Committee 不联网找证据。组合 transition、holding proposal、hedge effectiveness 都是只读研究工件，不直接写 paper ledger 或真实券商。
 17. Prospective 方法比较继续遵守 Phase 7/8。一次回测或一个更高 Sharpe 不自动改变 allocator、Skill 权重或 paper ledger。
 18. 项目任务结束后按 AGENTS 记录恰好一个 `agent-observation-register` 观测；普通运行不自行伪造 expected labels。
+19. Build every user-visible investment answer from one canonical `ResearchNarrativeBundle` and render it through `ResponseGateway`. Keep `research-investor-view` and `research-acquisition-investor-view` as stable machine JSON; use `research-public-view` and `research-acquisition-public-view` for audited public output. Only affirmative diagnostic intent or an explicit mode may enable Developer Mode. Negated diagnostic requests, ordinary “why” questions, and system error text remain Investor Mode. Length reduction may remove only non-critical reasons; mandatory content must survive or use a no-echo safe fallback.
 
 ## Workflows
 
@@ -41,6 +42,7 @@ description: Route broad or multi-step A-share research requests across candidat
 - [`docs/workflows/workflow-portfolio-construction.md`](../../../docs/workflows/workflow-portfolio-construction.md)
 - [`docs/workflows/workflow-prospective-evaluation.md`](../../../docs/workflows/workflow-prospective-evaluation.md)
 - [`docs/workflows/workflow-adaptive-edge.md`](../../../docs/workflows/workflow-adaptive-edge.md)
+- [`docs/architecture/public-response-contract-v1.md`](../../../docs/architecture/public-response-contract-v1.md)
 
 ## Compatibility and hard contracts
 
@@ -54,7 +56,7 @@ description: Route broad or multi-step A-share research requests across candidat
 
 ## Output
 
-Lead with the investment answer, not the process. 默认 **结论 → 2–4 个决定性理由 → 主要风险/改变判断的条件**；组合任务额外给当前/anchor/目标差异和目标区间，持仓任务额外给 HOLD/ADD/TRIM/EXIT。正常回复必须通过 investor-answer audit，不展示 CLI、artifact、Schema、reason code、task/daemon 或数据库细节。
+Lead with the investment answer, not the process. 默认 **主体 → 结论与强度 → 估值/赔率 → 2–4 个决定性理由 → 最大风险 → 改变判断的条件 → 数据时间与必要引用**；组合任务额外给当前/anchor/目标差异和目标区间，持仓任务额外给 HOLD/ADD/TRIM/EXIT。正常回复必须经过 `ResponseGateway` 和 investor-answer audit；压缩只能删除非关键理由，强制内容超预算时安全降级，不展示或回显 CLI、artifact、Schema、reason code、task/daemon、数据库细节或被拒绝草稿。
 
 ## Prohibitions
 

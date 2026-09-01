@@ -1,0 +1,80 @@
+schema_version: presentation-policy-v1
+locale: zh-CN
+default_mode: INVESTOR
+safe_fallback_text: "当前无法安全生成公开答复。已保留内部诊断信息，请稍后重试。"
+max_bullets: 8
+max_heading_level: 2
+semantic_duplicate_threshold: 0.92
+english_density_threshold: 0.25
+diagnostic_intent_terms:
+  - 调试
+  - 排查系统
+  - 系统排查
+  - 看日志
+  - 查看日志
+  - 系统日志
+  - 状态码
+  - 错误码
+  - 工件
+  - artifact
+  - 数据库
+  - sqlite
+  - provider
+  - 接口错误
+  - traceback
+  - stack trace
+  - 堆栈
+  - cli
+  - schema
+  - migration
+  - 哈希
+  - hash
+  - sql
+  - 测试失败
+  - 单元测试
+  - 集成测试
+diagnostic_negation_terms:
+  - 不要看日志
+  - 不用看日志
+  - 无需看日志
+  - 不需要调试
+  - 不用调试
+  - 无需调试
+  - 不要调试
+  - 别进入开发者模式
+  - 不要进入开发者模式
+  - 不用进入开发者模式
+  - 无需进入开发者模式
+  - 不是让你调试
+forbidden_expressions:
+  - 综上所述
+  - 值得注意的是
+  - 需要强调的是
+  - 毋庸置疑
+  - 从某种意义上说
+  - 不难发现
+  - 可以看出
+  - 作为一个 AI
+  - 以下是为您
+  - 赋能
+  - 抓手
+  - 全方位
+  - 多维度
+  - 深度挖掘
+protected_terms:
+  - A股
+  - ETF
+  - ROE
+  - DCF
+  - CVaR
+  - T+1
+  - Alpha
+  - Beta
+budgets:
+  FACT_QUERY: {min_chars: 40, max_chars: 180, max_reasons: 2}
+  MARKET_STATUS: {min_chars: 80, max_chars: 300, max_reasons: 3}
+  COMPANY_QUICK_VIEW: {min_chars: 120, max_chars: 600, max_reasons: 4}
+  PORTFOLIO_DECISION: {min_chars: 160, max_chars: 800, max_reasons: 4}
+  DEEP_RESEARCH: {min_chars: 200, max_chars: 900, max_reasons: 4}
+  DEVELOPER_DIAGNOSTIC: {min_chars: 80, max_chars: 800, max_reasons: 4}
+  FORMAL_REPORT: {min_chars: 300, max_chars: 1600, max_reasons: 6}

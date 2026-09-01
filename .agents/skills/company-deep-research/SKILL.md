@@ -17,6 +17,7 @@ description: Build a cited current or historical deep A-share company research c
 10. A direct user instruction to buy/sell overrides the model's opinion, not execution mechanics. Do not veto the user's simulated order because research is bearish; route it to the paper-order path immediately while preserving cash/position availability, lot size, verified tradability, price-band, account-confirmation and fill checks.
 11. Require `research-chain-audit` and final runtime/committee audits for a formal certified chain. For durable internal provenance use `uv run astock codex-run-init <request> --artifact-id <artifact_id> --require-registered-output`, `codex-run-import`, and `codex-run-audit`; these identities stay internal.
 12. After a formal current opinion is complete, invoke `$continuous-investment-monitor`: enroll the resolved stock as `ANALYZED`, and persist only evidence-backed typed entry/review/exit thresholds that already exist in structured outputs. This enrollment is required even when the conclusion is WATCH or the stock is not held, so later price, disclosure, news-lead and catalyst changes can be reviewed incrementally.
+13. Build one canonical `ResearchNarrativeBundle` and render public output through `ResponseGateway`. The stable machine commands `research-investor-view` and `research-acquisition-investor-view` remain JSON contracts; use `research-public-view` or `research-acquisition-public-view` for audited public presentation. Never delete the subject, conclusion strength, valuation/odds, largest risk, change condition, data cutoff, required citations, or safe report reference merely to meet a length budget.
 
 ## Workflows
 
@@ -24,10 +25,11 @@ description: Build a cited current or historical deep A-share company research c
 - [`docs/workflows/workflow-committee-trade-plan.md`](../../../docs/workflows/workflow-committee-trade-plan.md)
 - [`docs/workflows/workflow-paper-trading.md`](../../../docs/workflows/workflow-paper-trading.md)
 - [`docs/workflows/workflow-adaptive-edge.md`](../../../docs/workflows/workflow-adaptive-edge.md)
+- [`docs/architecture/public-response-contract-v1.md`](../../../docs/architecture/public-response-contract-v1.md)
 
 ## Output
 
-Keep the investor answer compact: **结论（1–2句）→ 2–4个决定性理由 → 最大风险/改变判断的条件**. Add valuation or catalyst detail only when it changes the decision. Avoid saying the same thing again under “总结”. If a technical term, empirical paper result or formula is necessary, explain it once in a short parenthesis, e.g. “CVaR（最差那部分行情里的平均亏损）”. Translate unresolved evidence into investment language rather than backend terminology. Before sending, apply the same rules as `research-investor-answer-audit`.
+Keep the investor answer compact: **主体 → 结论与强度 → 估值/赔率 → 2–4个决定性理由 → 最大风险 → 改变判断的条件 → 数据时间与必要引用**. Add catalyst detail only when it changes the decision. Avoid saying the same thing again under “总结”. If a technical term, empirical paper result or formula is necessary, explain it once in a short parenthesis, e.g. “CVaR（最差那部分行情里的平均亏损）”. Translate unresolved evidence into investment language rather than backend terminology. Length reduction may remove only non-critical reasons; mandatory fields must survive or the answer uses a no-echo safe fallback. Before sending, apply `research-investor-answer-audit` and the canonical public response contract.
 
 ## Prohibitions
 

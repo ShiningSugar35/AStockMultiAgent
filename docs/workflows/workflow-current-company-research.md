@@ -57,11 +57,14 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
    - A direct user simulated-trade instruction overrides the research opinion but not cash/lot/tradability/price-band/fill mechanics.
 
 9. **Render and audit the investor answer**
-   - INVESTOR_MODE is the default for a stock question even if repo-skill discovery or one tool call fails.
-   - Default structure: **结论（1–2句）→ 2–4个决定性理由 → 最大风险/改变判断的条件**. Do not add a second summary that repeats the same conclusion.
+   - INVESTOR_MODE is the default for a stock question even if repo-skill discovery or one tool call fails. A system error string and a negated request such as “不要看日志” must not switch the mode.
+   - Build one canonical `ResearchNarrativeBundle`, then project it through `ResponseGateway`; do not construct a parallel response object in a Workflow or Skill.
+   - Default structure: **主体 → 结论与强度 → 估值/赔率 → 2–4个决定性理由 → 最大风险 → 改变判断的条件 → 数据时间与必要引用**. Do not add a second summary that repeats the same conclusion.
+   - Length reduction may remove only non-critical reasons. It must never delete the subject, conclusion, conclusion strength, valuation/odds, largest risk, change condition, data cutoff, required citation or safe report reference; if mandatory content still exceeds the budget, return the safe fallback without echoing the draft.
    - Explain unfamiliar finance/statistics terms briefly on first use, then continue in plain language.
    - Keep provider paths, internal Agents/committee stages, protocol/schema/class names, machine states, reason codes, artifact IDs/hashes, SQL/SQLite, CLI logs and developer meta commentary in diagnostics only.
-   - Before sending, apply `research-investor-answer-audit` semantics. A failed audit means **rewrite**, not “show the audit” and not “show the backend blockers”.
+   - Preserve the stable machine contracts `research-investor-view` and `research-acquisition-investor-view`. Public rendering uses `research-public-view` or `research-acquisition-public-view`.
+   - Before sending, apply `research-investor-answer-audit` and `docs/architecture/public-response-contract-v1.md`. A failed audit means **safe rewrite/fallback**, not “show the audit”, “show the backend blockers”, or echo the rejected draft.
 
 ## Stop conditions
 

@@ -532,6 +532,25 @@ from astock.schemas.paper import (
 )
 from astock.schemas.phase6 import Phase6ClosureReport, Phase6RunStatus
 from astock.schemas.pit import AvailabilityBasis, PointInTimeMetadata, PointInTimeStatus
+from astock.schemas.presentation import (
+    BudgetStatus,
+    ConclusionStrength,
+    DeveloperDiagnosticsInput,
+    DeveloperDiagnosticsModel,
+    FactEquivalenceStatus,
+    FactFingerprint,
+    InvestorPresentationModel,
+    PresentationAudit,
+    PublicCitation,
+    PublicReportReference,
+    RenderedResponse,
+    ResearchNarrativeBundle,
+    ResponseChannel,
+    ResponseContext,
+    ResponseDetail,
+    ResponseMode,
+    ResponseTaskType,
+)
 from astock.schemas.provider import (
     ProviderDefinition,
     ProviderHealthStatus,
@@ -1443,4 +1462,21 @@ __all__ = [
     "TemporalOperationKind",
     "TemporalPipelineNode",
     "TruncationInvarianceResult",
+    "BudgetStatus",
+    "ConclusionStrength",
+    "DeveloperDiagnosticsInput",
+    "DeveloperDiagnosticsModel",
+    "FactEquivalenceStatus",
+    "FactFingerprint",
+    "InvestorPresentationModel",
+    "PresentationAudit",
+    "PublicCitation",
+    "PublicReportReference",
+    "RenderedResponse",
+    "ResearchNarrativeBundle",
+    "ResponseChannel",
+    "ResponseContext",
+    "ResponseDetail",
+    "ResponseMode",
+    "ResponseTaskType",
 ]

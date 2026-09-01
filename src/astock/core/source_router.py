@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import yaml
 
+from astock.core.logging import emit_operational_event
 from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 from astock.schemas import (
@@ -19,6 +20,10 @@ from astock.schemas import (
     SourceAccessRequest,
     SourceClass,
     TransportCapability,
+)
+from astock.schemas.operational import (
+    OperationalEventKind,
+    OperationalSeverity,
 )
 
 
@@ -201,6 +206,24 @@ class SourceAccessRouter:
         )
         if self.state is not None:
             self.state.record_source_decision(decision)
+        emit_operational_event(
+            component="source_router",
+            event="source_access_decision",
+            event_kind=OperationalEventKind.AUDIT,
+            severity=(
+                OperationalSeverity.INFO
+                if selected is not None
+                else OperationalSeverity.WARNING
+            ),
+            context={
+                "requested_capability": request.requested_capability,
+                "formal_use": request.formal_use,
+                "require_complete": request.require_complete,
+                "selected_source_id": selected_source_id,
+                "selected_transport": selected_transport.value,
+                "fallback_source_chain": fallback_sources,
+            },
+        )
         return decision
 
     def _score(self, item: TransportCapability) -> Decimal:

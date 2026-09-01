@@ -12,8 +12,10 @@ import httpx
 import yaml
 
 from astock.core.errors import AStockError, FailureClass
+from astock.core.logging import emit_operational_event
 from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
+from astock.schemas.operational import OperationalSeverity
 
 
 class SourceFailureClass(StrEnum):
@@ -219,6 +221,11 @@ class SourceCircuitBreaker:
     ) -> None:
         now = _aware(at)
         with self.state.transaction() as connection:
+            previous = connection.execute(
+                "SELECT state FROM source_circuit_breaker WHERE source_id=? AND capability=?",
+                (source_id, capability),
+            ).fetchone()
+            previous_state = str(previous["state"]) if previous is not None else None
             connection.execute(
                 "INSERT INTO source_circuit_breaker(source_id,capability,state,failure_count,"
                 "opened_at,retry_after_at,last_failure_class,half_open_probe_in_flight,updated_at) "
@@ -236,6 +243,18 @@ class SourceCircuitBreaker:
                     0,
                     now.isoformat(),
                 ),
+            )
+        if previous_state not in {None, CircuitState.CLOSED.value}:
+            emit_operational_event(
+                component="source_resilience",
+                event="source_capability_recovered",
+                severity=OperationalSeverity.INFO,
+                context={
+                    "source_id": source_id,
+                    "capability": capability,
+                    "previous_state": previous_state,
+                    "state": CircuitState.CLOSED.value,
+                },
             )
 
     def record_failure(
@@ -296,6 +315,22 @@ class SourceCircuitBreaker:
                     0,
                     now.isoformat(),
                 ),
+            )
+            emit_operational_event(
+                component="source_resilience",
+                event="source_capability_failure",
+                severity=OperationalSeverity.WARNING,
+                failure_class=failure_class.value,
+                context={
+                    "source_id": source_id,
+                    "capability": capability,
+                    "previous_state": previous_state.value,
+                    "state": state.value,
+                    "failure_count": failure_count,
+                    "retry_after_at": (
+                        retry_after_at.isoformat() if retry_after_at is not None else None
+                    ),
+                },
             )
             return state
 

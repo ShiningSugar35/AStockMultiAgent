@@ -6,10 +6,17 @@ import random
 import time
 from collections.abc import Mapping
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
-from astock.core.source_resilience import classify_http_status, parse_retry_after_seconds
+from astock.core.logging import emit_operational_event
+from astock.core.source_resilience import (
+    classify_http_status,
+    classify_source_error,
+    parse_retry_after_seconds,
+)
+from astock.schemas.operational import OperationalSeverity
 
 
 class HttpClientLike(Protocol):
@@ -105,10 +112,23 @@ class ResilientHttpClient:
         attempt_limit = self.max_attempts if normalized_method in self.retry_methods else 1
         last_error: httpx.HTTPError | None = None
         last_response: httpx.Response | None = None
+        endpoint = _safe_endpoint(url)
         started = time.monotonic()
         for attempt in range(attempt_limit):
             remaining = self._remaining_budget(started)
             if remaining <= 0:
+                emit_operational_event(
+                    component="http_resilience",
+                    event="http_elapsed_budget_exhausted",
+                    severity=OperationalSeverity.WARNING,
+                    failure_class="TIMEOUT",
+                    context={
+                        "method": normalized_method,
+                        **endpoint,
+                        "attempt": attempt + 1,
+                        "attempt_limit": attempt_limit,
+                    },
+                )
                 if last_error is not None:
                     raise last_error
                 if last_response is not None:
@@ -128,7 +148,23 @@ class ResilientHttpClient:
                 )
             except httpx.HTTPError as exc:
                 last_error = exc
-                if attempt + 1 >= attempt_limit or not self._sleep(attempt, started):
+                retry_planned = attempt + 1 < attempt_limit
+                emit_operational_event(
+                    component="http_resilience",
+                    event="http_attempt_failed",
+                    severity=OperationalSeverity.WARNING,
+                    failure_class=classify_source_error(exc).value,
+                    context={
+                        "method": normalized_method,
+                        **endpoint,
+                        "lane": lane_name,
+                        "attempt": attempt + 1,
+                        "attempt_limit": attempt_limit,
+                        "retry_planned": retry_planned,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                if not retry_planned or not self._sleep(attempt, started):
                     raise
                 continue
             response.extensions["astock_transport_lane"] = lane_name
@@ -143,8 +179,34 @@ class ResilientHttpClient:
                     response.extensions["astock_retry_after_seconds"] = retry_after
             if response.status_code not in self.retry_status_codes:
                 return response
+
+            retry_planned = attempt + 1 < attempt_limit
+            emit_operational_event(
+                component="http_resilience",
+                event="http_retryable_response",
+                severity=OperationalSeverity.WARNING,
+                failure_class=(
+                    failure_class.value
+                    if failure_class is not None
+                    else "REMOTE_5XX"
+                    if response.status_code >= 500
+                    else f"HTTP_{response.status_code}"
+                ),
+                context={
+                    "method": normalized_method,
+                    **endpoint,
+                    "lane": lane_name,
+                    "attempt": attempt + 1,
+                    "attempt_limit": attempt_limit,
+                    "status_code": response.status_code,
+                    "retry_after_seconds": response.extensions.get(
+                        "astock_retry_after_seconds"
+                    ),
+                    "retry_planned": retry_planned,
+                },
+            )
             last_response = response
-            if attempt + 1 >= attempt_limit:
+            if not retry_planned:
                 return response
             if not self._sleep(attempt, started):
                 return response
@@ -171,6 +233,16 @@ class ResilientHttpClient:
 
     def _remaining_budget(self, started: float) -> float:
         return self.elapsed_budget_seconds - (time.monotonic() - started)
+
+
+def _safe_endpoint(url: str) -> dict[str, str | int | None]:
+    parsed = urlsplit(url)
+    return {
+        "endpoint_scheme": parsed.scheme.lower(),
+        "endpoint_host": parsed.hostname,
+        "endpoint_port": parsed.port,
+        "endpoint_path": parsed.path or "/",
+    }
 
 
 __all__ = ["HttpClientLike", "ResilientHttpClient"]

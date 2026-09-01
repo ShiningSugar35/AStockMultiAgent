@@ -499,6 +499,12 @@ from astock.schemas.open_source import (
     OpenSourceAuditManifest,
     OpenSourceLocalMapping,
 )
+from astock.schemas.operational import (
+    OperationalEventKind,
+    OperationalSeverity,
+    PublicErrorSummary,
+    StructuredLogEvent,
+)
 from astock.schemas.paper import (
     AccountType,
     CorporateActionEvent,
@@ -1462,6 +1468,10 @@ __all__ = [
     "TemporalOperationKind",
     "TemporalPipelineNode",
     "TruncationInvarianceResult",
+    "OperationalEventKind",
+    "OperationalSeverity",
+    "PublicErrorSummary",
+    "StructuredLogEvent",
     "BudgetStatus",
     "ConclusionStrength",
     "DeveloperDiagnosticsInput",

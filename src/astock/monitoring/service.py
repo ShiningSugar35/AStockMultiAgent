@@ -8,7 +8,9 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from astock.core.errors import PublicErrorMapper
 from astock.core.hashing import content_hash
+from astock.core.logging import emit_operational_event
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents.cninfo import CninfoDisclosureProvider
@@ -33,6 +35,7 @@ from astock.schemas import (
     InstrumentType,
     Market,
     MarketBar,
+    OperationalSeverity,
 )
 from astock.schemas.adaptation import ResearchModule
 from astock.schemas.continuous_monitoring import (
@@ -234,6 +237,16 @@ class ContinuousMonitorService:
                     findings.append(
                         f"{target.target_id}:{source.value}:{type(exc).__name__}:attempt={count}"
                     )
+                    PublicErrorMapper.record(
+                        exc,
+                        component="continuous_monitor",
+                        event="monitor_source_failure",
+                        context={
+                            "target_id": target.target_id,
+                            "source": source.value,
+                            "failure_count": count,
+                        },
+                    )
                     degraded = self._event(
                         target,
                         event_type=MonitorEventType.DATA_SOURCE_DEGRADED,
@@ -283,6 +296,29 @@ class ContinuousMonitorService:
             findings=findings,
         )
         self.repo.record_run(report)
+        emit_operational_event(
+            component="continuous_monitor",
+            event="monitor_cycle_completed",
+            severity=(
+                OperationalSeverity.INFO
+                if run_status is MonitorRunStatus.SUCCEEDED
+                else OperationalSeverity.WARNING
+            ),
+            run_id=report.run_id,
+            context={
+                "live": live,
+                "status": run_status.value,
+                "target_count": len(targets),
+                "event_count": event_count,
+                "task_count": task_count,
+                "source_success": {
+                    key.value: value for key, value in success.items()
+                },
+                "source_failure": {
+                    key.value: value for key, value in failure.items()
+                },
+            },
+        )
         return report
 
     def _process_market(

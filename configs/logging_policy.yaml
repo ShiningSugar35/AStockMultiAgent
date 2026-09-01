@@ -1,0 +1,39 @@
+schema_version: operational-logging-policy-v1
+level: INFO
+file_name: astock-operational.jsonl
+max_bytes: 8388608
+backup_count: 7
+retention_days: 14
+queue_size: 4096
+max_event_bytes: 65536
+max_message_chars: 4096
+max_context_items: 100
+max_context_depth: 8
+redact_private_paths: true
+redact_request_bodies: true
+redacted_keys:
+  - authorization
+  - proxy-authorization
+  - cookie
+  - set-cookie
+  - password
+  - passwd
+  - pwd
+  - api_key
+  - apikey
+  - access_token
+  - refresh_token
+  - secret
+  - client_secret
+  - session
+  - request_body
+  - response_body
+  - raw_body
+  - payload_body
+  - request_json
+  - response_json
+  - request_data
+  - response_data
+  - form_data
+  - multipart
+  - files

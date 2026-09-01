@@ -11,6 +11,7 @@ from time import perf_counter
 from zoneinfo import ZoneInfo
 
 from astock.core.hashing import content_hash
+from astock.core.logging import emit_operational_event
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents.repository import DocumentRepository
@@ -26,6 +27,7 @@ from astock.schemas import (
     FinancialPeriodType,
     FinancialSourceReleaseStatus,
     OfficialWebDocumentCapture,
+    OperationalSeverity,
     ReferenceCoverageStatus,
     SourceClass,
 )
@@ -262,6 +264,32 @@ class CurrentResearchAcquisitionService:
             },
             status="SUCCEEDED" if not external_needs else "NEEDS_EXTERNAL_RESEARCH",
             object_hash=ref.sha256,
+        )
+        emit_operational_event(
+            component="current_research_acquisition",
+            event="current_research_acquisition_completed",
+            severity=(
+                OperationalSeverity.INFO
+                if status is CurrentResearchAcquisitionStatus.READY
+                else OperationalSeverity.WARNING
+            ),
+            run_id=report_id,
+            context={
+                "company_id": company_id,
+                "market": market.value,
+                "status": status.value,
+                "automatic_resolution_budget_seconds": (
+                    schedule.automatic_resolution_budget_seconds
+                ),
+                "attempt_count": len(attempts),
+                "failed_capabilities": [
+                    item.capability.value
+                    for item in attempts
+                    if item.status is not AcquisitionAttemptStatus.SUCCEEDED
+                ],
+                "external_research_need_count": len(external_needs),
+                "reused_capability_count": len(reused_attempts),
+            },
         )
         return report
 

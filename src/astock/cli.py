@@ -37,8 +37,13 @@ from astock.core.codex_runs import (
     registered_shadow_artifact_types,
     registered_strict_artifact_types,
 )
-from astock.core.errors import AStockError, FailureClass
+from astock.core.errors import AStockError, FailureClass, PublicErrorMapper
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
+from astock.core.logging import (
+    bind_operational_context,
+    configure_project_logging,
+    flush_logging,
+)
 from astock.core.object_store import ObjectStore
 from astock.core.source_policy_gate import SourcePolicyGate
 from astock.core.state import StateStore
@@ -220,9 +225,24 @@ app = typer.Typer(
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
+def _configure_cli_operation(
+    paths: ProjectPaths,
+    *,
+    create_log_dir: bool,
+) -> str:
+    context = bind_operational_context()
+    configure_project_logging(
+        paths.root,
+        paths.runtime,
+        create_log_dir=create_log_dir,
+    )
+    return context.correlation_id
+
+
 def _services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
     paths = ProjectPaths.discover()
     paths.ensure_directories()
+    _configure_cli_operation(paths, create_log_dir=True)
     state = StateStore(paths.state_db, paths.root / "migrations")
     state.migrate()
     return paths, state, ObjectStore(paths.objects)
@@ -232,6 +252,7 @@ def _read_only_services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
     """Resolve an existing runtime without creating directories or applying migrations."""
 
     paths = ProjectPaths.discover()
+    _configure_cli_operation(paths, create_log_dir=False)
     state = StateStore(paths.state_db, paths.root / "migrations")
     return paths, state, ObjectStore(paths.objects)
 
@@ -358,6 +379,7 @@ def _context_budget_with_registered(
 
 
 def _emit(value: Any) -> None:
+    flush_logging()
     typer.echo(json.dumps(_jsonable(value), ensure_ascii=False, indent=2, sort_keys=True))
 
 
@@ -476,6 +498,84 @@ def _disclosure_request(
         keyword=keyword,
         page_size=page_size,
     )
+
+
+@app.command("operational-status")
+def operational_status() -> None:
+    """Show bounded logging policy and the canonical current-research budget."""
+
+    import logging
+
+    from astock.research.policy import load_default_current_research_policy
+    from astock.research.team import load_research_team_policy
+
+    paths = ProjectPaths.discover()
+    context = bind_operational_context()
+    configuration = configure_project_logging(
+        paths.root,
+        paths.runtime,
+        create_log_dir=False,
+    )
+    current_policy = load_default_current_research_policy(paths.root)
+    team_policy = load_research_team_policy(paths.root / "configs" / "research_team.yaml")
+
+    policy = configuration.policy
+    if policy is None:
+        raise ValueError("operational logging policy is unavailable")
+    budget_consistent = (
+        current_policy.automatic_resolution_budget_seconds
+        == team_policy.automatic_resolution_budget_seconds
+        == 1800
+    )
+    _emit(
+        {
+            "schema_version": "operational-status-v1",
+            "correlation_id": context.correlation_id,
+            "file_sink_enabled": configuration.file_sink_enabled,
+            "log_file": (
+                str(Path("runtime") / "logs" / policy.file_name)
+                if configuration.file_sink_enabled
+                else None
+            ),
+            "logging_policy": {
+                "schema_version": policy.schema_version,
+                "level": logging.getLevelName(policy.level),
+                "max_bytes": policy.max_bytes,
+                "backup_count": policy.backup_count,
+                "retention_days": policy.retention_days,
+                "maximum_file_bytes": policy.maximum_file_bytes,
+                "max_event_bytes": policy.max_event_bytes,
+                "queue_size": policy.queue_size,
+            },
+            "current_research_budget_seconds": (
+                current_policy.automatic_resolution_budget_seconds
+            ),
+            "research_team_budget_seconds": team_policy.automatic_resolution_budget_seconds,
+            "budget_consistent": budget_consistent,
+            "broker_execution_allowed": False,
+        }
+    )
+
+
+@app.command("operational-error-summary")
+def operational_error_summary(
+    failure: Annotated[
+        str,
+        typer.Argument(help="Stable failure class or HTTP status to summarize."),
+    ],
+) -> None:
+    """Return one safe public impact and record its correlated internal event."""
+
+    paths = ProjectPaths.discover()
+    correlation_id = _configure_cli_operation(paths, create_log_dir=False)
+    summary = PublicErrorMapper.record(
+        failure,
+        component="cli",
+        event="operational_error_summary_requested",
+        correlation_id=correlation_id,
+        context={"requested_failure_class": failure},
+    )
+    _emit(summary)
 
 
 @app.command("init")

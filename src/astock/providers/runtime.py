@@ -17,7 +17,7 @@ from typing import Any, TypeVar
 import httpx
 import yaml
 
-from astock.core.errors import AStockError
+from astock.core.errors import AStockError, PublicErrorMapper
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.project_root import resolve_project_root
@@ -380,11 +380,24 @@ class ProviderFactory:
             raw_retry_after = error.details.get("retry_after_seconds")
             if isinstance(raw_retry_after, (int, float)) and not isinstance(raw_retry_after, bool):
                 retry_after_seconds = max(0, int(raw_retry_after))
-        self.source_breaker.record_failure(
+        breaker_state = self.source_breaker.record_failure(
             provider_id,
             capability,
             failure_class,
             retry_after_seconds=retry_after_seconds,
+        )
+
+        PublicErrorMapper.record(
+            failure_class.value,
+            component="provider_runtime",
+            event="provider_capability_failure",
+            context={
+                "provider_id": provider_id,
+                "capability": capability,
+                "breaker_state": breaker_state.value,
+                "retry_after_seconds": retry_after_seconds,
+                "error_type": type(error).__name__,
+            },
         )
 
     def create(self, provider_id: str) -> object:

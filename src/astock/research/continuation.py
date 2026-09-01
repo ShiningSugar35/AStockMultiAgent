@@ -6,11 +6,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from astock.core.hashing import content_hash
+from astock.core.logging import emit_operational_event
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents.repository import DocumentRepository
 from astock.research.acquisition import CurrentResearchAcquisitionService
+from astock.research.policy import load_default_current_research_policy
 from astock.research.team import ResearchTeamService
+from astock.schemas.operational import OperationalSeverity
 from astock.schemas.research_acquisition import (
     AcquisitionCapability,
     CurrentResearchAcquisitionReport,
@@ -62,15 +65,35 @@ class CurrentResearchContinuationService:
         self.state = state
         self.objects = objects
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.policy = load_default_current_research_policy(paths.root)
         self.acquisition = acquisition or CurrentResearchAcquisitionService(paths, state, objects)
         self.team = team or ResearchTeamService(
             project_root=paths.root,
             state=state,
             objects=objects,
         )
+        acquisition_policy = getattr(self.acquisition, "policy", None)
+        if (
+            acquisition_policy is not None
+            and acquisition_policy.automatic_resolution_budget_seconds
+            != self.policy.automatic_resolution_budget_seconds
+        ):
+            raise ValueError("current acquisition budget differs from the canonical policy")
+        if (
+            self.team.policy.automatic_resolution_budget_seconds
+            != self.policy.automatic_resolution_budget_seconds
+        ):
+            raise ValueError("research-team budget differs from the canonical policy")
         self.documents = DocumentRepository(state)
 
     def start(self, request: CurrentResearchContinuationRequest) -> CurrentResearchContinuation:
+        if (
+            request.automatic_resolution_budget_seconds
+            != self.policy.automatic_resolution_budget_seconds
+        ):
+            raise ValueError(
+                "current research continuation must use the canonical 1800-second budget"
+            )
         continuation_id = self._continuation_id(request)
         existing = self.get(continuation_id)
         if existing is not None:
@@ -535,6 +558,13 @@ class CurrentResearchContinuationService:
         record = self.get(continuation_id)
         if record is None:
             raise ValueError("unknown current research continuation")
+        if (
+            record.automatic_resolution_budget_seconds
+            != self.policy.automatic_resolution_budget_seconds
+        ):
+            raise ValueError(
+                "stored current research continuation uses a non-canonical budget"
+            )
         return record
 
     @staticmethod
@@ -767,6 +797,39 @@ class CurrentResearchContinuationService:
             },
             status=record.status.value,
             object_hash=ref.sha256,
+        )
+        emit_operational_event(
+            component="current_research_continuation",
+            event="current_research_continuation_checkpointed",
+            severity=(
+                OperationalSeverity.WARNING
+                if record.status
+                in {
+                    CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
+                    CurrentResearchContinuationStatus.FAILED,
+                }
+                else OperationalSeverity.INFO
+            ),
+            run_id=record.continuation_id,
+            request_id=record.request_id,
+            context={
+                "company_id": record.company_id,
+                "market": record.market.value,
+                "status": record.status.value,
+                "automatic_resolution_budget_seconds": (
+                    record.automatic_resolution_budget_seconds
+                ),
+                "automatic_rounds_completed": record.automatic_rounds_completed,
+                "pending_external_task_count": sum(
+                    item.status is ExternalResearchTaskStatus.PENDING
+                    for item in record.external_tasks
+                ),
+                "automatic_budget_exhausted": record.automatic_budget_exhausted,
+                "investor_view_allowed": record.investor_view_allowed,
+                "formal_recommendation_allowed": (
+                    record.formal_recommendation_allowed
+                ),
+            },
         )
         return record
 

@@ -21,6 +21,8 @@ from astock.schemas.research_acquisition import (
     ExternalAuthority,
 )
 
+CANONICAL_AUTOMATIC_RESOLUTION_BUDGET_SECONDS = 1800
+
 
 @dataclass(frozen=True, slots=True)
 class CapabilityPolicy:
@@ -247,7 +249,17 @@ def load_current_research_policy(path: Path) -> CurrentResearchPolicy:
 
 
 def load_default_current_research_policy(project_root: Path) -> CurrentResearchPolicy:
-    return load_current_research_policy(project_root / "configs" / "current_research_policy.yaml")
+    policy = load_current_research_policy(
+        project_root / "configs" / "current_research_policy.yaml"
+    )
+    if (
+        policy.automatic_resolution_budget_seconds
+        != CANONICAL_AUTOMATIC_RESOLUTION_BUDGET_SECONDS
+    ):
+        raise ValueError(
+            "current-research automatic resolution budget must remain the canonical 1800 seconds"
+        )
+    return policy
 
 
 def load_default_provider_registry(project_root: Path) -> ProviderRegistry:
@@ -255,6 +267,7 @@ def load_default_provider_registry(project_root: Path) -> ProviderRegistry:
 
 
 __all__ = [
+    "CANONICAL_AUTOMATIC_RESOLUTION_BUDGET_SECONDS",
     "CapabilityGraph",
     "CapabilityPolicy",
     "CurrentResearchPolicy",

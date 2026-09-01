@@ -16,6 +16,7 @@ from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.evidence.repository import EvidenceRepository
+from astock.research.policy import load_default_current_research_policy
 from astock.schemas.financial import FinancialCoverageStatus, FinancialIntegrityEvidencePack
 from astock.schemas.research_acquisition import (
     CurrentResearchAcquisitionReport,
@@ -117,12 +118,19 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
                 raise ValueError(f"invalid {source_name} for {resource_class.value}")
             hardware[resource_class][output_name] = value
 
+    if "automatic_resolution_budget_seconds" in execution:
+        raise ValueError(
+            "research-team policy must not duplicate "
+            "the current-research automatic resolution budget"
+        )
+    current_research_policy = load_default_current_research_policy(
+        path.parent.parent
+    )
+    canonical_budget = current_research_policy.automatic_resolution_budget_seconds
     policy = ResearchTeamPolicy(
         policy_version=str(raw.get("policy_version") or ""),
         default_backend=ResearchExecutionBackend(str(execution.get("default_backend"))),
-        automatic_resolution_budget_seconds=int(
-            execution.get("automatic_resolution_budget_seconds", 0)
-        ),
+        automatic_resolution_budget_seconds=canonical_budget,
         background_service_required=bool(execution.get("background_service_required")),
         on_demand_only=bool(execution.get("on_demand_only")),
         required_checks=required_checks,

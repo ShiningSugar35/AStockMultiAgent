@@ -1,10 +1,9 @@
 schema_version: research-team-policy-v1
-policy_version: research-team-policy-v2
+policy_version: research-team-policy-v3
 execution:
   default_backend: CHAT_ORCHESTRATED
   background_service_required: false
   on_demand_only: true
-  automatic_resolution_budget_seconds: 7200
   task_checkpointing_required: true
   independent_bull_bear_required: true
 acquisition:

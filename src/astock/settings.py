@@ -44,6 +44,14 @@ class ProjectPaths:
             state_db=runtime / "state.sqlite",
         )
 
+    @property
+    def logs(self) -> Path:
+        return self.runtime / "logs"
+
+    @property
+    def logging_policy(self) -> Path:
+        return self.root / "configs" / "logging_policy.yaml"
+
     def ensure_directories(self) -> None:
         for path in (
             self.runtime,
@@ -53,6 +61,6 @@ class ProjectPaths:
             self.runtime / "artifacts",
             self.runtime / "codex_runs",
             self.runtime / "checkpoints",
-            self.runtime / "logs",
+            self.logs,
         ):
             path.mkdir(parents=True, exist_ok=True)

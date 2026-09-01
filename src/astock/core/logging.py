@@ -249,6 +249,34 @@ class DailySizeRotatingFileHandler(logging.handlers.RotatingFileHandler):
             )
 
 
+class _DynamicStderrHandler(logging.StreamHandler):
+    """Write to the current sys.stderr, not a captured reference.
+
+    Click's CliRunner replaces sys.stderr during invoke(). If we capture
+    a reference to sys.stderr at construction time, the QueueListener
+    thread may attempt to write to the CliRunner's buffer after it is
+    closed.  Resolving sys.stderr at each write avoids this.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(sys.stderr)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            stream = sys.stderr
+            stream.write(msg + self.terminator)
+            stream.flush()
+        except Exception:
+            self.handleError(record)
+
+    def flush(self) -> None:
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+
 class BoundedQueueHandler(logging.handlers.QueueHandler):
     """Never block a research path because observability is saturated."""
 
@@ -278,7 +306,11 @@ class BoundedQueueHandler(logging.handlers.QueueHandler):
                 args=(),
                 exc_info=None,
             )
-            self.fallback.handle(overflow)
+            try:
+                self.fallback.handle(overflow)
+            except (ValueError, OSError):
+                # Fallback stream may be closed (e.g. during CliRunner tests)
+                pass
 
 
 def configure_logging(
@@ -305,7 +337,6 @@ def configure_logging(
         str(resolved_policy_path) if resolved_policy_path is not None else None,
         resolved_level,
         file_sink_enabled,
-        id(sys.stderr),
         policy,
     )
     with _CONFIG_LOCK:
@@ -319,7 +350,7 @@ def configure_logging(
         _shutdown_logging_locked()
 
         formatter = JsonFormatter(policy)
-        stderr = logging.StreamHandler()
+        stderr = _DynamicStderrHandler()
         stderr.setFormatter(formatter)
         sinks: list[logging.Handler] = [stderr]
         log_file: Path | None = None

@@ -48,12 +48,16 @@ class ProviderSelfProbeRunner:
             record_count, quality = self._market_bars(provider, definition.probe_target)
         elif operation == "reference-identity":
             record_count, quality = self._reference_identity(provider, definition.probe_target)
+        elif operation == "reference-master":
+            record_count, quality = self._reference_master(provider, definition.probe_target)
         elif operation == "financial-period":
             record_count, quality = self._financial_period(provider, definition.probe_target)
         elif operation == "disclosure-search":
             record_count, quality = self._disclosure_search(provider, definition.probe_target)
         elif operation == "news-lead":
             record_count, quality = self._news_lead(provider, definition.probe_target)
+        elif operation == "macro-indicator":
+            record_count, quality = self._macro_indicator(provider, definition.probe_target)
         else:
             raise ValueError(f"Unknown provider self-probe operation: {operation}")
         checked = tuple(_checked_capabilities(definition))
@@ -123,6 +127,33 @@ class ProviderSelfProbeRunner:
         return 0, False
 
     @staticmethod
+    def _reference_master(provider: object, target: dict[str, str | int]) -> tuple[int, bool]:
+        fetch = getattr(provider, "fetch_master", None)
+        if not callable(fetch):
+            return 0, False
+        result = fetch(Market(str(target["market"])), live=True)
+        if not isinstance(result, tuple) or len(result) != 2:
+            return 0, False
+        payload = result[0]
+        if not isinstance(payload, dict):
+            return 0, False
+        rows = payload.get("rows")
+        if not isinstance(rows, list):
+            return 0, False
+        try:
+            total = int(str(payload["total"]))
+            denominator = int(str(payload["coverage_denominator"]))
+        except (KeyError, TypeError, ValueError):
+            return len(rows), False
+        quality = (
+            payload.get("complete") is True
+            and total == denominator
+            and total == len(rows)
+            and bool(rows)
+        )
+        return len(rows), quality
+
+    @staticmethod
     def _financial_period(provider: object, target: dict[str, str | int]) -> tuple[int, bool]:
         fetch = getattr(provider, "fetch", None)
         if not callable(fetch):
@@ -176,6 +207,17 @@ class ProviderSelfProbeRunner:
         )
         return (len(leads), isinstance(leads, list)) if isinstance(leads, list) else (0, False)
 
+    @staticmethod
+    def _macro_indicator(provider: object, target: dict[str, str | int]) -> tuple[int, bool]:
+        fetch = getattr(provider, "fetch_indicator", None)
+        if not callable(fetch):
+            return 0, False
+        result = fetch(str(target["indicator_code"]), live=True)
+        if not isinstance(result, tuple) or len(result) != 2:
+            return 0, False
+        quality, count = _recorded_macro_indicator(result[0])
+        return count, quality
+
 
 def validate_recorded_probe_payload(
     definition: ProviderDefinition,
@@ -191,12 +233,16 @@ def validate_recorded_probe_payload(
         return _recorded_market_bars(payload)
     if operation == "reference-identity":
         return _recorded_reference_identity(payload)
+    if operation == "reference-master":
+        return _recorded_reference_master(payload)
     if operation == "financial-period":
         return _recorded_financial(payload)
     if operation == "disclosure-search":
         return _recorded_disclosure(payload)
     if operation == "news-lead":
         return _generic_self_probe(payload, definition) or (False, 0)
+    if operation == "macro-indicator":
+        return _recorded_macro_indicator(payload)
     return False, 0
 
 
@@ -211,6 +257,8 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
         selected = [item for item in capabilities if item.startswith("market.raw_")]
     elif operation == "reference-identity":
         selected = [item for item in capabilities if item == "instrument.identity"]
+    elif operation == "reference-master":
+        selected = [item for item in capabilities if item == "instrument.master"]
     elif operation == "financial-period":
         selected = [
             item
@@ -221,6 +269,8 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
         selected = [item for item in capabilities if item == "disclosure.discover"]
     elif operation == "news-lead":
         selected = [item for item in capabilities if item == "news.discovery.lead"]
+    elif operation == "macro-indicator":
+        selected = [item for item in capabilities if item.startswith("macro.")]
     else:
         selected = []
     return list(dict.fromkeys(selected))
@@ -284,6 +334,26 @@ def _recorded_reference_identity(payload: object) -> tuple[bool, int]:
     return False, 0
 
 
+def _recorded_reference_master(payload: object) -> tuple[bool, int]:
+    if not isinstance(payload, dict):
+        return False, 0
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return False, 0
+    try:
+        total = int(str(payload["total"]))
+        denominator = int(str(payload["coverage_denominator"]))
+    except (KeyError, TypeError, ValueError):
+        return False, len(rows)
+    quality = (
+        payload.get("complete") is True
+        and total == denominator
+        and total == len(rows)
+        and bool(rows)
+    )
+    return quality, len(rows)
+
+
 def _recorded_financial(payload: object) -> tuple[bool, int]:
     if not isinstance(payload, dict) or not isinstance(payload.get("responses"), dict):
         return False, 0
@@ -314,6 +384,39 @@ def _recorded_disclosure(payload: object) -> tuple[bool, int]:
         return False, 0
     rows = payload["announcements"]
     return True, len(rows)
+
+
+def _recorded_macro_indicator(payload: object) -> tuple[bool, int]:
+    if not isinstance(payload, dict):
+        return False, 0
+    schema_version = payload.get("schema_version")
+    request = payload.get("_astock_request")
+    data_points = payload.get("data_points")
+    revision_version = payload.get("revision_version")
+    quality = bool(
+        isinstance(schema_version, str)
+        and schema_version.startswith("macro-release-v")
+        and isinstance(request, dict)
+        and request.get("purpose") == "MACRO_ECONOMIC_RELEASE"
+        and request.get("indicator_code") == payload.get("indicator_code")
+        and isinstance(payload.get("publication_date"), str)
+        and isinstance(payload.get("available_to_system_at"), str)
+        and isinstance(revision_version, int)
+        and not isinstance(revision_version, bool)
+        and revision_version > 0
+        and isinstance(data_points, list)
+        and data_points
+        and all(
+            isinstance(point, dict)
+            and isinstance(point.get("period"), str)
+            and bool(point.get("period"))
+            and isinstance(point.get("unit"), str)
+            and bool(point.get("unit"))
+            and ("value" in point or "price" in point)
+            for point in data_points
+        )
+    )
+    return quality, len(data_points) if isinstance(data_points, list) else 0
 
 
 def _generic_payload_count(payload: object) -> tuple[int, bool]:

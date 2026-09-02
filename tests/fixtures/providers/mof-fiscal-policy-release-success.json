@@ -1,0 +1,43 @@
+{
+  "status_code": 200,
+  "content_type": "application/json",
+  "latency_ms": 0,
+  "body": {
+    "schema_version": "macro-release-v1",
+    "_astock_source": "mof-fiscal-policy-release",
+    "_astock_request": {
+      "indicator_code": "fiscal_revenue",
+      "purpose": "MACRO_ECONOMIC_RELEASE"
+    },
+    "indicator_code": "fiscal_revenue",
+    "indicator_name": "全国一般公共预算收入",
+    "observation_period": "2026-06",
+    "publication_date": "2026-07-18",
+    "revision_version": 1,
+    "available_to_system_at": "2026-07-18T14:00:00+08:00",
+    "source_url": "https://www.mof.gov.cn/zhengwuxinxi/caizhengshuju/",
+    "data_points": [
+      {
+        "period": "2026-06",
+        "value": 128000.0,
+        "unit": "亿元",
+        "growth_rate_yoy": 6.2,
+        "cumulative": true
+      },
+      {
+        "period": "2026-05",
+        "value": 105000.0,
+        "unit": "亿元",
+        "growth_rate_yoy": 6.5,
+        "cumulative": true
+      }
+    ],
+    "revision_history": [
+      {
+        "version": 1,
+        "date": "2026-07-18",
+        "description": "初步统计"
+      }
+    ]
+  }
+}

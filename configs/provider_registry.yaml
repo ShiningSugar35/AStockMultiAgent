@@ -261,12 +261,11 @@ providers:
     recorded_fixture: tests/fixtures/providers/gdelt-news-leads-success.json
   - provider_id: nbs-statistical-release
     adapter_class: astock.providers.macro_authority:NbsStatisticalReleaseProvider
-    capabilities: [macro.statistical_release, web.authoritative_fact]
+    capabilities: [macro.statistical_release]
     source_class: PRIMARY_OFFICIAL_WEB
-    formal_capabilities: [macro.statistical_release, web.authoritative_fact]
+    formal_capabilities: [macro.statistical_release]
     completeness_semantics:
       macro.statistical_release: EXACT_ITEM
-      web.authoritative_fact: EXACT_ITEM
     independence_group: NBS_OFFICIAL
     cache_ttl_seconds: 86400
     cost_class: LOW
@@ -279,15 +278,14 @@ providers:
     fixture_subdir: macro
     probe_operation: macro-indicator
     probe_target: {indicator_code: "gdp"}
-    recorded_fixture: tests/fixtures/macro/nbs_gdp.json
+    recorded_fixture: tests/fixtures/providers/nbs-statistical-release-success.json
   - provider_id: pboc-monetary-policy-release
     adapter_class: astock.providers.macro_authority:PbocMonetaryPolicyReleaseProvider
-    capabilities: [macro.monetary_policy_release, web.authoritative_fact]
+    capabilities: [macro.monetary_policy_release]
     source_class: PRIMARY_OFFICIAL_WEB
-    formal_capabilities: [macro.monetary_policy_release, web.authoritative_fact]
+    formal_capabilities: [macro.monetary_policy_release]
     completeness_semantics:
       macro.monetary_policy_release: EXACT_ITEM
-      web.authoritative_fact: EXACT_ITEM
     independence_group: PBOC_OFFICIAL
     cache_ttl_seconds: 86400
     cost_class: LOW
@@ -300,15 +298,14 @@ providers:
     fixture_subdir: macro
     probe_operation: macro-indicator
     probe_target: {indicator_code: "m2"}
-    recorded_fixture: tests/fixtures/macro/pboc_m2.json
+    recorded_fixture: tests/fixtures/providers/pboc-monetary-policy-release-success.json
   - provider_id: mof-fiscal-policy-release
     adapter_class: astock.providers.macro_authority:MofFiscalPolicyReleaseProvider
-    capabilities: [macro.fiscal_policy_release, web.authoritative_fact]
+    capabilities: [macro.fiscal_policy_release]
     source_class: PRIMARY_OFFICIAL_WEB
-    formal_capabilities: [macro.fiscal_policy_release, web.authoritative_fact]
+    formal_capabilities: [macro.fiscal_policy_release]
     completeness_semantics:
       macro.fiscal_policy_release: EXACT_ITEM
-      web.authoritative_fact: EXACT_ITEM
     independence_group: MOF_OFFICIAL
     cache_ttl_seconds: 86400
     cost_class: LOW
@@ -321,15 +318,14 @@ providers:
     fixture_subdir: macro
     probe_operation: macro-indicator
     probe_target: {indicator_code: "fiscal_revenue"}
-    recorded_fixture: tests/fixtures/macro/mof_fiscal_revenue.json
+    recorded_fixture: tests/fixtures/providers/mof-fiscal-policy-release-success.json
   - provider_id: ndrc-pricing-policy-release
     adapter_class: astock.providers.macro_authority:NdrcPricingPolicyReleaseProvider
-    capabilities: [macro.pricing_policy_release, web.authoritative_fact]
+    capabilities: [macro.pricing_policy_release]
     source_class: PRIMARY_OFFICIAL_WEB
-    formal_capabilities: [macro.pricing_policy_release, web.authoritative_fact]
+    formal_capabilities: [macro.pricing_policy_release]
     completeness_semantics:
       macro.pricing_policy_release: EXACT_ITEM
-      web.authoritative_fact: EXACT_ITEM
     independence_group: NDRC_OFFICIAL
     cache_ttl_seconds: 86400
     cost_class: LOW
@@ -342,4 +338,4 @@ providers:
     fixture_subdir: macro
     probe_operation: macro-indicator
     probe_target: {indicator_code: "refined_oil_price"}
-    recorded_fixture: tests/fixtures/macro/ndrc_refined_oil_price.json
+    recorded_fixture: tests/fixtures/providers/ndrc-pricing-policy-release-success.json

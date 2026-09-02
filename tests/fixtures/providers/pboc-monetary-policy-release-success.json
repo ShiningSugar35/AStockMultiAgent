@@ -1,0 +1,43 @@
+{
+  "status_code": 200,
+  "content_type": "application/json",
+  "latency_ms": 0,
+  "body": {
+    "schema_version": "macro-release-v1",
+    "_astock_source": "pboc-monetary-policy-release",
+    "_astock_request": {
+      "indicator_code": "m2",
+      "purpose": "MACRO_ECONOMIC_RELEASE"
+    },
+    "indicator_code": "m2",
+    "indicator_name": "广义货币供应量M2",
+    "observation_period": "2026-06",
+    "publication_date": "2026-07-12",
+    "revision_version": 1,
+    "available_to_system_at": "2026-07-12T16:00:00+08:00",
+    "source_url": "https://www.pbc.gov.cn/diaochatongjisi/116219/116319/index.html",
+    "data_points": [
+      {
+        "period": "2026-06",
+        "value": 3120000.0,
+        "unit": "亿元",
+        "growth_rate_yoy": 7.5,
+        "growth_rate_mom": 0.8
+      },
+      {
+        "period": "2026-05",
+        "value": 3096000.0,
+        "unit": "亿元",
+        "growth_rate_yoy": 7.6,
+        "growth_rate_mom": 0.7
+      }
+    ],
+    "revision_history": [
+      {
+        "version": 1,
+        "date": "2026-07-12",
+        "description": "初步统计"
+      }
+    ]
+  }
+}

@@ -158,8 +158,9 @@ def test_reference_service_reconciles_sse_szse_against_official_denominators(
 def test_bjse_official_company_action_coverage_stays_honestly_unavailable() -> None:
     reference, _registry = _reference()
 
-    # The disclosure enumeration layer (DisclosureExchange) only supports
-    # SSE/SZSE, so there is no BJSE exact-item official company-action path yet.
+    # The disclosure enumeration layer only proves SSE/SZSE windows. BJSE has
+    # a separate exact-item capture path, but no exhaustive enumeration or
+    # negative-proof authority; market-level coverage must therefore stay unavailable.
     assert reference.official_coverage("corporate_actions.official_evidence", Market.BJSE) == (
         "UNAVAILABLE"
     )

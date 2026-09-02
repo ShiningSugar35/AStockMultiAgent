@@ -757,3 +757,111 @@ def test_migration_0037_upgrades_a_database_frozen_at_0036(tmp_path: Path) -> No
         }
     assert {"report_object_hash", "latest_probe_id", "failure_code"} <= columns
     assert "provider_probe_event" in tables
+
+
+def test_new_official_reference_and_macro_recorded_probes_are_fully_covered(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    expected = {
+        "sse-official-reference": ["instrument.master"],
+        "szse-official-reference": ["instrument.master"],
+        "nbs-statistical-release": ["macro.statistical_release"],
+        "pboc-monetary-policy-release": ["macro.monetary_policy_release"],
+        "mof-fiscal-policy-release": ["macro.fiscal_policy_release"],
+        "ndrc-pricing-policy-release": ["macro.pricing_policy_release"],
+    }
+
+    for provider_id, checked_capabilities in expected.items():
+        status = service.probe(provider_id)
+        assert status.status is ProviderHealthStatus.HEALTHY
+        assert status.checked_capabilities == checked_capabilities
+        assert status.capability_gaps == service.registry.capability_gaps
+
+
+def test_new_self_probe_operations_execute_and_reject_bad_denominators(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    reference_definition = next(
+        item
+        for item in service.registry.providers
+        if item.provider_id == "sse-official-reference"
+    )
+
+    class MasterProvider:
+        def __init__(self, *, total: int = 1) -> None:
+            self.total = total
+
+        def fetch_master(
+            self,
+            market: object,
+            *,
+            live: bool = False,
+        ) -> tuple[dict[str, object], object]:
+            assert getattr(market, "value", None) == "XSHG"
+            assert live is True
+            return (
+                {
+                    "rows": [{"code": "600000", "name": "浦发银行"}],
+                    "total": self.total,
+                    "coverage_denominator": self.total,
+                    "complete": True,
+                },
+                object(),
+            )
+
+    monkeypatch.setattr(service.provider_factory, "create", lambda _provider_id: MasterProvider())
+    reference_result = service.self_probe.run(reference_definition)
+    assert reference_result.quality is True
+    assert reference_result.record_count == 1
+    assert reference_result.checked_capabilities == ("instrument.master",)
+
+    monkeypatch.setattr(
+        service.provider_factory,
+        "create",
+        lambda _provider_id: MasterProvider(total=2),
+    )
+    malformed = service.self_probe.run(reference_definition)
+    assert malformed.quality is False
+    assert malformed.record_count == 1
+
+    macro_definition = next(
+        item
+        for item in service.registry.providers
+        if item.provider_id == "nbs-statistical-release"
+    )
+
+    class MacroProvider:
+        def fetch_indicator(
+            self,
+            indicator_code: str,
+            *,
+            live: bool = False,
+        ) -> tuple[dict[str, object], object]:
+            assert indicator_code == "gdp"
+            assert live is True
+            return (
+                {
+                    "schema_version": "macro-release-v1",
+                    "_astock_request": {
+                        "purpose": "MACRO_ECONOMIC_RELEASE",
+                        "indicator_code": "gdp",
+                    },
+                    "indicator_code": "gdp",
+                    "publication_date": "2026-07-15",
+                    "available_to_system_at": "2026-07-15T10:00:00+08:00",
+                    "revision_version": 1,
+                    "data_points": [
+                        {"period": "2026-Q2", "value": 1.0, "unit": "亿元"}
+                    ],
+                },
+                object(),
+            )
+
+    monkeypatch.setattr(service.provider_factory, "create", lambda _provider_id: MacroProvider())
+    macro_result = service.self_probe.run(macro_definition)
+    assert macro_result.quality is True
+    assert macro_result.record_count == 1
+    assert macro_result.checked_capabilities == ("macro.statistical_release",)

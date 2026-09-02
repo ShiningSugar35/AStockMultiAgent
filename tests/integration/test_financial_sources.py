@@ -57,12 +57,15 @@ def _service(tmp_path: Path, instrument_market: Market = Market.XSHE) -> Financi
     state.migrate()
     objects = ObjectStore(tmp_path / "对象" / "sha256")
     parquet_root = tmp_path / "数据" / "parquet"
+    # Historical financial PIT regressions use the legacy July recorded ALL master.
+    # The new official SSE/SZSE freezes were observed on 2026-09-02 and must not be
+    # backdated into 2026-07 as-of queries.
     instrument_report = MarketReferenceService(
         state,
         objects,
         ReferenceParquetStore(parquet_root),
         PROJECT_ROOT / "tests" / "fixtures" / "reference",
-    ).sync_instruments(instrument_market)
+    ).sync_instruments()
     assert instrument_report.release_id is not None
     return FinancialSourceService(
         state,
@@ -517,17 +520,22 @@ def test_instrument_market_binding_and_official_index_lineage(tmp_path: Path) ->
     assert manifest.official_index_snapshot_id != manifest.official_snapshot_id
 
 
-def test_market_without_official_financial_coverage_is_blocked_by_config(tmp_path: Path) -> None:
+def test_bjse_without_exact_item_capture_fails_closed_without_exhaustive_claim(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path, Market.BJSE)
     report = service.sync(
-        "920000",
+        "920015",
         Market.BJSE,
         PERIOD_END,
         FinancialPeriodType.ANNUAL,
         live=True,
     )
     assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
-    assert report.reason_codes == ["OFFICIAL_FINANCIAL_REPORT_UNAVAILABLE_FOR_MARKET"]
+    assert report.reason_codes == [
+        "OFFICIAL_REPORT_NOT_AVAILABLE_AT_AS_OF",
+        "OFFICIAL_EXCHANGE_FALLBACK_BLOCKED",
+    ]
 
 
 def test_live_official_financial_report_enumerates_all_pages_for_exact_match(
@@ -700,6 +708,84 @@ def test_captured_exchange_financial_report_recovers_when_cninfo_is_unavailable(
     )
 
     assert factory_calls == ["disclosure.enumerate"]
+    assert report is not None
+    assert report.document.document_id == capture.document_id
+    assert report.snapshot.snapshot_id == capture.snapshot_id
+    assert report.index_snapshot.snapshot_id == capture.admission_snapshot_id
+    assert report.lineage_kind is OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION
+    assert report.lineage_snapshot_ids == [capture.admission_snapshot_id]
+    assert report.exhaustive_proof_allowed is False
+    assert report.pit.period_end == PERIOD_END
+    assert report.pit.source_snapshot_id == capture.snapshot_id
+
+
+def test_bjse_exact_item_financial_report_uses_formal_exchange_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path, Market.BJSE)
+    observed = datetime(2026, 3, 20, 8, tzinfo=UTC)
+    proposal = AgentSourceProposal.model_validate(
+        {
+            "requested_capability": "financial.official_document",
+            "query": "recover exact BJSE annual report",
+            "candidate_url": "https://www.bse.cn/disclosure/2026/annual-report-920015.pdf",
+            "expected_fact": "official 2025 annual-report values",
+            "preferred_source_class": SourceClass.PRIMARY_OFFICIAL_WEB,
+            "formal_use": True,
+            "require_complete": False,
+            "reason": "bounded exact-item issuer report on BJSE",
+        }
+    )
+    capture = OfficialWebDocumentCaptureService(service.state, service.objects).capture(
+        proposal,
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n",
+        title="锦波生物2025年年度报告",
+        company_ids=["920015"],
+        published_at=observed - timedelta(days=1),
+        period_end=PERIOD_END,
+        document_type=DocumentType.ANNUAL_REPORT,
+        disclosure_id="bse-annual-920015-2025",
+        observed_at=observed,
+    )
+
+    factory_calls: list[str] = []
+
+    def enumeration_unavailable(
+        capability: str,
+        _expected_type: type[object],
+        *,
+        formal_use: bool,
+        require_complete: bool,
+    ) -> object:
+        factory_calls.append(capability)
+        assert capability == "disclosure.enumerate"
+        assert formal_use
+        assert require_complete
+        raise RuntimeError("enumeration unavailable")
+
+    monkeypatch.setattr(
+        service.official.provider_factory,
+        "create_for_capability",
+        enumeration_unavailable,
+    )
+    monkeypatch.setattr(
+        service.official.parser,
+        "parse",
+        lambda *args, **kwargs: SimpleNamespace(page_ids=[]),
+    )
+
+    report = service.official.get(
+        "920015",
+        Market.BJSE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=observed + timedelta(minutes=1),
+        live=True,
+    )
+
+    assert service.config.official_market_coverage[Market.BJSE] == "AVAILABLE"
+    assert factory_calls == []
     assert report is not None
     assert report.document.document_id == capture.document_id
     assert report.snapshot.snapshot_id == capture.snapshot_id
@@ -1174,7 +1260,7 @@ def test_financial_source_cli_sync_status_and_audit(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("ASTOCK_PROJECT_ROOT", str(PROJECT_ROOT))
     monkeypatch.setenv("ASTOCK_RUNTIME_ROOT", str(runtime))
     runner = CliRunner()
-    instrument = runner.invoke(app, ["sync-instruments", "--market", "XSHE"])
+    instrument = runner.invoke(app, ["sync-instruments"])
     assert instrument.exit_code == 0, instrument.output
     synced = runner.invoke(
         app,

@@ -26,6 +26,7 @@ _ALLOWED_DOCUMENT_CAPABILITIES = frozenset(
     {
         "disclosure.document",
         "financial.official_document",
+        "corporate_actions.official_evidence",
     }
 )
 

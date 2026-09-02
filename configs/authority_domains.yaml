@@ -17,8 +17,8 @@ sources:
   - source_id: bse-official-web
     domains: [bse.cn, bseinfo.net]
     source_class: PRIMARY_OFFICIAL_WEB
-    capabilities: [instrument.master, instrument.identity, instrument.bjse_coverage, market.calendar, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
-    formal_capabilities: [instrument.master, instrument.identity, instrument.bjse_coverage, market.calendar, disclosure.document, financial.official_document, web.authoritative_fact]
+    capabilities: [instrument.master, instrument.identity, instrument.bjse_coverage, market.calendar, disclosure.discover, disclosure.document, financial.official_document, corporate_actions.official_evidence, web.authoritative_fact]
+    formal_capabilities: [instrument.master, instrument.identity, instrument.bjse_coverage, market.calendar, disclosure.document, financial.official_document, corporate_actions.official_evidence, web.authoritative_fact]
     exhaustive_capabilities: [instrument.master, instrument.bjse_coverage]
     independence_group: BSE_OFFICIAL
   - source_id: cninfo-official-web

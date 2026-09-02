@@ -15,10 +15,13 @@ from astock.cli import app
 from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents import OfficialWebDocumentCaptureService
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
 from astock.market_data.reference import _parse_baostock_daily
 from astock.providers import BaoStockReferenceProvider
 from astock.schemas import (
+    AgentSourceProposal,
+    DocumentType,
     Market,
     ReferenceBatch,
     ReferenceCoverage,
@@ -27,6 +30,7 @@ from astock.schemas import (
     ReferenceFileDescriptor,
     ReferencePitStatus,
     ReferenceSyncReport,
+    SourceClass,
 )
 from astock.schemas.reference_data import ReferenceRecord
 
@@ -193,7 +197,7 @@ def test_corporate_actions_link_only_official_document_and_never_touch_ledger(
     assert linked.status == "PARTIAL"
     assert "TERMS_NOT_VERIFIED" in linked.reason_codes
     assert bjse.status == "PARTIAL"
-    assert "OFFICIAL_DOCUMENT_NOT_FOUND" in bjse.reason_codes
+    assert "BSE_OFFICIAL_EXACT_ITEM_NOT_CAPTURED" in bjse.reason_codes
     linked_status = service.status(
         ReferenceDatasetKind.CORPORATE_ACTION, "XSHG:600519"
     )
@@ -206,6 +210,65 @@ def test_corporate_actions_link_only_official_document_and_never_touch_ledger(
     )
     assert row["status"] == "OFFICIAL_DOCUMENT_LINKED"
     assert row["official_document_url"].startswith("https://static.cninfo.com.cn/")
+    assert row["ledger_eligible"] is False
+    with service.state.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM corporate_action_event").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM journal").fetchone()[0] == 0
+
+
+def test_bjse_exact_item_official_corporate_action_capture_links_without_completeness(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    published = datetime(2026, 5, 10, 1, tzinfo=UTC)
+    observed = published + timedelta(hours=1)
+    proposal = AgentSourceProposal.model_validate(
+        {
+            "requested_capability": "corporate_actions.official_evidence",
+            "query": "exact BJSE cash-dividend implementation announcement",
+            "candidate_url": "https://www.bse.cn/disclosure/2026/cash-dividend-920015.pdf",
+            "expected_fact": "2025 annual cash-dividend implementation announcement",
+            "preferred_source_class": SourceClass.PRIMARY_OFFICIAL_WEB,
+            "formal_use": True,
+            "require_complete": False,
+            "reason": "bounded exact-item official evidence; no enumeration claim",
+        }
+    )
+    capture = OfficialWebDocumentCaptureService(service.state, service.objects).capture(
+        proposal,
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n",
+        title="2025年年度现金红利实施公告",
+        company_ids=["920015"],
+        published_at=published,
+        period_end=date(2025, 12, 31),
+        document_type=DocumentType.ANNOUNCEMENT,
+        disclosure_id="bse-cash-dividend-920015-2025",
+        observed_at=observed,
+    )
+
+    report = service.sync_corporate_actions(
+        "920015", Market.BJSE, date(2026, 1, 1), date(2026, 7, 22)
+    )
+
+    assert report.status == "PARTIAL"
+    assert "BSE_OFFICIAL_EXACT_ITEM_EVIDENCE_USED" in report.reason_codes
+    assert "TERMS_NOT_VERIFIED" in report.reason_codes
+    assert "OFFICIAL_EVIDENCE_UNAVAILABLE" not in report.reason_codes
+    assert "OFFICIAL_INDEX_CAPTURED_NO_MATCH" not in report.reason_codes
+    assert capture.snapshot_id in report.raw_snapshot_ids
+    assert capture.admission_snapshot_id in report.raw_snapshot_ids
+    status = service.status(ReferenceDatasetKind.CORPORATE_ACTION, "BJSE:920015")
+    assert status["release"]["coverage"]["status"] != "COMPLETE"
+    path = status["release"]["canonical_files"][0]["path"]
+    row = json.loads(
+        pq.ParquetFile(service.parquet.root / path)
+        .read()
+        .column("record_json")
+        .to_pylist()[0]
+    )
+    assert row["status"] == "OFFICIAL_DOCUMENT_LINKED"
+    assert row["official_document_url"] == str(capture.source_url)
+    assert row["official_document_snapshot_id"] == capture.snapshot_id
     assert row["ledger_eligible"] is False
     with service.state.connect() as connection:
         assert connection.execute("SELECT count(*) FROM corporate_action_event").fetchone()[0] == 0

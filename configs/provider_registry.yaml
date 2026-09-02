@@ -61,6 +61,46 @@ providers:
     probe_operation: disclosure-search
     probe_target: {symbol: "600519", exchange: SSE, category: ANNUAL_REPORT}
     recorded_fixture: tests/fixtures/providers/cninfo-disclosures-success.json
+  - provider_id: sse-official-reference
+    adapter_class: astock.providers.exchange_official_reference:SseOfficialReferenceProvider
+    capabilities: [instrument.master]
+    source_class: PRIMARY_OFFICIAL_WEB
+    formal_capabilities: [instrument.master]
+    completeness_semantics:
+      instrument.master: FULL_UNIVERSE
+    independence_group: SSE_OFFICIAL
+    cache_ttl_seconds: 86400
+    cost_class: LOW
+    transport: HTTP
+    transport_profile: sse-official-reference-v1
+    officiality: PRIMARY_OFFICIAL
+    live_supported: true
+    timeout_seconds: 20
+    priority: 135
+    fixture_subdir: reference/sse_official
+    probe_operation: reference-master
+    probe_target: {market: XSHG}
+    recorded_fixture: tests/fixtures/providers/sse-official-reference-success.json
+  - provider_id: szse-official-reference
+    adapter_class: astock.providers.exchange_official_reference:SzseOfficialReferenceProvider
+    capabilities: [instrument.master]
+    source_class: PRIMARY_OFFICIAL_WEB
+    formal_capabilities: [instrument.master]
+    completeness_semantics:
+      instrument.master: FULL_UNIVERSE
+    independence_group: SZSE_OFFICIAL
+    cache_ttl_seconds: 86400
+    cost_class: LOW
+    transport: HTTP
+    transport_profile: szse-official-reference-v1
+    officiality: PRIMARY_OFFICIAL
+    live_supported: true
+    timeout_seconds: 20
+    priority: 135
+    fixture_subdir: reference/szse_official
+    probe_operation: reference-master
+    probe_target: {market: XSHE}
+    recorded_fixture: tests/fixtures/providers/szse-official-reference-success.json
   - provider_id: bse-official-reference
     adapter_class: astock.providers.bse_official_reference:BseOfficialReferenceProvider
     capabilities: [instrument.master, instrument.identity, instrument.bjse_coverage]

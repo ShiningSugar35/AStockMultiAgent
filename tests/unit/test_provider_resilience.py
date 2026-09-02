@@ -285,6 +285,8 @@ def test_project_transport_and_reference_configs_enable_bounded_resilience() -> 
         Market.BJSE: 150,
     }
     assert [item.operation for item in reference.route("instrument.master")] == [
+        "sse-official-master",
+        "szse-official-master",
         "bse-official-master",
         "baostock-master",
         "eastmoney-master",
@@ -1003,6 +1005,8 @@ def test_live_master_below_floor_continues_to_sina_fallback(
         assert market is Market.XSHG
         assert live
         operation = step.operation
+        if operation == "sse-official-master":
+            raise ValueError("sse official down")
         if operation == "baostock-master":
             return [_instrument("600000")], ["snap:bao"], NOW, [], True
         if operation == "eastmoney-master":

@@ -29,6 +29,7 @@ from astock.core.source_resilience import (
 )
 from astock.core.state import StateStore
 from astock.documents import DisclosureEnumerationProvider
+from astock.documents.repository import DocumentRepository
 from astock.market_data.official_calendar import (
     OfficialTradingCalendarResolver,
     load_official_trading_calendar,
@@ -39,16 +40,22 @@ from astock.market_data.reference_config import (
     load_market_reference_config,
 )
 from astock.market_data.reference_storage import ReferenceParquetStore
+from astock.pit import PointInTimeRepository
 from astock.providers.baostock import BaoStockCaptureError, BaoStockReferenceProvider
 from astock.providers.bse_official_reference import BseOfficialReferenceProvider
 from astock.providers.config import load_provider_registry
 from astock.providers.eastmoney_reference import EastMoneyReferenceProvider
+from astock.providers.exchange_official_reference import (
+    SseOfficialReferenceProvider,
+    SzseOfficialReferenceProvider,
+)
 from astock.providers.runtime import ProviderFactory, load_transport_profiles
 from astock.providers.sina_reference import SinaReferenceProvider
 from astock.providers.symbols import market_from_baostock_code
 from astock.schemas import (
     AdjustmentMode,
     AmountUnit,
+    AvailabilityBasis,
     CompletenessSemantics,
     CorporateActionObservation,
     CorporateActionStatus,
@@ -62,12 +69,15 @@ from astock.schemas import (
     InstrumentType,
     Market,
     MarketCoverageReconciliation,
+    OfficialWebDocumentCapture,
+    PointInTimeStatus,
     ReferenceBatch,
     ReferenceCoverage,
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
     ReferencePitStatus,
     ReferenceSyncReport,
+    SourceClass,
     SourceSnapshot,
     TradingSession,
     UniverseCoverageLevel,
@@ -80,6 +90,8 @@ _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _EARLIEST_UTC = datetime.min.replace(tzinfo=UTC)
 _FULL_MARKET_COVERAGE_RATIO = 0.995
 _ROUTE_FAILURE_CODES = {
+    "sse-official-master": "SSE_OFFICIAL_MASTER_FAILED",
+    "szse-official-master": "SZSE_OFFICIAL_MASTER_FAILED",
     "bse-official-exact": "BSE_OFFICIAL_EXACT_IDENTITY_FAILED",
     "bse-official-master": "BSE_OFFICIAL_MASTER_FAILED",
     "eastmoney-exact": "EASTMONEY_EXACT_IDENTITY_FAILED",
@@ -112,6 +124,7 @@ class _OfficialActionCandidate:
     document_snapshot_id: str
     source_url: str
     available_to_system_at: datetime
+    source_id: str = "cninfo-disclosures"
 
 
 _T = TypeVar("_T")
@@ -669,6 +682,64 @@ class MarketReferenceService:
         live: bool,
     ) -> tuple[list[InstrumentRecord], list[str], datetime, list[str], bool]:
         provider = self._route_provider(step, "instrument.master", live=live)
+        if step.operation in {"sse-official-master", "szse-official-master"}:
+            expected_market = (
+                Market.XSHG if step.operation == "sse-official-master" else Market.XSHE
+            )
+            expected_type = (
+                SseOfficialReferenceProvider
+                if step.operation == "sse-official-master"
+                else SzseOfficialReferenceProvider
+            )
+            if not isinstance(provider, expected_type) or market is not expected_market:
+                raise ValueError(
+                    f"{step.operation} requires its matching official exchange adapter"
+                )
+            payload, snapshot = provider.fetch_master(expected_market, live=live)
+            records = _parse_exchange_official_master(
+                payload,
+                snapshot.snapshot_id,
+                snapshot.available_to_system_at,
+                provider.provider_id,
+                expected_market,
+            )
+            snapshots = [snapshot.snapshot_id]
+            available_at = snapshot.available_to_system_at
+            if live:
+                raw_snapshot_ids = payload.get("raw_snapshot_ids")
+                if not isinstance(raw_snapshot_ids, list) or not raw_snapshot_ids:
+                    raise ValueError("Official exchange master raw lineage is incomplete")
+                verified: list[str] = []
+                for raw_snapshot_id in raw_snapshot_ids:
+                    if not isinstance(raw_snapshot_id, str):
+                        raise ValueError("Official exchange master raw lineage is malformed")
+                    raw_snapshot = self.state.get_snapshot(raw_snapshot_id)
+                    if (
+                        raw_snapshot is None
+                        or raw_snapshot.source_id != provider.provider_id
+                        or not self.objects.verify(raw_snapshot.object_sha256)
+                    ):
+                        raise ValueError(
+                            "Official exchange master raw snapshot failed verification"
+                        )
+                    verified.append(raw_snapshot_id)
+                    available_at = max(
+                        available_at, raw_snapshot.available_to_system_at
+                    )
+                snapshots = [*verified, snapshot.snapshot_id]
+            complete = (
+                payload.get("complete") is True
+                and int(str(payload.get("coverage_denominator", -1))) == len(records)
+                and int(str(payload.get("total", -1))) == len(records)
+            )
+            reason_prefix = "SSE" if expected_market is Market.XSHG else "SZSE"
+            return (
+                records,
+                snapshots,
+                available_at,
+                [f"{reason_prefix}_OFFICIAL_UNIVERSE_PROOF_USED"],
+                complete,
+            )
         if step.operation == "bse-official-master":
             if not isinstance(provider, BseOfficialReferenceProvider):
                 raise ValueError("bse-official-master requires a BSE official adapter")
@@ -1455,6 +1526,34 @@ class MarketReferenceService:
         official_step = self.config.route("corporate_actions.official_evidence")[0]
         if market is Market.INDEX:
             reasons.append("CORPORATE_ACTION_NOT_APPLICABLE_TO_INDEX")
+        elif market is Market.BJSE:
+            try:
+                official_candidates, official_snapshot_ids, official_available = (
+                    self._official_actions_captured(symbol, market, start, end)
+                )
+                if official_candidates:
+                    official_lookup_succeeded = True
+                    snapshot_ids.extend(official_snapshot_ids)
+                    available_at = max(available_at, official_available)
+                    reasons.append("BSE_OFFICIAL_EXACT_ITEM_EVIDENCE_USED")
+                    if records:
+                        records, linked_count, match_reasons = _link_official_actions(
+                            records, official_candidates
+                        )
+                        reasons.extend(match_reasons)
+                        if linked_count:
+                            reasons.append("TERMS_NOT_VERIFIED")
+                    else:
+                        reasons.extend(
+                            [
+                                "OFFICIAL_EVIDENCE_FALLBACK_USED",
+                                "STRUCTURED_TERMS_UNAVAILABLE",
+                            ]
+                        )
+                else:
+                    reasons.append("BSE_OFFICIAL_EXACT_ITEM_NOT_CAPTURED")
+            except (AStockError, OSError, ValueError):
+                reasons.append("OFFICIAL_EVIDENCE_LOOKUP_FAILED")
         elif (
             self.config.official_coverage("corporate_actions.official_evidence", market)
             != "AVAILABLE"
@@ -1492,8 +1591,8 @@ class MarketReferenceService:
                 reasons.append("OFFICIAL_EVIDENCE_LOOKUP_FAILED")
 
         provider_id = (
-            official_step.provider_id
-            if official_lookup_succeeded and not records
+            official_candidates[0].source_id
+            if official_lookup_succeeded and official_candidates and not records
             else hint_step.provider_id
         )
         return self._release(
@@ -1510,6 +1609,138 @@ class MarketReferenceService:
             reasons=list(dict.fromkeys(reasons)),
             failed=not records and bao_failed and not official_lookup_succeeded,
         )
+
+    def _official_actions_captured(
+        self,
+        symbol: str,
+        market: Market,
+        start: date,
+        end: date,
+    ) -> tuple[list[_OfficialActionCandidate], list[str], datetime]:
+        if market is not Market.BJSE:
+            raise ValueError("exact-item official capture path is currently scoped to BJSE")
+        documents = DocumentRepository(self.state)
+        pit_repository = PointInTimeRepository(self.state)
+        with self.state.connect() as connection:
+            rows = connection.execute(
+                "SELECT artifact_id,schema_version,object_hash,input_hashes_json "
+                "FROM artifact_registry WHERE type='OfficialWebDocumentCapture' "
+                "ORDER BY created_at,artifact_id"
+            ).fetchall()
+        candidates: list[_OfficialActionCandidate] = []
+        snapshot_ids: list[str] = []
+        available_at = _EARLIEST_UTC
+        for row in rows:
+            object_hash = str(row["object_hash"])
+            if not self.objects.verify(object_hash):
+                raise ValueError("Official Web corporate-action capture artifact is corrupt")
+            try:
+                capture = OfficialWebDocumentCapture.model_validate_json(
+                    self.objects.get_bytes(object_hash)
+                )
+                input_hashes = json.loads(str(row["input_hashes_json"]))
+            except (AStockError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                raise ValueError("Official Web corporate-action capture is invalid") from exc
+            if (
+                str(row["artifact_id"])
+                != f"OfficialWebDocumentCapture:{capture.capture_id}"
+                or str(row["schema_version"]) != capture.schema_version
+                or capture.requested_capability != "corporate_actions.official_evidence"
+                or capture.source_id != "bse-official-web"
+                or capture.source_class is not SourceClass.PRIMARY_OFFICIAL_WEB
+                or not capture.formal_eligible
+                or capture.exhaustive_proof_allowed
+            ):
+                continue
+            document = documents.get_model(capture.document_id)
+            snapshot = documents.snapshot(capture.snapshot_id)
+            admission_snapshot = self.state.get_snapshot(capture.admission_snapshot_id)
+            pit = pit_repository.get(capture.pit_id)
+            if (
+                document is None
+                or snapshot is None
+                or admission_snapshot is None
+                or pit is None
+                or snapshot.object_sha256 != capture.object_sha256
+                or not self.objects.verify(snapshot.object_sha256)
+                or not self.objects.verify(admission_snapshot.object_sha256)
+                or input_hashes
+                != [snapshot.object_sha256, admission_snapshot.object_sha256]
+            ):
+                raise ValueError("Official Web corporate-action lineage is incomplete")
+            try:
+                admission = json.loads(
+                    self.objects.get_bytes(admission_snapshot.object_sha256)
+                )
+            except (AStockError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ValueError("Official Web corporate-action admission is invalid") from exc
+            proposal = admission.get("proposal") if isinstance(admission, dict) else None
+            decision = admission.get("decision") if isinstance(admission, dict) else None
+            if (
+                not isinstance(admission, dict)
+                or not isinstance(proposal, dict)
+                or not isinstance(decision, dict)
+                or admission.get("schema_version") != "official-web-admission-v1"
+                or admission.get("document_id") != document.document_id
+                or admission.get("document_snapshot_id") != snapshot.snapshot_id
+                or admission.get("document_object_sha256") != snapshot.object_sha256
+                or admission.get("exhaustive_proof_allowed") is not False
+                or proposal.get("requested_capability")
+                != "corporate_actions.official_evidence"
+                or proposal.get("candidate_url") != document.source_url
+                or proposal.get("formal_use") is not True
+                or proposal.get("require_complete") is not False
+                or decision.get("requested_capability")
+                != "corporate_actions.official_evidence"
+                or decision.get("allowed") is not True
+                or decision.get("source_id") != "bse-official-web"
+                or decision.get("formal_eligible") is not True
+                or decision.get("exhaustive_proof_allowed") is not False
+                or decision.get("admission_status") != "ADMIT_AFTER_SNAPSHOT"
+                or document.publisher != capture.source_id
+                or snapshot.source_id != capture.source_id
+                or admission_snapshot.source_id != f"{capture.source_id}:admission"
+                or pit.source_document_id != document.document_id
+                or pit.source_snapshot_id != snapshot.snapshot_id
+                or pit.point_in_time_status
+                is not PointInTimeStatus.DOCUMENT_RECONSTRUCTED
+                or pit.availability_basis is not AvailabilityBasis.FETCH_OBSERVED
+                or pit.available_to_system_at != snapshot.available_to_system_at
+                or symbol not in document.company_ids
+                or document.source_url != str(capture.source_url)
+                or snapshot.source_url != document.source_url
+                or admission_snapshot.source_url != document.source_url
+                or snapshot.fetch_status is not FetchStatus.SUCCEEDED
+                or admission_snapshot.fetch_status is not FetchStatus.SUCCEEDED
+            ):
+                continue
+            published_date = document.published_at.astimezone(_SHANGHAI).date()
+            if not start <= published_date <= end:
+                continue
+            report_period = _extract_report_period(document.title)
+            action_type = _official_action_type(document.title)
+            if report_period is None or action_type is None:
+                continue
+            candidates.append(
+                _OfficialActionCandidate(
+                    announcement_id=document.disclosure_id,
+                    published_date=published_date,
+                    report_period=report_period,
+                    action_type=action_type,
+                    document_snapshot_id=snapshot.snapshot_id,
+                    source_url=document.source_url,
+                    available_to_system_at=snapshot.available_to_system_at,
+                    source_id=capture.source_id,
+                )
+            )
+            snapshot_ids.extend(
+                [snapshot.snapshot_id, admission_snapshot.snapshot_id]
+            )
+            available_at = max(available_at, snapshot.available_to_system_at)
+        candidates.sort(
+            key=lambda item: (item.published_date, item.announcement_id, item.source_url)
+        )
+        return candidates, list(dict.fromkeys(snapshot_ids)), available_at
 
     def _official_actions_recorded(
         self, symbol: str, market: Market
@@ -2318,6 +2549,64 @@ def _parse_baostock_instruments(
                 available_to_system_at=available,
             )
         )
+    return result
+
+
+def _parse_exchange_official_master(
+    payload: dict[str, object],
+    snapshot_id: str,
+    available: datetime,
+    expected_provider_id: str,
+    market: Market,
+) -> list[InstrumentRecord]:
+    if payload.get("_astock_source") != expected_provider_id:
+        raise ValueError("Official exchange master source provenance mismatch")
+    request = payload.get("_astock_request")
+    if (
+        not isinstance(request, dict)
+        or request.get("purpose") != "INSTRUMENT_MASTER"
+        or request.get("market") != market.value
+    ):
+        raise ValueError("Official exchange master request provenance mismatch")
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or any(not isinstance(item, dict) for item in rows):
+        raise ValueError("Official exchange master rows are malformed")
+    try:
+        total = int(str(payload["total"]))
+        denominator = int(str(payload["coverage_denominator"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Official exchange master total is malformed") from exc
+    if payload.get("complete") is not True or total != denominator or total != len(rows):
+        raise ValueError("Official exchange master completeness proof failed")
+    result: list[InstrumentRecord] = []
+    for item in rows:
+        assert isinstance(item, dict)
+        symbol = str(item.get("code") or "")
+        name = str(item.get("name") or "").strip()
+        if len(symbol) != 6 or not symbol.isdigit() or not name:
+            raise ValueError("Official exchange master row identity is malformed")
+        raw_listing = item.get("listing_date")
+        listing_date = date.fromisoformat(str(raw_listing)) if raw_listing else None
+        result.append(
+            InstrumentRecord(
+                created_at=available,
+                instrument_id=f"{market.value}:{symbol}",
+                market=market,
+                symbol=symbol,
+                name=name,
+                instrument_type=InstrumentType.STOCK,
+                tradable=bool(item.get("tradable")),
+                status_date=available.astimezone(_SHANGHAI).date(),
+                is_st=_is_st_name(name),
+                listing_date=listing_date,
+                source_snapshot_id=snapshot_id,
+                available_to_system_at=available,
+            )
+        )
+    if len({item.instrument_id for item in result}) != len(result):
+        raise ValueError("Official exchange master contains duplicate instruments")
+    if [item.symbol for item in result] != sorted(item.symbol for item in result):
+        raise ValueError("Official exchange master is not sorted by symbol")
     return result
 
 

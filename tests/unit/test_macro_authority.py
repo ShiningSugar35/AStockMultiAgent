@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.pit import PointInTimeRepository
 from astock.providers.macro_authority import (
     MacroAuthorityReleaseError,
     MofFiscalPolicyReleaseProvider,
@@ -36,6 +38,39 @@ def test_nbs_gdp_recorded_fixture_is_valid(
     assert isinstance(payload["data_points"], list)
     assert len(payload["data_points"]) == 2
     assert object_store.verify(snapshot.object_sha256)
+
+
+def test_macro_revision_chain_is_pit_linked(
+    state: StateStore,
+    object_store: ObjectStore,
+    tmp_path: Path,
+) -> None:
+    payload = json.loads((FIXTURE_ROOT / "nbs_gdp.json").read_text(encoding="utf-8"))
+    fixture = tmp_path / "nbs_gdp.json"
+    fixture.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    provider = NbsStatisticalReleaseProvider(object_store, state, tmp_path)
+    _, first_snapshot = provider.fetch_indicator("gdp")
+
+    payload["revision_version"] = 2
+    payload["publication_date"] = "2026-07-20"
+    payload["available_to_system_at"] = "2026-07-20T10:00:00+08:00"
+    payload["revision_history"].append(
+        {"version": 2, "date": "2026-07-20", "description": "修订核算"}
+    )
+    payload["data_points"][0]["value"] = 321000.0
+    fixture.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    _, second_snapshot = provider.fetch_indicator("gdp")
+
+    repository = PointInTimeRepository(state)
+    first = repository.get_by_source("macro:nbs-statistical-release:gdp:2026-Q2:v1")
+    second = repository.get_by_source("macro:nbs-statistical-release:gdp:2026-Q2:v2")
+    assert first is not None
+    assert second is not None
+    assert first.source_snapshot_id == first_snapshot.snapshot_id
+    assert second.source_snapshot_id == second_snapshot.snapshot_id
+    assert second.supersedes_source_id == first.source_id
+    assert second.revised_at == second_snapshot.available_to_system_at
+    assert first.available_to_system_at < second.available_to_system_at
 
 
 def test_pboc_m2_recorded_fixture_is_valid(
@@ -166,9 +201,11 @@ def test_macro_release_validates_data_points_not_empty(
     bad_fixture = tmp_path / "nbs_empty_data.json"
     bad_fixture.write_text(
         '{"schema_version": "macro-release-v1", "_astock_source": "nbs-statistical-release", '
+        '"_astock_request": {"purpose": "MACRO_ECONOMIC_RELEASE", "indicator_code": "gdp"}, '
         '"indicator_code": "gdp", "observation_period": "2026-Q2", '
         '"publication_date": "2026-07-15", "revision_version": 1, '
-        '"available_to_system_at": "2026-07-15T10:00:00+08:00", "data_points": []}',
+        '"available_to_system_at": "2026-07-15T10:00:00+08:00", '
+        '"source_url": "https://www.stats.gov.cn/test", "data_points": []}',
         encoding="utf-8",
     )
     provider = NbsStatisticalReleaseProvider(object_store, state, tmp_path)

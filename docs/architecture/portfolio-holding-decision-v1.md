@@ -52,6 +52,8 @@ SQLite paper ledger 继续唯一拥有 simulated account/order/fill/position/T+1
 
 PaperOperation/PaperReplay 按 instrument-specific policy 路由。STOCK 继续使用既有规则；ETF 只在目标证券存在有效 `ETFInstrumentExecutionRule`、`execution_enabled=true`、费用仍满足 confirmation gate，并经过既有 prepare/人工确认链时才允许模拟。ETF lot/tick/limit/fee/settlement 在订单准备时冻结到 binding；缺规则、过期、费用不确定或 execution 关闭均 fail closed。只有确认订单后的 fill/replay fill 改变持仓。
 
+卖出冻结、reservation、position recovery 必须按完整 instrument identity（market + symbol + instrument type）匹配，不能只按 6 位代码查持仓；例如 XSHG:600519 不得被 XSHE:600519 的卖单占用。ETF 订单/成交价格采用 milli-yuan 精度，跨会话 LocalPortfolio 恢复和投影也必须保留该精度；只有面向 fen 的最终展示/汇总边界才允许确定性舍入，禁止在持仓平均成本恢复时先截断为股票 0.01 元精度。
+
 ## 3. PIT 公司行动调整研究序列
 
 执行价格仍使用原始未复权行情。组合统计新增本地派生 gross total-return research series：

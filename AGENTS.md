@@ -54,7 +54,7 @@
 - Provider Recovery 只能使用 registry allowlist 中声明目标 capability 且 health/transport 合法的 adapter，Manual-last 不可被 proposal 改写。
 - Schema Repair 必须 raw-first：至少满足 active policy 的多样本 SourceSnapshot、官方 artifact type 与仓库真实 contract test，才能从 PROPOSED 进入 VALIDATED；之后还需显式批准才可生成 ADMITTED candidate dialect。Candidate release 不自动修改 active dialect/config、不写正式事实，可 audit/rollback。
 - Deterministic Core 继续永久强制：官方事实认证、PIT/未来函数、会计与数学恒等式、不可变 ObjectStore、账本平衡、模拟盘人工确认、`paper_ledger_write_allowed=false` 的研究链、`broker_execution_allowed=false`。AI 不得通过 prompt、proposal、Skill 或 fallback 绕过这些边界。
-- 外部能力生产备用只认 canonical M-06 资格报告。2026-09-02 E-02 固定证据下，Arelle、Docling、Playwright MCP、AKShare、Crawl4AI、changedetection.io、`report-visual-qa`、`schema-drift-recorder` 均保持 `SHADOW`；只有仓库自有 `source-qualification-auditor` 作为**治理 Skill**达到 `PRODUCTION_BACKUP`，且 authority ceiling 为 `UNKNOWN/NOT_APPLICABLE`，绝不能提升任何数据源的官方性或完整性。AKShare 的包许可证不等于端点数据权利；当前未证明 endpoint-specific rights/PIT/provenance/recorded/live/SBOM 时禁止为满足配额硬升生产级。
+- 外部能力生产备用只认 canonical M-06 资格报告。2026-09-02 E-02 固定证据下，Arelle、Docling、Playwright MCP、AKShare、Crawl4AI、changedetection.io、`source-qualification-auditor`、`report-visual-qa`、`schema-drift-recorder` **全部保持 `SHADOW`**：`source-qualification-auditor` 尚未冻结真实 controlled-live Skill 执行输入/输出与延迟证据；AKShare 的包许可证和安装成功也不等于 endpoint-specific 上游数据权利。任何候选缺 rights/PIT/provenance/recorded/live/SBOM/安全/退出门时都不得为满足计划配额硬升生产级；治理 Skill 也绝不能提升底层数据源的官方性或完整性。
 - `CurrentResearchSchedule / ValidatedResearchPlan / ProviderRecoveryValidation / SchemaRepairValidation / ProviderDialectCandidateRelease` 等内部 artifact 只在 DEVELOPER_MODE 可见；INVESTOR_MODE 继续只输出自然语言投资判断，并由动态 internal vocabulary audit 拦截内部术语。
 
 ## 行情与模拟盘

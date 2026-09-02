@@ -30,7 +30,7 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | Knowledge Storage Lifecycle | 已实现 / 0057 | 1,066,886 行历史 Semantic/Distillation/Reviewed 流水冷归档；现役 FK 父级闭包保留；单行 knowledge Parquet 已分区合并；archive/restore/Parquet/VACUUM 均有显式审计命令 |
 | Agent Observability | 已实现 / 0058 | Repo Skill selection/execution hit rate、仅标注样本 routing precision/recall、任务耗时、ResearchRun stage/provider/cache、双源数据对齐质量统一报表 |
 | External Research Tech Scout | 已实现 | `$research-tech-scout`；GitHub/投研平台/社区发现 → 去重 → ADAPT/SHADOW/WATCH/REJECT，不自动改变生产权重 |
-| External Capability Qualification | 已实现 / M-06 fail-closed | 九项 E-02 候选按固定版本、License/ToS/data-rights/PIT/provenance/SBOM/live/exit 取证；当前只有 `$source-qualification-auditor` 作为治理 Skill 为 `PRODUCTION_BACKUP`，其余候选保持 `SHADOW` |
+| External Capability Qualification | 已实现 / M-06 fail-closed | 九项 E-02 候选按固定版本、License/ToS/data-rights/PIT/provenance/SBOM/live/exit 取证；当前九项全部保持 `SHADOW`，未冻结真实 controlled-live Skill 证据或 endpoint-specific 数据权利的候选不得进入生产备用 |
 | PIT Temporal Validity | 已实现 | `pit-temporal-audit`：availability/reference time 分离、O(V+E) temporal non-interference；truncation property tests；`pit-knowledge-cutoff-diagnostic` 仅作跨时期衰减诊断 |
 | 投资委员会 | 已实现 | `committee-*`；委员会只消费冻结工件 |
 | PIT TradingClassification | 已实现 | `trading-classification-*` |

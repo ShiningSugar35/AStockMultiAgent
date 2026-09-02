@@ -1,0 +1,43 @@
+{
+  "schema_version": "external-quant-qualification-snapshot-v1",
+  "observed_at": "2026-09-02",
+  "scope": "reference-only pattern comparison; no external framework installed or executed",
+  "candidates": [
+    {
+      "candidate": "qlib",
+      "repository": "https://github.com/microsoft/qlib",
+      "license_evidence": "https://github.com/microsoft/qlib/blob/main/LICENSE",
+      "license_class": "MIT",
+      "runtime_dependency_added": false,
+      "source_code_copied": false,
+      "admission": "ADAPT_PATTERN"
+    },
+    {
+      "candidate": "rdagent",
+      "repository": "https://github.com/microsoft/RD-Agent",
+      "license_evidence": "https://github.com/microsoft/RD-Agent/blob/main/LICENSE",
+      "license_class": "MIT",
+      "runtime_dependency_added": false,
+      "source_code_copied": false,
+      "admission": "SHADOW_EXPERIMENT"
+    },
+    {
+      "candidate": "lean",
+      "repository": "https://github.com/QuantConnect/Lean",
+      "license_evidence": "https://github.com/QuantConnect/Lean/blob/master/LICENSE",
+      "license_class": "Apache-2.0",
+      "runtime_dependency_added": false,
+      "source_code_copied": false,
+      "admission": "REJECT_MODELED_ORDERING_WATCH_ROBUSTNESS_IDEAS"
+    },
+    {
+      "candidate": "rqalpha",
+      "repository": "https://github.com/ricequant/rqalpha",
+      "license_evidence": "https://github.com/ricequant/rqalpha/blob/master/LICENSE",
+      "license_class": "CUSTOM_NONCOMMERCIAL_WITH_APACHE_2_0_TERMS",
+      "runtime_dependency_added": false,
+      "source_code_copied": false,
+      "admission": "WATCH_PATTERN_ONLY_REJECT_RUNTIME_WITHOUT_AUTHORIZATION"
+    }
+  ]
+}

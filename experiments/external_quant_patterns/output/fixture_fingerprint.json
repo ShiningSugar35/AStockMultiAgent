@@ -1,0 +1,25 @@
+{
+  "astock_event_count": 6,
+  "backtest_variant_count": 5,
+  "event_types_astock": [
+    "CLASSIFICATION",
+    "COMMITTEE_PROTOCOL",
+    "CLASSIFIED_PROTOCOL",
+    "EXECUTION_PREPARE",
+    "EXECUTION_CONFIRM",
+    "LEDGER_FILL"
+  ],
+  "event_types_lean": [
+    "MARKET_DATA",
+    "SIGNAL",
+    "ORDER",
+    "FILL",
+    "SETTLE",
+    "ACCOUNTING"
+  ],
+  "first_ic": 0.0553,
+  "hypothesis_count": 3,
+  "lean_event_count": 6,
+  "recorder_run_count": 3,
+  "result_count": 3
+}

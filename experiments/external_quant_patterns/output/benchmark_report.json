@@ -1,0 +1,75 @@
+{
+  "benchmark_metrics": {
+    "lean_event_ordering": {
+      "astock_events": 6,
+      "lean_events": 6,
+      "lean_violates_astock": true
+    },
+    "qlib_recorder": {
+      "astock_entry_count": 3,
+      "qlib_entry_count": 21,
+      "unique_artifact_count": 6,
+      "unique_param_count": 3
+    },
+    "rdagent_hypothesis": {
+      "astock_formal_events": 0,
+      "astock_prospective_entries": 2,
+      "rdagent_convergence": 0.029,
+      "rdagent_iterations": 3
+    },
+    "rqalpha_robustness": {
+      "max_drawdown_worst": 0.0068,
+      "sharpe_mean": 16.5649,
+      "sharpe_std": 4.2629,
+      "variant_count": 5
+    }
+  },
+  "decisions": [
+    {
+      "candidate": "qlib",
+      "duplicate_scope": "AStock already records observation/checkpoint/performance and uses an immutable ObjectStore; Qlib Recorder adds experiment-level run grouping only.",
+      "environment_notes": "No Qlib code imported; simulation is a minimal local model of Recorder file semantics. Removable by deleting this directory.",
+      "exit_notes": "Zero default dependencies added; delete experiments/external_quant_patterns to exit.",
+      "marginal_value": "Qlib Recorder adds experiment-level grouping (multiple runs under one experiment). AStock agent-observation-register covers per-skill selection/completion/duration. Marginal value: experiment-level grouping could help multi-iteration factor research.",
+      "object_hash": "0f6c0a3bbcf2694cfcc15bf3956e9120fdcfd1a285993b49a39897e48be64ad3",
+      "recommendation": "ADAPT_PATTERN"
+    },
+    {
+      "candidate": "rdagent",
+      "duplicate_scope": "AStock uses prospective/shadow governance (PBO, DSR, walk-forward); RD-Agent's automated factor iteration loop is intentionally NOT_ADMITTED in Phase 8.",
+      "environment_notes": "RD-Agent LLM loop not executed; simulation uses the deterministic fixture hypotheses and results only.",
+      "exit_notes": "No rdagent/langchain dependency; no API keys. Removable by deleting this directory.",
+      "marginal_value": "The modeled rapid-iteration pattern may help hypothesis discovery, but the synthetic fixture cannot establish RD-Agent runtime performance. Any future automation must remain behind AStock's prospective and model-risk admission gates to control overfitting.",
+      "object_hash": "caf80e49a01226e5019c35aa3be0f273ebbc3fd06ecedfe4358517b15db6b349",
+      "recommendation": "SHADOW_EXPERIMENT"
+    },
+    {
+      "candidate": "lean",
+      "duplicate_scope": "The simplified LEAN-inspired fixture omits AStock governance stages; this local result does not characterize the full LEAN engine. Robustness ideas remain separate model-risk candidates.",
+      "environment_notes": "LEAN engine not installed; only the ordering model is simulated with deterministic events.",
+      "exit_notes": "No .NET/LEAN artifacts created; removable by deleting this directory.",
+      "marginal_value": "This simplified modeled chain omits governance stages required by AStock, so the fixture provides no evidence for replacing the current ordering contract. This result is not a quality comparison of the full LEAN engine. Selected robustness ideas can be evaluated separately under model-risk governance.",
+      "object_hash": "537407db264e557321c083cd676b690f74710c757e172ec8c78a78a3d5f357e4",
+      "recommendation": "REJECT_ORDERING"
+    },
+    {
+      "candidate": "rqalpha",
+      "duplicate_scope": "AStock already has block bootstrap and deflated Sharpe; RQAlpha's parameter grid adds no new standalone robustness capability.",
+      "environment_notes": "RQAlpha is not installed; the robustness model uses five deterministic local variants only. The repository license includes material commercial-use restrictions, so runtime/code adoption is rejected without authorization.",
+      "exit_notes": "No rqalpha package or module imported; removable by deleting this directory.",
+      "marginal_value": "AStockMultiAgent already has block bootstrap and deflated Sharpe for robustness. The modeled small-grid perturbation adds granular per-parameter sensitivity that could complement the existing shadow walk-forward folds, but provides no additional value as a standalone framework. Decision: WATCH_PATTERN_ONLY / REJECT_WHOLESALE.",
+      "object_hash": "c37d08c9d3a7264ae8e5593bab865876f5648957bf680dbfaa9b133753b826ce",
+      "recommendation": "WATCH_PATTERN_ONLY"
+    }
+  ],
+  "dependencies_borrowed": false,
+  "experiment_id": "external-quant-patterns-e03",
+  "external_model_calls": 0,
+  "fixture_hash": "34152a3948d563ed34cf31b7f843e481f25f0715126e855271f85a9d7580227b",
+  "generated_at": "2026-09-02T00:00:00Z",
+  "network_requests": 0,
+  "production_module_changed": false,
+  "report_id": "e0e8c222a529ad91cc33342f988d5cdd2f429c988acfc21cc219def2f739349e",
+  "schema_version": "external-quant-patterns-report-v1",
+  "summary": "The fixed-fixture comparisons support only pattern-level decisions: Qlib-style experiment grouping is an ADAPT pattern; the modeled RD-Agent-style hypothesis loop remains SHADOW only; selected walk-forward/parameter-perturbation ideas remain WATCH items. The simplified event-order fixture does not justify replacing the project's classification/protocol/ledger chain, but it is not a benchmark of the full LEAN or RQAlpha engines. The modeled robustness grid adds no demonstrated marginal value beyond existing block-bootstrap/deflated-Sharpe governance."
+}

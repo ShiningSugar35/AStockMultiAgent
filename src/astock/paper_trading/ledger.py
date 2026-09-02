@@ -10,7 +10,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -56,6 +56,7 @@ class ReplayFillPlan(TypedDict):
     order_id: str
     qty: int
     price_fen: int
+    price_milli_yuan: NotRequired[int]
 
 
 _ACCOUNT_SPECS: dict[str, tuple[AccountType, NormalBalance]] = {
@@ -188,14 +189,23 @@ class LedgerService:
         side: OrderSide,
         qty: int,
         limit_price_fen: int,
+        limit_price_milli_yuan: int | None = None,
         fee_reserve_fen: int = 0,
         effective_rule_version: str = "cn-a-m1",
         submitted_at: datetime | None = None,
+        lot_size: int = 100,
     ) -> Order:
-        if qty <= 0 or qty % 100 != 0:
-            raise ValueError("M1 A-share orders require a positive 100-share lot multiple")
+        if lot_size <= 0:
+            raise ValueError("paper order lot_size must be positive")
+        if qty <= 0 or qty % lot_size != 0:
+            raise ValueError(f"paper order requires a positive {lot_size}-share lot multiple")
         if limit_price_fen <= 0 or fee_reserve_fen < 0:
             raise ValueError("limit price must be positive and fee reserve non-negative")
+        if limit_price_milli_yuan is not None:
+            if limit_price_milli_yuan <= 0:
+                raise ValueError("exact milli-yuan limit price must be positive")
+            if _milli_yuan_to_fen(limit_price_milli_yuan) != limit_price_fen:
+                raise ValueError("fen and milli-yuan limit prices must represent one price")
         with self._transaction() as connection:
             existing = connection.execute(
                 "SELECT * FROM order_record WHERE account_id=? AND client_request_id=?",
@@ -208,6 +218,7 @@ class LedgerService:
                     or stored.side is not side
                     or stored.qty != qty
                     or stored.limit_price_fen != limit_price_fen
+                    or stored.limit_price_milli_yuan != limit_price_milli_yuan
                     or stored.effective_rule_version != effective_rule_version
                     or (submitted_at is not None and stored.submitted_at != submitted_at)
                 ):
@@ -222,7 +233,9 @@ class LedgerService:
             reserve_qty = 0
             lines: list[LedgerLine] = []
             if side == OrderSide.BUY:
-                reserve_fen = qty * limit_price_fen + fee_reserve_fen
+                reserve_fen = _gross_fen(qty, limit_price_fen, limit_price_milli_yuan) + (
+                    fee_reserve_fen
+                )
                 available = self._balance(connection, account_id, "CASH")
                 if available < reserve_fen:
                     raise PolicyError(
@@ -255,8 +268,9 @@ class LedgerService:
             submitted_at = submitted_at or datetime.now(UTC)
             connection.execute(
                 "INSERT INTO order_record(order_id,account_id,client_request_id,symbol,side,"
-                "order_type,qty,filled_qty,limit_price_fen,reserved_fen,reserved_qty,status,"
-                "submitted_at,effective_rule_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "order_type,qty,filled_qty,limit_price_fen,limit_price_milli_yuan,reserved_fen,"
+                "reserved_qty,status,submitted_at,effective_rule_version) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     order_id,
                     account_id,
@@ -267,6 +281,7 @@ class LedgerService:
                     qty,
                     0,
                     limit_price_fen,
+                    limit_price_milli_yuan,
                     reserve_fen,
                     reserve_qty,
                     OrderStatus.ACCEPTED.value,
@@ -394,6 +409,7 @@ class LedgerService:
         order_id: str,
         qty: int,
         price_fen: int,
+        price_milli_yuan: int | None = None,
         commission_fen: int = 0,
         tax_fen: int = 0,
         transfer_fee_fen: int = 0,
@@ -402,6 +418,8 @@ class LedgerService:
     ) -> Fill:
         if qty <= 0 or price_fen <= 0:
             raise ValueError("fill qty and price must be positive")
+        if price_milli_yuan is not None and _milli_yuan_to_fen(price_milli_yuan) != price_fen:
+            raise ValueError("fill fen and milli-yuan prices must represent one price")
         if min(commission_fen, tax_fen, transfer_fee_fen) < 0:
             raise ValueError("fees cannot be negative")
         occurred_at = occurred_at or datetime.now(UTC)
@@ -415,6 +433,7 @@ class LedgerService:
                     order_id,
                     qty,
                     price_fen,
+                    price_milli_yuan,
                     commission_fen,
                     tax_fen,
                     transfer_fee_fen,
@@ -425,6 +444,7 @@ class LedgerService:
                     existing.order_id,
                     existing.qty,
                     existing.price_fen,
+                    existing.price_milli_yuan,
                     existing.commission_fen,
                     existing.tax_fen,
                     existing.transfer_fee_fen,
@@ -454,7 +474,7 @@ class LedgerService:
             if qty > remaining:
                 raise ValueError("fill exceeds remaining order quantity")
             fees = commission_fen + tax_fen + transfer_fee_fen
-            gross = qty * price_fen
+            gross = _gross_fen(qty, price_fen, price_milli_yuan)
             final_fill = qty == remaining
             lines: list[LedgerLine]
             position = connection.execute(
@@ -462,10 +482,12 @@ class LedgerService:
                 (order["account_id"], order["symbol"]),
             ).fetchone()
             binding = connection.execute(
-                "SELECT market,instrument_id FROM paper_order_rule_binding WHERE order_id=?",
+                "SELECT market,instrument_id,instrument_type,settlement_cycle "
+                "FROM paper_order_rule_binding WHERE order_id=?",
                 (order_id,),
             ).fetchone()
             formal = binding is not None
+            settles_t0 = formal and str(binding["settlement_cycle"]) == "T0"
             resulting_total_cost = 0
             if order["side"] == OrderSide.BUY.value:
                 total = gross + fees
@@ -512,16 +534,30 @@ class LedgerService:
                 new_avg = new_total_cost // new_qty
                 if position:
                     connection.execute(
-                        "UPDATE position SET qty_total=?,avg_cost_fen=? "
+                        "UPDATE position SET qty_total=?,qty_available=qty_available+?,"
+                        "avg_cost_fen=? "
                         "WHERE account_id=? AND symbol=?",
-                        (new_qty, new_avg, order["account_id"], order["symbol"]),
+                        (
+                            new_qty,
+                            qty if settles_t0 else 0,
+                            new_avg,
+                            order["account_id"],
+                            order["symbol"],
+                        ),
                     )
                 else:
                     connection.execute(
                         "INSERT INTO position(account_id,symbol,qty_total,qty_available,"
                         "avg_cost_fen,"
                         "realized_pnl_fen,as_of_event_seq) VALUES(?,?,?,?,?,?,0)",
-                        (order["account_id"], order["symbol"], qty, 0, new_avg, 0),
+                        (
+                            order["account_id"],
+                            order["symbol"],
+                            qty,
+                            qty if settles_t0 else 0,
+                            new_avg,
+                            0,
+                        ),
                     )
                 new_reserved_fen = 0 if final_fill else reserved_fen - total
                 new_reserved_qty = 0
@@ -614,13 +650,14 @@ class LedgerService:
                 occurred_at=occurred_at,
             )
             connection.execute(
-                "INSERT INTO fill(fill_id,order_id,qty,price_fen,commission_fen,tax_fen,"
-                "transfer_fee_fen,occurred_at,replay_quality) VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO fill(fill_id,order_id,qty,price_fen,price_milli_yuan,commission_fen,"
+                "tax_fen,transfer_fee_fen,occurred_at,replay_quality) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
                     fill_id,
                     order_id,
                     qty,
                     price_fen,
+                    price_milli_yuan,
                     commission_fen,
                     tax_fen,
                     transfer_fee_fen,
@@ -672,7 +709,7 @@ class LedgerService:
                             fill_id,
                         ),
                     )
-            if order["side"] == OrderSide.BUY.value:
+            if order["side"] == OrderSide.BUY.value and not settles_t0:
                 trade_date = occurred_at.astimezone(_SHANGHAI).date()
                 settlement_id = uuid4().hex
                 connection.execute(
@@ -691,9 +728,15 @@ class LedgerService:
                 )
                 if formal:
                     connection.execute(
-                        "INSERT INTO paper_settlement_identity(settlement_id,market,instrument_id) "
-                        "VALUES(?,?,?)",
-                        (settlement_id, binding["market"], binding["instrument_id"]),
+                        "INSERT INTO paper_settlement_identity("
+                        "settlement_id,market,instrument_id,settlement_cycle) "
+                        "VALUES(?,?,?,?)",
+                        (
+                            settlement_id,
+                            binding["market"],
+                            binding["instrument_id"],
+                            binding["settlement_cycle"],
+                        ),
                     )
             new_filled = int(order["filled_qty"]) + qty
             new_status = OrderStatus.FILLED if final_fill else OrderStatus.PARTIALLY_FILLED
@@ -852,17 +895,13 @@ class LedgerService:
                 ).fetchone()
                 if existing is not None:
                     object_hash = str(existing["commit_object_hash"])
-                    if existing["input_hash"] != input_hash or not self.objects.verify(
-                        object_hash
-                    ):
+                    if existing["input_hash"] != input_hash or not self.objects.verify(object_hash):
                         raise PolicyError(
                             "Replay bar identity collision",
                             failure_class=FailureClass.CONFLICT,
                         )
                     ids = json.loads(existing["fill_ids_json"])
-                    committed = ReplayCheckpoint.model_validate_json(
-                        existing["checkpoint_json"]
-                    )
+                    committed = ReplayCheckpoint.model_validate_json(existing["checkpoint_json"])
                     expected_payload = {
                         "commit_id": commit_id,
                         "account_id": account_id,
@@ -947,33 +986,34 @@ class LedgerService:
                             "Partial fill history has no reliable frozen fee accrual",
                             failure_class=FailureClass.DATA_QUALITY,
                         )
-                    gross_delta = int(plan["qty"]) * int(plan["price_fen"])
+                    gross_delta = _gross_fen(
+                        int(plan["qty"]),
+                        int(plan["price_fen"]),
+                        int(plan["price_milli_yuan"]) if "price_milli_yuan" in plan else None,
+                    )
                     prior_gross = int(prior["gross_fen"]) if prior else 0
                     cumulative_gross = prior_gross + gross_delta
                     target_commission = _commission_for_gross(cumulative_gross, fee_schedule)
                     target_tax = (
-                        _round_fee(
-                            Decimal(cumulative_gross) * fee_schedule.stamp_tax_sell_rate
-                        )
+                        _round_fee(Decimal(cumulative_gross) * fee_schedule.stamp_tax_sell_rate)
                         if order_row["side"] == OrderSide.SELL.value
                         else 0
                     )
                     target_transfer = _round_fee(
                         Decimal(cumulative_gross) * fee_schedule.transfer_fee_rate
                     )
-                    commission = target_commission - (
-                        int(prior["commission_fen"]) if prior else 0
-                    )
+                    commission = target_commission - (int(prior["commission_fen"]) if prior else 0)
                     tax = target_tax - (int(prior["tax_fen"]) if prior else 0)
-                    transfer = target_transfer - (
-                        int(prior["transfer_fee_fen"]) if prior else 0
-                    )
+                    transfer = target_transfer - (int(prior["transfer_fee_fen"]) if prior else 0)
                     before_status = OrderStatus(str(order_row["status"]))
                     fill = self.record_fill(
                         fill_id=str(plan["fill_id"]),
                         order_id=order_id,
                         qty=int(plan["qty"]),
                         price_fen=int(plan["price_fen"]),
+                        price_milli_yuan=(
+                            int(plan["price_milli_yuan"]) if "price_milli_yuan" in plan else None
+                        ),
                         commission_fen=commission,
                         tax_fen=tax,
                         transfer_fee_fen=transfer,
@@ -1052,9 +1092,7 @@ class LedgerService:
                         input_hash,
                         commit_ref.sha256,
                         canonical_json_bytes(fill_ids).decode(),
-                        canonical_json_bytes(
-                            committed_checkpoint.model_dump(mode="json")
-                        ).decode(),
+                        canonical_json_bytes(committed_checkpoint.model_dump(mode="json")).decode(),
                         datetime.now(UTC).isoformat(),
                     ),
                 )
@@ -1165,7 +1203,8 @@ class LedgerService:
                         failure_class=FailureClass.DATA_QUALITY,
                     )
                 rows = connection.execute(
-                    "SELECT s.*,i.market,i.instrument_id FROM position_settlement s "
+                    "SELECT s.*,i.market,i.instrument_id,i.settlement_cycle "
+                    "FROM position_settlement s "
                     "JOIN paper_settlement_identity i ON i.settlement_id=s.settlement_id "
                     "WHERE s.account_id=? AND s.status=? AND i.market=? "
                     "ORDER BY s.trade_date,s.settlement_id",
@@ -1178,6 +1217,11 @@ class LedgerService:
                     (account_id, "PENDING_CALENDAR_CONFIRMATION"),
                 ).fetchall()
             for row in rows:
+                if market is not None and str(row["settlement_cycle"]) != "T1":
+                    raise PolicyError(
+                        "Pending formal settlement unexpectedly carries a non-T1 cycle",
+                        failure_class=FailureClass.DATA_QUALITY,
+                    )
                 if market is not None and row["instrument_id"] != (
                     f"{market.value}:{row['symbol']}"
                 ):
@@ -1209,9 +1253,7 @@ class LedgerService:
                     connection,
                     account_id=account_id,
                     event_type="POSITION_T1_SETTLED",
-                    idempotency_key=(
-                        f"settlement:{row['settlement_id']}:{calendar_release_id}"
-                    ),
+                    idempotency_key=(f"settlement:{row['settlement_id']}:{calendar_release_id}"),
                     payload={
                         "settlement_id": row["settlement_id"],
                         "eligible_on": eligible.isoformat(),
@@ -1391,9 +1433,7 @@ class LedgerService:
             cash_after_tax_fen_text = terms.get("cashFenPsAfterTax")
             cash_after_tax_yuan_text = terms.get("cashPsAfterTax")
             cash_before_tax = Decimal(terms.get("dividCashPsBeforeTax", "0"))
-            if cash_before_tax > 0 and not (
-                cash_after_tax_fen_text or cash_after_tax_yuan_text
-            ):
+            if cash_before_tax > 0 and not (cash_after_tax_fen_text or cash_after_tax_yuan_text):
                 raise PolicyError(
                     "Cash dividend lacks exact after-tax cash terms",
                     failure_class=FailureClass.DATA_QUALITY,
@@ -1450,9 +1490,7 @@ class LedgerService:
                 connection,
                 account_id=account_id,
                 event_type="CORPORATE_ACTION_APPLIED",
-                idempotency_key=(
-                    f"corporate-action:{account_id}:{observation.observation_id}"
-                ),
+                idempotency_key=(f"corporate-action:{account_id}:{observation.observation_id}"),
                 payload={
                     "observation_id": observation.observation_id,
                     **result,
@@ -1579,17 +1617,32 @@ class LedgerService:
         account_id: str,
         market_prices_fen: dict[str, int] | None = None,
         *,
+        market_prices_milli_yuan: dict[str, int] | None = None,
         as_of: datetime | None = None,
         require_all_prices: bool = False,
     ) -> PortfolioNAV:
         market_prices_fen = market_prices_fen or {}
+        market_prices_milli_yuan = market_prices_milli_yuan or {}
         mark_time = as_of or datetime.now(UTC)
         status = self.status(account_id)
         market_value = 0
         data_quality = "MARK_TO_COST"
         for position in status["positions"]:
             symbol = str(position["symbol"])
+            price_milli_yuan = market_prices_milli_yuan.get(symbol)
             price = market_prices_fen.get(symbol)
+            if price_milli_yuan is not None:
+                if price is not None and _milli_yuan_to_fen(price_milli_yuan) != int(price):
+                    raise PolicyError(
+                        "Fen and milli-yuan mark prices disagree",
+                        failure_class=FailureClass.CONFLICT,
+                        details={"symbol": symbol},
+                    )
+                data_quality = "MARKET_PRICE_INPUT_EXACT_MILLI_YUAN"
+                market_value += _round_fee(
+                    Decimal(int(position["qty_total"]) * price_milli_yuan) / Decimal(10)
+                )
+                continue
             if price is None:
                 if require_all_prices and int(position["qty_total"]) > 0:
                     raise PolicyError(
@@ -1717,9 +1770,7 @@ class LedgerService:
             ).fetchall()
             for commit in commits:
                 try:
-                    checkpoint = ReplayCheckpoint.model_validate_json(
-                        commit["checkpoint_json"]
-                    )
+                    checkpoint = ReplayCheckpoint.model_validate_json(commit["checkpoint_json"])
                     fill_ids = json.loads(str(commit["fill_ids_json"]))
                 except (TypeError, ValueError, json.JSONDecodeError):
                     issues.append("BAR_COMMIT_CHECKPOINT_INVALID")
@@ -1790,8 +1841,7 @@ class LedgerService:
                     "checkpoint": checkpoint.model_dump(mode="json"),
                 }
                 if not isinstance(commit_object, dict) or any(
-                    commit_object.get(key) != value
-                    for key, value in expected_object_fields.items()
+                    commit_object.get(key) != value for key, value in expected_object_fields.items()
                 ):
                     issues.append("BAR_COMMIT_OBJECT_BINDING_MISMATCH")
                     break
@@ -1800,9 +1850,7 @@ class LedgerService:
                 account_id, as_of, source_operation_id=source_operation_id
             )
         return {
-            "status": (
-                "CORRUPT" if issues else "RECOVERED" if expired else "HEALTHY_NOOP"
-            ),
+            "status": ("CORRUPT" if issues else "RECOVERED" if expired else "HEALTHY_NOOP"),
             "expired_order_count": expired,
             "issues": issues,
             "integrity": self.state.integrity_check(),
@@ -2003,6 +2051,9 @@ class LedgerService:
             qty=row["qty"],
             filled_qty=row["filled_qty"],
             limit_price_fen=row["limit_price_fen"],
+            limit_price_milli_yuan=(
+                row["limit_price_milli_yuan"] if "limit_price_milli_yuan" in row.keys() else None
+            ),
             reserved_fen=row["reserved_fen"],
             reserved_qty=row["reserved_qty"],
             status=OrderStatus(row["status"]),
@@ -2017,12 +2068,27 @@ class LedgerService:
             order_id=row["order_id"],
             qty=row["qty"],
             price_fen=row["price_fen"],
+            price_milli_yuan=(
+                row["price_milli_yuan"] if "price_milli_yuan" in row.keys() else None
+            ),
             commission_fen=row["commission_fen"],
             tax_fen=row["tax_fen"],
             transfer_fee_fen=row["transfer_fee_fen"],
             occurred_at=datetime.fromisoformat(row["occurred_at"]),
             replay_quality=ReplayQuality(row["replay_quality"]),
         )
+
+
+def _milli_yuan_to_fen(price_milli_yuan: int) -> int:
+    if price_milli_yuan <= 0:
+        raise ValueError("milli-yuan price must be positive")
+    return _round_fee(Decimal(price_milli_yuan) / Decimal(10))
+
+
+def _gross_fen(qty: int, price_fen: int, price_milli_yuan: int | None = None) -> int:
+    if price_milli_yuan is None:
+        return qty * price_fen
+    return _round_fee(Decimal(qty * price_milli_yuan) / Decimal(10))
 
 
 def _round_fee(value: Decimal) -> int:

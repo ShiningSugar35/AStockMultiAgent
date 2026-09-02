@@ -61,6 +61,10 @@ class Order(AStockModel):
     qty: int = Field(gt=0)
     filled_qty: int = Field(default=0, ge=0)
     limit_price_fen: int | None = Field(default=None, gt=0)
+    # Exact exchange quote in CNY mills (0.001 CNY). Stock orders may omit this
+    # and keep the historical fen-only representation; ETF orders persist it so
+    # a 0.001-CNY tick is never rounded into a synthetic 0.01-CNY price.
+    limit_price_milli_yuan: int | None = Field(default=None, gt=0)
     reserved_fen: int = Field(default=0, ge=0)
     reserved_qty: int = Field(default=0, ge=0)
     status: OrderStatus
@@ -81,6 +85,7 @@ class Fill(AStockModel):
     order_id: str
     qty: int = Field(gt=0)
     price_fen: int = Field(gt=0)
+    price_milli_yuan: int | None = Field(default=None, gt=0)
     commission_fen: int = Field(default=0, ge=0)
     tax_fen: int = Field(default=0, ge=0)
     transfer_fee_fen: int = Field(default=0, ge=0)
@@ -227,6 +232,7 @@ class PaperPlaceOrderPayload(AStockModel):
     side: OrderSide
     qty: int = Field(gt=0)
     limit_price_fen: int = Field(gt=0)
+    limit_price_milli_yuan: int | None = Field(default=None, gt=0)
     validity: PaperOrderValidity = PaperOrderValidity.DAY
     calendar_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     instrument_release_id: str = Field(pattern=r"^[0-9a-f]{64}$")

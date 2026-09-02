@@ -1,0 +1,33 @@
+schema_version: etf-paper-trading-rules-v1
+rule_version: cn-etf-paper-2026-09-02-v1
+# Independent kill switch. Research artifacts remain available when false.
+execution_enabled: false
+# No blanket ETF defaults are executable. Each admitted ETF must have its own
+# effective-dated rule so category-specific settlement is never guessed.
+instruments:
+  - instrument_id: XSHG:510300
+    market: XSHG
+    symbol: "510300"
+    effective_from: "2026-09-02"
+    price_limit_rate_bps: 1000
+    buy_lot_size: 100
+    sell_lot_size: 100
+    allow_odd_lot_full_exit: true
+    tick_size_cny: "0.001"
+    settlement_cycle: T1
+    source_urls:
+      - "https://www.sse.com.cn/assortment/fund/etf/question/"
+fee_schedule:
+  rule_version: cn-etf-paper-2026-09-02-v1
+  effective_from: "2026-09-02"
+  applicable_markets:
+    - XSHG
+    - XSHE
+  commission_rate: "0.0003"
+  minimum_commission_fen: 0
+  stamp_tax_sell_rate: "0"
+  transfer_fee_rate: "0"
+  commission_includes_exchange_regulatory_fees: true
+  requires_broker_confirmation: true
+  source_urls:
+    - "https://www.sse.com.cn/assortment/fund/etf/question/"

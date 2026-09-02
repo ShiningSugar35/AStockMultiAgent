@@ -168,6 +168,17 @@ class SettlementCycle(StrEnum):
     T1 = "T1"
 
 
+class ProductDataQuality(StrEnum):
+    VERIFIED = "VERIFIED"
+    PARTIAL = "PARTIAL"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class ProductCoverageStatus(StrEnum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+
+
 class PortfolioIntentProfile(AStockModel):
     schema_version: str = "portfolio-intent-profile-v1"
     portfolio_id: str = Field(min_length=1)
@@ -253,9 +264,15 @@ class ETFProductProfile(AStockModel):
     management_fee_bps: float | None = Field(default=None, ge=0, le=500)
     custody_fee_bps: float | None = Field(default=None, ge=0, le=500)
     total_expense_ratio_bps: float | None = Field(default=None, ge=0, le=1000)
+    total_net_asset_cny: Decimal | None = Field(default=None, ge=0)
+    total_outstanding_shares: int | None = Field(default=None, ge=0)
+    nav_currency: Literal["CNY"] = "CNY"
     trading_rule: InstrumentTradingUnitRule
     secondary_market_tradable: bool = True
     paper_replay_supported: bool = False
+    facts_as_of: AwareDatetime | None = None
+    quality_status: ProductDataQuality = ProductDataQuality.PARTIAL
+    quality_warning_codes: list[str] = Field(default_factory=list)
     official_source_artifact_ids: list[str] = Field(min_length=1)
     official_source_object_hashes: list[str] = Field(min_length=1)
     available_to_system_at: AwareDatetime
@@ -285,16 +302,192 @@ class ETFProductProfile(AStockModel):
         if len(self.official_source_artifact_ids) != len(self.official_source_object_hashes):
             raise ValueError("ETF official artifact/hash counts must match")
         for values in (
+            self.quality_warning_codes,
             self.official_source_artifact_ids,
             self.official_source_object_hashes,
         ):
             if values != sorted(set(values)):
-                raise ValueError("ETF official provenance must be sorted and unique")
-        if (
-            self.paper_replay_supported
-            and self.trading_rule.settlement_cycle is not SettlementCycle.T1
+                raise ValueError("ETF profile lists must be sorted and unique")
+        if self.facts_as_of is not None and self.facts_as_of > self.available_to_system_at:
+            raise ValueError("ETF facts_as_of cannot follow product availability")
+        if self.quality_status is ProductDataQuality.VERIFIED:
+            required = (
+                self.facts_as_of,
+                self.tracking_benchmark_market,
+                self.tracking_benchmark_symbol,
+                self.management_fee_bps,
+                self.custody_fee_bps,
+                self.total_expense_ratio_bps,
+                self.total_net_asset_cny,
+                self.total_outstanding_shares,
+            )
+            if any(item is None for item in required) or self.quality_warning_codes:
+                raise ValueError(
+                    "VERIFIED ETF profile requires complete benchmark/fee/size/share facts"
+                )
+        return self
+
+
+class FundProductProfile(AStockModel):
+    """Frozen official identity and low-frequency facts for a non-ETF fund product."""
+
+    schema_version: str = "fund-product-profile-v1"
+    profile_id: str = Field(min_length=1)
+    instrument_id: str = Field(min_length=1)
+    fund_code: str = Field(pattern=r"^\d{6}$")
+    name: str = Field(min_length=1)
+    instrument_type: InstrumentType = InstrumentType.FUND
+    fund_category: str = Field(min_length=1)
+    manager_name: str = Field(min_length=1)
+    tracking_target: str | None = None
+    tracking_benchmark_market: Market | None = None
+    tracking_benchmark_symbol: str | None = Field(default=None, pattern=r"^\d{6}$")
+    management_fee_bps: float | None = Field(default=None, ge=0, le=500)
+    custody_fee_bps: float | None = Field(default=None, ge=0, le=500)
+    total_expense_ratio_bps: float | None = Field(default=None, ge=0, le=1000)
+    total_net_asset_cny: Decimal | None = Field(default=None, ge=0)
+    total_outstanding_shares: int | None = Field(default=None, ge=0)
+    nav_currency: Literal["CNY"] = "CNY"
+    facts_as_of: AwareDatetime
+    available_to_system_at: AwareDatetime
+    quality_status: ProductDataQuality = ProductDataQuality.PARTIAL
+    quality_warning_codes: list[str] = Field(default_factory=list)
+    official_source_artifact_ids: list[str] = Field(min_length=1)
+    official_source_object_hashes: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_profile(self) -> FundProductProfile:
+        if self.instrument_type is not InstrumentType.FUND:
+            raise ValueError("fund profile requires InstrumentType.FUND")
+        if self.instrument_id != f"FUND:{self.fund_code}":
+            raise ValueError("fund instrument_id must be FUND:fund_code")
+        if (self.tracking_benchmark_market is None) != (self.tracking_benchmark_symbol is None):
+            raise ValueError("fund tracking benchmark market/symbol must be supplied together")
+        if self.facts_as_of > self.available_to_system_at:
+            raise ValueError("fund facts_as_of cannot follow product availability")
+        if len(self.official_source_artifact_ids) != len(self.official_source_object_hashes):
+            raise ValueError("fund official artifact/hash counts must match")
+        for values in (
+            self.quality_warning_codes,
+            self.official_source_artifact_ids,
+            self.official_source_object_hashes,
         ):
-            raise ValueError("current paper replay only admits T1 ETF profiles")
+            if values != sorted(set(values)):
+                raise ValueError("fund profile lists must be sorted and unique")
+        if self.quality_status is ProductDataQuality.VERIFIED:
+            required = (
+                self.management_fee_bps,
+                self.custody_fee_bps,
+                self.total_expense_ratio_bps,
+                self.total_net_asset_cny,
+                self.total_outstanding_shares,
+            )
+            if any(item is None for item in required) or self.quality_warning_codes:
+                raise ValueError("VERIFIED fund profile requires complete fee/size/share facts")
+        return self
+
+
+class IndexProductProfile(AStockModel):
+    """Frozen official index identity and benchmark methodology identity."""
+
+    schema_version: str = "index-product-profile-v1"
+    profile_id: str = Field(min_length=1)
+    instrument_id: str = Field(min_length=1)
+    market: Literal[Market.INDEX] = Market.INDEX
+    symbol: str = Field(pattern=r"^\d{6}$")
+    name: str = Field(min_length=1)
+    instrument_type: InstrumentType = InstrumentType.INDEX
+    index_provider: str = Field(min_length=1)
+    methodology_name: str = Field(min_length=1)
+    base_date: date | None = None
+    base_value: Decimal | None = Field(default=None, gt=0)
+    currency: Literal["CNY"] = "CNY"
+    facts_as_of: AwareDatetime
+    available_to_system_at: AwareDatetime
+    quality_status: ProductDataQuality = ProductDataQuality.PARTIAL
+    quality_warning_codes: list[str] = Field(default_factory=list)
+    official_source_artifact_ids: list[str] = Field(min_length=1)
+    official_source_object_hashes: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_profile(self) -> IndexProductProfile:
+        if self.instrument_type is not InstrumentType.INDEX:
+            raise ValueError("index profile requires InstrumentType.INDEX")
+        if self.instrument_id != f"INDEX:{self.symbol}":
+            raise ValueError("index instrument_id must be INDEX:symbol")
+        if self.facts_as_of > self.available_to_system_at:
+            raise ValueError("index facts_as_of cannot follow product availability")
+        if len(self.official_source_artifact_ids) != len(self.official_source_object_hashes):
+            raise ValueError("index official artifact/hash counts must match")
+        for values in (
+            self.quality_warning_codes,
+            self.official_source_artifact_ids,
+            self.official_source_object_hashes,
+        ):
+            if values != sorted(set(values)):
+                raise ValueError("index profile lists must be sorted and unique")
+        if self.quality_status is ProductDataQuality.VERIFIED and (
+            self.base_date is None or self.base_value is None or self.quality_warning_codes
+        ):
+            raise ValueError("VERIFIED index profile requires complete base facts")
+        return self
+
+
+class ProductConstituent(AStockModel):
+    instrument_id: str = Field(min_length=1)
+    market: Market
+    symbol: str = Field(pattern=r"^\d{6}$")
+    name: str | None = None
+    weight: Decimal = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> ProductConstituent:
+        if self.market is Market.INDEX:
+            expected = f"INDEX:{self.symbol}"
+        else:
+            expected = f"{self.market.value}:{self.symbol}"
+        if self.instrument_id != expected:
+            raise ValueError("constituent instrument identity mismatch")
+        return self
+
+
+class ProductConstituentSnapshot(AStockModel):
+    """Official point-in-time composition for an ETF, fund, or index."""
+
+    schema_version: str = "product-constituent-snapshot-v1"
+    snapshot_id: str = Field(min_length=1)
+    product_artifact_id: str = Field(min_length=1)
+    product_instrument_id: str = Field(min_length=1)
+    product_type: Literal["ETF", "FUND", "INDEX"]
+    as_of: AwareDatetime
+    available_to_system_at: AwareDatetime
+    coverage_status: ProductCoverageStatus
+    constituents: list[ProductConstituent] = Field(min_length=1)
+    official_source_artifact_ids: list[str] = Field(min_length=1)
+    official_source_object_hashes: list[str] = Field(min_length=1)
+    warning_codes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> ProductConstituentSnapshot:
+        identities = [item.instrument_id for item in self.constituents]
+        if identities != sorted(set(identities)):
+            raise ValueError("product constituents must be sorted and unique")
+        total_weight = sum((item.weight for item in self.constituents), Decimal("0"))
+        if total_weight > Decimal("1.02"):
+            raise ValueError("product constituent weights exceed a valid normalized total")
+        if self.coverage_status is ProductCoverageStatus.COMPLETE and not (
+            Decimal("0.98") <= total_weight <= Decimal("1.02")
+        ):
+            raise ValueError("complete constituent snapshot must cover approximately 100% weight")
+        if len(self.official_source_artifact_ids) != len(self.official_source_object_hashes):
+            raise ValueError("constituent artifact/hash counts must match")
+        for values in (
+            self.warning_codes,
+            self.official_source_artifact_ids,
+            self.official_source_object_hashes,
+        ):
+            if values != sorted(set(values)):
+                raise ValueError("constituent snapshot lists must be sorted and unique")
         return self
 
 
@@ -348,6 +541,107 @@ class ETFResearchMetrics(AStockModel):
         ):
             if values != sorted(set(values)):
                 raise ValueError("ETF metrics lists must be sorted and unique")
+        return self
+
+
+class ETFNavSighting(AStockModel):
+    """A frozen per-share NAV or iNAV sighting with complete point-in-time semantics."""
+
+    schema_version: str = "etf-nav-sighting-v1"
+    sighting_id: str = Field(min_length=1)
+    instrument_id: str = Field(min_length=1)
+    market: Market
+    symbol: str = Field(pattern=r"^\d{6}$")
+    sighting_type: Literal["NAV", "INAV"]
+    value_cny: Decimal = Field(gt=0)
+    as_of: AwareDatetime
+    available_to_system_at: AwareDatetime
+    official_source_artifact_ids: list[str] = Field(min_length=1)
+    official_source_object_hashes: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_sighting(self) -> ETFNavSighting:
+        if self.instrument_id != f"{self.market.value}:{self.symbol}":
+            raise ValueError("ETF nav sighting instrument_id must be market:symbol")
+        if self.available_to_system_at < self.as_of:
+            raise ValueError("ETF NAV/iNAV availability cannot precede its valuation timestamp")
+        if len(self.official_source_artifact_ids) != len(self.official_source_object_hashes):
+            raise ValueError("ETF nav sighting official artifact/hash counts must match")
+        for values in (
+            self.official_source_artifact_ids,
+            self.official_source_object_hashes,
+        ):
+            if values != sorted(set(values)):
+                raise ValueError("ETF nav sighting provenance must be sorted and unique")
+        return self
+
+
+class ETFMarketPriceSighting(AStockModel):
+    """Frozen market-price observation used only for research valuation."""
+
+    schema_version: str = "etf-market-price-sighting-v1"
+    sighting_id: str = Field(min_length=1)
+    instrument_id: str = Field(min_length=1)
+    market: Market
+    symbol: str = Field(pattern=r"^\d{6}$")
+    price_cny: Decimal = Field(gt=0)
+    as_of: AwareDatetime
+    available_to_system_at: AwareDatetime
+    source_artifact_ids: list[str] = Field(min_length=1)
+    source_object_hashes: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_sighting(self) -> ETFMarketPriceSighting:
+        if self.instrument_id != f"{self.market.value}:{self.symbol}":
+            raise ValueError("ETF market price instrument_id must be market:symbol")
+        if self.available_to_system_at < self.as_of:
+            raise ValueError("ETF market-price availability cannot precede its price timestamp")
+        if len(self.source_artifact_ids) != len(self.source_object_hashes):
+            raise ValueError("ETF market-price artifact/hash counts must match")
+        for values in (self.source_artifact_ids, self.source_object_hashes):
+            if values != sorted(set(values)):
+                raise ValueError("ETF market-price provenance must be sorted and unique")
+        return self
+
+
+class ETFPremiumDiscountRequest(AStockModel):
+    schema_version: str = "etf-premium-discount-request-v2"
+    profile_artifact_id: str = Field(min_length=1)
+    as_of: AwareDatetime
+    nav_sighting_artifact_id: str = Field(min_length=1)
+    inav_sighting_artifact_id: str = Field(min_length=1)
+    market_price_sighting_artifact_id: str = Field(min_length=1)
+
+
+class ETFPremiumDiscountValuation(AStockModel):
+    """Frozen market/iNAV premium-discount with NAV bound as an independent control."""
+
+    schema_version: str = "etf-premium-discount-valuation-v2"
+    valuation_id: str = Field(min_length=1)
+    profile_artifact_id: str = Field(min_length=1)
+    instrument_id: str = Field(min_length=1)
+    market: Market
+    symbol: str = Field(pattern=r"^\d{6}$")
+    as_of: AwareDatetime
+    nav_sighting_artifact_id: str = Field(min_length=1)
+    inav_sighting_artifact_id: str = Field(min_length=1)
+    market_price_sighting_artifact_id: str = Field(min_length=1)
+    nav_value_cny: Decimal = Field(gt=0)
+    inav_value_cny: Decimal = Field(gt=0)
+    market_price_cny: Decimal = Field(gt=0)
+    premium_discount_basis: Literal["INAV"] = "INAV"
+    premium_discount_rate: float
+    market_to_nav_rate: float
+    source_artifact_ids: list[str]
+    source_object_hashes: list[str]
+
+    @model_validator(mode="after")
+    def validate_valuation(self) -> ETFPremiumDiscountValuation:
+        if self.instrument_id != f"{self.market.value}:{self.symbol}":
+            raise ValueError("ETF premium discount instrument_id must be market:symbol")
+        for values in (self.source_artifact_ids, self.source_object_hashes):
+            if values != sorted(set(values)):
+                raise ValueError("ETF premium discount lists must be sorted and unique")
         return self
 
 
@@ -681,15 +975,25 @@ class RebalanceBandPolicy(AStockModel):
 __all__ = [
     "DeclaredTradeValidationStatus",
     "ETFCategory",
+    "ETFMarketPriceSighting",
+    "ETFNavSighting",
+    "ETFPremiumDiscountRequest",
+    "ETFPremiumDiscountValuation",
     "ETFProductProfile",
     "ETFResearchMetrics",
     "ETFResearchMetricsRequest",
     "ExternalTradeImportReceipt",
+    "FundProductProfile",
     "HedgeClassification",
     "HedgeEffectivenessReport",
     "HedgeEffectivenessRequest",
     "HedgeInstrumentCandidate",
+    "IndexProductProfile",
     "InstrumentTradingUnitRule",
+    "ProductConstituent",
+    "ProductConstituentSnapshot",
+    "ProductCoverageStatus",
+    "ProductDataQuality",
     "PortfolioComplementCandidate",
     "PortfolioComplementScreenReport",
     "PortfolioComplementScreenRequest",

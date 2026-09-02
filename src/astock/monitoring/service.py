@@ -20,6 +20,7 @@ from astock.market_data.sync import MarketSyncService
 from astock.monitoring.config import ContinuousMonitorConfig
 from astock.monitoring.news import GdeltNewsLeadProvider
 from astock.monitoring.repository import ContinuousMonitorRepository
+from astock.paper_trading.etf_policy import load_etf_execution_policy
 from astock.paper_trading.ledger import LedgerService
 from astock.paper_trading.operation import MarketReferencePaperVerifier
 from astock.paper_trading.replay import PaperReplayService, load_fee_schedule
@@ -166,8 +167,11 @@ class ContinuousMonitorService:
                 "WHERE p.qty_total>0 ORDER BY i.market,p.symbol"
             ).fetchall()
             order_rows = connection.execute(
-                "SELECT DISTINCT o.symbol,COALESCE(i.market,'') AS market FROM order_record o "
-                "LEFT JOIN paper_position_identity i ON i.account_id=o.account_id AND i.symbol=o.symbol "  # noqa: E501
+                "SELECT DISTINCT o.symbol,COALESCE(b.market,i.market,'') AS market "
+                "FROM order_record o "
+                "LEFT JOIN paper_order_rule_binding b ON b.order_id=o.order_id "
+                "LEFT JOIN paper_position_identity i "
+                "ON i.account_id=o.account_id AND i.symbol=o.symbol "
                 "WHERE o.status IN ('NEW','ACCEPTED','PARTIALLY_FILLED') ORDER BY o.symbol"
             ).fetchall()
         for row in position_rows:
@@ -652,8 +656,10 @@ class ContinuousMonitorService:
             return 0, 0, now.isoformat()
         with closing(self.state.connect()) as connection:
             rows = connection.execute(
-                "SELECT DISTINCT account_id FROM order_record WHERE symbol=? "
-                "AND status IN ('NEW','ACCEPTED','PARTIALLY_FILLED') ORDER BY account_id",
+                "SELECT DISTINCT o.account_id,b.instrument_type FROM order_record o "
+                "JOIN paper_order_rule_binding b ON b.order_id=o.order_id "
+                "WHERE o.symbol=? AND o.status IN ('NEW','ACCEPTED','PARTIALLY_FILLED') "
+                "ORDER BY o.account_id,b.instrument_type",
                 (target.symbol,),
             ).fetchall()
         if not rows:
@@ -664,15 +670,21 @@ class ContinuousMonitorService:
             ReferenceParquetStore(self.paths.parquet),
             self.paths.root / "tests" / "fixtures" / "reference",
         )
+        etf_policy = load_etf_execution_policy(
+            self.paths.root / "configs" / "etf_paper_trading_rules.yaml"
+        )
         replay = PaperReplayService(
             LedgerService(self.state, self.objects),
             self.canonical,
             MarketReferencePaperVerifier(references),
+            etf_execution_policy=etf_policy,
         )
-        fees = load_fee_schedule(self.paths.root / "configs" / "fee_rules.yaml")
-        request = self._bar_request(target, now)
+        stock_fees = load_fee_schedule(self.paths.root / "configs" / "fee_rules.yaml")
         events = tasks = 0
         for row in rows:
+            instrument_type = InstrumentType(str(row["instrument_type"]))
+            request = self._bar_request(target, now, instrument_type=instrument_type)
+            fees = etf_policy.fee_schedule if instrument_type is InstrumentType.ETF else stock_fees
             report = replay.replay(
                 account_id=str(row["account_id"]),
                 request=request,
@@ -713,14 +725,21 @@ class ContinuousMonitorService:
                 tasks += int(task_inserted)
         return events, tasks, now.isoformat()
 
-    def _bar_request(self, target: ContinuousMonitorTarget, now: datetime) -> BarRequest:
+    def _bar_request(
+        self,
+        target: ContinuousMonitorTarget,
+        now: datetime,
+        *,
+        instrument_type: InstrumentType | None = None,
+    ) -> BarRequest:
         end = now.astimezone(_SHANGHAI)
+        resolved_type = instrument_type or (
+            InstrumentType.INDEX if target.market is Market.INDEX else InstrumentType.STOCK
+        )
         return BarRequest(
             symbol=target.symbol,
             market=target.market,
-            instrument_type=(
-                InstrumentType.INDEX if target.market is Market.INDEX else InstrumentType.STOCK
-            ),
+            instrument_type=resolved_type,
             frequency=Frequency.H1,
             requested_start=end - timedelta(days=self.config.market.lookback_days),
             requested_end=end,

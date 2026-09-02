@@ -1,5 +1,10 @@
 """Deterministic paper-trading ledger and recovery services."""
 
+from astock.paper_trading.etf_policy import (
+    ETFExecutionPolicy,
+    ETFInstrumentExecutionRule,
+    load_etf_execution_policy,
+)
 from astock.paper_trading.execution import (
     PaperExecutionPreparation,
     PaperExecutionService,
@@ -25,6 +30,8 @@ from astock.paper_trading.operation import (
 from astock.paper_trading.replay import PaperReplayService, load_fee_schedule
 
 __all__ = [
+    "ETFExecutionPolicy",
+    "ETFInstrumentExecutionRule",
     "LedgerService",
     "MarketReferencePaperVerifier",
     "PaperOperationService",
@@ -34,6 +41,7 @@ __all__ = [
     "PaperTradingRuleBook",
     "RecordedPaperReferenceVerifier",
     "PostResult",
+    "load_etf_execution_policy",
     "load_fee_schedule",
     "load_paper_confirmation",
     "load_paper_authorization_keys",

@@ -26,11 +26,17 @@ from astock.schemas.external_accounts import (
     ExternalAccountProjection,
 )
 from astock.schemas.portfolio_decision import (
+    ETFMarketPriceSighting,
+    ETFNavSighting,
+    ETFPremiumDiscountRequest,
     ETFProductProfile,
     ETFResearchMetricsRequest,
+    FundProductProfile,
     HedgeEffectivenessRequest,
+    IndexProductProfile,
     PortfolioComplementScreenRequest,
     PortfolioTransitionRequest,
+    ProductConstituentSnapshot,
     UserDeclaredTradeCapture,
 )
 
@@ -81,6 +87,12 @@ def register_portfolio_decision_commands(
                 "hedge_effectiveness_request": HedgeEffectivenessRequest.model_json_schema(),
                 "complement_screen_request": PortfolioComplementScreenRequest.model_json_schema(),
                 "etf_product_profile": ETFProductProfile.model_json_schema(),
+                "fund_product_profile": FundProductProfile.model_json_schema(),
+                "index_product_profile": IndexProductProfile.model_json_schema(),
+                "product_constituent_snapshot": ProductConstituentSnapshot.model_json_schema(),
+                "etf_nav_sighting": ETFNavSighting.model_json_schema(),
+                "etf_market_price_sighting": ETFMarketPriceSighting.model_json_schema(),
+                "etf_premium_discount_request": ETFPremiumDiscountRequest.model_json_schema(),
                 "etf_research_metrics_request": ETFResearchMetricsRequest.model_json_schema(),
             }
         )
@@ -203,6 +215,54 @@ def register_portfolio_decision_commands(
     ) -> None:
         request = ETFProductProfile.model_validate_json(request_file.read_text(encoding="utf-8"))
         emit(service().register_etf_profile(request))
+
+    @app.command("portfolio-fund-profile-register")
+    def portfolio_fund_profile_register(
+        request_file: Annotated[Path, typer.Argument()],
+    ) -> None:
+        request = FundProductProfile.model_validate_json(request_file.read_text(encoding="utf-8"))
+        emit(service().register_fund_profile(request))
+
+    @app.command("portfolio-index-profile-register")
+    def portfolio_index_profile_register(
+        request_file: Annotated[Path, typer.Argument()],
+    ) -> None:
+        request = IndexProductProfile.model_validate_json(request_file.read_text(encoding="utf-8"))
+        emit(service().register_index_profile(request))
+
+    @app.command("portfolio-product-constituents-register")
+    def portfolio_product_constituents_register(
+        request_file: Annotated[Path, typer.Argument()],
+    ) -> None:
+        request = ProductConstituentSnapshot.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(service().register_product_constituents(request))
+
+    @app.command("portfolio-etf-nav-register")
+    def portfolio_etf_nav_register(
+        request_file: Annotated[Path, typer.Argument()],
+    ) -> None:
+        request = ETFNavSighting.model_validate_json(request_file.read_text(encoding="utf-8"))
+        emit(service().register_etf_nav_sighting(request))
+
+    @app.command("portfolio-etf-market-price-register")
+    def portfolio_etf_market_price_register(
+        request_file: Annotated[Path, typer.Argument()],
+    ) -> None:
+        request = ETFMarketPriceSighting.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(service().register_etf_market_price_sighting(request))
+
+    @app.command("portfolio-etf-premium-discount")
+    def portfolio_etf_premium_discount(
+        request_file: Annotated[Path, typer.Argument()],
+    ) -> None:
+        request = ETFPremiumDiscountRequest.model_validate_json(
+            request_file.read_text(encoding="utf-8")
+        )
+        emit(service().evaluate_etf_premium_discount(request))
 
     @app.command("portfolio-etf-metrics")
     def portfolio_etf_metrics(

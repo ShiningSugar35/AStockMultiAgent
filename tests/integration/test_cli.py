@@ -51,6 +51,13 @@ def test_legacy_paragraph_semantic_writes_are_rejected_without_runtime_writes(
     assert not runtime.exists()
 
 
+def test_etf_intraday_sync_and_replay_cli_expose_instrument_type() -> None:
+    for command in ("sync-5m", "sync-hourly", "sync-market", "paper-replay"):
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--instrument-type" in result.output
+
+
 def test_knowledge_coverage_audit_cli_exposes_non_negative_quiescence_lag() -> None:
     help_result = runner.invoke(app, ["knowledge-coverage-audit", "--help"])
     assert help_result.exit_code == 0, help_result.output
@@ -391,9 +398,7 @@ def test_research_diagnostic_cli_schema_and_invalid_requests_are_safe(
     payload = json.loads(schema.output)
     assert payload["diagnostics_version"] == "research-diagnostics-v2"
     assert len(payload["diagnostics"]) == 7
-    assert {
-        item["skill_id"]: item["input_schema"] for item in payload["diagnostics"]
-    } == {
+    assert {item["skill_id"]: item["input_schema"] for item in payload["diagnostics"]} == {
         "IndustryBottleneckSkill": "IndustryBottleneckDiagnosticRequestV2",
         "EventToAlphaSkill": "EventToAlphaDiagnosticRequestV2",
         "GrowthProbabilitySkill": "GrowthProbabilityDiagnosticRequestV2",
@@ -762,9 +767,8 @@ def test_research_formal_prepare_cli_recorded_vertical_slice_is_idempotent(
         missing_items=[],
     )
     run_ref = objects.put_json(run.model_dump(mode="json"))
-    run_artifact_id = (
-        "EvidenceCollectionRun:"
-        + content_hash({"task_artifact_id": task_payload["artifact_id"]})
+    run_artifact_id = "EvidenceCollectionRun:" + content_hash(
+        {"task_artifact_id": task_payload["artifact_id"]}
     )
     state.register_artifact(
         artifact_id=run_artifact_id,
@@ -810,9 +814,7 @@ def test_research_formal_prepare_cli_recorded_vertical_slice_is_idempotent(
     repeated_payload = json.loads(repeated.output)
     assert repeated_payload["reused_existing"]
     assert repeated_payload["manifest_artifact_id"] == payload["manifest_artifact_id"]
-    assert repeated_payload["frozen_evidence_pack_id"] == (
-        payload["frozen_evidence_pack_id"]
-    )
+    assert repeated_payload["frozen_evidence_pack_id"] == (payload["frozen_evidence_pack_id"])
 
 
 def test_research_formal_prepare_cli_needs_info_uses_exit_code_three(
@@ -1060,7 +1062,6 @@ def test_committee_cli_schema_status_and_invalid_requests_fail_closed(
         assert str(invalid_request) not in invoked.output
 
 
-
 def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
     tmp_path: Path,
     monkeypatch,
@@ -1121,9 +1122,7 @@ def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
     )
     assert adaptive.exit_code == 0, adaptive.output
     adaptive_payload = json.loads(adaptive.output)
-    assert adaptive_payload["implementation_status"] == (
-        "IMPLEMENTED_DISABLED_BOUNDARY"
-    )
+    assert adaptive_payload["implementation_status"] == ("IMPLEMENTED_DISABLED_BOUNDARY")
     assert adaptive_payload["capability_status"] == "NOT_ENTERED_BY_DESIGN"
     assert adaptive_payload["reason_codes"] == ["PHASE7_STUDY_NOT_RUN"]
     assert adaptive_payload["observation_month_gap"] == "12"

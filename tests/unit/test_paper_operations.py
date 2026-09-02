@@ -16,8 +16,11 @@ from astock.core.errors import PolicyError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.paper_trading import (
+    ETFExecutionPolicy,
+    ETFInstrumentExecutionRule,
     LedgerService,
     PaperOperationService,
+    load_etf_execution_policy,
     load_fee_schedule,
     load_paper_trading_rules,
     paper_confirmation_hash,
@@ -43,6 +46,7 @@ from astock.schemas import (
     PaperUserConfirmation,
     TradingSession,
 )
+from astock.schemas.portfolio_decision import SettlementCycle
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -148,6 +152,37 @@ class _ReferenceFixture:
         )
 
 
+class _ETFReferenceFixture(_ReferenceFixture):
+    def instrument(
+        self, market: Market, symbol: str, release_id: str, *, visible_at: datetime
+    ) -> InstrumentRecord:
+        record = super().instrument(market, symbol, release_id, visible_at=visible_at)
+        return record.model_copy(
+            update={
+                "name": "测试ETF",
+                "instrument_type": InstrumentType.ETF,
+                "is_st": False,
+            }
+        )
+
+    def daily(
+        self, market: Market, symbol: str, release_id: str, *, visible_at: datetime
+    ) -> list[DailyBarObservation]:
+        row = super().daily(market, symbol, release_id, visible_at=visible_at)[0]
+        return [
+            row.model_copy(
+                update={
+                    "open": Decimal("1.000"),
+                    "high": Decimal("1.000"),
+                    "low": Decimal("1.000"),
+                    "close": Decimal("1.000"),
+                    "previous_close": Decimal("1.000"),
+                    "is_st": False,
+                }
+            )
+        ]
+
+
 class _CorporateActionFixture(_ReferenceFixture):
     def __init__(self, action: CorporateActionObservation) -> None:
         super().__init__()
@@ -249,6 +284,98 @@ def _request(
     )
 
 
+def _etf_policy(
+    *,
+    enabled: bool,
+    settlement_cycle: SettlementCycle = SettlementCycle.T1,
+    buy_lot_size: int = 10,
+    sell_lot_size: int = 10,
+) -> ETFExecutionPolicy:
+    base = load_fee_schedule(PROJECT_ROOT / "configs" / "fee_rules.yaml")
+    fee = base.model_copy(
+        update={
+            "rule_version": f"fixture-etf-{settlement_cycle.value.lower()}-v1",
+            "effective_from": date(2026, 7, 1),
+            "commission_rate": Decimal("0.001"),
+            "minimum_commission_fen": 0,
+            "stamp_tax_sell_rate": Decimal("0"),
+            "transfer_fee_rate": Decimal("0"),
+            "requires_broker_confirmation": True,
+            "source_urls": ["https://www.sse.com.cn/assortment/fund/etf/question/"],
+        }
+    )
+    rule_version = fee.rule_version
+    return ETFExecutionPolicy(
+        schema_version="etf-paper-trading-rules-v1",
+        rule_version=rule_version,
+        execution_enabled=enabled,
+        instrument_rules=(
+            ETFInstrumentExecutionRule(
+                instrument_id="XSHG:510300",
+                market=Market.XSHG,
+                symbol="510300",
+                effective_from=date(2026, 7, 1),
+                price_limit_rate_bps=1000,
+                buy_lot_size=buy_lot_size,
+                sell_lot_size=sell_lot_size,
+                allow_odd_lot_full_exit=True,
+                tick_size_milli_yuan=1,
+                settlement_cycle=settlement_cycle,
+                source_urls=("https://www.sse.com.cn/assortment/fund/etf/question/",),
+            ),
+        ),
+        fee_schedule=fee,
+    )
+
+
+def _etf_request(
+    policy: ETFExecutionPolicy,
+    *,
+    qty: int = 10,
+    side: OrderSide = OrderSide.BUY,
+    limit_price_milli_yuan: int = 1001,
+) -> PaperOperationRequest:
+    limit_price_fen = int((Decimal(limit_price_milli_yuan) / Decimal(10)).quantize(Decimal("1")))
+    return _operation_request(
+        PaperPlaceOrderPayload(
+            market=Market.XSHG,
+            symbol="510300",
+            side=side,
+            qty=qty,
+            limit_price_fen=limit_price_fen,
+            limit_price_milli_yuan=limit_price_milli_yuan,
+            validity=PaperOrderValidity.DAY,
+            calendar_release_id="1" * 64,
+            instrument_release_id="2" * 64,
+            daily_release_id="3" * 64,
+            fee_rule_version=policy.fee_schedule.rule_version,
+        ),
+        f"etf-{policy.rule_version}-{side.value}-{qty}-{limit_price_milli_yuan}",
+    )
+
+
+def _etf_service(
+    state: StateStore,
+    object_store: ObjectStore,
+    policy: ETFExecutionPolicy,
+) -> tuple[PaperOperationService, LedgerService]:
+    ledger = LedgerService(state, object_store)
+    ledger.initialize_account("paper", 2_000_000)
+    return (
+        PaperOperationService(
+            state,
+            object_store,
+            ledger,
+            _ETFReferenceFixture(),
+            load_fee_schedule(PROJECT_ROOT / "configs" / "fee_rules.yaml"),
+            clock=lambda: NOW + timedelta(minutes=2),
+            etf_execution_policy=policy,
+            **_SERVICE_SECURITY,
+        ),
+        ledger,
+    )
+
+
 def _confirmation(request: PaperOperationRequest) -> PaperUserConfirmation:
     confirmation = PaperUserConfirmation(
         confirmation_id="0" * 64,
@@ -311,6 +438,17 @@ def _bind_pending_settlement_identity(state: StateStore, *, market: Market, symb
                 "instrument_id) VALUES(?,?,?)",
                 (row["settlement_id"], market.value, f"{market.value}:{symbol}"),
             )
+
+
+def test_repo_etf_execution_policy_is_independently_disabled_and_has_no_stock_taxes() -> None:
+    policy = load_etf_execution_policy(PROJECT_ROOT / "configs" / "etf_paper_trading_rules.yaml")
+    assert policy.execution_enabled is False
+    assert policy.instrument_rules[0].instrument_id == "XSHG:510300"
+    assert policy.instrument_rules[0].tick_size_milli_yuan == 1
+    assert policy.fee_schedule.stamp_tax_sell_rate == 0
+    assert policy.fee_schedule.transfer_fee_rate == 0
+    assert policy.fee_schedule.minimum_commission_fen == 0
+    assert policy.fee_schedule.requires_broker_confirmation is True
 
 
 def test_place_requires_exact_unexpired_user_confirmation(
@@ -441,6 +579,151 @@ def test_confirmed_place_is_immutable_and_idempotent(
             ]
             == schedule["schedule_hash"]
         )
+
+
+def test_etf_execution_disable_fails_closed_without_mutating_holdings(
+    state: StateStore, object_store: ObjectStore
+) -> None:
+    policy = _etf_policy(enabled=False)
+    service, ledger = _etf_service(state, object_store, policy)
+    request = _etf_request(policy)
+
+    with pytest.raises(PolicyError, match="independently disabled"):
+        service.execute(request, _confirmation(request))
+
+    assert ledger.open_orders("paper") == []
+    assert ledger.status("paper")["positions"] == []
+
+
+def test_etf_confirmed_order_is_idempotent_and_freezes_independent_execution_policy(
+    state: StateStore, object_store: ObjectStore
+) -> None:
+    policy = _etf_policy(enabled=True, buy_lot_size=10, sell_lot_size=10)
+    service, ledger = _etf_service(state, object_store, policy)
+    request = _etf_request(policy, qty=10, limit_price_milli_yuan=1001)
+    confirmation = _confirmation(request)
+
+    first = service.execute(request, confirmation, expected_operation_type="PLACE_ORDER")
+    second = service.execute(request, confirmation, expected_operation_type="PLACE_ORDER")
+
+    assert first == second
+    orders = ledger.open_orders("paper")
+    assert len(orders) == 1
+    assert orders[0].qty == 10
+    assert orders[0].limit_price_fen == 100
+    assert orders[0].limit_price_milli_yuan == 1001
+    assert ledger.status("paper")["positions"] == []
+    with state.connect() as connection:
+        binding = connection.execute(
+            "SELECT instrument_type,buy_lot_size,sell_lot_size,tick_size_milli_yuan,"
+            "settlement_cycle,fee_rule_version,execution_policy_rule_version,"
+            "execution_policy_hash FROM paper_order_rule_binding WHERE order_id=?",
+            (orders[0].order_id,),
+        ).fetchone()
+        assert tuple(binding[:7]) == (
+            "ETF",
+            10,
+            10,
+            1,
+            "T1",
+            policy.fee_schedule.rule_version,
+            policy.rule_version,
+        )
+        assert binding["execution_policy_hash"] is not None
+        assert (
+            connection.execute("SELECT COUNT(*) FROM etf_execution_policy_release").fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM paper_operation_execution WHERE operation_id=?",
+                (request.operation_id,),
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_stock_order_binding_keeps_historical_100_share_fen_t1_contract(
+    state: StateStore, object_store: ObjectStore
+) -> None:
+    service, ledger = _service(state, object_store)
+    request = _request()
+    service.execute(request, _confirmation(request))
+    order = ledger.open_orders("paper")[0]
+
+    assert order.qty == 100
+    assert order.limit_price_milli_yuan is None
+    with state.connect() as connection:
+        binding = connection.execute(
+            "SELECT instrument_type,buy_lot_size,sell_lot_size,tick_size_milli_yuan,"
+            "settlement_cycle,execution_policy_rule_version FROM paper_order_rule_binding "
+            "WHERE order_id=?",
+            (order.order_id,),
+        ).fetchone()
+    assert tuple(binding) == ("STOCK", 100, 100, 10, "T1", None)
+
+
+@pytest.mark.parametrize(
+    ("settlement_cycle", "expected_available", "expected_pending"),
+    [
+        (SettlementCycle.T0, 10, 0),
+        (SettlementCycle.T1, 0, 1),
+    ],
+)
+def test_etf_fill_uses_frozen_settlement_cycle_and_only_fill_creates_position(
+    state: StateStore,
+    object_store: ObjectStore,
+    settlement_cycle: SettlementCycle,
+    expected_available: int,
+    expected_pending: int,
+) -> None:
+    policy = _etf_policy(enabled=True, settlement_cycle=settlement_cycle)
+    service, ledger = _etf_service(state, object_store, policy)
+    request = _etf_request(policy)
+    service.execute(request, _confirmation(request))
+    order = ledger.open_orders("paper")[0]
+    assert ledger.status("paper")["positions"] == []
+
+    fill = ledger.record_fill(
+        fill_id=f"etf-{settlement_cycle.value.lower()}-fill",
+        order_id=order.order_id,
+        qty=10,
+        price_fen=100,
+        price_milli_yuan=1001,
+        commission_fen=1,
+        occurred_at=NOW + timedelta(minutes=3),
+    )
+    assert fill.price_milli_yuan == 1001
+    position = ledger.status("paper")["positions"][0]
+    assert position["qty_total"] == 10
+    assert position["qty_available"] == expected_available
+    nav = ledger.portfolio_nav(
+        "paper",
+        {"510300": 100},
+        market_prices_milli_yuan={"510300": 1001},
+        as_of=NOW + timedelta(minutes=4),
+        require_all_prices=True,
+    )
+    assert nav.market_value_fen == 1001
+    with state.connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM position_settlement "
+                "WHERE status='PENDING_CALENDAR_CONFIRMATION'"
+            ).fetchone()[0]
+            == expected_pending
+        )
+
+    if settlement_cycle is SettlementCycle.T1:
+        settled = ledger.settle_buys_with_calendar(
+            "paper",
+            as_of=NOW + timedelta(days=1),
+            open_session_dates=[NOW.date(), (NOW + timedelta(days=1)).date()],
+            calendar_release_id="calendar-etf-t1",
+            market=Market.XSHG,
+        )
+        assert settled == 10
+        assert ledger.status("paper")["positions"][0]["qty_available"] == 10
 
 
 def test_concurrent_exact_operation_commits_one_order(

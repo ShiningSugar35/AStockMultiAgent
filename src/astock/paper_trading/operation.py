@@ -27,6 +27,7 @@ from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.market_data.reference import MarketReferenceService
+from astock.paper_trading.etf_policy import ETFExecutionPolicy, ETFInstrumentExecutionRule
 from astock.paper_trading.ledger import LedgerService
 from astock.schemas import (
     CorporateActionObservation,
@@ -647,6 +648,7 @@ class PaperOperationService:
         clock: Callable[[], datetime] | None = None,
         trusted_confirmation_keys: Mapping[str, str | bytes] | None = None,
         trading_rules: PaperTradingRuleBook | None = None,
+        etf_execution_policy: ETFExecutionPolicy | None = None,
     ) -> None:
         self.state = state
         self.objects = objects
@@ -660,6 +662,7 @@ class PaperOperationService:
             effective_from=date.max,
             price_limit_rules=(),
         )
+        self.etf_execution_policy = etf_execution_policy
 
     def execute(
         self,
@@ -981,17 +984,9 @@ class PaperOperationService:
     ) -> dict[str, object]:
         if payload.market is Market.INDEX:
             raise _policy("Index orders are not supported")
-        if payload.qty % 100:
-            raise _policy("A-share order quantity must use 100-share lots")
         if payload.validity is PaperOrderValidity.GTC:
             raise _needs_info("GTC is disabled until each session can re-freeze all PIT rules")
-        if payload.fee_rule_version != self.fee_schedule.rule_version:
-            raise _policy("Order fee rule does not match the configured release")
         local = request.requested_at.astimezone(_SHANGHAI)
-        if payload.market not in self.fee_schedule.applicable_markets:
-            raise _policy("Fee schedule does not cover the order market")
-        if local.date() < self.fee_schedule.effective_from:
-            raise _policy("Fee schedule is not effective for the order session")
         sessions = self.references.calendar(
             payload.market, payload.calendar_release_id, visible_at=request.requested_at
         )
@@ -1021,24 +1016,91 @@ class PaperOperationService:
             or instrument.status_date > local.date()
         ):
             raise _policy("Instrument is not proven tradable for the order session")
-        if instrument.instrument_type is not InstrumentType.STOCK:
-            raise _needs_info(
-                "Paper order execution currently admits STOCK instruments only; "
-                "ETF execution is not admitted"
+        etf_rule: ETFInstrumentExecutionRule | None = None
+        execution_policy_rule_version: str | None = None
+        execution_policy_hash: str | None = None
+        if instrument.instrument_type is InstrumentType.STOCK:
+            if payload.limit_price_milli_yuan is not None:
+                raise _policy("Stock orders must keep the historical fen-only price contract")
+            if payload.qty % 100:
+                raise _policy("A-share stock order quantity must use 100-share lots")
+            fee_schedule = self.fee_schedule
+            classification = self.references.trading_classification(
+                instrument, visible_at=request.requested_at
             )
-        classification = self.references.trading_classification(
-            instrument, visible_at=request.requested_at
-        )
-        if (
-            classification.board not in {"MAIN", "STAR", "CHINEXT", "BSE"}
-            or classification.risk_status not in {"NORMAL", "RISK_WARNING"}
-            or not classification.fixed_price_limit_eligible
-            or not classification.suspension_status_verified
-            or classification.suspended
-        ):
-            raise _needs_info("Instrument trading classification is unknown or excluded")
-        if payload.market is Market.BJSE:
-            raise _needs_info("BSE order-price rounding semantics are not yet frozen")
+            if (
+                classification.board not in {"MAIN", "STAR", "CHINEXT", "BSE"}
+                or classification.risk_status not in {"NORMAL", "RISK_WARNING"}
+                or not classification.fixed_price_limit_eligible
+                or not classification.suspension_status_verified
+                or classification.suspended
+            ):
+                raise _needs_info("Instrument trading classification is unknown or excluded")
+            if payload.market is Market.BJSE:
+                raise _needs_info("BSE order-price rounding semantics are not yet frozen")
+            board = classification.board
+            risk_status = classification.risk_status
+            trading_rule_version = self.trading_rules.rule_version
+            buy_lot_size = 100
+            sell_lot_size = 100
+            allow_odd_lot_full_exit = False
+            tick_size_milli_yuan = 10
+            settlement_cycle = "T1"
+            is_st = instrument.is_st
+        elif instrument.instrument_type is InstrumentType.ETF:
+            policy = self.etf_execution_policy
+            if policy is None or not policy.execution_enabled:
+                raise _needs_info(
+                    "ETF paper execution is independently disabled; "
+                    "read-only research remains available"
+                )
+            try:
+                etf_rule = policy.rule_for(
+                    instrument.instrument_id,
+                    market=payload.market,
+                    symbol=payload.symbol,
+                    trade_date=local.date(),
+                )
+            except ValueError as exc:
+                raise _needs_info(str(exc)) from exc
+            if payload.limit_price_milli_yuan is None:
+                raise _needs_info("ETF order requires an exact 0.001-CNY-capable limit price")
+            if payload.limit_price_milli_yuan % etf_rule.tick_size_milli_yuan:
+                raise _policy("ETF limit price is not aligned to the frozen instrument tick")
+            if _milli_yuan_to_fen(payload.limit_price_milli_yuan) != payload.limit_price_fen:
+                raise _policy("ETF fen and milli-yuan limit prices do not represent one price")
+            lot_size = (
+                etf_rule.buy_lot_size if payload.side.value == "BUY" else etf_rule.sell_lot_size
+            )
+            if payload.qty % lot_size:
+                if not (
+                    payload.side.value == "SELL"
+                    and etf_rule.allow_odd_lot_full_exit
+                    and self._is_full_position_exit(request.account_id, payload.symbol, payload.qty)
+                ):
+                    raise _policy("ETF order quantity violates the frozen instrument trading unit")
+            fee_schedule = policy.fee_schedule
+            board = "ETF"
+            risk_status = "NORMAL"
+            trading_rule_version = policy.rule_version
+            buy_lot_size = etf_rule.buy_lot_size
+            sell_lot_size = etf_rule.sell_lot_size
+            allow_odd_lot_full_exit = etf_rule.allow_odd_lot_full_exit
+            tick_size_milli_yuan = etf_rule.tick_size_milli_yuan
+            settlement_cycle = etf_rule.settlement_cycle.value
+            is_st = False
+            execution_policy_rule_version = policy.rule_version
+            execution_policy_hash = content_hash(policy.as_frozen_dict())
+        else:
+            raise _needs_info(
+                "Paper order execution admits only STOCK or exactly governed ETF instruments"
+            )
+        if payload.fee_rule_version != fee_schedule.rule_version:
+            raise _policy("Order fee rule does not match the instrument execution policy")
+        if payload.market not in fee_schedule.applicable_markets:
+            raise _policy("Fee schedule does not cover the order market")
+        if local.date() < fee_schedule.effective_from:
+            raise _policy("Fee schedule is not effective for the order session")
         daily = self.references.daily(
             payload.market,
             payload.symbol,
@@ -1071,21 +1133,42 @@ class PaperOperationService:
             raise _needs_info(
                 "Previous unadjusted close for the latest open session is unavailable"
             )
-        previous_close_fen = _yuan_to_fen(prior.close)
-        is_st = instrument.is_st
-        limit_bps = self.trading_rules.price_limit_bps(
-            market=payload.market,
-            board=classification.board,
-            risk_status=classification.risk_status,
-            trade_date=local.date(),
+        if etf_rule is None:
+            previous_close_fen = _yuan_to_fen(prior.close)
+            previous_close_milli_yuan = previous_close_fen * 10
+            limit_bps = self.trading_rules.price_limit_bps(
+                market=payload.market,
+                board=board,
+                risk_status=risk_status,
+                trade_date=local.date(),
+            )
+            lower, upper = _price_bounds(previous_close_fen, limit_bps)
+            if not lower <= payload.limit_price_fen <= upper:
+                raise _policy("Limit price breaches the verified board/ST price band")
+        else:
+            assert payload.limit_price_milli_yuan is not None
+            previous_close_milli_yuan = _yuan_to_milli_yuan(prior.close)
+            previous_close_fen = _milli_yuan_to_fen(previous_close_milli_yuan)
+            limit_bps = etf_rule.price_limit_rate_bps
+            lower_milli, upper_milli = _price_bounds_milli_yuan(
+                previous_close_milli_yuan,
+                limit_bps,
+                etf_rule.tick_size_milli_yuan,
+            )
+            if not lower_milli <= payload.limit_price_milli_yuan <= upper_milli:
+                raise _policy("ETF limit price breaches the frozen instrument price band")
+        gross = _gross_fen(
+            payload.qty,
+            payload.limit_price_fen,
+            payload.limit_price_milli_yuan,
         )
-        lower, upper = _price_bounds(previous_close_fen, limit_bps)
-        if not lower <= payload.limit_price_fen <= upper:
-            raise _policy("Limit price breaches the verified board/ST price band")
-        gross = payload.qty * payload.limit_price_fen
-        commission = _commission(gross, self.fee_schedule)
-        transfer = _round_fen(Decimal(gross) * self.fee_schedule.transfer_fee_rate)
-        self._register_fee_schedule()
+        commission = _commission(gross, fee_schedule)
+        transfer = _round_fen(Decimal(gross) * fee_schedule.transfer_fee_rate)
+        self._register_fee_schedule(fee_schedule)
+        if self.etf_execution_policy is not None and etf_rule is not None:
+            self._register_etf_execution_policy(self.etf_execution_policy)
+        natural_lot = buy_lot_size if payload.side.value == "BUY" else sell_lot_size
+        ledger_lot_size = natural_lot if payload.qty % natural_lot == 0 else 1
         order = self.ledger.place_order(
             account_id=request.account_id,
             client_request_id=request.operation_id,
@@ -1093,9 +1176,11 @@ class PaperOperationService:
             side=payload.side,
             qty=payload.qty,
             limit_price_fen=payload.limit_price_fen,
+            limit_price_milli_yuan=payload.limit_price_milli_yuan,
             fee_reserve_fen=commission + transfer,
-            effective_rule_version=self.fee_schedule.rule_version,
+            effective_rule_version=fee_schedule.rule_version,
             submitted_at=request.requested_at,
+            lot_size=ledger_lot_size,
         )
         expires_at = (
             datetime.combine(local.date(), time(15, 0), _SHANGHAI)
@@ -1118,31 +1203,44 @@ class PaperOperationService:
                 payload.market.value,
                 payload.symbol,
                 instrument.instrument_id,
-                classification.board,
-                classification.risk_status,
-                self.trading_rules.rule_version,
+                instrument.instrument_type.value,
+                board,
+                risk_status,
+                trading_rule_version,
                 payload.validity.value,
                 expires_at.isoformat() if expires_at else None,
                 payload.calendar_release_id,
                 payload.instrument_release_id,
                 payload.daily_release_id,
                 payload.fee_rule_version,
-                paper_fee_schedule_hash(self.fee_schedule),
+                paper_fee_schedule_hash(fee_schedule),
+                trading_rule_version,
+                execution_policy_rule_version,
+                execution_policy_hash,
+                buy_lot_size,
+                sell_lot_size,
+                int(allow_odd_lot_full_exit),
+                tick_size_milli_yuan,
+                settlement_cycle,
                 authorization["confirmation_id"],
                 authorization["key_id"],
                 authorization["confirmation_hash"],
                 previous_close_fen,
+                previous_close_milli_yuan,
                 limit_bps,
                 int(is_st),
             )
             if row is None:
                 connection.execute(
                     "INSERT INTO paper_order_rule_binding(order_id,operation_id,market,symbol,"
-                    "instrument_id,board,risk_status,trading_rule_version,validity,"
+                    "instrument_id,instrument_type,board,risk_status,trading_rule_version,validity,"
                     "expires_at,calendar_release_id,instrument_release_id,daily_release_id,"
-                    "fee_rule_version,fee_schedule_hash,confirmation_id,authorization_key_id,"
-                    "confirmation_hash,previous_close_fen,price_limit_bps,is_st) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "fee_rule_version,fee_schedule_hash,price_limit_rule_version,"
+                    "execution_policy_rule_version,execution_policy_hash,buy_lot_size,"
+                    "sell_lot_size,allow_odd_lot_full_exit,tick_size_milli_yuan,settlement_cycle,"
+                    "confirmation_id,authorization_key_id,confirmation_hash,previous_close_fen,"
+                    "previous_close_milli_yuan,price_limit_bps,is_st) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (order.order_id, *values),
                 )
                 connection.execute(
@@ -1303,6 +1401,7 @@ class PaperOperationService:
                 },
             )
         prices: dict[str, int] = {}
+        prices_milli_yuan: dict[str, int] = {}
         for instrument_id, release_id in sorted(payload.daily_release_ids.items()):
             market_text, symbol = instrument_id.split(":", maxsplit=1)
             market = Market(market_text)
@@ -1323,10 +1422,17 @@ class PaperOperationService:
             ]
             if not eligible:
                 raise _policy(f"No unadjusted mark is available for {symbol}")
-            prices[symbol] = _yuan_to_fen(max(eligible, key=lambda item: item.session_date).close)
+            exact_close = max(eligible, key=lambda item: item.session_date).close
+            exact_milli = _yuan_to_milli_yuan(exact_close)
+            prices_milli_yuan[symbol] = exact_milli
+            prices[symbol] = _milli_yuan_to_fen(exact_milli)
         journal_before = self.ledger.status(request.account_id)["last_event_seq"]
         nav = self.ledger.portfolio_nav(
-            request.account_id, prices, as_of=payload.as_of, require_all_prices=True
+            request.account_id,
+            prices,
+            market_prices_milli_yuan=prices_milli_yuan,
+            as_of=payload.as_of,
+            require_all_prices=True,
         )
         journal_after = self.ledger.status(request.account_id)["last_event_seq"]
         if journal_after != journal_before:
@@ -1336,6 +1442,7 @@ class PaperOperationService:
             "account_id": request.account_id,
             "as_of": payload.as_of.isoformat(),
             "prices_fen": prices,
+            "prices_milli_yuan": prices_milli_yuan,
             "release_ids": payload.daily_release_ids,
             "nav": nav.model_dump(mode="json"),
         }
@@ -1491,6 +1598,25 @@ class PaperOperationService:
                         issues.append(f"REPORT_BINDING_MISMATCH:{row['operation_id']}")
             object_queries = (
                 (
+                    "paper_fee_schedule_release",
+                    "SELECT DISTINCT f.rule_version,f.schedule_object_hash "
+                    "FROM paper_fee_schedule_release f "
+                    "JOIN paper_order_rule_binding b ON b.fee_rule_version=f.rule_version "
+                    "JOIN order_record o ON o.order_id=b.order_id WHERE o.account_id=?",
+                    "rule_version",
+                    "schedule_object_hash",
+                ),
+                (
+                    "etf_execution_policy_release",
+                    "SELECT DISTINCT p.rule_version,p.policy_object_hash "
+                    "FROM etf_execution_policy_release p "
+                    "JOIN paper_order_rule_binding b "
+                    "ON b.execution_policy_rule_version=p.rule_version "
+                    "JOIN order_record o ON o.order_id=b.order_id WHERE o.account_id=?",
+                    "rule_version",
+                    "policy_object_hash",
+                ),
+                (
                     "paper_replay_bar_commit",
                     "SELECT commit_id,commit_object_hash FROM paper_replay_bar_commit "
                     "WHERE account_id=?",
@@ -1536,8 +1662,8 @@ class PaperOperationService:
                         issues.append(f"OBJECT_CORRUPT:{table}:{row[identity]}")
         return issues
 
-    def _register_fee_schedule(self) -> None:
-        schedule_bytes = paper_fee_schedule_bytes(self.fee_schedule)
+    def _register_fee_schedule(self, schedule: ReplayFeeSchedule) -> None:
+        schedule_bytes = paper_fee_schedule_bytes(schedule)
         schedule_json = schedule_bytes.decode()
         schedule_hash = sha256_bytes(schedule_bytes)
         ref = self.objects.put_bytes(schedule_bytes)
@@ -1545,17 +1671,15 @@ class PaperOperationService:
             schedule_hash,
             ref.sha256,
             schedule_json,
-            self.fee_schedule.effective_from.isoformat(),
-            canonical_json_bytes(
-                [item.value for item in self.fee_schedule.applicable_markets]
-            ).decode(),
+            schedule.effective_from.isoformat(),
+            canonical_json_bytes([item.value for item in schedule.applicable_markets]).decode(),
         )
         with self.ledger.transaction() as connection:
             existing = connection.execute(
                 "SELECT schedule_hash,schedule_object_hash,schedule_json,effective_from,"
                 "markets_json "
                 "FROM paper_fee_schedule_release WHERE rule_version=?",
-                (self.fee_schedule.rule_version,),
+                (schedule.rule_version,),
             ).fetchone()
             if existing is not None and tuple(existing) != values:
                 raise _policy("Fee schedule version collision")
@@ -1565,11 +1689,49 @@ class PaperOperationService:
                     "schedule_object_hash,schedule_json,effective_from,markets_json,registered_at) "
                     "VALUES(?,?,?,?,?,?,?)",
                     (
-                        self.fee_schedule.rule_version,
+                        schedule.rule_version,
                         *values,
                         self.clock().astimezone(UTC).isoformat(),
                     ),
                 )
+
+    def _register_etf_execution_policy(self, policy: ETFExecutionPolicy) -> None:
+        policy_payload = policy.as_frozen_dict()
+        policy_bytes = canonical_json_bytes(policy_payload)
+        policy_hash = sha256_bytes(policy_bytes)
+        ref = self.objects.put_bytes(policy_bytes)
+        values = (
+            policy_hash,
+            ref.sha256,
+            policy_bytes.decode(),
+            int(policy.execution_enabled),
+        )
+        with self.ledger.transaction() as connection:
+            existing = connection.execute(
+                "SELECT policy_hash,policy_object_hash,policy_json,execution_enabled "
+                "FROM etf_execution_policy_release WHERE rule_version=?",
+                (policy.rule_version,),
+            ).fetchone()
+            if existing is not None and tuple(existing) != values:
+                raise _policy("ETF execution policy version collision")
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO etf_execution_policy_release(rule_version,policy_hash,"
+                    "policy_object_hash,policy_json,execution_enabled,registered_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        policy.rule_version,
+                        *values,
+                        self.clock().astimezone(UTC).isoformat(),
+                    ),
+                )
+
+    def _is_full_position_exit(self, account_id: str, symbol: str, qty: int) -> bool:
+        return any(
+            int(row["qty_available"]) == qty and int(row["qty_total"]) == qty
+            for row in self.ledger.status(account_id)["positions"]
+            if row["symbol"] == symbol
+        )
 
     def _complete(self, report: PaperOperationReport) -> None:
         result_json = canonical_json_bytes(report.result).decode()
@@ -1930,6 +2092,22 @@ def _price_bounds(previous_close_fen: int, limit_bps: int) -> tuple[int, int]:
     return lower, upper
 
 
+def _price_bounds_milli_yuan(
+    previous_close_milli_yuan: int,
+    limit_bps: int,
+    tick_size_milli_yuan: int,
+) -> tuple[int, int]:
+    rate = Decimal(limit_bps) / Decimal(10_000)
+    tick = Decimal(tick_size_milli_yuan)
+    lower_ticks = (Decimal(previous_close_milli_yuan) * (Decimal(1) - rate) / tick).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    upper_ticks = (Decimal(previous_close_milli_yuan) * (Decimal(1) + rate) / tick).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    return int(lower_ticks * tick), int(upper_ticks * tick)
+
+
 def _commission(gross_fen: int, schedule: ReplayFeeSchedule) -> int:
     value = _round_fen(Decimal(gross_fen) * schedule.commission_rate)
     return max(value, schedule.minimum_commission_fen) if schedule.commission_rate else 0
@@ -1941,6 +2119,23 @@ def _round_fen(value: Decimal) -> int:
 
 def _yuan_to_fen(value: Decimal) -> int:
     return _round_fen(value * 100)
+
+
+def _yuan_to_milli_yuan(value: Decimal) -> int:
+    scaled = value * Decimal(1000)
+    if scaled != scaled.to_integral_value():
+        raise _needs_info("ETF executable price is not exactly representable at 0.001 CNY")
+    return int(scaled)
+
+
+def _milli_yuan_to_fen(value: int) -> int:
+    return _round_fen(Decimal(value) / Decimal(10))
+
+
+def _gross_fen(qty: int, price_fen: int, price_milli_yuan: int | None) -> int:
+    if price_milli_yuan is None:
+        return qty * price_fen
+    return _round_fen(Decimal(qty * price_milli_yuan) / Decimal(10))
 
 
 __all__ = [

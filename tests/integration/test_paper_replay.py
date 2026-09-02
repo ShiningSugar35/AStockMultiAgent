@@ -11,7 +11,13 @@ from astock.core.errors import PolicyError
 from astock.core.hashing import content_hash
 from astock.market_data.quality import cross_validate_batches
 from astock.market_data.storage import CanonicalMarketStore
-from astock.paper_trading import LedgerService, PaperReplayService, load_fee_schedule
+from astock.paper_trading import (
+    ETFExecutionPolicy,
+    ETFInstrumentExecutionRule,
+    LedgerService,
+    PaperReplayService,
+    load_fee_schedule,
+)
 from astock.paper_trading.ledger import ReplayFillPlan
 from astock.schemas import (
     Frequency,
@@ -25,6 +31,7 @@ from astock.schemas import (
     TradingSession,
     VolumeUnit,
 )
+from astock.schemas.portfolio_decision import SettlementCycle
 from tests.helpers import make_batch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -43,12 +50,83 @@ class _CalendarFixture:
         ]
 
 
-def _bind_order(state, order, schedule, market: Market = Market.XSHG) -> None:
+def _replay_etf_policy(schedule, symbol: str) -> ETFExecutionPolicy:
+    fee = schedule.model_copy(
+        update={
+            "rule_version": "fixture-etf-replay-v1",
+            "effective_from": date(2026, 7, 1),
+            "commission_rate": Decimal("0.001"),
+            "minimum_commission_fen": 0,
+            "stamp_tax_sell_rate": Decimal("0"),
+            "transfer_fee_rate": Decimal("0"),
+            "requires_broker_confirmation": True,
+            "source_urls": ["https://www.sse.com.cn/assortment/fund/etf/question/"],
+        }
+    )
+    return ETFExecutionPolicy(
+        schema_version="etf-paper-trading-rules-v1",
+        rule_version=fee.rule_version,
+        execution_enabled=True,
+        instrument_rules=(
+            ETFInstrumentExecutionRule(
+                instrument_id=f"XSHG:{symbol}",
+                market=Market.XSHG,
+                symbol=symbol,
+                effective_from=date(2026, 7, 1),
+                price_limit_rate_bps=1000,
+                buy_lot_size=10,
+                sell_lot_size=10,
+                allow_odd_lot_full_exit=True,
+                tick_size_milli_yuan=1,
+                settlement_cycle=SettlementCycle.T0,
+                source_urls=("https://www.sse.com.cn/assortment/fund/etf/question/",),
+            ),
+        ),
+        fee_schedule=fee,
+    )
+
+
+def _bind_order(
+    state,
+    order,
+    schedule,
+    market: Market = Market.XSHG,
+    *,
+    instrument_type: InstrumentType = InstrumentType.STOCK,
+    etf_policy: ETFExecutionPolicy | None = None,
+) -> None:
     operation_id = content_hash({"formal-replay-order": order.order_id})
     request_hash = content_hash({"request": operation_id})
     confirmation_id = content_hash({"confirmation": operation_id})
     now = order.submitted_at.isoformat()
     schedule_hash = content_hash(schedule.model_dump(mode="json", exclude={"created_at"}))
+    if instrument_type is InstrumentType.ETF:
+        assert etf_policy is not None
+        rule = etf_policy.rule_for(
+            f"{market.value}:{order.symbol}",
+            market=market,
+            symbol=order.symbol,
+            trade_date=order.submitted_at.date(),
+        )
+        board = "ETF"
+        trading_rule_version = etf_policy.rule_version
+        execution_policy_rule_version = etf_policy.rule_version
+        execution_policy_hash = content_hash(etf_policy.as_frozen_dict())
+        buy_lot_size = rule.buy_lot_size
+        sell_lot_size = rule.sell_lot_size
+        allow_odd_lot_full_exit = int(rule.allow_odd_lot_full_exit)
+        tick_size_milli_yuan = rule.tick_size_milli_yuan
+        settlement_cycle = rule.settlement_cycle.value
+    else:
+        board = "MAIN"
+        trading_rule_version = "fixture-trading-rule"
+        execution_policy_rule_version = None
+        execution_policy_hash = None
+        buy_lot_size = 100
+        sell_lot_size = 100
+        allow_odd_lot_full_exit = 0
+        tick_size_milli_yuan = 10
+        settlement_cycle = "T1"
     with state.transaction() as connection:
         connection.execute(
             "INSERT INTO paper_operation_request(operation_id,account_id,operation_type,"
@@ -93,20 +171,23 @@ def _bind_order(state, order, schedule, market: Market = Market.XSHG) -> None:
         )
         connection.execute(
             "INSERT INTO paper_order_rule_binding(order_id,operation_id,market,symbol,"
-            "instrument_id,"
-            "board,risk_status,trading_rule_version,validity,expires_at,calendar_release_id,"
-            "instrument_release_id,daily_release_id,fee_rule_version,fee_schedule_hash,"
-            "confirmation_id,authorization_key_id,confirmation_hash,previous_close_fen,"
-            "price_limit_bps,is_st) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "instrument_id,instrument_type,board,risk_status,trading_rule_version,validity,"
+            "expires_at,calendar_release_id,instrument_release_id,daily_release_id,fee_rule_version,"
+            "fee_schedule_hash,price_limit_rule_version,execution_policy_rule_version,"
+            "execution_policy_hash,buy_lot_size,sell_lot_size,allow_odd_lot_full_exit,"
+            "tick_size_milli_yuan,settlement_cycle,confirmation_id,authorization_key_id,"
+            "confirmation_hash,previous_close_fen,previous_close_milli_yuan,price_limit_bps,is_st) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 order.order_id,
                 operation_id,
                 market.value,
                 order.symbol,
                 f"{market.value}:{order.symbol}",
-                "MAIN",
+                instrument_type.value,
+                board,
                 "NORMAL",
-                "fixture-trading-rule",
+                trading_rule_version,
                 "DAY",
                 (order.submitted_at + timedelta(hours=6)).isoformat(),
                 "1" * 64,
@@ -114,12 +195,81 @@ def _bind_order(state, order, schedule, market: Market = Market.XSHG) -> None:
                 "3" * 64,
                 schedule.rule_version,
                 schedule_hash,
+                trading_rule_version,
+                execution_policy_rule_version,
+                execution_policy_hash,
+                buy_lot_size,
+                sell_lot_size,
+                allow_odd_lot_full_exit,
+                tick_size_milli_yuan,
+                settlement_cycle,
                 confirmation_id,
                 "fixture-key",
                 confirmation_id,
                 10000,
+                100000,
                 1000,
                 0,
+            ),
+        )
+
+
+def _etf_replay_policy() -> ETFExecutionPolicy:
+    fee = load_fee_schedule(PROJECT_ROOT / "configs" / "fee_rules.yaml").model_copy(
+        update={
+            "rule_version": "fixture-etf-replay-v1",
+            "effective_from": date(2026, 7, 1),
+            "commission_rate": Decimal("0.001"),
+            "minimum_commission_fen": 0,
+            "stamp_tax_sell_rate": Decimal("0"),
+            "transfer_fee_rate": Decimal("0"),
+        }
+    )
+    return ETFExecutionPolicy(
+        schema_version="etf-paper-trading-rules-v1",
+        rule_version=fee.rule_version,
+        execution_enabled=True,
+        instrument_rules=(
+            ETFInstrumentExecutionRule(
+                instrument_id="XSHG:510300",
+                market=Market.XSHG,
+                symbol="510300",
+                effective_from=date(2026, 7, 1),
+                price_limit_rate_bps=1000,
+                buy_lot_size=10,
+                sell_lot_size=10,
+                allow_odd_lot_full_exit=True,
+                tick_size_milli_yuan=1,
+                settlement_cycle=SettlementCycle.T1,
+                source_urls=("https://www.sse.com.cn/assortment/fund/etf/question/",),
+            ),
+        ),
+        fee_schedule=fee,
+    )
+
+
+def _bind_etf_order(state, order, policy: ETFExecutionPolicy) -> None:
+    _bind_order(state, order, policy.fee_schedule)
+    rule = policy.instrument_rules[0]
+    with state.transaction() as connection:
+        connection.execute(
+            "UPDATE paper_order_rule_binding SET instrument_type='ETF',board='ETF',"
+            "trading_rule_version=?,price_limit_rule_version=?,"
+            "execution_policy_rule_version=?,execution_policy_hash=?,buy_lot_size=?,"
+            "sell_lot_size=?,allow_odd_lot_full_exit=?,tick_size_milli_yuan=?,"
+            "settlement_cycle=?,previous_close_milli_yuan=? WHERE order_id=?",
+            (
+                policy.rule_version,
+                policy.rule_version,
+                policy.rule_version,
+                content_hash(policy.as_frozen_dict()),
+                rule.buy_lot_size,
+                rule.sell_lot_size,
+                int(rule.allow_odd_lot_full_exit),
+                rule.tick_size_milli_yuan,
+                rule.settlement_cycle.value,
+                1_000_000,
+                order.order_id,
             ),
         )
 
@@ -652,10 +802,89 @@ def test_replay_rejects_etf_until_instrument_specific_execution_is_admitted(
     store = CanonicalMarketStore(tmp_path / "data", tmp_path / "manifests")
     service = PaperReplayService(ledger, store, _CalendarFixture())
     fee_schedule = load_fee_schedule(PROJECT_ROOT / "configs" / "fee_rules.yaml")
-    with pytest.raises(PolicyError, match="STOCK instruments only"):
+    with pytest.raises(PolicyError, match="ETF paper replay is independently disabled"):
         service.replay(
             account_id="paper-etf",
             request=request,
             requested_cursor=batch.bars[0].timestamp,
             fee_schedule=fee_schedule,
         )
+
+
+def test_etf_replay_uses_exact_tick_independent_fee_and_frozen_t1_policy(
+    tmp_path: Path, state, object_store
+) -> None:
+    east = make_batch(
+        "eastmoney-5m",
+        volume_unit=VolumeUnit.LOT_100_SHARES,
+        symbol="510300",
+        frequency=Frequency.H1,
+    )
+    sina = make_batch(
+        "sina-5m",
+        volume_unit=VolumeUnit.SHARE,
+        symbol="510300",
+        frequency=Frequency.H1,
+    )
+    east = east.model_copy(
+        update={"request": east.request.model_copy(update={"instrument_type": InstrumentType.ETF})}
+    )
+    sina = sina.model_copy(
+        update={"request": sina.request.model_copy(update={"instrument_type": InstrumentType.ETF})}
+    )
+    store = CanonicalMarketStore(tmp_path / "data", tmp_path / "manifests")
+    store.publish(
+        east,
+        cross_validate_batches(east, sina),
+        source_batch_ids=[east.batch_id, sina.batch_id],
+    )
+    ledger = LedgerService(state, object_store)
+    ledger.initialize_account("paper-etf-replay", 5_000_000)
+    order = ledger.place_order(
+        account_id="paper-etf-replay",
+        client_request_id="etf-replay-buy",
+        symbol="510300",
+        side=OrderSide.BUY,
+        qty=10,
+        limit_price_fen=10_000,
+        limit_price_milli_yuan=100_001,
+        fee_reserve_fen=1_000,
+        submitted_at=east.bars[0].timestamp - timedelta(hours=1, minutes=1),
+        lot_size=10,
+    )
+    policy = _etf_replay_policy()
+    _bind_etf_order(state, order, policy)
+    service = PaperReplayService(ledger, store, _CalendarFixture(), etf_execution_policy=policy)
+
+    report = service.replay(
+        account_id="paper-etf-replay",
+        request=east.request,
+        requested_cursor=east.bars[0].timestamp,
+        fee_schedule=policy.fee_schedule,
+        maximum_participation_rate=Decimal("0.05"),
+    )
+    assert len(report.fill_ids) == 1
+    with state.connect() as connection:
+        fill = connection.execute(
+            "SELECT qty,price_fen,price_milli_yuan,commission_fen,tax_fen,transfer_fee_fen "
+            "FROM fill WHERE fill_id=?",
+            (report.fill_ids[0],),
+        ).fetchone()
+        pending = connection.execute(
+            "SELECT COUNT(*) FROM position_settlement "
+            "WHERE account_id='paper-etf-replay' AND status='PENDING_CALENDAR_CONFIRMATION'"
+        ).fetchone()[0]
+    assert tuple(fill) == (10, 10_000, 100_001, 100, 0, 0)
+    position = ledger.status("paper-etf-replay")["positions"][0]
+    assert (position["qty_total"], position["qty_available"]) == (10, 0)
+    assert pending == 1
+
+    repeated = service.replay(
+        account_id="paper-etf-replay",
+        request=east.request,
+        requested_cursor=east.bars[0].timestamp,
+        fee_schedule=policy.fee_schedule,
+        maximum_participation_rate=Decimal("0.05"),
+    )
+    assert repeated.fill_ids == []
+    assert ledger.status("paper-etf-replay")["positions"][0]["qty_total"] == 10

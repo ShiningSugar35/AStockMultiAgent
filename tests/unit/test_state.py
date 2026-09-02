@@ -86,6 +86,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0063",
         "0064",
         "0065",
+        "0066",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -120,8 +121,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
             "AND name='knowledge_reviewed_argument_paragraph_ref'"
         ).fetchone()
         assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='knowledge_reviewed_skill'"
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_reviewed_skill'"
         ).fetchone()
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_circuit_breaker'"
@@ -164,9 +164,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         source_access_columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(source_access_decision)")
         }
-        assert {"selected_source_id", "fallback_source_chain_json"}.issubset(
-            source_access_columns
-        )
+        assert {"selected_source_id", "fallback_source_chain_json"}.issubset(source_access_columns)
         for table in (
             "knowledge_direct_run",
             "knowledge_direct_source",
@@ -211,6 +209,137 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             ).fetchone()
+
+
+def test_0066_upgrades_existing_stock_binding_without_changing_stock_contract(
+    tmp_path: Path,
+) -> None:
+    legacy_migrations = tmp_path / "legacy-migrations"
+    legacy_migrations.mkdir()
+    for migration in sorted((PROJECT_ROOT / "migrations").glob("*.sql")):
+        version = int(migration.name[:4])
+        if version <= 64:
+            shutil.copy2(migration, legacy_migrations / migration.name)
+    state = StateStore(tmp_path / "legacy.sqlite", legacy_migrations)
+    assert state.migrate()[-1] == "0064"
+
+    now = datetime(2026, 8, 31, 2, 0, tzinfo=UTC).isoformat()
+    with state.transaction() as connection:
+        connection.execute(
+            "INSERT INTO paper_account(account_id,status,created_at) VALUES('paper','OPEN',?)",
+            (now,),
+        )
+        connection.execute(
+            "INSERT INTO order_record(order_id,account_id,client_request_id,symbol,side,"
+            "order_type,qty,filled_qty,limit_price_fen,reserved_fen,reserved_qty,status,"
+            "submitted_at,effective_rule_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "stock-order",
+                "paper",
+                "legacy-client",
+                "600519",
+                "BUY",
+                "LIMIT",
+                100,
+                0,
+                1000,
+                100500,
+                0,
+                "ACCEPTED",
+                now,
+                "cn-a-share-paper-2026-07-13",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO paper_operation_request(operation_id,account_id,operation_type,"
+            "idempotency_key,request_hash,request_object_hash,requested_at,expires_at,"
+            "payload_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-op",
+                "paper",
+                "PLACE_ORDER",
+                "legacy-key",
+                "request-hash",
+                "request-object",
+                now,
+                now,
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO paper_operation_confirmation(confirmation_id,operation_id,request_hash,"
+            "confirmed_at,expires_at,confirmation_hash,confirmation_object_hash,key_id,nonce,"
+            "signature_algorithm,payload_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-confirmation",
+                "legacy-op",
+                "request-hash",
+                now,
+                now,
+                "confirmation-hash",
+                "confirmation-object",
+                "legacy-key",
+                "legacy-nonce",
+                "ED25519",
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO paper_order_rule_binding(order_id,operation_id,market,symbol,"
+            "instrument_id,board,risk_status,trading_rule_version,validity,expires_at,"
+            "calendar_release_id,instrument_release_id,daily_release_id,fee_rule_version,"
+            "fee_schedule_hash,confirmation_id,authorization_key_id,confirmation_hash,"
+            "previous_close_fen,price_limit_bps,is_st) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "stock-order",
+                "legacy-op",
+                "XSHG",
+                "600519",
+                "XSHG:600519",
+                "MAIN",
+                "NORMAL",
+                "stock-rules",
+                "DAY",
+                now,
+                "calendar",
+                "instrument",
+                "daily",
+                "cn-a-share-paper-2026-07-13",
+                "fee-hash",
+                "legacy-confirmation",
+                "legacy-key",
+                "confirmation-hash",
+                1000,
+                1000,
+                0,
+            ),
+        )
+
+    shutil.copy2(
+        PROJECT_ROOT / "migrations" / "0066_etf_execution_policy.sql",
+        legacy_migrations / "0066_etf_execution_policy.sql",
+    )
+    assert state.migrate() == ["0066"]
+    assert state.migrate() == []
+    with state.connect() as connection:
+        binding = connection.execute(
+            "SELECT instrument_type,board,buy_lot_size,sell_lot_size,"
+            "tick_size_milli_yuan,settlement_cycle,execution_policy_rule_version,"
+            "previous_close_milli_yuan FROM paper_order_rule_binding WHERE order_id='stock-order'"
+        ).fetchone()
+        order = connection.execute(
+            "SELECT limit_price_fen,limit_price_milli_yuan FROM order_record "
+            "WHERE order_id='stock-order'"
+        ).fetchone()
+        assert tuple(binding) == ("STOCK", "MAIN", 100, 100, 10, "T1", None, 10000)
+        assert tuple(order) == (1000, None)
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='etf_execution_policy_release'"
+        ).fetchone()
+    assert state.integrity_check() == "ok"
 
 
 def test_source_resilience_migration_upgrades_cleanly_from_0059(tmp_path: Path) -> None:
@@ -261,8 +390,7 @@ def test_book_visual_semantics_migration_upgrades_cleanly_from_0042(
     assert state.integrity_check() == "ok"
     with state.connect() as connection:
         assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='book_visual_semantic_ref'"
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='book_visual_semantic_ref'"
         ).fetchone()
 
 
@@ -277,30 +405,22 @@ def test_phase7_forward_close_migration_marks_legacy_rows_unverified(
     state = StateStore(tmp_path / "state.sqlite", migrations)
     assert state.migrate()[-1] == "0044"
 
-    migration = (
-        PROJECT_ROOT / "migrations" / "0045_phase7_forward_research_close.sql"
-    )
+    migration = PROJECT_ROOT / "migrations" / "0045_phase7_forward_research_close.sql"
     shutil.copy(migration, migrations / migration.name)
     assert state.migrate() == ["0045"]
     assert state.migrate() == []
     with state.connect() as connection:
         study_columns = {
             str(row["name"])
-            for row in connection.execute(
-                "PRAGMA table_info(shadow_study_index)"
-            ).fetchall()
+            for row in connection.execute("PRAGMA table_info(shadow_study_index)").fetchall()
         }
         assignment_columns = {
             str(row["name"])
-            for row in connection.execute(
-                "PRAGMA table_info(shadow_assignment_index)"
-            ).fetchall()
+            for row in connection.execute("PRAGMA table_info(shadow_assignment_index)").fetchall()
         }
         observation_columns = {
             str(row["name"])
-            for row in connection.execute(
-                "PRAGMA table_info(shadow_observation_index)"
-            ).fetchall()
+            for row in connection.execute("PRAGMA table_info(shadow_observation_index)").fetchall()
         }
     assert {"registered_at", "prospective_eligible"} <= study_columns
     assert {
@@ -335,9 +455,7 @@ def test_phase7_independence_migration_adds_formal_identity_guards(
     with state.connect() as connection:
         indexes = {
             str(row["name"])
-            for row in connection.execute(
-                "PRAGMA index_list(shadow_assignment_index)"
-            ).fetchall()
+            for row in connection.execute("PRAGMA index_list(shadow_assignment_index)").fetchall()
         }
     assert {
         "idx_shadow_assignment_formal_memo",
@@ -418,13 +536,15 @@ def test_market_reference_migration_upgrades_cleanly_from_0037(tmp_path: Path) -
             '{"legacy_0038":true,"status":"COMPLETE"}',
             "UNVERIFIED",
         )
+        assert (
+            connection.execute(
+                "SELECT release_id FROM market_reference_head WHERE dataset_kind=? AND scope_key=?",
+                ("DAILY_UNADJUSTED", "XSHG:600519"),
+            ).fetchone()[0]
+            == "legacy-release"
+        )
         assert connection.execute(
-            "SELECT release_id FROM market_reference_head WHERE dataset_kind=? AND scope_key=?",
-            ("DAILY_UNADJUSTED", "XSHG:600519"),
-        ).fetchone()[0] == "legacy-release"
-        assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='reference_provider_lease'"
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_provider_lease'"
         ).fetchone()
 
 
@@ -444,9 +564,7 @@ def test_financial_source_migration_upgrades_cleanly_from_0039(tmp_path: Path) -
     with state.connect() as connection:
         columns = {
             row[1]
-            for row in connection.execute(
-                "PRAGMA table_info(financial_source_release)"
-            ).fetchall()
+            for row in connection.execute("PRAGMA table_info(financial_source_release)").fetchall()
         }
         assert {
             "instrument_id",
@@ -455,8 +573,7 @@ def test_financial_source_migration_upgrades_cleanly_from_0039(tmp_path: Path) -
             "official_index_snapshot_id",
         } <= columns
         assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='financial_source_head'"
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='financial_source_head'"
         ).fetchone()
 
 
@@ -516,13 +633,16 @@ def test_paper_operation_migration_upgrades_from_0041_and_rolls_back(
     with pytest.raises(sqlite3.OperationalError):
         state.migrate()
     with state.connect() as connection:
-        assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' "
-            "AND name='paper_operation_request'"
-        ).fetchone() is None
-        assert connection.execute(
-            "SELECT 1 FROM schema_migration WHERE version='0042'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='paper_operation_request'"
+            ).fetchone()
+            is None
+        )
+        assert (
+            connection.execute("SELECT 1 FROM schema_migration WHERE version='0042'").fetchone()
+            is None
+        )
 
     shutil.copy(source, target)
     assert state.migrate() == ["0042"]
@@ -672,12 +792,18 @@ def test_gap_event_migration_preserves_rows_and_tracks_direct_state_changes(
     shutil.copy(migration, migrations / migration.name)
     assert state.migrate() == ["0034"]
     with state.connect() as connection:
-        assert connection.execute(
-            "SELECT status FROM collection_gap WHERE gap_id=?", (gap_id,)
-        ).fetchone()[0] == "OPEN"
-        assert connection.execute(
-            "SELECT status FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
-        ).fetchall()[0][0] == "OPEN"
+        assert (
+            connection.execute(
+                "SELECT status FROM collection_gap WHERE gap_id=?", (gap_id,)
+            ).fetchone()[0]
+            == "OPEN"
+        )
+        assert (
+            connection.execute(
+                "SELECT status FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
+            ).fetchall()[0][0]
+            == "OPEN"
+        )
         reliable_from = connection.execute(
             "SELECT reliable_from FROM collection_gap_temporal_meta WHERE singleton=1"
         ).fetchone()[0]
@@ -688,25 +814,34 @@ def test_gap_event_migration_preserves_rows_and_tracks_direct_state_changes(
             "UPDATE collection_gap SET status='OPEN' WHERE gap_id=?",
             (gap_id,),
         )
-        assert connection.execute(
-            "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
+            ).fetchone()[0]
+            == 1
+        )
         connection.execute(
             "UPDATE collection_gap SET status='RESOLVED' WHERE gap_id=?",
             (gap_id,),
         )
-        assert connection.execute(
-            "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
-        ).fetchone()[0] == 2
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
+            ).fetchone()[0]
+            == 2
+        )
         connection.execute(
             "INSERT OR REPLACE INTO collection_gap("
             "gap_id,scope_id,cursor_json,failure_class,retryable,status) "
             "VALUES(?,?,?,?,?,?)",
             (gap_id, scope_id, '{"offset":0}', "AUTH_REQUIRED", 0, "OPEN"),
         )
-        assert connection.execute(
-            "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
-        ).fetchone()[0] == 3
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM collection_gap_state_event WHERE gap_id=?", (gap_id,)
+            ).fetchone()[0]
+            == 3
+        )
 
 
 def test_collection_checkpoint_round_trips_every_required_cursor_level(
@@ -769,12 +904,10 @@ def test_root_and_child_comment_checkpoints_use_distinct_scopes(state: StateStor
     child_id = state.set_collection_checkpoint(child, status="RUNNING")
 
     assert root_id != child_id
-    assert state.get_collection_checkpoint(
-        "zhihu:test", "answers", "answer-1"
-    ) == root
-    assert state.get_collection_checkpoint(
-        "zhihu:test", "answers", "answer-1", "comment-1"
-    ) == child
+    assert state.get_collection_checkpoint("zhihu:test", "answers", "answer-1") == root
+    assert (
+        state.get_collection_checkpoint("zhihu:test", "answers", "answer-1", "comment-1") == child
+    )
 
 
 def test_lease_lock_can_be_recovered_after_expiry(state: StateStore) -> None:
@@ -915,12 +1048,13 @@ def test_private_draft_version_migration_preserves_rows_and_allows_new_version(
     shutil.copy(source, migrations / source.name)
     assert state.migrate() == ["0021"]
     with state.transaction() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM private_viewpoint_draft"
-        ).fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM private_skill_candidate_viewpoint_ref"
-        ).fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM private_viewpoint_draft").fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM private_skill_candidate_viewpoint_ref"
+            ).fetchone()[0]
+            == 1
+        )
         connection.execute(
             "INSERT INTO private_viewpoint_draft VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
@@ -938,9 +1072,7 @@ def test_private_draft_version_migration_preserves_rows_and_allows_new_version(
                 now,
             ),
         )
-        assert connection.execute(
-            "SELECT COUNT(*) FROM private_viewpoint_draft"
-        ).fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM private_viewpoint_draft").fetchone()[0] == 2
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -960,7 +1092,14 @@ def test_generic_evidence_migration_preserves_existing_page_links(tmp_path: Path
         )
         connection.execute(
             "INSERT INTO source_snapshot_detail VALUES(?,?,?,?,?,?)",
-            ("snapshot:legacy", None, "application/pdf", 1, None, "TEST",),
+            (
+                "snapshot:legacy",
+                None,
+                "application/pdf",
+                1,
+                None,
+                "TEST",
+            ),
         )
         connection.execute(
             "INSERT INTO source_document VALUES(?,?,?,?,?,?,?,?,?,?,?)",

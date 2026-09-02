@@ -34,18 +34,27 @@ from astock.schemas.portfolio import (
 from astock.schemas.portfolio_decision import (
     DeclaredTradeValidationStatus,
     ETFCategory,
+    ETFMarketPriceSighting,
+    ETFNavSighting,
+    ETFPremiumDiscountRequest,
     ETFProductProfile,
     ETFResearchMetricsRequest,
+    FundProductProfile,
     HedgeClassification,
     HedgeEffectivenessReport,
     HedgeEffectivenessRequest,
     HedgeInstrumentCandidate,
+    IndexProductProfile,
     InstrumentTradingUnitRule,
     PortfolioComplementScreenRequest,
     PortfolioImplementationCostInput,
     PortfolioIntentProfile,
     PortfolioRiskObjective,
     PortfolioTransitionRequest,
+    ProductConstituent,
+    ProductConstituentSnapshot,
+    ProductCoverageStatus,
+    ProductDataQuality,
     SettlementCycle,
     UserDeclaredTradeCapture,
 )
@@ -454,7 +463,7 @@ def test_formal_hedge_claim_requires_frozen_provenance() -> None:
     assert diversification.classification is HedgeClassification.DIVERSIFICATION
 
 
-def test_etf_profile_is_research_only_until_instrument_specific_paper_path_is_admitted(
+def test_etf_profile_research_registration_is_independent_of_execution_switch(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
@@ -487,9 +496,258 @@ def test_etf_profile_is_research_only_until_instrument_specific_paper_path_is_ad
     )
     assert service.register_etf_profile(profile) == profile
     assert service.audit("ETFProductProfile:xshg-510300-v1")["status"] == "PASS"
-    with pytest.raises(ValueError, match="paper replay remains disabled"):
-        service.register_etf_profile(
-            profile.model_copy(update={"profile_id": "paper", "paper_replay_supported": True})
+    paper_profile = profile.model_copy(
+        update={"profile_id": "paper", "paper_replay_supported": True}
+    )
+    assert service.register_etf_profile(paper_profile) == paper_profile
+    assert service.audit("ETFProductProfile:paper")["status"] == "PASS"
+
+
+def test_fund_index_and_constituents_freeze_identity_pit_quality_and_provenance(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    fund_source = _register_official_capture(service, "OfficialWebDocumentCapture:fund-profile")
+    index_source = _register_official_capture(service, "OfficialWebDocumentCapture:index-profile")
+    constituent_source = _register_official_capture(
+        service, "OfficialWebDocumentCapture:index-constituents"
+    )
+    facts_as_of = AS_OF - timedelta(days=1)
+
+    fund = FundProductProfile(
+        profile_id="fund-000001-v1",
+        instrument_id="FUND:000001",
+        fund_code="000001",
+        name="fixture fund",
+        fund_category="INDEX_FUND",
+        manager_name="fixture manager",
+        tracking_target="CSI 300",
+        tracking_benchmark_market=Market.INDEX,
+        tracking_benchmark_symbol="000300",
+        management_fee_bps=50,
+        custody_fee_bps=10,
+        total_expense_ratio_bps=60,
+        total_net_asset_cny=Decimal("123456789.01"),
+        total_outstanding_shares=123_000_000,
+        facts_as_of=facts_as_of,
+        available_to_system_at=AS_OF,
+        quality_status=ProductDataQuality.PARTIAL,
+        quality_warning_codes=["FUND_SIZE_SOURCE_LAG"],
+        official_source_artifact_ids=["OfficialWebDocumentCapture:fund-profile"],
+        official_source_object_hashes=[fund_source],
+        created_at=AS_OF,
+    )
+    assert service.register_fund_profile(fund) == fund
+    assert service.audit("FundProductProfile:fund-000001-v1")["status"] == "PASS"
+    with pytest.raises(ValueError, match="VERIFIED fund profile"):
+        FundProductProfile.model_validate(
+            fund.model_copy(
+                update={
+                    "quality_status": ProductDataQuality.VERIFIED,
+                    "quality_warning_codes": [],
+                    "total_outstanding_shares": None,
+                }
+            ).model_dump(mode="python")
+        )
+
+    index = IndexProductProfile(
+        profile_id="csi300-v1",
+        instrument_id="INDEX:000300",
+        symbol="000300",
+        name="fixture CSI 300",
+        index_provider="fixture official provider",
+        methodology_name="fixture methodology",
+        base_date=date(2004, 12, 31),
+        base_value=Decimal("1000"),
+        facts_as_of=facts_as_of,
+        available_to_system_at=AS_OF,
+        quality_status=ProductDataQuality.VERIFIED,
+        official_source_artifact_ids=["OfficialWebDocumentCapture:index-profile"],
+        official_source_object_hashes=[index_source],
+        created_at=AS_OF,
+    )
+    assert service.register_index_profile(index) == index
+    assert service.audit("IndexProductProfile:csi300-v1")["status"] == "PASS"
+
+    snapshot = ProductConstituentSnapshot(
+        snapshot_id="csi300-constituents-v1",
+        product_artifact_id="IndexProductProfile:csi300-v1",
+        product_instrument_id="INDEX:000300",
+        product_type="INDEX",
+        as_of=facts_as_of,
+        available_to_system_at=AS_OF,
+        coverage_status=ProductCoverageStatus.COMPLETE,
+        constituents=[
+            ProductConstituent(
+                instrument_id="XSHE:000001",
+                market=Market.XSHE,
+                symbol="000001",
+                weight=Decimal("0.4"),
+            ),
+            ProductConstituent(
+                instrument_id="XSHG:600519",
+                market=Market.XSHG,
+                symbol="600519",
+                weight=Decimal("0.6"),
+            ),
+        ],
+        official_source_artifact_ids=["OfficialWebDocumentCapture:index-constituents"],
+        official_source_object_hashes=[constituent_source],
+        created_at=AS_OF,
+    )
+    assert service.register_product_constituents(snapshot) == snapshot
+    assert service.audit("ProductConstituentSnapshot:csi300-constituents-v1")["status"] == "PASS"
+    with pytest.raises(ValueError, match="approximately 100%"):
+        snapshot.model_copy(
+            update={
+                "snapshot_id": "bad-coverage",
+                "constituents": [snapshot.constituents[0]],
+            }
+        ).model_validate(
+            snapshot.model_copy(
+                update={
+                    "snapshot_id": "bad-coverage",
+                    "constituents": [snapshot.constituents[0]],
+                }
+            ).model_dump(mode="python")
+        )
+
+
+def test_etf_premium_discount_requires_nav_inav_and_market_price_with_pit(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    profile_source = _register_official_capture(
+        service, "OfficialWebDocumentCapture:etf-premium-profile"
+    )
+    rule = InstrumentTradingUnitRule(
+        instrument_id="XSHG:510300",
+        instrument_type=InstrumentType.ETF,
+        buy_lot_size=100,
+        sell_lot_size=100,
+        tick_size_cny=Decimal("0.001"),
+        settlement_cycle=SettlementCycle.T1,
+        effective_from=date(2026, 4, 24),
+        source_urls=["https://www.sse.com.cn/assortment/fund/etf/question/"],
+        created_at=AS_OF,
+    )
+    profile = ETFProductProfile(
+        profile_id="premium-etf-profile",
+        instrument_id="XSHG:510300",
+        market=Market.XSHG,
+        symbol="510300",
+        name="fixture premium ETF",
+        category=ETFCategory.EQUITY,
+        tracking_target="CSI 300",
+        tracking_benchmark_market=Market.INDEX,
+        tracking_benchmark_symbol="000300",
+        management_fee_bps=15,
+        custody_fee_bps=5,
+        total_expense_ratio_bps=20,
+        total_net_asset_cny=Decimal("1000000000"),
+        total_outstanding_shares=900_000_000,
+        trading_rule=rule,
+        facts_as_of=AS_OF - timedelta(days=1),
+        quality_status=ProductDataQuality.VERIFIED,
+        official_source_artifact_ids=["OfficialWebDocumentCapture:etf-premium-profile"],
+        official_source_object_hashes=[profile_source],
+        available_to_system_at=AS_OF - timedelta(hours=3),
+        created_at=AS_OF,
+    )
+    service.register_etf_profile(profile)
+    with pytest.raises(ValueError, match="VERIFIED ETF profile"):
+        ETFProductProfile.model_validate(
+            profile.model_copy(update={"total_outstanding_shares": None}).model_dump(mode="python")
+        )
+
+    valuation_at = AS_OF - timedelta(hours=2)
+    available_at = AS_OF - timedelta(hours=1)
+    nav_source = _register_official_capture(
+        service,
+        "OfficialWebDocumentCapture:etf-nav",
+        observed_at=available_at,
+    )
+    inav_source = _register_official_capture(
+        service,
+        "OfficialWebDocumentCapture:etf-inav",
+        observed_at=available_at,
+    )
+    price_source = _register_official_capture(
+        service,
+        "OfficialWebDocumentCapture:etf-market-price",
+        observed_at=available_at,
+    )
+    nav = ETFNavSighting(
+        sighting_id="nav-1",
+        instrument_id="XSHG:510300",
+        market=Market.XSHG,
+        symbol="510300",
+        sighting_type="NAV",
+        value_cny=Decimal("1.00"),
+        as_of=valuation_at - timedelta(hours=4),
+        available_to_system_at=available_at,
+        official_source_artifact_ids=["OfficialWebDocumentCapture:etf-nav"],
+        official_source_object_hashes=[nav_source],
+        created_at=AS_OF,
+    )
+    inav = ETFNavSighting(
+        sighting_id="inav-1",
+        instrument_id="XSHG:510300",
+        market=Market.XSHG,
+        symbol="510300",
+        sighting_type="INAV",
+        value_cny=Decimal("1.01"),
+        as_of=valuation_at,
+        available_to_system_at=available_at,
+        official_source_artifact_ids=["OfficialWebDocumentCapture:etf-inav"],
+        official_source_object_hashes=[inav_source],
+        created_at=AS_OF,
+    )
+    market_price = ETFMarketPriceSighting(
+        sighting_id="price-1",
+        instrument_id="XSHG:510300",
+        market=Market.XSHG,
+        symbol="510300",
+        price_cny=Decimal("1.02"),
+        as_of=valuation_at,
+        available_to_system_at=available_at,
+        source_artifact_ids=["OfficialWebDocumentCapture:etf-market-price"],
+        source_object_hashes=[price_source],
+        created_at=AS_OF,
+    )
+    service.register_etf_nav_sighting(nav)
+    service.register_etf_nav_sighting(inav)
+    service.register_etf_market_price_sighting(market_price)
+
+    request = ETFPremiumDiscountRequest(
+        profile_artifact_id="ETFProductProfile:premium-etf-profile",
+        as_of=AS_OF,
+        nav_sighting_artifact_id="ETFNavSighting:nav-1",
+        inav_sighting_artifact_id="ETFNavSighting:inav-1",
+        market_price_sighting_artifact_id="ETFMarketPriceSighting:price-1",
+        created_at=AS_OF,
+    )
+    valuation = service.evaluate_etf_premium_discount(request)
+    assert valuation.premium_discount_basis == "INAV"
+    assert valuation.premium_discount_rate == pytest.approx(
+        float(Decimal("1.02") / Decimal("1.01") - 1)
+    )
+    assert valuation.market_to_nav_rate == pytest.approx(0.02)
+    assert (
+        service.audit(f"ETFPremiumDiscountValuation:{valuation.valuation_id}")["status"] == "PASS"
+    )
+
+    with pytest.raises(ValueError):
+        service.evaluate_etf_premium_discount(
+            request.model_copy(update={"nav_sighting_artifact_id": "ETFNavSighting:missing-nav"})
+        )
+    with pytest.raises(ValueError):
+        service.evaluate_etf_premium_discount(
+            request.model_copy(update={"inav_sighting_artifact_id": "ETFNavSighting:missing-inav"})
+        )
+    with pytest.raises(ValueError, match="distinct NAV and iNAV"):
+        service.evaluate_etf_premium_discount(
+            request.model_copy(update={"nav_sighting_artifact_id": "ETFNavSighting:inav-1"})
         )
 
 

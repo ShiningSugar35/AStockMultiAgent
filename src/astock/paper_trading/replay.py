@@ -14,6 +14,7 @@ from astock.core.errors import FailureClass, PolicyError
 from astock.core.hashing import content_hash
 from astock.market_data.quality import normalize_volume_to_shares
 from astock.market_data.storage import CanonicalMarketStore
+from astock.paper_trading.etf_policy import ETFExecutionPolicy
 from astock.paper_trading.ledger import LedgerService, ReplayFillPlan
 from astock.schemas import (
     AdjustmentMode,
@@ -55,10 +56,12 @@ class PaperReplayService:
         ledger: LedgerService,
         canonical_store: CanonicalMarketStore,
         references: PaperReplayReferenceVerifier | None = None,
+        etf_execution_policy: ETFExecutionPolicy | None = None,
     ) -> None:
         self.ledger = ledger
         self.canonical_store = canonical_store
         self.references = references
+        self.etf_execution_policy = etf_execution_policy
 
     def replay(
         self,
@@ -71,9 +74,26 @@ class PaperReplayService:
     ) -> ReplayExecutionReport:
         if not (Decimal("0") < maximum_participation_rate <= Decimal("1")):
             raise ValueError("maximum_participation_rate must be in (0, 1]")
-        if request.instrument_type is not InstrumentType.STOCK:
+        if request.instrument_type is InstrumentType.STOCK:
+            pass
+        elif request.instrument_type is InstrumentType.ETF:
+            policy = self.etf_execution_policy
+            if policy is None or not policy.execution_enabled:
+                raise PolicyError(
+                    "ETF paper replay is independently disabled",
+                    failure_class=FailureClass.POLICY_REJECTED,
+                )
+            if content_hash(
+                fee_schedule.model_dump(mode="json", exclude={"created_at"})
+            ) != content_hash(policy.fee_schedule.model_dump(mode="json", exclude={"created_at"})):
+                raise PolicyError(
+                    "ETF replay refuses a caller-selected stock or mismatched fee schedule",
+                    failure_class=FailureClass.CONFLICT,
+                )
+            fee_schedule = policy.fee_schedule
+        else:
             raise PolicyError(
-                "Paper replay currently admits STOCK instruments only",
+                "Paper replay admits only STOCK or exactly governed ETF instruments",
                 failure_class=FailureClass.POLICY_REJECTED,
             )
         if request.market not in fee_schedule.applicable_markets:
@@ -268,6 +288,9 @@ class PaperReplayService:
                         "Open order instrument identity mismatches replay request",
                         failure_class=FailureClass.CONFLICT,
                     )
+                lot_size, tick_size_milli_yuan, allow_odd_full_exit = self._execution_units(
+                    request, order, binding
+                )
                 expires_at = binding.get("expires_at")
                 if (
                     binding.get("validity") == "DAY"
@@ -306,14 +329,27 @@ class PaperReplayService:
                     if bar.timestamp_semantics is TimestampSemantics.BAR_START
                     else order.submitted_at <= bar_start
                 )
-                if remaining_capacity < 100 or not eligible:
-                    continue
-                price_fen = self._match_price_fen(order, bar)
-                if price_fen is None:
-                    continue
                 remaining_order_qty = order.qty - order.filled_qty
+                minimum_qty = (
+                    min(lot_size, remaining_order_qty) if allow_odd_full_exit else lot_size
+                )
+                if remaining_capacity < minimum_qty or not eligible:
+                    continue
+                matched_price = self._match_price(order, bar, tick_size_milli_yuan)
+                if matched_price is None:
+                    continue
+                price_fen, price_milli_yuan = matched_price
                 fill_qty = min(remaining_order_qty, remaining_capacity)
-                fill_qty -= fill_qty % 100
+                if remaining_order_qty % lot_size == 0:
+                    fill_qty -= fill_qty % lot_size
+                elif allow_odd_full_exit:
+                    if fill_qty < remaining_order_qty:
+                        fill_qty -= fill_qty % lot_size
+                else:
+                    raise PolicyError(
+                        "Open order violates its frozen trading unit",
+                        failure_class=FailureClass.CONFLICT,
+                    )
                 if fill_qty <= 0:
                     continue
                 fill_id = content_hash(
@@ -323,16 +359,18 @@ class PaperReplayService:
                         "bar_observation_id": bar.observation_id,
                         "qty": fill_qty,
                         "price_fen": price_fen,
+                        "price_milli_yuan": price_milli_yuan,
                     }
                 )
-                fill_plans.append(
-                    {
-                        "fill_id": fill_id,
-                        "order_id": order.order_id,
-                        "qty": fill_qty,
-                        "price_fen": price_fen,
-                    }
-                )
+                plan: ReplayFillPlan = {
+                    "fill_id": fill_id,
+                    "order_id": order.order_id,
+                    "qty": fill_qty,
+                    "price_fen": price_fen,
+                }
+                if price_milli_yuan is not None:
+                    plan["price_milli_yuan"] = price_milli_yuan
+                fill_plans.append(plan)
                 bar_order_ids.add(order.order_id)
                 remaining_capacity -= fill_qty
             planned_checkpoint = ReplayCheckpoint(
@@ -402,6 +440,80 @@ class PaperReplayService:
             maximum_participation_rate=maximum_participation_rate,
             checkpoint=checkpoint,
         )
+
+    def _execution_units(
+        self,
+        request: BarRequest,
+        order: Order,
+        binding: dict[str, object],
+    ) -> tuple[int, int, bool]:
+        if binding.get("instrument_type") != request.instrument_type.value:
+            raise PolicyError(
+                "Open order instrument type mismatches replay request",
+                failure_class=FailureClass.CONFLICT,
+            )
+        if request.instrument_type is InstrumentType.STOCK:
+            if (
+                binding.get("execution_policy_rule_version") is not None
+                or binding.get("execution_policy_hash") is not None
+                or _binding_int(binding, "buy_lot_size", default=0) != 100
+                or _binding_int(binding, "sell_lot_size", default=0) != 100
+                or _binding_int(binding, "tick_size_milli_yuan", default=0) != 10
+                or binding.get("settlement_cycle") != "T1"
+            ):
+                raise PolicyError(
+                    "Stock replay binding no longer matches the frozen stock execution contract",
+                    failure_class=FailureClass.CONFLICT,
+                )
+            return 100, 10, False
+        policy = self.etf_execution_policy
+        if policy is None or not policy.execution_enabled:
+            raise PolicyError(
+                "ETF paper replay is independently disabled",
+                failure_class=FailureClass.POLICY_REJECTED,
+            )
+        policy_hash = content_hash(policy.as_frozen_dict())
+        if (
+            binding.get("execution_policy_rule_version") != policy.rule_version
+            or binding.get("execution_policy_hash") != policy_hash
+        ):
+            raise PolicyError(
+                "ETF replay binding does not match the frozen execution policy",
+                failure_class=FailureClass.CONFLICT,
+            )
+        try:
+            rule = policy.rule_for(
+                str(binding["instrument_id"]),
+                market=request.market,
+                symbol=request.symbol,
+                trade_date=order.submitted_at.astimezone(_SHANGHAI).date(),
+            )
+        except ValueError as exc:
+            raise PolicyError(
+                str(exc),
+                failure_class=FailureClass.DATA_QUALITY,
+            ) from exc
+        expected = (
+            rule.buy_lot_size,
+            rule.sell_lot_size,
+            int(rule.allow_odd_lot_full_exit),
+            rule.tick_size_milli_yuan,
+            rule.settlement_cycle.value,
+        )
+        actual = (
+            _binding_int(binding, "buy_lot_size"),
+            _binding_int(binding, "sell_lot_size"),
+            _binding_int(binding, "allow_odd_lot_full_exit"),
+            _binding_int(binding, "tick_size_milli_yuan"),
+            str(binding["settlement_cycle"]),
+        )
+        if actual != expected:
+            raise PolicyError(
+                "ETF replay binding execution units differ from the frozen instrument rule",
+                failure_class=FailureClass.CONFLICT,
+            )
+        lot_size = rule.buy_lot_size if order.side is OrderSide.BUY else rule.sell_lot_size
+        return lot_size, rule.tick_size_milli_yuan, rule.allow_odd_lot_full_exit
 
     @staticmethod
     def _bar_duration(bar: MarketBar) -> timedelta:
@@ -501,17 +613,23 @@ class PaperReplayService:
 
     @staticmethod
     def _bar_capacity(bar: MarketBar, maximum_participation_rate: Decimal) -> int:
-        raw_capacity = int(normalize_volume_to_shares(bar) * maximum_participation_rate)
-        return raw_capacity - raw_capacity % 100
+        return int(normalize_volume_to_shares(bar) * maximum_participation_rate)
 
     @staticmethod
-    def _match_price_fen(order: Order, bar: MarketBar) -> int | None:
+    def _match_price(
+        order: Order,
+        bar: MarketBar,
+        tick_size_milli_yuan: int,
+    ) -> tuple[int, int | None] | None:
         if order.limit_price_fen is None:
             raise PolicyError(
                 "Paper replay only supports explicit limit orders",
                 failure_class=FailureClass.POLICY_REJECTED,
             )
-        limit_yuan = Decimal(order.limit_price_fen) / 100
+        if order.limit_price_milli_yuan is None:
+            limit_yuan = Decimal(order.limit_price_fen) / 100
+        else:
+            limit_yuan = Decimal(order.limit_price_milli_yuan) / 1000
         if order.side == OrderSide.BUY:
             if bar.low > limit_yuan:
                 return None
@@ -524,7 +642,25 @@ class PaperReplayService:
             matched_yuan = (
                 limit_yuan if bar.frequency is Frequency.H1 else max(bar.open, limit_yuan)
             )
-        return int((matched_yuan * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        if order.limit_price_milli_yuan is None:
+            price_fen = int((matched_yuan * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            return price_fen, None
+        scaled = matched_yuan * 1000
+        if scaled != scaled.to_integral_value():
+            raise PolicyError(
+                "ETF canonical execution price is not exact to 0.001 CNY",
+                failure_class=FailureClass.DATA_QUALITY,
+            )
+        price_milli_yuan = int(scaled)
+        if price_milli_yuan % tick_size_milli_yuan:
+            raise PolicyError(
+                "ETF canonical execution price violates the frozen instrument tick",
+                failure_class=FailureClass.DATA_QUALITY,
+            )
+        price_fen = int(
+            (Decimal(price_milli_yuan) / 10).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        )
+        return price_fen, price_milli_yuan
 
     @staticmethod
     def _fees(
@@ -542,6 +678,18 @@ class PaperReplayService:
         )
         transfer = _round_fen(Decimal(gross_fen) * schedule.transfer_fee_rate)
         return commission, tax, transfer
+
+
+def _binding_int(binding: dict[str, object], key: str, *, default: int | None = None) -> int:
+    value = binding.get(key, default)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, str)):
+        return int(value)
+    raise PolicyError(
+        f"Order binding is missing an integer execution field: {key}",
+        failure_class=FailureClass.DATA_QUALITY,
+    )
 
 
 def _round_fen(value: Decimal) -> int:

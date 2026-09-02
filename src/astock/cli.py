@@ -121,6 +121,7 @@ from astock.paper_trading import (
     PaperOperationService,
     PaperReplayService,
     RecordedPaperReferenceVerifier,
+    load_etf_execution_policy,
     load_fee_schedule,
     load_paper_authorization_keys,
     load_paper_confirmation,
@@ -433,14 +434,25 @@ def _request(
     start: str | None,
     end: str | None,
     frequency: Frequency = Frequency.M5,
+    instrument_type: InstrumentType | None = None,
 ) -> BarRequest:
     now = datetime.now(_SHANGHAI)
     requested_start = _parse_local_datetime(start) if start else now - timedelta(days=45)
     requested_end = _parse_local_datetime(end, end_of_day=True) if end else now
+    resolved_type = instrument_type or (
+        InstrumentType.INDEX if market == Market.INDEX else InstrumentType.STOCK
+    )
+    if market is Market.INDEX and resolved_type is not InstrumentType.INDEX:
+        raise ValueError("INDEX market requests require InstrumentType.INDEX")
+    if market is not Market.INDEX and resolved_type not in {
+        InstrumentType.STOCK,
+        InstrumentType.ETF,
+    }:
+        raise ValueError("Exchange intraday sync supports STOCK or ETF instrument types")
     return BarRequest(
         symbol=symbol,
         market=market,
-        instrument_type=(InstrumentType.INDEX if market == Market.INDEX else InstrumentType.STOCK),
+        instrument_type=resolved_type,
         frequency=frequency,
         requested_start=requested_start,
         requested_end=requested_end,
@@ -454,6 +466,7 @@ def _sync(
     start: str | None,
     end: str | None,
     frequency: Frequency = Frequency.M5,
+    instrument_type: InstrumentType | None = None,
 ) -> dict[str, Any]:
     paths, state, objects = _services()
     providers = [
@@ -466,7 +479,16 @@ def _sync(
         ParquetMarketStore(paths.parquet, "market_observation"),
         CanonicalMarketStore(paths.parquet, paths.manifests),
     )
-    result = service.sync_intraday(_request(symbol, market, start, end, frequency))
+    result = service.sync_intraday(
+        _request(
+            symbol,
+            market,
+            start,
+            end,
+            frequency,
+            instrument_type=instrument_type,
+        )
+    )
     return {
         "job_id": result.job_id,
         "providers": [
@@ -554,9 +576,7 @@ def operational_status() -> None:
                 "max_event_bytes": policy.max_event_bytes,
                 "queue_size": policy.queue_size,
             },
-            "current_research_budget_seconds": (
-                current_policy.automatic_resolution_budget_seconds
-            ),
+            "current_research_budget_seconds": (current_policy.automatic_resolution_budget_seconds),
             "research_team_budget_seconds": team_policy.automatic_resolution_budget_seconds,
             "budget_consistent": budget_consistent,
             "broker_execution_allowed": False,
@@ -752,6 +772,7 @@ def _paper_operation_service(
 ) -> PaperOperationService:
     schedule = load_fee_schedule(fee_rules or paths.root / "configs" / "fee_rules.yaml")
     paper_rules_path = paper_rules or paths.root / "configs" / "paper_trading_rules.yaml"
+    etf_policy = load_etf_execution_policy(paths.root / "configs" / "etf_paper_trading_rules.yaml")
     return PaperOperationService(
         state,
         objects,
@@ -762,6 +783,7 @@ def _paper_operation_service(
         clock=clock,
         trusted_confirmation_keys=load_paper_authorization_keys(paper_rules_path),
         trading_rules=load_paper_trading_rules(paper_rules_path),
+        etf_execution_policy=etf_policy,
     )
 
 
@@ -857,10 +879,7 @@ def official_web_document_ingest(
     capability: Annotated[
         str,
         typer.Option(
-            help=(
-                "Exact-item capability: disclosure.document or "
-                "financial.official_document."
-            )
+            help=("Exact-item capability: disclosure.document or financial.official_document.")
         ),
     ] = "disclosure.document",
     document_type: Annotated[
@@ -1007,15 +1026,16 @@ def provider_probe(
 
 @app.command("sync-5m")
 def sync_5m(
-    symbol: Annotated[str, typer.Argument(help="Six-digit stock or index code.")],
+    symbol: Annotated[str, typer.Argument(help="Six-digit stock, ETF, or index code.")],
     market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    instrument_type: Annotated[InstrumentType | None, typer.Option(case_sensitive=False)] = None,
     start: Annotated[str | None, typer.Option(help="ISO local start date/time.")] = None,
     end: Annotated[str | None, typer.Option(help="ISO local end date/time.")] = None,
 ) -> None:
     """Synchronize unadjusted 5m bars through both free providers when available."""
 
     try:
-        _emit(_sync(symbol, market, start, end, Frequency.M5))
+        _emit(_sync(symbol, market, start, end, Frequency.M5, instrument_type))
     except AStockError as exc:
         _emit(
             {
@@ -1031,15 +1051,16 @@ def sync_5m(
 
 @app.command("sync-hourly")
 def sync_hourly(
-    symbol: Annotated[str, typer.Argument(help="Six-digit stock or index code.")],
+    symbol: Annotated[str, typer.Argument(help="Six-digit stock, ETF, or index code.")],
     market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    instrument_type: Annotated[InstrumentType | None, typer.Option(case_sensitive=False)] = None,
     start: Annotated[str | None, typer.Option(help="ISO local start date/time.")] = None,
     end: Annotated[str | None, typer.Option(help="ISO local end date/time.")] = None,
 ) -> None:
     """Synchronize unadjusted 60m bars for session-on-demand paper replay."""
 
     try:
-        _emit(_sync(symbol, market, start, end, Frequency.H1))
+        _emit(_sync(symbol, market, start, end, Frequency.H1, instrument_type))
     except AStockError as exc:
         _emit(
             {
@@ -1066,15 +1087,16 @@ def market_canonical_gc(
 
 @app.command("sync-market")
 def sync_market(
-    symbol: Annotated[str, typer.Argument(help="Six-digit stock or index code.")],
+    symbol: Annotated[str, typer.Argument(help="Six-digit stock, ETF, or index code.")],
     market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    instrument_type: Annotated[InstrumentType | None, typer.Option(case_sensitive=False)] = None,
     start: Annotated[str | None, typer.Option()] = None,
     end: Annotated[str | None, typer.Option()] = None,
 ) -> None:
     """M1 market sync entry; currently delegates to the verified 5m path."""
 
     try:
-        result = _sync(symbol, market, start, end)
+        result = _sync(symbol, market, start, end, instrument_type=instrument_type)
         result["implemented_frequency"] = "5m"
         _emit(result)
     except AStockError as exc:
@@ -2466,6 +2488,9 @@ def paper_replay(
     cursor: Annotated[str, typer.Option(help="Last replay boundary in ISO format.")],
     account_id: Annotated[str, typer.Option()] = "default",
     market: Annotated[Market, typer.Option(case_sensitive=False)] = Market.XSHG,
+    instrument_type: Annotated[
+        InstrumentType, typer.Option(case_sensitive=False)
+    ] = InstrumentType.STOCK,
     resolution: Annotated[
         Frequency,
         typer.Option(
@@ -2491,17 +2516,25 @@ def paper_replay(
     paths, state, objects = _services()
     parsed_cursor = _parse_local_datetime(cursor)
     profile_path = fee_rules or paths.root / "configs" / "fee_rules.yaml"
-    schedule = load_fee_schedule(profile_path)
+    etf_policy = load_etf_execution_policy(paths.root / "configs" / "etf_paper_trading_rules.yaml")
+    schedule = (
+        etf_policy.fee_schedule
+        if instrument_type is InstrumentType.ETF and fee_rules is None
+        else load_fee_schedule(profile_path)
+    )
     store = CanonicalMarketStore(paths.parquet, paths.manifests)
     service = PaperReplayService(
         LedgerService(state, objects),
         store,
         MarketReferencePaperVerifier(_market_reference_service(paths, state, objects)),
+        etf_execution_policy=etf_policy,
     )
     try:
         report = service.replay(
             account_id=account_id,
-            request=_request(symbol, market, None, cursor, resolution),
+            request=_request(
+                symbol, market, None, cursor, resolution, instrument_type=instrument_type
+            ),
             requested_cursor=parsed_cursor,
             fee_schedule=schedule,
             maximum_participation_rate=Decimal(maximum_participation_rate),

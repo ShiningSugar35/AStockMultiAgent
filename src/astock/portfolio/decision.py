@@ -34,14 +34,20 @@ from astock.schemas.portfolio import (
 )
 from astock.schemas.portfolio_decision import (
     DeclaredTradeValidationStatus,
+    ETFMarketPriceSighting,
+    ETFNavSighting,
+    ETFPremiumDiscountRequest,
+    ETFPremiumDiscountValuation,
     ETFProductProfile,
     ETFResearchMetrics,
     ETFResearchMetricsRequest,
     ExternalTradeImportReceipt,
+    FundProductProfile,
     HedgeClassification,
     HedgeEffectivenessReport,
     HedgeEffectivenessRequest,
     HedgeInstrumentCandidate,
+    IndexProductProfile,
     InstrumentTradingUnitRule,
     PortfolioComplementCandidate,
     PortfolioComplementScreenReport,
@@ -54,6 +60,7 @@ from astock.schemas.portfolio_decision import (
     PortfolioTransitionRequest,
     PortfolioVariantMetrics,
     PositionTargetBand,
+    ProductConstituentSnapshot,
     RebalanceBandPolicy,
     SettlementCycle,
     UserDeclaredTradeCapture,
@@ -332,9 +339,7 @@ class PortfolioDecisionService:
                     )
                 )
             trade_count = sum(
-                1
-                for item in external_events
-                if item.event_type is ExternalAccountEventType.TRADE
+                1 for item in external_events if item.event_type is ExternalAccountEventType.TRADE
             )
             cash_cny = external_projection.cash_cny
             cash_known = external_projection.cash_known
@@ -421,10 +426,6 @@ class PortfolioDecisionService:
             require_official_web=True,
         )
         inputs = list(profile.official_source_object_hashes)
-        if profile.paper_replay_supported:
-            raise ValueError(
-                "ETF paper replay remains disabled until instrument-specific execution is admitted"
-            )
         artifact_id = f"ETFProductProfile:{profile.profile_id}"
         self._freeze_exact(
             artifact_id,
@@ -434,6 +435,85 @@ class PortfolioDecisionService:
             input_hashes=inputs,
         )
         return profile
+
+    def register_fund_profile(self, profile: FundProductProfile) -> FundProductProfile:
+        if profile.available_to_system_at > datetime.now(UTC):
+            raise ValueError("fund product profile cannot be future-visible")
+        self._verify_provenance_pairs(
+            profile.official_source_artifact_ids,
+            profile.official_source_object_hashes,
+            label="fund official product",
+            visible_at=profile.available_to_system_at,
+            require_official_web=True,
+        )
+        artifact_id = f"FundProductProfile:{profile.profile_id}"
+        self._freeze_exact(
+            artifact_id,
+            "FundProductProfile",
+            profile.schema_version,
+            profile.model_dump(mode="json"),
+            input_hashes=list(profile.official_source_object_hashes),
+        )
+        return profile
+
+    def register_index_profile(self, profile: IndexProductProfile) -> IndexProductProfile:
+        if profile.available_to_system_at > datetime.now(UTC):
+            raise ValueError("index product profile cannot be future-visible")
+        self._verify_provenance_pairs(
+            profile.official_source_artifact_ids,
+            profile.official_source_object_hashes,
+            label="index official product",
+            visible_at=profile.available_to_system_at,
+            require_official_web=True,
+        )
+        artifact_id = f"IndexProductProfile:{profile.profile_id}"
+        self._freeze_exact(
+            artifact_id,
+            "IndexProductProfile",
+            profile.schema_version,
+            profile.model_dump(mode="json"),
+            input_hashes=list(profile.official_source_object_hashes),
+        )
+        return profile
+
+    def register_product_constituents(
+        self, snapshot: ProductConstituentSnapshot
+    ) -> ProductConstituentSnapshot:
+        if snapshot.available_to_system_at > datetime.now(UTC):
+            raise ValueError("product constituent snapshot cannot be future-visible")
+        if snapshot.as_of > snapshot.available_to_system_at:
+            raise ValueError("product constituent as_of cannot follow source availability")
+        expected_types = {
+            "ETF": ("ETFProductProfile", ETFProductProfile),
+            "FUND": ("FundProductProfile", FundProductProfile),
+            "INDEX": ("IndexProductProfile", IndexProductProfile),
+        }
+        artifact_type, model_type = expected_types[snapshot.product_type]
+        profile, profile_hash = self._load_model(
+            snapshot.product_artifact_id,
+            artifact_type,
+            model_type,
+        )
+        if profile.instrument_id != snapshot.product_instrument_id:
+            raise ValueError("product constituent snapshot profile identity mismatch")
+        if profile.available_to_system_at > snapshot.available_to_system_at:
+            raise ValueError("product profile was not visible for constituent snapshot")
+        self._verify_provenance_pairs(
+            snapshot.official_source_artifact_ids,
+            snapshot.official_source_object_hashes,
+            label="product constituents",
+            visible_at=snapshot.available_to_system_at,
+            require_official_web=True,
+        )
+        artifact_id = f"ProductConstituentSnapshot:{snapshot.snapshot_id}"
+        self._freeze_exact(
+            artifact_id,
+            "ProductConstituentSnapshot",
+            snapshot.schema_version,
+            snapshot.model_dump(mode="json"),
+            input_hashes=[profile_hash, *snapshot.official_source_object_hashes],
+        )
+        return snapshot
 
     def evaluate_etf_metrics(self, request: ETFResearchMetricsRequest) -> ETFResearchMetrics:
         """Freeze PIT ETF liquidity, volatility, fee and tracking diagnostics."""
@@ -553,11 +633,176 @@ class PortfolioDecisionService:
         )
         return metrics
 
+    def register_etf_nav_sighting(self, sighting: ETFNavSighting) -> ETFNavSighting:
+        if sighting.available_to_system_at > datetime.now(UTC):
+            raise ValueError("ETF nav sighting cannot be future-visible")
+        if sighting.as_of > datetime.now(UTC):
+            raise ValueError("ETF nav sighting cannot reference a future valuation time")
+        self._verify_provenance_pairs(
+            sighting.official_source_artifact_ids,
+            sighting.official_source_object_hashes,
+            label=f"ETF {sighting.sighting_type} sighting",
+            visible_at=sighting.available_to_system_at,
+            require_official_web=True,
+        )
+        artifact_id = f"ETFNavSighting:{sighting.sighting_id}"
+        self._freeze_exact(
+            artifact_id,
+            "ETFNavSighting",
+            sighting.schema_version,
+            sighting.model_dump(mode="json"),
+            input_hashes=list(sighting.official_source_object_hashes),
+        )
+        return sighting
+
+    def register_etf_market_price_sighting(
+        self, sighting: ETFMarketPriceSighting
+    ) -> ETFMarketPriceSighting:
+        if sighting.available_to_system_at > datetime.now(UTC):
+            raise ValueError("ETF market price sighting cannot be future-visible")
+        if sighting.as_of > datetime.now(UTC):
+            raise ValueError("ETF market price sighting cannot reference a future time")
+        self._verify_provenance_pairs(
+            sighting.source_artifact_ids,
+            sighting.source_object_hashes,
+            label="ETF market-price sighting",
+            visible_at=sighting.available_to_system_at,
+        )
+        artifact_id = f"ETFMarketPriceSighting:{sighting.sighting_id}"
+        self._freeze_exact(
+            artifact_id,
+            "ETFMarketPriceSighting",
+            sighting.schema_version,
+            sighting.model_dump(mode="json"),
+            input_hashes=list(sighting.source_object_hashes),
+        )
+        return sighting
+
+    def evaluate_etf_premium_discount(
+        self, request: ETFPremiumDiscountRequest
+    ) -> ETFPremiumDiscountValuation:
+        """Freeze market/iNAV premium-discount, failing closed without NAV, iNAV, and price."""
+
+        request_id, request_hash = self._freeze(
+            "ETFPremiumDiscountRequest",
+            request.schema_version,
+            request.model_dump(mode="json"),
+        )
+        if request.nav_sighting_artifact_id == request.inav_sighting_artifact_id:
+            raise ValueError("ETF premium discount requires distinct NAV and iNAV sightings")
+        nav, nav_hash = self._load_nav_sighting(request.nav_sighting_artifact_id, "NAV")
+        inav, inav_hash = self._load_nav_sighting(request.inav_sighting_artifact_id, "INAV")
+        market_price, market_price_hash = self._load_market_price_sighting(
+            request.market_price_sighting_artifact_id
+        )
+        profile, profile_hash = self._load_model(
+            request.profile_artifact_id,
+            "ETFProductProfile",
+            ETFProductProfile,
+        )
+        if profile.available_to_system_at > request.as_of:
+            raise ValueError("ETF product profile was not visible at premium-discount as_of")
+        if any(item.instrument_id != profile.instrument_id for item in (nav, inav, market_price)):
+            raise ValueError("ETF premium discount sightings must match the product instrument")
+        if inav.as_of != market_price.as_of:
+            raise ValueError(
+                "ETF premium discount requires market price and iNAV at one exact as_of"
+            )
+        if nav.as_of > inav.as_of:
+            raise ValueError("ETF NAV control cannot be newer than the iNAV valuation timestamp")
+        if inav.as_of > request.as_of:
+            raise ValueError("ETF premium discount cannot use a valuation after the decision as_of")
+        if any(item.available_to_system_at > request.as_of for item in (nav, inav, market_price)):
+            raise ValueError("ETF premium discount input was not yet available at as_of")
+        premium_rate = float(market_price.price_cny / inav.value_cny) - 1.0
+        market_to_nav_rate = float(market_price.price_cny / nav.value_cny) - 1.0
+        source_ids = sorted(
+            {
+                request_id,
+                request.profile_artifact_id,
+                request.nav_sighting_artifact_id,
+                request.inav_sighting_artifact_id,
+                request.market_price_sighting_artifact_id,
+            }
+        )
+        source_hashes = sorted({request_hash, profile_hash, nav_hash, inav_hash, market_price_hash})
+        valuation_id = "etf-premium-discount:" + content_hash(
+            {
+                "request_hash": request_hash,
+                "profile_hash": profile_hash,
+                "nav_hash": nav_hash,
+                "inav_hash": inav_hash,
+                "market_price_hash": market_price_hash,
+                "premium_discount_rate": premium_rate,
+                "market_to_nav_rate": market_to_nav_rate,
+            }
+        )
+        valuation = ETFPremiumDiscountValuation(
+            valuation_id=valuation_id,
+            profile_artifact_id=request.profile_artifact_id,
+            instrument_id=profile.instrument_id,
+            market=profile.market,
+            symbol=profile.symbol,
+            as_of=request.as_of,
+            nav_sighting_artifact_id=request.nav_sighting_artifact_id,
+            inav_sighting_artifact_id=request.inav_sighting_artifact_id,
+            market_price_sighting_artifact_id=request.market_price_sighting_artifact_id,
+            nav_value_cny=nav.value_cny,
+            inav_value_cny=inav.value_cny,
+            market_price_cny=market_price.price_cny,
+            premium_discount_rate=premium_rate,
+            market_to_nav_rate=market_to_nav_rate,
+            source_artifact_ids=source_ids,
+            source_object_hashes=source_hashes,
+            created_at=request.as_of,
+        )
+        artifact_id = f"ETFPremiumDiscountValuation:{valuation.valuation_id}"
+        self._freeze_exact(
+            artifact_id,
+            "ETFPremiumDiscountValuation",
+            valuation.schema_version,
+            valuation.model_dump(mode="json"),
+            input_hashes=valuation.source_object_hashes,
+        )
+        return valuation
+
+    def _load_nav_sighting(
+        self, artifact_id: str, expected_type: str
+    ) -> tuple[ETFNavSighting, str]:
+        sighting, sighting_hash = self._load_model(
+            artifact_id,
+            "ETFNavSighting",
+            ETFNavSighting,
+        )
+        if sighting.sighting_type != expected_type:
+            raise ValueError(
+                f"ETF premium discount requires a {expected_type} sighting at this binding"
+            )
+        self._verify_provenance_pairs(
+            sighting.official_source_artifact_ids,
+            sighting.official_source_object_hashes,
+            label=f"ETF {expected_type} sighting",
+            require_official_web=True,
+        )
+        return sighting, sighting_hash
+
+    def _load_market_price_sighting(self, artifact_id: str) -> tuple[ETFMarketPriceSighting, str]:
+        sighting, sighting_hash = self._load_model(
+            artifact_id,
+            "ETFMarketPriceSighting",
+            ETFMarketPriceSighting,
+        )
+        self._verify_provenance_pairs(
+            sighting.source_artifact_ids,
+            sighting.source_object_hashes,
+            label="ETF market-price sighting",
+        )
+        return sighting, sighting_hash
+
     def screen_complements(
         self, request: PortfolioComplementScreenRequest
     ) -> PortfolioComplementScreenReport:
         """Rank bounded ResearchSeed candidates only by portfolio-risk complementarity."""
-
         request_id, request_hash = self._freeze(
             "PortfolioComplementScreenRequest",
             request.schema_version,
@@ -1349,6 +1594,12 @@ class PortfolioDecisionService:
             "UserPortfolioSnapshot",
             "ExternalTradeImportReceipt",
             "ETFProductProfile",
+            "FundProductProfile",
+            "IndexProductProfile",
+            "ProductConstituentSnapshot",
+            "ETFNavSighting",
+            "ETFMarketPriceSighting",
+            "ETFPremiumDiscountValuation",
         }:
             return {
                 "status": "FAIL",

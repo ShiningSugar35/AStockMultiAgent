@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from astock.core.errors import PolicyError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.local_portfolio import LocalPortfolioService
 from astock.paper_trading import (
     ETFExecutionPolicy,
     ETFInstrumentExecutionRule,
@@ -771,6 +772,42 @@ def test_etf_fill_uses_frozen_settlement_cycle_and_only_fill_creates_position(
         )
         assert settled == 10
         assert ledger.status("paper")["positions"][0]["qty_available"] == 10
+
+
+def test_etf_paper_fill_preserves_milli_yuan_price_in_local_portfolio_projection(
+    tmp_path: Path,
+    state: StateStore,
+    object_store: ObjectStore,
+) -> None:
+    policy = _etf_policy(enabled=True, settlement_cycle=SettlementCycle.T0)
+    service, ledger = _etf_service(state, object_store, policy)
+    request = _etf_request(policy, qty=10, limit_price_milli_yuan=1001)
+    service.execute(request, _confirmation(request))
+    local = LocalPortfolioService(tmp_path / "user_state", state)
+    local.sync_from_paper("paper")
+    open_orders = local.status()["open_orders"]
+    assert isinstance(open_orders, list)
+    assert open_orders[0]["limit_price_cny"] == "1.0010"
+
+    order = ledger.open_orders("paper")[0]
+    ledger.record_fill(
+        fill_id="etf-local-portfolio-precision",
+        order_id=order.order_id,
+        qty=1,
+        price_fen=100,
+        price_milli_yuan=1001,
+        commission_fen=1,
+        occurred_at=NOW + timedelta(minutes=3),
+    )
+
+    local = LocalPortfolioService(tmp_path / "user_state", state)
+    result = local.sync_from_paper("paper")
+
+    positions = result["positions"]
+    assert isinstance(positions, list)
+    assert positions[0]["average_cost_cny"] == "1.0010"
+    assert local.trade_facts()[0]["price_cny"] == "1.0010"
+    assert local.status()["status"] == "READY"
 
 
 def test_concurrent_exact_operation_commits_one_order(

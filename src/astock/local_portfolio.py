@@ -308,84 +308,124 @@ class LocalPortfolioService:
                 raise ValueError("paper account does not exist")
             account_id = resolved_account_id
             fill_rows = connection.execute(
-                "SELECT f.fill_id,f.qty,f.price_fen,f.occurred_at,o.side,o.symbol,b.market "
-                "FROM fill f JOIN order_record o ON o.order_id=f.order_id "
+                "SELECT f.fill_id,f.qty,f.price_fen,f.price_milli_yuan,f.occurred_at,"
+                "o.side,o.symbol,b.market FROM fill f "
+                "JOIN order_record o ON o.order_id=f.order_id "
                 "LEFT JOIN paper_order_rule_binding b ON b.order_id=o.order_id "
                 "WHERE o.account_id=? ORDER BY f.occurred_at,f.fill_id",
                 (account_id,),
             ).fetchall()
-            if any(row[6] is None for row in fill_rows):
+            if any(row[7] is None for row in fill_rows):
                 raise ValueError("paper fill is missing a formal market binding")
             position_rows = connection.execute(
-                "SELECT symbol,qty_total,avg_cost_fen FROM position "
-                "WHERE account_id=? AND qty_total>0 ORDER BY symbol",
+                "SELECT p.symbol,p.qty_total,p.avg_cost_fen,i.market,i.instrument_id,"
+                "c.total_cost_fen FROM position p "
+                "LEFT JOIN paper_position_identity i "
+                "ON i.account_id=p.account_id AND i.symbol=p.symbol "
+                "LEFT JOIN paper_position_cost c "
+                "ON c.account_id=p.account_id AND c.symbol=p.symbol "
+                "WHERE p.account_id=? AND p.qty_total>0 ORDER BY p.symbol",
                 (account_id,),
             ).fetchall()
             order_rows = connection.execute(
                 "SELECT o.order_id,o.submitted_at,o.symbol,o.side,o.qty,o.filled_qty,"
-                "o.limit_price_fen,o.status,b.market FROM order_record o "
+                "o.limit_price_fen,o.limit_price_milli_yuan,o.status,b.market "
+                "FROM order_record o "
                 "JOIN paper_order_rule_binding b ON b.order_id=o.order_id "
                 "WHERE o.account_id=? AND o.status IN ('ACCEPTED','PARTIALLY_FILLED') "
                 "ORDER BY o.submitted_at,o.order_id",
                 (account_id,),
             ).fetchall()
-            last_market_by_symbol = {
-                str(row[0]): str(row[1])
-                for row in connection.execute(
-                    "SELECT o.symbol,b.market FROM order_record o "
-                    "JOIN paper_order_rule_binding b ON b.order_id=o.order_id "
-                    "WHERE o.account_id=? ORDER BY o.submitted_at",
-                    (account_id,),
-                ).fetchall()
-            }
+            markets_by_symbol: dict[str, set[str]] = {}
+            for symbol, market in connection.execute(
+                "SELECT o.symbol,b.market FROM order_record o "
+                "JOIN paper_order_rule_binding b ON b.order_id=o.order_id "
+                "WHERE o.account_id=? ORDER BY o.submitted_at",
+                (account_id,),
+            ).fetchall():
+                markets_by_symbol.setdefault(str(symbol), set()).add(str(market))
 
-        orders = [
-            {
-                "order_id": str(row[0]),
-                "submitted_at": str(row[1]),
-                "symbol": str(row[2]),
-                "side": str(row[3]).upper(),
-                "quantity": int(row[4]),
-                "filled_quantity": int(row[5]),
-                "limit_price_cny": self._decimal_text(Decimal(int(row[6])) / 100),
-                "status": str(row[7]),
-                "market": str(row[8]),
-            }
-            for row in order_rows
-        ]
+        orders: list[dict[str, Any]] = []
+        for row in order_rows:
+            limit_price_milli_yuan = int(row[7]) if row[7] is not None else int(row[6]) * 10
+            orders.append(
+                {
+                    "order_id": str(row[0]),
+                    "submitted_at": str(row[1]),
+                    "symbol": str(row[2]),
+                    "side": str(row[3]).upper(),
+                    "quantity": int(row[4]),
+                    "filled_quantity": int(row[5]),
+                    "limit_price_cny": self._decimal_text(
+                        Decimal(limit_price_milli_yuan) / 1000
+                    ),
+                    "status": str(row[8]),
+                    "market": str(row[9]),
+                }
+            )
         trades: list[dict[str, Any]] = []
-        times_by_symbol: dict[str, list[str]] = {}
+        times_by_identity: dict[tuple[str, str], list[str]] = {}
         for row in fill_rows:
-            symbol = str(row[5])
-            occurred_at = str(row[3])
-            times_by_symbol.setdefault(symbol, []).append(occurred_at)
+            symbol = str(row[6])
+            market = str(row[7])
+            occurred_at = str(row[4])
+            price_milli_yuan = int(row[3]) if row[3] is not None else int(row[2]) * 10
+            times_by_identity.setdefault((market, symbol), []).append(occurred_at)
             trades.append(
                 {
                     "trade_id": f"paper-fill:{row[0]}",
                     "occurred_at": occurred_at,
-                    "market": str(row[6]),
+                    "market": market,
                     "symbol": symbol,
-                    "side": str(row[4]).upper(),
+                    "side": str(row[5]).upper(),
                     "quantity": int(row[1]),
-                    "price_cny": self._decimal_text(Decimal(int(row[2])) / 100),
+                    "price_cny": self._decimal_text(Decimal(price_milli_yuan) / 1000),
                     "source": "PAPER_FILL",
                     "note": "账户模拟成交回放",
                     "ordinal": len(trades) + 1,
                 }
             )
+        replayed_positions = {
+            (str(position["market"]), str(position["symbol"])): position
+            for position in self._replay(trades)
+        }
         positions: list[dict[str, Any]] = []
         for row in position_rows:
             symbol = str(row[0])
-            market = last_market_by_symbol.get(symbol)
-            if market is None:
-                raise ValueError(f"open paper position lacks market binding: {symbol}")
-            times = times_by_symbol.get(symbol, [])
+            quantity = int(row[1])
+            identity_market = str(row[3]) if row[3] is not None else None
+            identity_instrument_id = str(row[4]) if row[4] is not None else None
+            if identity_market is None:
+                legacy_markets = markets_by_symbol.get(symbol, set())
+                if len(legacy_markets) != 1:
+                    raise ValueError(
+                        f"open paper position lacks unambiguous market binding: {symbol}"
+                    )
+                market = next(iter(legacy_markets))
+            else:
+                market = identity_market
+                if identity_instrument_id != f"{market}:{symbol}":
+                    raise ValueError(
+                        f"open paper position has invalid instrument identity: {symbol}"
+                    )
+            times = times_by_identity.get((market, symbol), [])
+            replayed_position = replayed_positions.get((market, symbol))
+            total_cost_fen = int(row[5]) if row[5] is not None else None
+            if (
+                replayed_position is not None
+                and int(replayed_position["quantity"]) == quantity
+            ):
+                average_cost = Decimal(str(replayed_position["average_cost_cny"]))
+            elif total_cost_fen is not None:
+                average_cost = Decimal(total_cost_fen) / 100 / quantity
+            else:
+                average_cost = Decimal(int(row[2])) / 100
             positions.append(
                 {
                     "market": market,
                     "symbol": symbol,
-                    "quantity": int(row[1]),
-                    "average_cost_cny": self._decimal_text(Decimal(int(row[2])) / 100),
+                    "quantity": quantity,
+                    "average_cost_cny": self._decimal_text(average_cost),
                     "opened_at": times[0] if times else datetime.now(UTC).isoformat(),
                     "last_trade_at": times[-1] if times else datetime.now(UTC).isoformat(),
                     "last_review_at": None,

@@ -194,7 +194,14 @@ class LedgerService:
         effective_rule_version: str = "cn-a-m1",
         submitted_at: datetime | None = None,
         lot_size: int = 100,
+        position_identity: tuple[Market, str] | None = None,
     ) -> Order:
+        if position_identity is not None:
+            expected_market, expected_instrument_id = position_identity
+            if expected_instrument_id != f"{expected_market.value}:{symbol}":
+                raise ValueError(
+                    "paper order position identity must match market:symbol"
+                )
         if lot_size <= 0:
             raise ValueError("paper order lot_size must be positive")
         if qty <= 0 or qty % lot_size != 0:
@@ -252,6 +259,40 @@ class LedgerService:
                     "SELECT * FROM position WHERE account_id=? AND symbol=?",
                     (account_id, symbol),
                 ).fetchone()
+                if position is not None and int(position["qty_total"]) > 0:
+                    identity = connection.execute(
+                        "SELECT market,instrument_id FROM paper_position_identity "
+                        "WHERE account_id=? AND symbol=?",
+                        (account_id, symbol),
+                    ).fetchone()
+                    if position_identity is not None and identity is None:
+                        raise PolicyError(
+                            "Sell position instrument identity is missing",
+                            failure_class=FailureClass.DATA_QUALITY,
+                            details={"symbol": symbol},
+                        )
+                    if position_identity is not None and identity is not None:
+                        expected_market, expected_instrument_id = position_identity
+                        actual_identity = (
+                            str(identity["market"]),
+                            str(identity["instrument_id"]),
+                        )
+                        expected_identity = (
+                            expected_market.value,
+                            expected_instrument_id,
+                        )
+                        if actual_identity != expected_identity:
+                            raise PolicyError(
+                                "Sell position instrument identity does not match order",
+                                failure_class=FailureClass.CONFLICT,
+                                details={
+                                    "symbol": symbol,
+                                    "actual_market": actual_identity[0],
+                                    "actual_instrument_id": actual_identity[1],
+                                    "expected_market": expected_identity[0],
+                                    "expected_instrument_id": expected_identity[1],
+                                },
+                            )
                 available_qty = int(position["qty_available"]) if position else 0
                 if available_qty < qty:
                     raise PolicyError(

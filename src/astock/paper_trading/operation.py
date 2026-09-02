@@ -1181,6 +1181,7 @@ class PaperOperationService:
             effective_rule_version=fee_schedule.rule_version,
             submitted_at=request.requested_at,
             lot_size=ledger_lot_size,
+            position_identity=(payload.market, instrument.instrument_id),
         )
         expires_at = (
             datetime.combine(local.date(), time(15, 0), _SHANGHAI)

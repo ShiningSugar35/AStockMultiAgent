@@ -663,6 +663,53 @@ def test_stock_order_binding_keeps_historical_100_share_fen_t1_contract(
     assert tuple(binding) == ("STOCK", 100, 100, 10, "T1", None)
 
 
+def test_sell_order_rejects_cross_market_symbol_identity_before_reserving_position(
+    state: StateStore, object_store: ObjectStore
+) -> None:
+    service, ledger = _service(state, object_store)
+    buy = _request()
+    service.execute(buy, _confirmation(buy))
+    order = ledger.open_orders("paper")[0]
+    ledger.record_fill(
+        fill_id="formal-stock-position",
+        order_id=order.order_id,
+        qty=100,
+        price_fen=1000,
+        commission_fen=500,
+        occurred_at=NOW,
+    )
+    ledger.settle_buys_with_calendar(
+        "paper",
+        as_of=NOW + timedelta(days=1),
+        open_session_dates=[NOW.date(), (NOW + timedelta(days=1)).date()],
+        calendar_release_id="calendar-stock-t1",
+        market=Market.XSHG,
+    )
+    assert ledger.status("paper")["positions"][0]["qty_available"] == 100
+
+    cross_market_sell = _operation_request(
+        PaperPlaceOrderPayload(
+            market=Market.XSHE,
+            symbol="600519",
+            side=OrderSide.SELL,
+            qty=100,
+            limit_price_fen=1000,
+            validity=PaperOrderValidity.DAY,
+            calendar_release_id="1" * 64,
+            instrument_release_id="2" * 64,
+            daily_release_id="3" * 64,
+            fee_rule_version="cn-a-share-paper-2026-07-13",
+        ),
+        "cross-market-same-symbol-sell",
+    )
+
+    with pytest.raises(PolicyError, match="position instrument identity"):
+        service.execute(cross_market_sell, _confirmation(cross_market_sell))
+
+    assert ledger.status("paper")["positions"][0]["qty_available"] == 100
+    assert ledger.open_orders("paper", "600519") == []
+
+
 @pytest.mark.parametrize(
     ("settlement_cycle", "expected_available", "expected_pending"),
     [

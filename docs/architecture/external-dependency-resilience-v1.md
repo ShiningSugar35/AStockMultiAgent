@@ -1,8 +1,8 @@
 # External Dependency Resilience v1 — 能力路由、权威证据与低 API 依赖数据平面
 
-状态：RELEASED（v0.1.0 基线）/ v0.3.0 扩展已集成待发布
+状态：RELEASED（v0.1.0 历史基线；v0.3.0 扩展已正式发布）
 日期：2026-09-02
-发布证据：实现提交 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc` 已推送 `origin/main`；正式 annotated tag `v0.1.0` 与非草稿、非预发布 GitHub Release 均已创建，Release target 精确指向该实现提交。后续状态文档提交只追加到 `main`，不移动已发布 tag。
+发布证据：v0.3.0 release baseline 为 `5567cab46195a5073a9bf5a4fc16acfe1ff35066`；annotated tag `v0.3.0` 与非草稿、非预发布 GitHub Release 均已创建并指向该 baseline。wheel SHA-256=`19ddb987ef5d73058b204f329525d5628d1a04c934ae6d4ec9f396f76bf1abd8`，sdist SHA-256=`3a0a3efd2b84cecfa67114dabef1a2ad29f51f92d02770641b0f4ee52fa25109`。历史 v0.1.0 release baseline `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc` 与其 tag 保持不变；发布后的 docs-only closeout 只推进 `main`，不移动任何已发布 tag。
 
 ## 1. 审核来源与优先级
 

@@ -1,6 +1,6 @@
 # Portfolio & Holding Decision Architecture v1
 
-> 状态：v0.2.0 已正式发布；v0.3.0 ETF 深度事实与独立 paper policy 扩展已集成待发布。历史 v0.2.0 release baseline 仍为 commit `b776d0054b60d96f5c4da41b10926c1e583bc699`，annotated tag `v0.2.0` 不移动
+> 状态：v0.3.0 ETF 深度事实与独立 paper policy 扩展已正式发布；release baseline 为 `5567cab46195a5073a9bf5a4fc16acfe1ff35066`，annotated tag `v0.3.0` 不移动。历史 v0.2.0 release baseline `b776d0054b60d96f5c4da41b10926c1e583bc699` 与 tag `v0.2.0` 保持不变
 > 日期：2026-09-02
 > 边界：A 股 long-only 投研、组合研究、持仓复核和模拟交易建议；真实券商执行永久关闭。ETF 已有独立、effective-dated paper execution policy，但仓库默认关闭，且绝不复用 STOCK 交易规则。
 

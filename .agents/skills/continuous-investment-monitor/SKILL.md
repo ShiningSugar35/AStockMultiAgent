@@ -13,7 +13,7 @@ description: Keep analyzed, recommended, held, catalyst-bound, and open-paper-or
 6. 语义 Agent 在取得正式证据后，将事件裁决为 `THESIS_INVALIDATING / THESIS_WEAKENING / THESIS_STRENGTHENING / VALUATION_ONLY / PORTFOLIO_RISK_ONLY / TEMPORARY_NOISE`。severity 必须与本轮 evidence lineage 一起进入 `$holding-monitor`，不能由 daemon 或调用方单独声明后直接交易。
 7. material held-name delta 除单股复核外必须检查组合层影响：风险贡献、集中度、相关性、beta/因子、行业/周期共振、流动性和现金。若影响组合，触发 `$portfolio-manager` 的增量 transition；同一事件影响多个持仓时合并成一次组合级重算，避免 N 次重复矩阵计算。
 8. 正式研究得到机器可执行的价格、减仓、退出、回撤或复核阈值时，只能把已结构化且证据绑定的数字写成 monitor rule；禁止从自然语言 entry/stop/target 文本猜阈值。
-9. 价格触发只产生复核/模拟候选动作，不直接改变持仓。模拟订单仍需正式研究准入、typed 条件满足、本地设置和用户确认；fill 只由 replay 决定。ETF paper order/replay 当前未准入，monitor 不得绕过这一边界。
+9. 价格触发只产生复核/模拟候选动作，不直接改变持仓。模拟订单仍需正式研究准入、typed 条件满足、本地设置和用户确认；fill 只由 replay 决定。ETF paper order/replay 只在独立 `ETFInstrumentExecutionRule` 对目标证券和当前日期有效、`execution_enabled=true`、费用/lot/tick/limit/settlement 已冻结并完成既有确认链时才可进入；仓库默认关闭，monitor 不得绕过这一边界。
 10. 完成增量研究后更新 reviewed boundary，再完成/失败对应持久任务；失败必须保留为可审计失败。正常投资者输出只说“什么变了、影响是什么、现在 HOLD/ADD/TRIM/EXIT 或组合条件如何改变”。
 11. 没有可用独立 Agent worker 时，daemon 可以继续更新确定性事件和 replay，但语义 task 必须留在持久队列，下一次 Agent 会话优先消费；不得把“已排队”冒充“已分析”。
 

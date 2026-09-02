@@ -318,7 +318,7 @@ continuous-monitor-tasks [--pending-only]
 
 - [x] `broker_execution_allowed=false` 在新增 schema/服务/CLI 中无例外。
 - [x] 新闻不能单源直接触发模拟买入/卖出。
-- [x] 发布时全仓 pytest、Ruff、Pyright、diff check 与 state-integrity-audit 全部通过；历史数字保留在《验收报告》，不冒充本轮 External 冻结树结果。
+- [x] 对应历史发布的 pytest、Ruff、Pyright、diff check 与 state-integrity-audit 证据由 Git/Release 历史保留；《进度验收》只记录最近一次任务，历史数字不得冒充当前冻结树结果。
 - [x] unit/integration tests 覆盖 dedupe、lease、rule evaluator、source degradation、CNINFO/GDELT recorded fixture、restart recovery 与 CLI。
 
 真实长时间 daemon、自然语言场景及 crash/source-degradation 连续观察仍是长期运行义务，不影响 0059 确定性软件架构已经发布，但不得描述为真实无人值守运行已完成。

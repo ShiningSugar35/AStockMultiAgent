@@ -15,7 +15,7 @@
 | Arelle | XBRL taxonomy、context、unit、dimension 与计算一致性验证 | Financial Integrity / Evidence | 固定材料对拍、异常定位、版本与许可证、性能、卸载回归 | `SHADOW`，通过后可作专项验证备用 |
 | Docling | 复杂 PDF、Office、HTML、版面与表格结构解析 | documents / ObjectStore / Evidence | 页码与表格定位、解析器分歧、原始材料绑定、资源成本、故障恢复 | `SHADOW`，通过后可作解析备用 |
 | Microsoft Playwright MCP | 动态网页与交互页面的浏览器 transport | ExternalCapabilityRegistry / Provider Registry | capability 描述、版本与供应链、任务范围、快照 lineage、资源预算、失败与退出 | 按 capability 资格决定 |
-| AKShare | A 股、基金、ETF、指数等明确端点的结构化 Provider 备用 | Provider Registry / provider dialect / SourcePolicyGate | 逐 endpoint 上游、字段、时间语义、权利、限流、漂移、recorded/live 对拍 | 至少一个 endpoint 争取 `PRODUCTION_BACKUP` |
+| AKShare | A 股、基金、ETF、指数等明确端点的结构化 Provider 备用 | Provider Registry / provider dialect / SourcePolicyGate | 逐 endpoint 上游、字段、时间语义、权利、限流、漂移、recorded/live 对拍 | 2026-09-02 E-02 维持 `SHADOW`；只有未来取得 endpoint-specific 数据权利、PIT/provenance、recorded/live 与 SBOM/退出证据后才重新评估 `PRODUCTION_BACKUP` |
 | Crawl4AI | 网页抓取、正文清洗和结构化提取 | ExternalCapabilityRegistry / documents / Evidence | 许可证与安全记录、依赖锁定、输出稳定性、资源成本、故障与退出 | `SHADOW`，通过后按 capability 升级 |
 | changedetection.io | 网站变化检测与事件线索生成 | monitoring / durable tasks / evidence investigation | 变化快照、去重、恢复、误报漏报、维护成本、事件 lineage | `SHADOW`，通过后可作监测备用 |
 
@@ -62,5 +62,5 @@
 - 每项候选独立形成资格报告，不以“同类工具已通过”替代自身验证。
 - 通过的外部能力进入 `configs/external_capabilities.yaml` 的冻结 release；到期、上游重大变更或安全事件触发重新资格验证。
 - 新 Repo Skills 位于 `.agents/skills/*/SKILL.md`，并补齐 Workflow、触发测试、Skill observability 和卸载回归。
-- 完成项从《开发计划》迁移到《验收报告》；未通过项保留具体原因、可恢复条件和回滚结论。
+- 完成项从《开发计划》删除；影响当前理解的稳定事实迁移到对应 architecture/Workflow/Skill，最近一次任务的验收摘要写入《进度验收》，更早过程由 Git 历史追溯。未通过项保留具体原因、可恢复条件和回滚结论。
 - 真实券商执行能力仍不在准入范围，`broker_execution_allowed=false` 保持不变。

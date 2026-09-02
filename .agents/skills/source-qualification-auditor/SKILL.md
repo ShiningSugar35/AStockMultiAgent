@@ -25,3 +25,7 @@ Return the capability id and fixed version, immutable evidence hashes, per-gate 
 - Do not let a Skill, parser, crawler, MCP, or secondary Provider upgrade the authority of the underlying source material.
 - Do not create a second Router, Provider registry, Evidence store, ObjectStore, qualification index, or mutable copy of qualification history.
 - Do not enable broker order execution. `broker_execution_allowed=false` and the M-06 permanent rejection of execution-capable broker MCPs remain unchanged.
+
+## Workflows
+
+- [Research Tech Scout](../../../docs/workflows/workflow-research-tech-scout.md) — use after discovery when a candidate needs deterministic qualification, revocation, and exit evidence before it can become a production backup.

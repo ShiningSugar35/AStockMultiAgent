@@ -24,3 +24,7 @@ Return the raw SourceSnapshot ids, immutable object hashes, structural drift sum
 - Do not auto-admit a schema repair or modify the active provider dialect from a single sample.
 - Do not create a second Provider route, parser registry, facts store or Evidence system.
 - Do not enable broker execution; `broker_execution_allowed=false` remains unchanged.
+
+## Workflows
+
+- [Adaptive Edge](../../../docs/workflows/workflow-adaptive-edge.md) — use when immutable raw snapshots show provider schema drift and a candidate dialect repair must be validated without mutating production parsing.

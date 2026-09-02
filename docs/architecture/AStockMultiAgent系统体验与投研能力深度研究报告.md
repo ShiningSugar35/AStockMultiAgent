@@ -884,7 +884,7 @@ flowchart TB
 | R21 | `configs/authority_domains.yaml` | 官方域准入范围 |
 | R22 | `pyproject.toml`、`src/astock/settings.py` | 报告依赖和路径配置缺口 |
 | R23 | `src/astock/local_portfolio.py` | 本地交易/持仓状态与展示偏好缺口 |
-| R24 | `验收报告.md` | 已完成功能和历史验收证据 |
+| R24 | `进度验收.md` | 最近一次任务的验收终态；更早流水由 Git/Release 历史承担 |
 
 ### 12.2 中文写作与文档标准
 

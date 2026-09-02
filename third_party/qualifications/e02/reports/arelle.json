@@ -22,7 +22,7 @@
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
   "evidence_object_hashes": [
-    "1290cb02db67018ecd55517a20081a903cf52b7149c673e9672192172ce0c1e6"
+    "b9228a4a11eebd138419ebae13fba495fa5bf2cccccf1d76ca02375ad025358c"
   ],
   "expires_at": "2026-10-02T06:16:28Z",
   "reason_codes": [
@@ -32,7 +32,7 @@
     "SBOM_SECURITY_NOT_FROZEN"
   ],
   "recorded_validation": "FAIL",
-  "report_id": "5395170b4e669631d634684042ce0b52de903d776154f1642356b8c560dcc462",
+  "report_id": "dff1877b535cab078e2a0174006a43677e395640b7578195ee6a44f94884e950",
   "requested_stage": "SHADOW",
   "schema_version": "capability-qualification-report-v1",
   "source_class_ceiling": "UNKNOWN",

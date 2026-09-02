@@ -21,7 +21,7 @@ description: Evaluate portfolio risk, complete a planned purchase with complemen
    - `NATURAL_HEDGE`：经济机制 + PIT 历史 + 压力期 + 已验证成本共同证明指定风险净下降；
    - `EXPLICIT_HEDGE`：当前 long-only 股票/ETF 工具链尚未准入，不得输出已实现显式对冲。
    仅凭低/负相关不得称为 hedge。
-11. 对 ETF 只允许使用已注册、具官方产品 lineage 的 `ETFProductProfile`，并先用 `portfolio-etf-metrics` 冻结同一 `as_of` 的成交额、波动、tracking error 与费率诊断，再运行 `portfolio-hedge-evaluate`。当前 ETF **研究与组合评估可用，但 paper order/replay 未准入**；融券、期货、期权、杠杆/反向工具不在当前系统能力内。若缺正式 ETF profile 或成本/机制证据，只能称“互补配置/分散化候选”。
+11. 对 ETF 只允许使用已注册、具官方产品 lineage 的 `ETFProductProfile`，并先用 `portfolio-etf-metrics` 冻结同一 `as_of` 的成交额、波动、tracking error 与费率诊断，再运行 `portfolio-hedge-evaluate`。ETF 研究与组合评估可用；paper order/replay 只有在独立 `ETFInstrumentExecutionRule` 对目标证券和当前日期有效、`execution_enabled=true`、费用/lot/tick/limit/settlement 完整且经过既有确认/replay 链时才可模拟，仓库默认关闭。融券、期货、期权、杠杆/反向工具不在当前系统能力内。若缺正式 ETF profile 或成本/机制证据，只能称“互补配置/分散化候选”。
 12. 正式 `NATURAL_HEDGE` 必须由 `HedgeEffectivenessReport` 复算：至少比较正常期和压力期相关/敏感度、指定风险加入前后、风险改善阈值、独立的已验证成本上限和基差/模型风险；风险指标与费用不得跨量纲相减。调用方自行填写“降低 20% 风险”没有对冲权威。
 13. 组合提案只读：不得写 paper ledger、不得把 proposal 当订单、不得把订单当 fill。若用户选择模拟执行，另走现有确认/订单/replay 流程；真实券商执行始终不存在。
 
@@ -47,5 +47,5 @@ Use `uv run astock portfolio-paper-evaluate` / `portfolio-evaluate` / `portfolio
 - Do not invent cash, NAV, risk tolerance, expected return, industry labels, ETF product facts or transaction costs.
 - Do not optimize around a company `REJECT / WATCH / NEEDS_INFO` or stale formal result.
 - Do not force small drift back to an exact point target when it remains inside the no-trade band.
-- Do not claim ETF paper execution, shorting, futures, options, margin or real-broker execution is available.
+- Do not claim ETF paper execution is generally enabled: it is default-off and requires a valid independent instrument rule plus the existing confirmation/replay chain. Shorting, futures, options, margin and real-broker execution remain unavailable.
 - Do not create or send a real brokerage order.

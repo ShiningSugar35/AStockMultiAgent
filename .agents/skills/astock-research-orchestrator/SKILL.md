@@ -16,7 +16,7 @@ description: Route broad or multi-step A-share research requests across candidat
    - accounting credibility → `$financial-integrity-audit`；evidence gap → `$evidence-investigation`；paper recovery → `$paper-trading-recovery`；技术侦察 → `$research-tech-scout`。
 5. Planned-purchase 组合补全不是新的荐股捷径。先确认 anchor X 的 current formal result 仍成立，再分析 `CURRENT → ANCHOR_ONLY` 增加的风险 gap；股票互补候选仍只能来自可证明 Universe/ResearchSeed/Candidate → 公司深研 → Committee。不能从 Web/新闻临时挑一只“负相关股票”代替正式候选链。
 6. 组合/持仓请求必须恢复或确认用户约束：可用资本/现金、投资期限、最大总暴露、单股/行业/回撤/流动性/换手和锁定持仓。缺关键约束时允许风险诊断和条件方案，但不得伪造总资产、现金或风险承受。具体数量区间只有在 NAV、价格和工具交易单位都确定时生成。
-7. 组合里的“对冲”用语必须通过 `$portfolio-manager` 的正式分类。低相关只能叫分散化；`NATURAL_HEDGE` 需要机制证据、PIT 正常/压力期复算和已验证成本。当前 long-only 股票/ETF 链不支持 `EXPLICIT_HEDGE`；ETF 可做正式研究/组合评估，但 paper order/replay 尚未准入，融券/期货/期权/真实券商均不可用。
+7. 组合里的“对冲”用语必须通过 `$portfolio-manager` 的正式分类。低相关只能叫分散化；`NATURAL_HEDGE` 需要机制证据、PIT 正常/压力期复算和已验证成本。当前 long-only 股票/ETF 链不支持 `EXPLICIT_HEDGE`；ETF 可做正式研究/组合评估，并具备独立但默认关闭的 paper execution policy，只有精确有效的 instrument rule + 既有确认/replay 链才可模拟；融券/期货/期权/真实券商均不可用。
 8. 用户明确指示模拟买入/卖出/加减仓时，其指令覆盖模型意见但不覆盖市场机械约束：现金/可用股数、交易单位、可交易状态、价格限制、账户确认和 replay 必须成立。AI 主动模拟下单仍要求正式研究允许模拟、typed entry 已满足和本地自动模拟设置；下单不等于成交。
 9. 不要在每个投资问题前跑 `probe`。`probe` 仅为开发/恢复诊断；完整 SQLite 体检也只在显式诊断/发布门执行。
 10. Existing stable discovery/execution-readiness route remains: `research-seeds --live` → `research-seeds-promote ... --live` → Candidate；`RESEARCH_READY` 仍无 BUY 权威。`JuglarCycleStageSkill` 等 audited Skills 只能影响 bounded research priority。正式执行条件继续由 `ClassifiedTradeProtocol` 和 `trade-plan-view` 解释，不能被 portfolio/holding 新链绕过。
@@ -67,5 +67,5 @@ Lead with the investment answer, not the process. 默认 **主体 → 结论与�
 - Do not turn a Candidate directly into a recommendation, portfolio weight or filled position.
 - Do not call low historical correlation an explicit hedge.
 - Do not treat an unfilled simulated order as a holding.
-- Do not claim ETF paper execution, shorting, futures, options, margin or real-broker execution is available.
+- Do not claim ETF paper execution is generally enabled: it remains default-off and requires a valid independent instrument rule plus the existing confirmation/replay chain. Shorting, futures, options, margin and real-broker execution remain unavailable.
 - Do not create or send a real brokerage order.

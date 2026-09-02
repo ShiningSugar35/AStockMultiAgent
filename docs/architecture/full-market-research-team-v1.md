@@ -403,4 +403,4 @@ A 股公告优先入口包括上海证券交易所最新公告和巨潮资讯。
 - `UNIVERSE_COVERAGE` 由 typed `ResearchSeedReport` 派生，`FINANCIAL_INTEGRITY` 由 typed `FinancialIntegrityEvidencePack` 派生；任意 Role 文本、自报 check 或错误 artifact type 都不能提升 gate。
 - CNINFO、交易所 exact-item、secondary financial 的降级链遵循 typed official lineage。Official Web exact-item 只能恢复已知报告，不能证明 exhaustive enumeration；恢复为 PARTIAL 时精确估值和正式推荐继续关闭。
 - Provider health/breaker 按 capability 隔离；EastMoney 5m 的真实 NETWORK 失败不污染 Sina 5m 的 HEALTHY 状态，也不允许聊天 Agent手工补位成为正式候选。
-- 2026-08-27 的真实 CNINFO、官方日历、5m fallback 与组合故障注入证据记录于《验收报告》和唯一 durable run `lr_mtb4gekw_ff5540ff05d2`；这些增强已随 External Dependency Resilience v0.1.0 通过独立冻结树与远端 Release 门，target 为 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc`，且不改写 `7bb7288` 的历史发布身份。
+- 2026-08-27 的真实 CNINFO、官方日历、5m fallback 与组合故障注入证据由对应 Git/Release 历史和 durable run `lr_mtb4gekw_ff5540ff05d2` 保留；这些增强已随 External Dependency Resilience v0.1.0 通过独立冻结树与远端 Release 门，target 为 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc`，且不改写 `7bb7288` 的历史发布身份。

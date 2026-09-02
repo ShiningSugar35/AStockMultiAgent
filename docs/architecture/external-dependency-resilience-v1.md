@@ -1,12 +1,12 @@
 # External Dependency Resilience v1 — 能力路由、权威证据与低 API 依赖数据平面
 
-状态：RELEASED
-日期：2026-08-28
+状态：RELEASED（v0.1.0 基线）/ v0.3.0 扩展已集成待发布
+日期：2026-09-02
 发布证据：实现提交 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc` 已推送 `origin/main`；正式 annotated tag `v0.1.0` 与非草稿、非预发布 GitHub Release 均已创建，Release target 精确指向该实现提交。后续状态文档提交只追加到 `main`，不移动已发布 tag。
 
 ## 1. 审核来源与优先级
 
-本文件是本轮外部依赖去脆弱化的现行架构合同，事实源按 `AGENTS.md → docs/architecture/ → 开发计划.md → 验收报告.md → 唯一 durable run → Git/测试/运行工件` 恢复。纳入并统一以下输入：
+本文件是外部依赖去脆弱化的现行架构合同，事实源按 `AGENTS.md → docs/architecture/ → 开发计划.md → 进度验收.md → 唯一 durable run → Git/测试/运行工件` 恢复。《进度验收》只保留最近一次任务；历史验收流水由 Git/Release 历史承担。纳入并统一以下输入：
 
 1. 用户提供的《AStockMultiAgent 外部依赖鲁棒性架构与验收规范 v1.0》；
 2. 当前唯一 durable run `lr_mtb4gekw_ff5540ff05d2`；
@@ -422,6 +422,9 @@ Search 结果在未冻结/验源前不能直接成为正式数据库事实。
 17. s6 定向 resilience 矩阵为 `206 passed / 0 failed`；s7 迁移与最终独立 Review 又发现并修复 migration 0060 缺少显式 `0059 → 0060`/checksum 回归，以及 raw 5m/60m 同步仍写 provider-wide health、未消费 capability breaker 的双轨语义。修复后的最终冻结树真实门为：Ruff=`PASS`；Pyright=`0 errors / 0 warnings / 0 informations`；`git diff --check`=`exit 0`（仅 CRLF→LF 提示，无 whitespace error）；`uv run pytest` 收集 `1072` 项，结果 **`1054 passed / 18 skipped / 0 failed`，1162.11s**；只读 `state-integrity-audit`=`PASS / integrity_check=ok / read_only=true`。18 个 skip 均为既有显式 opt-in 的 OCR/private/live 项，本轮真实 live 证据已另行执行并记录。
 18. s8 发布门已完成：91 个显式 staged 路径经最终 diff Review、secret/private/runtime、binary、private absolute path 与 broker authority 复扫均无阻断；实现提交 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc` 已推送并与远端 `main` 一致；`v0.1.0` annotated tag 与 GitHub Release 已创建，Release 为正式非草稿、非预发布状态，target 精确绑定该实现提交。
 19. v0.3.0 M-06 已在既有 Router/Provider 架构上增加 `ExternalCapabilityRegistry` 与 append-only qualification/revocation 索引。`PRODUCTION_BACKUP` 不由 Provider 配置自证：Provider 必须绑定 external capability，资格报告需在 ObjectStore lineage 中有效、未到期/未撤销、authority/completeness ceiling 与 Provider 一致，且标准路线当前不可用时才可参与路由。GDELT 已纳入 Provider Registry/capability breaker/SourceSnapshot，固定为 `news.discovery.lead + DISCOVERY_ONLY`、无 formal capability；执行型券商 MCP 在资格 schema 层永久拒绝。SQLite 资格索引不是新的事实源，任何索引字段与不可变资格报告漂移均 fail closed。
+20. v0.3.0 R-01 已把上交所/深交所官方证券 denominator freeze 接入既有 `instrument.master` 证明链；新的官方 freeze 只从真实 `available_to_system_at` 起生效，禁止回填历史。国家统计局、人民银行、财政部、发改委宏观 authority 当前保持 recorded-first、`live_supported=false`；北交所财报/公司行动只准 exact-item official capture，不声称 exhaustive enumeration 或 negative proof。
+21. v0.3.0 E-02 已对 Arelle、Docling、Playwright MCP、AKShare、Crawl4AI、changedetection.io 与三个 Repo Skills 固定版本并执行 M-06 资格裁决。当前 Arelle/Docling/Playwright MCP/AKShare/Crawl4AI/changedetection.io/`report-visual-qa`/`schema-drift-recorder` 均保持 `SHADOW`；只有仓库自有 `source-qualification-auditor` 作为治理 Skill 达到 `PRODUCTION_BACKUP`，authority ceiling 固定 `UNKNOWN/NOT_APPLICABLE`，不能提升任何底层数据源的官方性、完整性或推荐资格。
+22. AKShare 的包级许可证/可安装性不能替代 endpoint-specific 上游数据权利、PIT、provenance、recorded/live、SBOM 与退出证据；缺任一 M-06 门时不得为了满足数量目标硬升生产级。资格证据的 ObjectStore freeze 对 validated model 做 canonical JSON（`exclude_unset=true`），因此 CRLF/LF checkout 差异和未显式提供的嵌套默认时间不会改变 report identity。
 
 Code Review 实际发生多轮打回返工，包括：CNINFO 财报首页误作 negative proof、elapsed budget 只解析未消费、完整扫描 0 candidates 与 Universe unavailable 混淆、OHLCV 多源冲突 silent-first-win、generic local cache 误把不相关快照算作 capability cache、EastMoney/Sina 日线 fallback 永久 `complete=false` 造成 BaoStock 隐性单点、Provider 排序把 EastMoney bulk fallback 提前到 Sina exact 之前、live probe 对 ProviderError/raw schema drift 异常穿透、官方 Web 稳定 source id 未进入财务白名单、财务 PARTIAL 可自报精确估值、migration 0060 缺少升级/checksum 专项门，以及 legacy intraday sync 继续写 provider-wide health。上述问题均已修复并增加回归/故障注入测试；最终独立 Review 对 capability 隔离、完整性、lineage、PIT/ObjectStore/Evidence/Paper/broker 边界、migration 与文档职责逐项复核后通过。
 

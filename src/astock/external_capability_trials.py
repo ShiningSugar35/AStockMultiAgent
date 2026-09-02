@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from astock.core.hashing import canonical_json_bytes
 from astock.core.object_store import ObjectStore
 from astock.external_capabilities import ExternalCapabilityService
 from astock.schemas.external_capabilities import CapabilityQualificationReport
@@ -30,7 +31,10 @@ def register_capability_qualification_evidence(
         raise ValueError("qualification evidence completeness ceiling does not match registry")
     if evidence.admitted_stage not in {definition.default_stage, definition.maximum_stage}:
         raise ValueError("qualification evidence admitted stage is outside registry contract")
-    ref = objects.put_bytes(raw)
+    canonical_evidence = canonical_json_bytes(
+        evidence.model_dump(mode="json", exclude_unset=True)
+    )
+    ref = objects.put_bytes(canonical_evidence)
     report = evidence.to_report(ref.sha256)
     return service.register_qualification(report)
 

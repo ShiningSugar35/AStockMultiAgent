@@ -22,7 +22,7 @@
   "completeness_ceiling": "DISCOVERY_ONLY",
   "controlled_live_validation": "FAIL",
   "evidence_object_hashes": [
-    "3b0496e792e5606a0922aafc7582b5d58442c2ae77af71b6bcbb87b67648cd4a"
+    "d0d970b64f4b9005a493443b5881a285edd8671437d65bcdc8096089f2979503"
   ],
   "expires_at": "2026-10-02T06:28:47Z",
   "reason_codes": [
@@ -34,7 +34,7 @@
     "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
   ],
   "recorded_validation": "FAIL",
-  "report_id": "9011555011241e3fe974434896393334f165de671d388000dc89fb930905a2c7",
+  "report_id": "2da2442fb7444010e2a67ae6ff05f612591406907c5fb7a87d7e011470901e87",
   "requested_stage": "SHADOW",
   "schema_version": "capability-qualification-report-v1",
   "source_class_ceiling": "UNKNOWN",

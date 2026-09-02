@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.source_router import SourceAccessRouter
 from astock.core.state import StateStore
@@ -162,7 +163,10 @@ def test_e02_all_tracked_evidence_materializes_through_canonical_m06(tmp_path: P
             evidence_path,
         )
         assert saved == frozen_report
-        assert saved.evidence_object_hashes == [_sha256(evidence_path)]
+        canonical_evidence_hash = sha256_bytes(
+            canonical_json_bytes(evidence.model_dump(mode="json", exclude_unset=True))
+        )
+        assert saved.evidence_object_hashes == [canonical_evidence_hash]
         assert saved.capability_id == capability_id
         active = service.active_report(capability_id, at=evidence.valid_from + timedelta(seconds=1))
         assert active is not None
@@ -183,6 +187,30 @@ def test_e02_all_tracked_evidence_materializes_through_canonical_m06(tmp_path: P
         primary_available=True,
         at=at,
     )
+
+
+def test_e02_qualification_evidence_freeze_is_line_ending_invariant(tmp_path: Path) -> None:
+    source_path = EVIDENCE_ROOT / "akshare.json"
+    normalized = source_path.read_bytes().replace(b"\r\n", b"\n")
+    lf_path = tmp_path / "akshare-lf.json"
+    crlf_path = tmp_path / "akshare-crlf.json"
+    lf_path.write_bytes(normalized)
+    crlf_path.write_bytes(normalized.replace(b"\n", b"\r\n"))
+
+    lf_root = tmp_path / "lf-runtime"
+    crlf_root = tmp_path / "crlf-runtime"
+    lf_root.mkdir()
+    crlf_root.mkdir()
+    lf_service, _lf_state, lf_objects = _service(lf_root)
+    crlf_service, _crlf_state, crlf_objects = _service(crlf_root)
+
+    lf_report = register_capability_qualification_evidence(lf_service, lf_objects, lf_path)
+    crlf_report = register_capability_qualification_evidence(
+        crlf_service,
+        crlf_objects,
+        crlf_path,
+    )
+    assert lf_report == crlf_report
 
 
 def test_source_qualification_skill_controlled_live_observability_and_exit_drill(

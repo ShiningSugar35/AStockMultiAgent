@@ -1,6 +1,6 @@
 {
   "admitted_stage": "PRODUCTION_BACKUP",
-  "candidate_version": "sha256:ab1c5787412a72de0fa0160160d714ba4e5fb659f73bec9355c058062d4f3156",
+  "candidate_version": "sha256:b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
   "capability_id": "source-qualification-auditor",
   "checks": {
     "cache_behavior": "PASS",
@@ -22,12 +22,12 @@
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "PASS",
   "evidence_object_hashes": [
-    "75f47bd6c0b6bd784927f9744a250cddfd46712f0ed5a362bf471ff671a0a814"
+    "a11176f3cc4f87c036fb8ce8cde50e48990696894e78f458fdbb57a2f87997d3"
   ],
   "expires_at": "2026-12-01T06:16:28Z",
   "reason_codes": [],
   "recorded_validation": "PASS",
-  "report_id": "ed859de7869b043346bd7de4d9644297e2650b00b9e51313e126fba50c85c0d1",
+  "report_id": "3a911f8799436221bf7055e76136756bc37788282c59c1c2f9c4fcd8357f3696",
   "requested_stage": "PRODUCTION_BACKUP",
   "schema_version": "capability-qualification-report-v1",
   "source_class_ceiling": "UNKNOWN",

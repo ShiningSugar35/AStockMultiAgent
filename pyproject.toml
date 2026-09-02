@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "astock-research"
-version = "0.2.0"
+version = "0.3.0"
 description = "Deterministic A-share research, evidence, and paper-trading foundation for Codex"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

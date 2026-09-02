@@ -1,6 +1,6 @@
 {
   "admitted_stage": "PRODUCTION_BACKUP",
-  "candidate_version": "sha256:ab1c5787412a72de0fa0160160d714ba4e5fb659f73bec9355c058062d4f3156",
+  "candidate_version": "sha256:b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
   "capability_id": "source-qualification-auditor",
   "checks": {
     "cache_behavior": "PASS",
@@ -33,19 +33,19 @@
     {
       "assertion": "Tracked Repo Skill contract used by the qualification pilot.",
       "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "ab1c5787412a72de0fa0160160d714ba4e5fb659f73bec9355c058062d4f3156",
+      "sha256": "b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
       "source_ref": "repo:.agents/skills/source-qualification-auditor/SKILL.md"
     },
     {
       "assertion": "The project is proprietary; these Repo Skills are project-owned and introduce no third-party runtime license or service ToS.",
       "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "00a15a216fe51decf4a8c0e0d2e75c49b78db90a1782467f494649c31dd071cb",
+      "sha256": "bc77467e23297ddd1622620bd6eeca1f5967bc29c1600c8db91dd92d4a352056",
       "source_ref": "repo:pyproject.toml"
     },
     {
       "assertion": "The Repo Skill integration adds no runtime package dependency; the existing locked dependency graph is unchanged.",
       "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "94f782183326f4e6e02ab316009b1046c4abe3c8c05b8d357590765094efb3e2",
+      "sha256": "20e3b85a71849600cbe0a65bd29793c01eed33c39029c4a6264d0ff84c044ead",
       "source_ref": "repo:uv.lock"
     },
     {

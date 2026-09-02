@@ -1,8 +1,8 @@
 # Portfolio & Holding Decision Architecture v1
 
-> 状态：v0.2.0 已正式发布；release baseline 为 commit `b776d0054b60d96f5c4da41b10926c1e583bc699`，annotated tag `v0.2.0` 与 GitHub Release 均指向该提交；后续纯文档收尾提交不改变该发布基线
-> 日期：2026-08-31
-> 边界：A 股 long-only 投研、组合研究、持仓复核和模拟交易建议；真实券商执行永久关闭。ETF 当前只开放研究/组合评估基础，paper order/replay 未准入。
+> 状态：v0.2.0 已正式发布；v0.3.0 ETF 深度事实与独立 paper policy 扩展已集成待发布。历史 v0.2.0 release baseline 仍为 commit `b776d0054b60d96f5c4da41b10926c1e583bc699`，annotated tag `v0.2.0` 不移动
+> 日期：2026-09-02
+> 边界：A 股 long-only 投研、组合研究、持仓复核和模拟交易建议；真实券商执行永久关闭。ETF 已有独立、effective-dated paper execution policy，但仓库默认关闭，且绝不复用 STOCK 交易规则。
 
 ## 1. 目标
 
@@ -50,7 +50,7 @@ UserDeclaredTradeCapture
 
 SQLite paper ledger 继续唯一拥有 simulated account/order/fill/position/T+1/corporate-action application。proposal/order 都不等于 position，只有 replay fill 改变持仓。
 
-新增 `InstrumentType.ETF` 后，PaperOperation 和 PaperReplay 显式要求 `InstrumentType.STOCK`；ETF execution 未准入时 fail closed，避免将 ETF 误套股票交易/结算规则。
+PaperOperation/PaperReplay 按 instrument-specific policy 路由。STOCK 继续使用既有规则；ETF 只在目标证券存在有效 `ETFInstrumentExecutionRule`、`execution_enabled=true`、费用仍满足 confirmation gate，并经过既有 prepare/人工确认链时才允许模拟。ETF lot/tick/limit/fee/settlement 在订单准备时冻结到 binding；缺规则、过期、费用不确定或 execution 关闭均 fail closed。只有确认订单后的 fill/replay fill 改变持仓。
 
 ## 3. PIT 公司行动调整研究序列
 
@@ -141,20 +141,23 @@ PortfolioAnalysisReport (CURRENT)
 
 即使 ETF 形成 `NATURAL_HEDGE`，当前 long-only system 也不会生成 `EXPLICIT_HEDGE`。融券、股指期货、期权、margin、inverse/leveraged execution 均不在本版本。
 
-## 7. ETF 研究基础
+## 7. ETF 深度事实与独立模拟执行合同
 
 新增：
 
-- `InstrumentType.ETF`；
-- `ETFProductProfile`：官方产品 lineage、跟踪标的、管理/托管/总费率、instrument-specific 交易单位/价格单位/结算；
-- `ETFResearchMetrics`：同一 `as_of` 的平均日成交额、年化波动、相对绑定基准的 tracking error，并冻结行情/策略 lineage；
+- `InstrumentType.ETF / FUND / INDEX` 的产品身份与基础分类；
+- `ETFProductProfile` / `FundProductProfile` / `IndexProductProfile`：分别冻结 ETF、非 ETF 基金与指数的官方身份和低频产品事实；ETF profile 额外保存 tracking benchmark、费率、规模/份额与交易规则；
+- `ETFResearchMetrics`：同一 `as_of` 的平均日成交额、年化波动、tracking error 与费率视图，并冻结行情/产品/策略 lineage；
+- `ETFNavSighting` / `ETFMarketPriceSighting` / `ETFPremiumDiscountValuation`：分别冻结 NAV/iNAV、市场价以及基于 iNAV 的溢折价，全部带真实 `as_of`、`available_to_system_at` 与 artifact/hash provenance；
+- `ProductConstituentSnapshot`：冻结 ETF/FUND/INDEX 的 PIT 成分与权重，并区分 COMPLETE/PARTIAL 覆盖语义；
 - `InstrumentTradingUnitRule`、`ETFCategory`、`SettlementCycle`；
+- migration `0066` 与 `configs/etf_paper_trading_rules.yaml`：精确 instrument + effective date 的 ETF execution policy，独立保存 lot/tick/price-limit/fee/settlement；
 - EastMoney/Sina intraday capability 对 ETF request 的显式声明；
 - official `PRIMARY_OFFICIAL_WEB` source artifact/hash 与 source-time gate；
 - target portfolio supplemental ETF overlay；
 - hedge-effectiveness evaluation。
 
-当前 reference 体系没有正式 ETF NAV/iNAV 连续序列，因此 `premium_discount_rate` 保持 `None` 并输出 `ETF_PREMIUM_DISCOUNT_UNAVAILABLE_NO_NAV_SERIES`，不得自行推断折溢价。`ETFProductProfile.paper_replay_supported` 当前必须保持 false；注册服务会拒绝宣称已支持 paper replay 的 profile，PaperOperation/PaperReplay 也再次 STOCK-only fail closed。因此本版本是**正式 ETF 研究/组合评估基础，不是 ETF 模拟执行上线**。
+产品/NAV/iNAV 等正式值必须来自具备 PIT、source-time 与不可变 artifact/hash 的已准入产品事实；缺 NAV/iNAV 时不得计算伪溢折价，VERIFIED 级产品缺关键字段直接 fail closed。当前仓库对 ETF paper execution **默认关闭**；只有显式开启且目标证券存在当时有效的精确规则时，PaperOperation/PaperReplay 才消费独立 ETF binding。primary-market creation/redemption 继续不在模拟执行范围；关闭 execution 不影响只读 ETF 研究、组合补全或 hedge evaluation。
 
 ## 8. 持仓事件与动作
 

@@ -33,6 +33,9 @@ AStockMultiAgent 的 canonical Agent Skills 位于 [`../.agents/skills/`](../.ag
 | `$paper-trading-recovery` | 会话式模拟账户、订单/成交恢复、默认 60m replay + 5m fallback | [SKILL.md](../.agents/skills/paper-trading-recovery/SKILL.md) | [paper trading](../docs/workflows/workflow-paper-trading.md) |
 | `$knowledge-ingest` | 批准来源采集、覆盖与知识蒸馏前置 | [SKILL.md](../.agents/skills/knowledge-ingest/SKILL.md) | [knowledge ingest](../docs/workflows/workflow-knowledge-ingest.md) |
 | `$research-tech-scout` | 外部 GitHub/投研平台/社区技术侦察与去重 | [SKILL.md](../.agents/skills/research-tech-scout/SKILL.md) | [research tech scout](../docs/workflows/workflow-research-tech-scout.md) |
+| `$source-qualification-auditor` | 外部能力 M-06 资格、撤销与退出审计，不授予来源权威 | [SKILL.md](../.agents/skills/source-qualification-auditor/SKILL.md) | [research tech scout](../docs/workflows/workflow-research-tech-scout.md) |
+| `$report-visual-qa` | 正式报告渲染页、引用、隐私、资产权利与版式 QA | [SKILL.md](../.agents/skills/report-visual-qa/SKILL.md) | [current company research](../docs/workflows/workflow-current-company-research.md) |
+| `$schema-drift-recorder` | raw-first Schema 漂移记录、候选修复验证与回滚 | [SKILL.md](../.agents/skills/schema-drift-recorder/SKILL.md) | [adaptive edge](../docs/workflows/workflow-adaptive-edge.md) |
 
 ## 维护规则
 

@@ -1590,11 +1590,14 @@ class MarketReferenceService:
             except (AStockError, OSError, ValueError):
                 reasons.append("OFFICIAL_EVIDENCE_LOOKUP_FAILED")
 
-        provider_id = (
-            official_candidates[0].source_id
-            if official_lookup_succeeded and official_candidates and not records
-            else hint_step.provider_id
-        )
+        if official_lookup_succeeded and not records:
+            provider_id = (
+                official_candidates[0].source_id
+                if official_candidates
+                else official_step.provider_id
+            )
+        else:
+            provider_id = hint_step.provider_id
         return self._release(
             command="sync-corporate-actions",
             dataset_kind=ReferenceDatasetKind.CORPORATE_ACTION,

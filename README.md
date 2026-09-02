@@ -2,11 +2,13 @@
 
 AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent 投研与模拟交易系统。自然语言入口可以是 Codex、ChatGPT、Gemini 等支持本地 MCP/仓库工具的模型；确定性的数据、计算、证据、风控和账本工作由 Python 3.12 的 `astock` CLI 完成。
 
-系统的长期设计、尚未完成的真实运行义务和已经验收的工程事实分别维护在：
+系统的长期设计、尚未完成的真实运行义务和**最近一次任务**的验收终态分别维护在：
 
 - [低成本A股多Agent投研系统方案.md](低成本A股多Agent投研系统方案.md)
 - [开发计划.md](开发计划.md)
-- [验收报告.md](验收报告.md)
+- [进度验收.md](进度验收.md)
+
+会影响当前项目理解的稳定工程事实不会长期堆在《进度验收》中，而会同步维护到 `AGENTS.md`、`docs/architecture/`、`docs/workflows/`、本 README 和 canonical Skills；更早的验收流水由 Git/Release 历史追溯。
 
 ## 当前产品能力
 
@@ -14,6 +16,7 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 |---|---|---|
 | 数据 / ObjectStore / Parquet / SQLite / PIT | 已实现 | `probe`、`sync-*`、`reference-*` |
 | Provider Resilience / 全市场按需油路 | 已实现 | ENV↔DIRECT transport lane、BaoStock→EastMoney→Sina fallback、per-market completeness gate、fresh verified snapshot reuse；无需后台预同步 |
+| 官方证券分母 / 宏观 authority / BJSE exact-item | 已实现 / 边界化 | 上交所/深交所官方 denominator freeze；NBS/PBOC/MOF/NDRC recorded-first；BJSE 财报/公司行动 exact-item official capture，不伪造 exhaustive negative proof |
 | 官方公告、PDF/DOCX、Claim-Evidence | 已实现 | `disclosure-*`、文档 / evidence CLI |
 | 财务可信度与红旗审计 | 已实现 | `financial-*` |
 | Research Seeds → Candidate 自动 Promotion | 已实现 | `research-seeds`、`research-seeds-promote`、`candidate-audit` |
@@ -27,12 +30,14 @@ AStockMultiAgent 是一套本地优先、可审计、可恢复的 A 股多 Agent
 | Knowledge Storage Lifecycle | 已实现 / 0057 | 1,066,886 行历史 Semantic/Distillation/Reviewed 流水冷归档；现役 FK 父级闭包保留；单行 knowledge Parquet 已分区合并；archive/restore/Parquet/VACUUM 均有显式审计命令 |
 | Agent Observability | 已实现 / 0058 | Repo Skill selection/execution hit rate、仅标注样本 routing precision/recall、任务耗时、ResearchRun stage/provider/cache、双源数据对齐质量统一报表 |
 | External Research Tech Scout | 已实现 | `$research-tech-scout`；GitHub/投研平台/社区发现 → 去重 → ADAPT/SHADOW/WATCH/REJECT，不自动改变生产权重 |
+| External Capability Qualification | 已实现 / M-06 fail-closed | 九项 E-02 候选按固定版本、License/ToS/data-rights/PIT/provenance/SBOM/live/exit 取证；当前只有 `$source-qualification-auditor` 作为治理 Skill 为 `PRODUCTION_BACKUP`，其余候选保持 `SHADOW` |
 | PIT Temporal Validity | 已实现 | `pit-temporal-audit`：availability/reference time 分离、O(V+E) temporal non-interference；truncation property tests；`pit-knowledge-cutoff-diagnostic` 仅作跨时期衰减诊断 |
 | 投资委员会 | 已实现 | `committee-*`；委员会只消费冻结工件 |
 | PIT TradingClassification | 已实现 | `trading-classification-*` |
 | 最终模拟研究协议 | 已实现 | `ClassifiedTradeProtocol`、`trade-plan-view` |
 | 组合评估 | 已实现 | `portfolio-paper-evaluate`、`portfolio-evaluate` |
 | 组合构建 | 已实现 | `portfolio-construct`、`portfolio-audit` |
+| ETF 产品深度事实与独立 paper policy | 已实现 / execution 默认关闭 | 产品身份、benchmark、费率、AUM/份额、NAV/iNAV、market price、溢折价、成分/权重、tracking error/liquidity；ETF lot/tick/fee/settlement 独立于 STOCK，只有显式有效 instrument rule + 确认链才能模拟 |
 | 持续投研与 Watch Universe | 已实现 / 0059 | 60m 行情、CNINFO、GDELT lead、Catalyst、typed rule、事件/研究任务、lease/heartbeat、恢复式 daemon |
 | 模拟账户生命周期 | 已实现 | 保留账户/订单/成交/确认；默认 60m，5m 高精度 fallback；已确认开放模拟订单可由 monitor 持续 deterministic replay |
 | Phase 7 前向影子评测 | 程序完成 / 真实样本采集中 | 正式 6-arm study，当前 0/100 |

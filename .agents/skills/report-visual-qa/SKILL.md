@@ -24,3 +24,7 @@ Return the ReportManifest identity, output hash, deterministic integrity finding
 - Do not treat a Skill result as new source authority or bypass ReportService/ObjectStore lineage.
 - Do not copy images with unknown rights into a report or suppress privacy findings.
 - Do not enable broker execution; `broker_execution_allowed=false` remains unchanged.
+
+## Workflows
+
+- [Current Company Research](../../../docs/workflows/workflow-current-company-research.md) — use on the formal report produced from the frozen research facts when rendered-page QA is required before delivery.

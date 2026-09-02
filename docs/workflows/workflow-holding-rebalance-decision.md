@@ -52,7 +52,7 @@ Primary skill: `$holding-monitor`; aggregate allocation uses `$portfolio-manager
 8. **Persist the review, not a fake fill**
    - Run the formal HoldingReview/PositionActionProposal path when material and audit it.
    - Save the concise review boundary with `local-portfolio-review` so the next session can work incrementally.
-   - If a simulated order follows, only `paper-replay` fill + `local-portfolio-sync-paper` changes position quantity. ETF paper execution is currently not admitted.
+   - If a simulated order follows, only `paper-replay` fill + `local-portfolio-sync-paper` changes position quantity. ETF simulation is default-off and is allowed only when a valid independent `ETFInstrumentExecutionRule` covers the instrument/date and the existing confirmation/replay gates all pass; STOCK mechanics must never be reused implicitly.
 
 9. **Batch portfolio re-evaluation for shared events**
    - When one macro/industry event affects multiple holdings, aggregate affected positions and perform one portfolio-level recomputation through `$portfolio-manager` rather than one full matrix calculation per name.

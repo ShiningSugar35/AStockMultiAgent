@@ -1,6 +1,6 @@
 {
   "admitted_stage": "SHADOW",
-  "candidate_version": "sha256:a9b8d0a5d76f88bd5a327dd331487ec918a2992b1aabfec2516784bc7312f188",
+  "candidate_version": "sha256:191aa0f2d527ccca5dc574d26daee51b6e49d83cbad7d5ccae9774a0930d8202",
   "capability_id": "report-visual-qa",
   "checks": {
     "cache_behavior": "PASS",
@@ -22,7 +22,7 @@
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
   "evidence_object_hashes": [
-    "d5bcd8ca2a27266126fd646b21547b5dc6a5659d38f813661912e41b5e37e5c7"
+    "bfcaf71372663d974bfe1feb76b49e4706f29bde4d9f8840e57b6efd69399c33"
   ],
   "expires_at": "2026-10-02T06:16:28Z",
   "reason_codes": [
@@ -30,7 +30,7 @@
     "VISUAL_LATENCY_AND_FAILURE_BEHAVIOR_NOT_VALIDATED"
   ],
   "recorded_validation": "PASS",
-  "report_id": "478f9b0f95578bd20b1dcd080b82acfcefc538daf2c9ac7d6137d323061f6393",
+  "report_id": "c005acdf12f8357025c2ba052131de87c0e13fb68dad41e208daa31313a950c0",
   "requested_stage": "SHADOW",
   "schema_version": "capability-qualification-report-v1",
   "source_class_ceiling": "UNKNOWN",

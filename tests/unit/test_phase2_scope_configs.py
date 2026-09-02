@@ -121,14 +121,13 @@ def test_root_documents_name_current_sources_and_knowledge_boundaries() -> None:
         encoding="utf-8"
     )
     plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
-    acceptance = (PROJECT_ROOT / "验收报告.md").read_text(encoding="utf-8")
     for text in (
         "MR Dang",
         "黄彦臻",
         "派大星皮皮",
         "寒武纪的鳄鱼",
     ):
-        assert text in acceptance
+        assert text in design
     for text in (
         "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate",
         "`ParagraphUnit` 是原文存储和定位单位",

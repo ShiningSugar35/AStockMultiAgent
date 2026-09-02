@@ -53,6 +53,7 @@ desktop.ini
 
 # Logs, AI bridge state, and temporary files
 .ai-bridge/
+.agent-runtime/
 .devbridge/
 bash.cmd
 tmp/

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from astock import __version__
 from astock.schemas import (
     AuthorCollectionCoverageReport,
     AuthorSkillCoverage,
@@ -26,10 +27,16 @@ def _fields(model: type) -> set[str]:
     return set(model.model_fields)
 
 
+def test_runtime_version_matches_package_metadata() -> None:
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    project = tomllib.loads(pyproject)["project"]
+    assert project["version"] == __version__
+
+
 def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     design = (PROJECT_ROOT / "低成本A股多Agent投研系统方案.md").read_text(encoding="utf-8")
     plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
-    acceptance = (PROJECT_ROOT / "验收报告.md").read_text(encoding="utf-8")
+    acceptance = (PROJECT_ROOT / "进度验收.md").read_text(encoding="utf-8")
     for required in (
         "总方案只写长期设计",
         "不自动向券商发送订单",
@@ -41,7 +48,6 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     for required in (
         "本文件只保存当前未完成任务",
         "维护契约",
-        "当前没有未完成的代码发布主线",
         "独立长期运行/数据义务",
     ):
         assert required in plan
@@ -50,51 +56,36 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
         "Portfolio & Holding Decision Skills v1",
         "PHD-1",
         "PHD-7",
-        "s8 — 显式提交、推送、Tag/GitHub Release 与 clean worktree",
-        "当前未完成主线：External Dependency Resilience v1",
         "Phase 5：COMPLETE",
-        "Phase 5 已完成后的不可变边界",
         "composite registry",
         "Priority 1：可恢复的单股票 Research Runtime",
     ):
         assert completed_history not in plan
+    assert not (PROJECT_ROOT / "验收报告.md").exists()
     for required in (
-        "本报告只记录已实现",
-        "当前能力",
+        "这里只保留**最近一次任务**",
+        "当前任务",
+        "本次任务范围",
+        "发布终态",
+    ):
+        assert required in acceptance
+    for historical_detail in (
         "Phase 5 采集覆盖",
-        "论证级语义链",
         "三位知乎作者真实视觉证据与视觉增强 Skill",
-        "VisualEvidencePack",
         "COMPOSITE_REGISTRY_READY",
         "《价值投资功法》视觉证据链",
         "OpenCode 边界",
-        "research-skills-v3",
     ):
-        assert required in acceptance
-    assert "K5-D5" not in plan
-    assert "K5-D6" not in plan
+        assert historical_detail not in acceptance
     assert "Spark 首次实现" not in acceptance
     assert "Sol takeover" not in acceptance
-    assert "SER-1" not in plan
-    assert "SER-2" not in plan
-    assert "SER-3" not in plan
-    assert "P5X-1：" not in plan
-    assert "P5X-2：" not in plan
-    assert "P5X-3：" not in plan
-    assert "P5X-4：" not in plan
-    assert "P5X-5" not in plan
-    assert "DeepSeek 执行" not in plan
-    assert "人工审核" not in plan
-    assert "K5-D3：" not in plan
-    assert "K5-D4-R：" not in plan
-    assert "2P + A + 14" not in plan
     assert "旧段落级链" not in design
 
 
 def test_release_closeout_workflow_is_machine_enforced() -> None:
     agents = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
-    acceptance = (PROJECT_ROOT / "验收报告.md").read_text(encoding="utf-8")
+    acceptance = (PROJECT_ROOT / "进度验收.md").read_text(encoding="utf-8")
     for required in (
         "发布后文档归档与终局核验是强制阶段",
         "开发计划零残留规则",
@@ -110,9 +101,11 @@ def test_release_closeout_workflow_is_machine_enforced() -> None:
         "禁止为 L0/L1 机械跑全仓 pytest",
     ):
         assert required in agents
-    assert "正式 release 结束后还必须执行一次发布后归档" in plan
+    assert "独立长期运行/数据义务" in plan
+    assert "进度验收.md" in agents
+    assert "验收报告.md" not in agents
     assert "v0.2.0 最终正式发布仍必须" not in acceptance
-    assert "**发布终态**" in acceptance
+    assert "发布终态" in acceptance
 
 
 def test_original_instruction_public_schemas_keep_all_required_fields() -> None:

@@ -1,0 +1,40 @@
+{
+  "schema_version": "macro-release-v1",
+  "_astock_source": "ndrc-pricing-policy-release",
+  "_astock_request": {
+    "indicator_code": "refined_oil_price",
+    "purpose": "MACRO_ECONOMIC_RELEASE"
+  },
+  "indicator_code": "refined_oil_price",
+  "indicator_name": "成品油价格调整",
+  "observation_period": "2026-07-01",
+  "publication_date": "2026-06-30",
+  "revision_version": 1,
+  "available_to_system_at": "2026-06-30T18:00:00+08:00",
+  "source_url": "https://www.ndrc.gov.cn/xwdt/xwfb/",
+  "data_points": [
+    {
+      "period": "2026-07-01",
+      "product": "92号汽油",
+      "price": 7.85,
+      "unit": "元/升",
+      "adjustment": 0.15,
+      "adjustment_direction": "up"
+    },
+    {
+      "period": "2026-07-01",
+      "product": "0号柴油",
+      "price": 7.52,
+      "unit": "元/升",
+      "adjustment": 0.14,
+      "adjustment_direction": "up"
+    }
+  ],
+  "revision_history": [
+    {
+      "version": 1,
+      "date": "2026-06-30",
+      "description": "价格调整通知"
+    }
+  ]
+}

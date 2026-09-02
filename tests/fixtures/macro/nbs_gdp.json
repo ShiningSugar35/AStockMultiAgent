@@ -1,0 +1,38 @@
+{
+  "schema_version": "macro-release-v1",
+  "_astock_source": "nbs-statistical-release",
+  "_astock_request": {
+    "indicator_code": "gdp",
+    "purpose": "MACRO_ECONOMIC_RELEASE"
+  },
+  "indicator_code": "gdp",
+  "indicator_name": "国内生产总值",
+  "observation_period": "2026-Q2",
+  "publication_date": "2026-07-15",
+  "revision_version": 1,
+  "available_to_system_at": "2026-07-15T10:00:00+08:00",
+  "source_url": "https://data.stats.gov.cn/easyquery.htm?cn=A01&zb=A0201",
+  "data_points": [
+    {
+      "period": "2026-Q2",
+      "value": 342000.0,
+      "unit": "亿元",
+      "growth_rate_yoy": 5.0,
+      "seasonally_adjusted": false
+    },
+    {
+      "period": "2026-Q1",
+      "value": 296000.0,
+      "unit": "亿元",
+      "growth_rate_yoy": 5.3,
+      "seasonally_adjusted": false
+    }
+  ],
+  "revision_history": [
+    {
+      "version": 1,
+      "date": "2026-07-15",
+      "description": "初步核算"
+    }
+  ]
+}

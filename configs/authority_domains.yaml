@@ -3,16 +3,16 @@ sources:
   - source_id: sse-official-web
     domains: [sse.com.cn]
     source_class: PRIMARY_OFFICIAL_WEB
-    capabilities: [instrument.identity, market.calendar, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
-    formal_capabilities: [instrument.identity, market.calendar, disclosure.document, financial.official_document, web.authoritative_fact]
-    exhaustive_capabilities: []
+    capabilities: [instrument.master, instrument.identity, market.calendar, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
+    formal_capabilities: [instrument.master, instrument.identity, market.calendar, disclosure.document, financial.official_document, web.authoritative_fact]
+    exhaustive_capabilities: [instrument.master]
     independence_group: SSE_OFFICIAL
   - source_id: szse-official-web
     domains: [szse.cn]
     source_class: PRIMARY_OFFICIAL_WEB
-    capabilities: [instrument.identity, market.calendar, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
-    formal_capabilities: [instrument.identity, market.calendar, disclosure.document, financial.official_document, web.authoritative_fact]
-    exhaustive_capabilities: []
+    capabilities: [instrument.master, instrument.identity, market.calendar, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
+    formal_capabilities: [instrument.master, instrument.identity, market.calendar, disclosure.document, financial.official_document, web.authoritative_fact]
+    exhaustive_capabilities: [instrument.master]
     independence_group: SZSE_OFFICIAL
   - source_id: bse-official-web
     domains: [bse.cn, bseinfo.net]
@@ -24,8 +24,8 @@ sources:
   - source_id: cninfo-official-web
     domains: [cninfo.com.cn]
     source_class: PRIMARY_OFFICIAL_WEB
-    capabilities: [instrument.identity, disclosure.discover, disclosure.document, financial.official_document, web.authoritative_fact]
-    formal_capabilities: [instrument.identity, disclosure.document, financial.official_document, web.authoritative_fact]
+    capabilities: [instrument.identity, disclosure.discover, disclosure.document, financial.official_document, financial.official_report, corporate_actions.official_evidence, web.authoritative_fact]
+    formal_capabilities: [instrument.identity, disclosure.document, financial.official_document, financial.official_report, corporate_actions.official_evidence, web.authoritative_fact]
     exhaustive_capabilities: []
     independence_group: CNINFO_OFFICIAL
   - source_id: csrc-official-web
@@ -42,3 +42,31 @@ sources:
     formal_capabilities: [web.authoritative_fact]
     exhaustive_capabilities: []
     independence_group: GOVERNMENT_OFFICIAL
+  - source_id: nbs-official-web
+    domains: [stats.gov.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [macro.statistical_release, web.authoritative_fact]
+    formal_capabilities: [macro.statistical_release, web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: NBS_OFFICIAL
+  - source_id: pboc-official-web
+    domains: [pbc.gov.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [macro.monetary_policy_release, web.authoritative_fact]
+    formal_capabilities: [macro.monetary_policy_release, web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: PBOC_OFFICIAL
+  - source_id: mof-official-web
+    domains: [mof.gov.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [macro.fiscal_policy_release, web.authoritative_fact]
+    formal_capabilities: [macro.fiscal_policy_release, web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: MOF_OFFICIAL
+  - source_id: ndrc-official-web
+    domains: [ndrc.gov.cn]
+    source_class: PRIMARY_OFFICIAL_WEB
+    capabilities: [macro.pricing_policy_release, web.authoritative_fact]
+    formal_capabilities: [macro.pricing_policy_release, web.authoritative_fact]
+    exhaustive_capabilities: []
+    independence_group: NDRC_OFFICIAL

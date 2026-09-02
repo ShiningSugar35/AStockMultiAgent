@@ -29,15 +29,28 @@ routes:
     - {provider_id: baostock-reference, operation: baostock-corporate-hint}
   corporate_actions.official_evidence:
     - {provider_id: cninfo-disclosures, operation: cninfo-official}
+macro_authority_routes:
+  macro.statistical_release:
+    - {provider_id: nbs-statistical-release, operation: nbs-indicator}
+  macro.monetary_policy_release:
+    - {provider_id: pboc-monetary-policy-release, operation: pboc-indicator}
+  macro.fiscal_policy_release:
+    - {provider_id: mof-fiscal-policy-release, operation: mof-indicator}
+  macro.pricing_policy_release:
+    - {provider_id: ndrc-pricing-policy-release, operation: ndrc-indicator}
 official_market_coverage:
   corporate_actions.official_evidence:
     XSHG: AVAILABLE
     XSHE: AVAILABLE
-    BJSE: UNAVAILABLE
+    BJSE: AVAILABLE
   financial.official_report:
     XSHG: AVAILABLE
     XSHE: AVAILABLE
-    BJSE: UNAVAILABLE
+    BJSE: AVAILABLE
+  instrument.master:
+    XSHG: UNAVAILABLE
+    XSHE: UNAVAILABLE
+    BJSE: AVAILABLE
 daily_adjustment_mode: NONE
 daily_timestamp_semantics: SHANGHAI_SESSION_CLOSE
 volume_unit: SHARE

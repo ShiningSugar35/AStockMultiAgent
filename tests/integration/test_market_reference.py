@@ -193,7 +193,7 @@ def test_corporate_actions_link_only_official_document_and_never_touch_ledger(
     assert linked.status == "PARTIAL"
     assert "TERMS_NOT_VERIFIED" in linked.reason_codes
     assert bjse.status == "PARTIAL"
-    assert "OFFICIAL_EVIDENCE_UNAVAILABLE" in bjse.reason_codes
+    assert "OFFICIAL_DOCUMENT_NOT_FOUND" in bjse.reason_codes
     linked_status = service.status(
         ReferenceDatasetKind.CORPORATE_ACTION, "XSHG:600519"
     )

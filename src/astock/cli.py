@@ -113,6 +113,7 @@ from astock.market_data.storage import (
     canonical_manifest_path,
 )
 from astock.market_data.sync import MarketSyncService
+from astock.operations_cli import register_operations_commands
 from astock.paper_trading import (
     LedgerService,
     MarketReferencePaperVerifier,
@@ -405,6 +406,7 @@ register_knowledge_storage_commands(app, _services, _emit)
 register_local_portfolio_commands(app, _services)
 register_external_capability_commands(app, _services, _emit)
 register_report_commands(app, _services, _emit)
+register_operations_commands(app, _services, _emit)
 register_research_runtime_commands(
     app,
     _services,

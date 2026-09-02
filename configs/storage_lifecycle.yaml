@@ -1,0 +1,27 @@
+schema_version: storage-lifecycle-policy-v1
+object_store:
+  orphan_retention_days: 14
+  scan_limit: 20000
+runtime_tmp:
+  retention_hours: 24
+  scan_limit: 5000
+report_staging:
+  retention_hours: 24
+  scan_limit: 2000
+report_output:
+  orphan_retention_days: 90
+  scan_limit: 5000
+logs:
+  retention_hours: 336
+  scan_limit: 1000
+watermarks:
+  runtime_warning_bytes: 5368709120
+  runtime_critical_bytes: 10737418240
+  object_store_warning_bytes: 4294967296
+  report_warning_bytes: 1073741824
+  temp_warning_bytes: 1073741824
+operations_slo:
+  evidence_freshness_target_seconds: 86400
+  monitor_backlog_warning: 100
+  provider_degraded_warning: 1
+  report_success_rate_target: 0.95

@@ -1,0 +1,42 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "0.0.80",
+  "capability_id": "playwright-mcp",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "PASS",
+    "credential_handling": "FAIL",
+    "data_rights": "FAIL",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "FAIL",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "FAIL"
+  },
+  "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
+  "evidence_object_hashes": [
+    "74eacb2c69c952ea84b131093ddb7589ca5cda52d1e1cd4ca1ed54b8441b6d29"
+  ],
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "BROWSER_CREDENTIAL_ISOLATION_NOT_VALIDATED",
+    "BROWSER_RUNTIME_SBOM_SECURITY_NOT_FROZEN",
+    "CONTROLLED_LIVE_MCP_BROWSER_TRANSACTION_NOT_RUN",
+    "MCP_RECORDED_FIXTURE_NOT_FROZEN",
+    "PIT_CACHE_FAILURE_LATENCY_NOT_VALIDATED",
+    "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
+  ],
+  "recorded_validation": "FAIL",
+  "report_id": "5d7736b90f741e016f00870c3f4f908b3a219d7cdd6eef35d1f548f8baf5721e",
+  "requested_stage": "SHADOW",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-09-02T06:16:28Z"
+}

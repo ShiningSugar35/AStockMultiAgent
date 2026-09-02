@@ -29,6 +29,12 @@ EXPECTED = {
     "research-tech-scout": ("external", "scout"),
 }
 
+E02_GOVERNANCE_SKILLS = {
+    "source-qualification-auditor": ("qualification", "external"),
+    "report-visual-qa": ("rendered", "report"),
+    "schema-drift-recorder": ("schema", "drift"),
+}
+
 
 def frontmatter(path: Path) -> dict[str, str]:
     text = path.read_text(encoding="utf-8")
@@ -38,8 +44,9 @@ def frontmatter(path: Path) -> dict[str, str]:
 
 
 def test_all_repo_skills_have_valid_trigger_metadata_and_ui() -> None:
-    assert {path.name for path in SKILLS_ROOT.iterdir() if path.is_dir()} == set(EXPECTED)
-    for name, trigger_terms in EXPECTED.items():
+    expected = EXPECTED | E02_GOVERNANCE_SKILLS
+    assert {path.name for path in SKILLS_ROOT.iterdir() if path.is_dir()} == set(expected)
+    for name, trigger_terms in expected.items():
         folder = SKILLS_ROOT / name
         metadata = frontmatter(folder / "SKILL.md")
         assert metadata["name"] == name

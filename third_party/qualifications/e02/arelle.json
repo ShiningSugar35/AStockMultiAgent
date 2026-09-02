@@ -1,0 +1,51 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "2.44.6",
+  "capability_id": "arelle",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "PASS",
+    "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "PASS",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "PASS"
+  },
+  "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
+  "created_at": "2026-09-02T06:16:28Z",
+  "evidence_version": "e02-qualification-evidence-v1",
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "CONTROLLED_LIVE_XBRL_NOT_RUN",
+    "PERFORMANCE_CACHE_FAILURE_NOT_VALIDATED",
+    "RECORDED_XBRL_CROSSCHECK_NOT_RUN",
+    "SBOM_SECURITY_NOT_FROZEN"
+  ],
+  "recorded_validation": "FAIL",
+  "requested_stage": "SHADOW",
+  "schema_version": "1.0",
+  "source_class_ceiling": "UNKNOWN",
+  "sources": [
+    {
+      "assertion": "{\"artifact_filename\": \"arelle_release-2.44.6-py3-none-any.whl\", \"artifact_sha256\": \"ac6757b7e6dcc3b2b9a4cf2db3618ad273a17cac1880ace3a380682fce6ecde9\", \"artifact_size\": 6083902, \"license\": null, \"license_expression\": \"Apache-2.0\", \"name\": \"arelle-release\", \"project_urls\": {\"Blog\": \"https://arelle.org/updates/\", \"Bug Reports\": \"https://github.com/Arelle/Arelle/issues/\", \"Documentation\": \"https://arelle.readthedocs.io/en/latest/\", \"Downloads\": \"https://arelle.org/download/\", \"Homepage\": \"https://arelle.org/\", \"Source Code\": \"https://github.com/Arelle/Arelle/\", \"Support\": \"https://groups.google.com/g/arelle-users/\"}, \"requires_dist_count\": 33, \"requires_python\": \">=3.10\", \"uploaded_at\": \"2026-09-01T16:14:09.078527Z\", \"version\": \"2.44.6\"}",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "ac6757b7e6dcc3b2b9a4cf2db3618ad273a17cac1880ace3a380682fce6ecde9",
+      "source_ref": "https://pypi.org/pypi/arelle-release/json"
+    },
+    {
+      "assertion": "Exact arelle-release 2.44.6 imported successfully in an ephemeral uv environment; this is install/import evidence only, not an XBRL capability smoke.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "source_ref": "local-command:uv-run-arelle-import"
+    }
+  ],
+  "valid_from": "2026-09-02T06:16:28Z"
+}

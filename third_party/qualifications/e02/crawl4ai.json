@@ -1,0 +1,54 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "0.9.3",
+  "capability_id": "crawl4ai",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "PASS",
+    "credential_handling": "FAIL",
+    "data_rights": "FAIL",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "FAIL",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "FAIL"
+  },
+  "completeness_ceiling": "EXACT_ITEM",
+  "controlled_live_validation": "FAIL",
+  "created_at": "2026-09-02T06:16:28Z",
+  "evidence_version": "e02-qualification-evidence-v1",
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "BROWSER_CREDENTIAL_ISOLATION_NOT_VALIDATED",
+    "CONTROLLED_LIVE_CRAWL_NOT_RUN",
+    "PERFORMANCE_CACHE_FAILURE_NOT_VALIDATED",
+    "RECORDED_CRAWL_FIXTURE_NOT_FROZEN",
+    "SBOM_SECURITY_REVIEW_INCOMPLETE",
+    "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
+  ],
+  "recorded_validation": "FAIL",
+  "requested_stage": "SHADOW",
+  "schema_version": "1.0",
+  "source_class_ceiling": "UNKNOWN",
+  "sources": [
+    {
+      "assertion": "{\"artifact_filename\": \"crawl4ai-0.9.3-py3-none-any.whl\", \"artifact_sha256\": \"3c479cd4be60fb91f663e90cf9c005fa5844261fe3c1c75af81636f2d832ec2c\", \"artifact_size\": 485831, \"license\": null, \"license_expression\": \"Apache-2.0\", \"name\": \"Crawl4AI\", \"project_urls\": {\"Homepage\": \"https://github.com/unclecode/crawl4ai\"}, \"requires_dist_count\": 54, \"requires_python\": \">=3.10\", \"uploaded_at\": \"2026-08-31T11:34:09.028686Z\", \"version\": \"0.9.3\"}",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "3c479cd4be60fb91f663e90cf9c005fa5844261fe3c1c75af81636f2d832ec2c",
+      "source_ref": "https://pypi.org/pypi/Crawl4AI/json"
+    },
+    {
+      "assertion": "Current 0.9.3 release is explicitly a security release fixing multiple PDF/browser issues; the pilot did not infer a complete security PASS from that release note.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "9e5824a91a05969776fb773560d10aaf025fbfd3980d18aa2de0e6b8e773bd3a",
+      "source_ref": "https://pypi.org/pypi/Crawl4AI/0.9.3/json#info.description"
+    }
+  ],
+  "valid_from": "2026-09-02T06:16:28Z"
+}

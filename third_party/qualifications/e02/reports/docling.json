@@ -1,0 +1,41 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "2.124.0",
+  "capability_id": "docling",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "FAIL",
+    "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "FAIL",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "PASS",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "PASS"
+  },
+  "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
+  "evidence_object_hashes": [
+    "901272b32c3597f86221e5d865700afea0b421358a6587d1a6404c416fe05eef"
+  ],
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "CONTROLLED_LIVE_DOCUMENT_PARSE_NOT_RUN",
+    "MODEL_LICENSE_SET_NOT_FROZEN",
+    "RECORDED_DOCUMENT_CROSSCHECK_NOT_RUN",
+    "RESOURCE_CACHE_FAILURE_NOT_VALIDATED",
+    "SBOM_SECURITY_NOT_FROZEN"
+  ],
+  "recorded_validation": "FAIL",
+  "report_id": "2f6d73ab90152d9d3044d884dde543bb024257c3bfe394e464c69e13e1e835a4",
+  "requested_stage": "SHADOW",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-09-02T06:16:28Z"
+}

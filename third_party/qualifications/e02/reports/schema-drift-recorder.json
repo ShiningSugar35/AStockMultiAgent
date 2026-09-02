@@ -1,0 +1,37 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "sha256:12093dc61ccf16475ad71bd9343a6af450b140b5d75a4d033e0dc23691b7560c",
+  "capability_id": "schema-drift-recorder",
+  "checks": {
+    "cache_behavior": "PASS",
+    "cost": "PASS",
+    "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "PASS",
+    "latency": "PASS",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "PASS",
+    "pit": "PASS",
+    "provenance": "PASS",
+    "sbom": "PASS",
+    "security_review": "PASS",
+    "terms_of_service": "PASS"
+  },
+  "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
+  "evidence_object_hashes": [
+    "17286dc2e2a5ea5edc68a6147899b0ff25c1dec8eaeda410eb5cf1b94262ca4f"
+  ],
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "END_TO_END_CONTROLLED_LIVE_DRIFT_CAPTURE_NOT_RUN"
+  ],
+  "recorded_validation": "PASS",
+  "report_id": "672f3a32b26ad4c5be4792a489c70e781ded2eacf7f610dae5ea27451e3f5edd",
+  "requested_stage": "SHADOW",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-09-02T06:16:28Z"
+}

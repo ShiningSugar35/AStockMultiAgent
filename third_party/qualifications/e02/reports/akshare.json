@@ -1,0 +1,42 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "1.18.94",
+  "capability_id": "akshare",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "PASS",
+    "credential_handling": "PASS",
+    "data_rights": "FAIL",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "FAIL",
+    "provenance": "FAIL",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "FAIL"
+  },
+  "completeness_ceiling": "EXACT_ITEM",
+  "controlled_live_validation": "FAIL",
+  "evidence_object_hashes": [
+    "6b899b47417c5db3a2427229c7b47ab3ed6a0c4220ff860b966b8543943746f1"
+  ],
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "AKSHARE_ACADEMIC_RESEARCH_STATEMENT",
+    "CONTROLLED_LIVE_ENDPOINT_NOT_RUN",
+    "ENDPOINT_PIT_AND_PROVENANCE_NOT_PROVEN",
+    "NO_ENDPOINT_SPECIFIC_UPSTREAM_RIGHTS_REVIEW",
+    "RECORDED_ENDPOINT_FIXTURE_NOT_FROZEN",
+    "SBOM_SECURITY_NOT_FROZEN"
+  ],
+  "recorded_validation": "FAIL",
+  "report_id": "bb9738f0c6b97f5e3298887709d26b1543db1a1bec928ca40185e2a2b99f7a06",
+  "requested_stage": "SHADOW",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "SECONDARY_STRUCTURED",
+  "valid_from": "2026-09-02T06:16:28Z"
+}

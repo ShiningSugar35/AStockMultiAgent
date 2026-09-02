@@ -1,0 +1,4 @@
+interface:
+  display_name: "Schema 漂移记录"
+  short_description: "Record raw schema drift and validate repair candidates"
+  default_prompt: "Use $schema-drift-recorder to preserve raw drift evidence and validate a repair proposal without mutating production parsers."

@@ -1,0 +1,52 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "0.0.80",
+  "capability_id": "playwright-mcp",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "PASS",
+    "credential_handling": "FAIL",
+    "data_rights": "FAIL",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "FAIL",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "FAIL"
+  },
+  "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
+  "created_at": "2026-09-02T06:16:28Z",
+  "evidence_version": "e02-qualification-evidence-v1",
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "BROWSER_CREDENTIAL_ISOLATION_NOT_VALIDATED",
+    "BROWSER_RUNTIME_SBOM_SECURITY_NOT_FROZEN",
+    "CONTROLLED_LIVE_MCP_BROWSER_TRANSACTION_NOT_RUN",
+    "MCP_RECORDED_FIXTURE_NOT_FROZEN",
+    "PIT_CACHE_FAILURE_LATENCY_NOT_VALIDATED",
+    "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
+  ],
+  "recorded_validation": "FAIL",
+  "requested_stage": "SHADOW",
+  "schema_version": "1.0",
+  "source_class_ceiling": "UNKNOWN",
+  "sources": [
+    {
+      "assertion": "{\"dependencies\": {\"playwright\": \"1.63.0-alpha-2026-08-31\", \"playwright-core\": \"1.63.0-alpha-2026-08-31\"}, \"engines\": {\"node\": \">=18\"}, \"integrity\": \"sha512-FOPXHm2SvFhAQylm10jMZ35B/SR2TaMLVkavAlwoG4N2qCb5RqbvhQYcu3zmXNyxR2DW0Ooxe+9XPVt5UjKRCQ==\", \"license\": \"Apache-2.0\", \"name\": \"@playwright/mcp\", \"published_at\": \"2026-09-01T03:48:24.350Z\", \"repository\": {\"type\": \"git\", \"url\": \"git+https://github.com/microsoft/playwright-mcp.git\"}, \"shasum\": \"5ef4341aad22b3d85a7543a8426b371c5eea8742\", \"version\": \"0.0.80\"}",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "source_ref": "https://registry.npmjs.org/%40playwright%2Fmcp/latest"
+    },
+    {
+      "assertion": "npx 10.9.3 is available, but no MCP client/browser transaction was executed; package availability is not controlled-live evidence.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "source_ref": "local-command:npx-version"
+    }
+  ],
+  "valid_from": "2026-09-02T06:16:28Z"
+}

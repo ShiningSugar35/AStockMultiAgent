@@ -1,0 +1,4 @@
+interface:
+  display_name: "外部能力资格审计"
+  short_description: "Audit external qualification gates and safe revocation"
+  default_prompt: "Use $source-qualification-auditor to verify current evidence and M-06 admission gates for an external capability."

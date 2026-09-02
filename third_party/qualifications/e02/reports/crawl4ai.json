@@ -1,0 +1,42 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "0.9.3",
+  "capability_id": "crawl4ai",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "PASS",
+    "credential_handling": "FAIL",
+    "data_rights": "FAIL",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "FAIL",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "FAIL"
+  },
+  "completeness_ceiling": "EXACT_ITEM",
+  "controlled_live_validation": "FAIL",
+  "evidence_object_hashes": [
+    "b8655ae62e8aa1b2a905f5993896d804020c42d4677ede81ba45ea767b93834f"
+  ],
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "BROWSER_CREDENTIAL_ISOLATION_NOT_VALIDATED",
+    "CONTROLLED_LIVE_CRAWL_NOT_RUN",
+    "PERFORMANCE_CACHE_FAILURE_NOT_VALIDATED",
+    "RECORDED_CRAWL_FIXTURE_NOT_FROZEN",
+    "SBOM_SECURITY_REVIEW_INCOMPLETE",
+    "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
+  ],
+  "recorded_validation": "FAIL",
+  "report_id": "0045c1efc766d61af4cecd85e10013fa38d855009bfc8ecfb20b7e5accba55a6",
+  "requested_stage": "SHADOW",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-09-02T06:16:28Z"
+}

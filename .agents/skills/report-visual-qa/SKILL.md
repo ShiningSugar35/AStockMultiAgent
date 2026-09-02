@@ -1,39 +1,26 @@
 ---
 name: report-visual-qa
-description: DOCX/PDF rendering, pagination, table, font, reference, image rights, privacy, output hash verification; consumes report service products, does not establish second report facts source
+description: Review rendered report visual QA, manifest integrity, privacy, citations, assets, and delivery failures without changing research facts.
 ---
 
 # Report Visual QA
 
-## Responsibility
-Formal report of visual and delivery acceptance: DOCX/PDF rendering, pagination, widowed headings, table truncation, font fallback, Chinese display, references, image rights, privacy scan, output hash and Manifest reconciliation. This Skill consumes report service products and does not establish a second report facts source.
+1. Read `uv run astock report-policy-status` and `uv run astock report-schema` before reviewing output so format, privacy, citation, asset-rights and converter requirements come from the existing report contract.
+2. Review only products emitted by the existing report service. Keep the report source artifact, CitationManifest, AssetManifest and ReportManifest as the authoritative delivery lineage; this Skill does not create a second report facts store.
+3. Verify deterministic checks first: terminal report status, output hash/manifest identity, citation references, asset-rights status, privacy audit result, requested output format and converter capability. Fail closed on a missing or corrupt artifact.
+4. When a rendered PDF/DOCX is available, inspect the actual rendered pages for clipping, missing glyphs, table truncation, orphaned headings, broken images and unreadable layout. A text extraction success is not evidence that visual rendering passed.
+5. If visual inspection is unavailable in the current environment, report the visual gate as incomplete and keep this Skill in `SHADOW`; do not invent a PASS from source text or file existence.
+6. On a failed visual check, preserve the original source and report artifacts, record the violation, and use the existing report recovery/publish path rather than rewriting research content inside the QA Skill.
+7. Record selection/completion through `uv run astock agent-observation-register <request.json>` and inspect `uv run astock agent-observability-report --lookback-days 30` for Skill routing telemetry.
 
-## Triggers
-- **Negative**: When rendering produces visual artifacts (missing content, truncation, font fallback errors, unrendered Chinese characters, broken references, privacy redactions failures, hash mismatches), the skill returns `REJECTED` with specific placement violation codes.
-- **Conflict routing**: When multiple report formats compete for the same output slot, the skill resolves through the existing document validation pipeline without creating a second facts source.
-- **Fact/permission protection**: Ensures reported metadata (page counts, section headers, image captions) matches the source document; no fabrication or alteration of document content.
-- **Recovery**: When a document fails visual QA, fallback to deterministic text extraction; the original document remains unchanged and authoritative.
-- **Exit/Uninstall**: On skill unload, all visual QA reference data and hash manifests are preserved; document generation continues via existing deterministic paths.
+## Output
 
-## Workflow
-1. Accept a rendered DOCX/PDF output and its source document metadata.
-2. Verify pagination consistency (no orphan headings, all pages accounted for).
-3. Verify table integrity (no truncation, all rows/columns present, data matches source).
-4. Verify font rendering (Chinese fallback chains present, no missing glyph groups).
-5. Verify reference integrity (all citations match source, no phantom references).
-6. Verify image rights and privacy (no unauthorized image reuse, PII redaction complete).
-7. Compute output hash (Manifest reconciliation with source artifact).
-8. If all checks pass, return `ACCEPTED` with hash and violation count.
-9. If any check fails, return `REJECTED` with specific violation codes; document generation continues via existing path.
+Return the ReportManifest identity, output hash, deterministic integrity findings, actual rendered-page findings when performed, privacy/citation/asset-rights findings, and an explicit `PASS`, `FAIL`, or `INCOMPLETE` visual verdict. The result must state whether page-level visual inspection actually occurred.
 
-## Observability
-- Records placement violations, hash changes, and fallback triggers per `agent-observation-register`.
-- Emits `agent-observability-report` compatible metrics via ResearchRun checkpoint.
+## Prohibitions
 
-## Hard Contracts
-- Consumes report service products; does not establish second report facts source.
-- All passing items enter existing `M-06 ExternalCapabilityRegistry/QualificationRelease` Router fallback, not a second bus.
-- Execution-type broker MCP permanently rejected: `broker_execution_allowed=false` remains.
-- Large dependency/lazy loading does not enter core minimal installation.
-- Public live only read-only low-frequency: prohibited account/Secret/write operations.
-- Does not bypass existing access flow to directly modify active production parser (see `schema-drift-recorder` exit contract).
+- Do not claim visual QA from a parser-only, source-text-only, or file-exists check.
+- Do not alter investment facts, citations, page content or source artifacts to make a visual check pass.
+- Do not treat a Skill result as new source authority or bypass ReportService/ObjectStore lineage.
+- Do not copy images with unknown rights into a report or suppress privacy findings.
+- Do not enable broker execution; `broker_execution_allowed=false` remains unchanged.

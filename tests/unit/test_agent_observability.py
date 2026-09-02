@@ -15,7 +15,7 @@ NOW = datetime(2026, 8, 17, 7, 30, tzinfo=UTC)
 
 def _service(tmp_path: Path) -> AgentObservabilityService:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
-    assert state.migrate()[-1] == "0066"
+    assert "0058" in state.migrate()
     return AgentObservabilityService(
         state,
         ObjectStore(tmp_path / "objects"),

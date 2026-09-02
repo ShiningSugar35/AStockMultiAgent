@@ -1,0 +1,54 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "1.18.94",
+  "capability_id": "akshare",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "PASS",
+    "credential_handling": "PASS",
+    "data_rights": "FAIL",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "FAIL",
+    "provenance": "FAIL",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "FAIL"
+  },
+  "completeness_ceiling": "EXACT_ITEM",
+  "controlled_live_validation": "FAIL",
+  "created_at": "2026-09-02T06:16:28Z",
+  "evidence_version": "e02-qualification-evidence-v1",
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "AKSHARE_ACADEMIC_RESEARCH_STATEMENT",
+    "CONTROLLED_LIVE_ENDPOINT_NOT_RUN",
+    "ENDPOINT_PIT_AND_PROVENANCE_NOT_PROVEN",
+    "NO_ENDPOINT_SPECIFIC_UPSTREAM_RIGHTS_REVIEW",
+    "RECORDED_ENDPOINT_FIXTURE_NOT_FROZEN",
+    "SBOM_SECURITY_NOT_FROZEN"
+  ],
+  "recorded_validation": "FAIL",
+  "requested_stage": "SHADOW",
+  "schema_version": "1.0",
+  "source_class_ceiling": "SECONDARY_STRUCTURED",
+  "sources": [
+    {
+      "assertion": "{\"artifact_filename\": \"akshare-1.18.94-py3-none-any.whl\", \"artifact_sha256\": \"a66901c646865781da353d294dbab9ac760955e00e5c761ff5028583431c6771\", \"artifact_size\": 1260826, \"license\": \"MIT\", \"license_expression\": null, \"name\": \"akshare\", \"project_urls\": {\"Homepage\": \"https://github.com/akfamily/akshare\"}, \"requires_dist_count\": 16, \"requires_python\": \">=3.11\", \"uploaded_at\": \"2026-08-21T05:17:44.506794Z\", \"version\": \"1.18.94\"}",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "a66901c646865781da353d294dbab9ac760955e00e5c761ff5028583431c6771",
+      "source_ref": "https://pypi.org/pypi/akshare/json"
+    },
+    {
+      "assertion": "Current AKShare statement restricts the supplied data to academic-research use, warns about data risk, and states interfaces may be removed; package licensing therefore does not establish production data rights for any endpoint.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "13b44c5e7b68e76071ebea0cb910587e3f8988c3b1ea06aa86590cbff081c9e2",
+      "source_ref": "https://pypi.org/pypi/akshare/1.18.94/json#info.description"
+    }
+  ],
+  "valid_from": "2026-09-02T06:16:28Z"
+}

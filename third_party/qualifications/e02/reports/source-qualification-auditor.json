@@ -1,0 +1,35 @@
+{
+  "admitted_stage": "PRODUCTION_BACKUP",
+  "candidate_version": "sha256:ab1c5787412a72de0fa0160160d714ba4e5fb659f73bec9355c058062d4f3156",
+  "capability_id": "source-qualification-auditor",
+  "checks": {
+    "cache_behavior": "PASS",
+    "cost": "PASS",
+    "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "PASS",
+    "latency": "PASS",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "PASS",
+    "pit": "PASS",
+    "provenance": "PASS",
+    "sbom": "PASS",
+    "security_review": "PASS",
+    "terms_of_service": "PASS"
+  },
+  "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "PASS",
+  "evidence_object_hashes": [
+    "75f47bd6c0b6bd784927f9744a250cddfd46712f0ed5a362bf471ff671a0a814"
+  ],
+  "expires_at": "2026-12-01T06:16:28Z",
+  "reason_codes": [],
+  "recorded_validation": "PASS",
+  "report_id": "ed859de7869b043346bd7de4d9644297e2650b00b9e51313e126fba50c85c0d1",
+  "requested_stage": "PRODUCTION_BACKUP",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-09-02T06:16:28Z"
+}

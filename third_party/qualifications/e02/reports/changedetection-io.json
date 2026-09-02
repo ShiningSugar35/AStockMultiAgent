@@ -1,0 +1,42 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "0.55.8",
+  "capability_id": "changedetection-io",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "FAIL",
+    "credential_handling": "FAIL",
+    "data_rights": "FAIL",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "FAIL",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "FAIL"
+  },
+  "completeness_ceiling": "DISCOVERY_ONLY",
+  "controlled_live_validation": "FAIL",
+  "evidence_object_hashes": [
+    "3b0496e792e5606a0922aafc7582b5d58442c2ae77af71b6bcbb87b67648cd4a"
+  ],
+  "expires_at": "2026-10-02T06:28:47Z",
+  "reason_codes": [
+    "COMMERCIAL_TERMS_NOT_FORMALLY_CLEARED",
+    "CONTROLLED_LIVE_MONITOR_NOT_RUN",
+    "CREDENTIAL_AND_NOTIFICATION_BOUNDARY_NOT_VALIDATED",
+    "RECORDED_MONITOR_FIXTURE_NOT_FROZEN",
+    "SBOM_SECURITY_COST_PERFORMANCE_NOT_VALIDATED",
+    "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
+  ],
+  "recorded_validation": "FAIL",
+  "report_id": "9011555011241e3fe974434896393334f165de671d388000dc89fb930905a2c7",
+  "requested_stage": "SHADOW",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-09-02T06:28:47Z"
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "报告视觉验收"
+  short_description: "Review rendered reports without changing research facts"
+  default_prompt: "Use $report-visual-qa to verify report manifest integrity and actual rendered-page quality when available."

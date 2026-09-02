@@ -1,0 +1,54 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "0.55.8",
+  "capability_id": "changedetection-io",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "FAIL",
+    "credential_handling": "FAIL",
+    "data_rights": "FAIL",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "FAIL",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "FAIL"
+  },
+  "completeness_ceiling": "DISCOVERY_ONLY",
+  "controlled_live_validation": "FAIL",
+  "created_at": "2026-09-02T06:28:47Z",
+  "evidence_version": "e02-qualification-evidence-v1",
+  "expires_at": "2026-10-02T06:28:47Z",
+  "reason_codes": [
+    "COMMERCIAL_TERMS_NOT_FORMALLY_CLEARED",
+    "CONTROLLED_LIVE_MONITOR_NOT_RUN",
+    "CREDENTIAL_AND_NOTIFICATION_BOUNDARY_NOT_VALIDATED",
+    "RECORDED_MONITOR_FIXTURE_NOT_FROZEN",
+    "SBOM_SECURITY_COST_PERFORMANCE_NOT_VALIDATED",
+    "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
+  ],
+  "recorded_validation": "FAIL",
+  "requested_stage": "SHADOW",
+  "schema_version": "1.0",
+  "source_class_ceiling": "UNKNOWN",
+  "sources": [
+    {
+      "assertion": "{\"artifact_filename\": \"changedetection_io-0.55.8-py3-none-any.whl\", \"artifact_sha256\": \"3bbdcc2c9bf5789fb75cf2ae8bbf15ef68897d3b8727010667ad5dcc0d10582a\", \"artifact_size\": 3751799, \"license\": \"Apache License 2.0\", \"license_expression\": null, \"name\": \"changedetection.io\", \"project_urls\": {\"Homepage\": \"https://changedetection.io\"}, \"requires_dist_count\": 67, \"requires_python\": \">=3.10\", \"uploaded_at\": \"2026-07-13T09:27:15.138840Z\", \"version\": \"0.55.8\"}",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "3bbdcc2c9bf5789fb75cf2ae8bbf15ef68897d3b8727010667ad5dcc0d10582a",
+      "source_ref": "https://pypi.org/pypi/changedetection.io/json"
+    },
+    {
+      "assertion": "The upstream commercial-license text states that commercial activity involving Hosting must execute and adhere to that agreement; this pilot therefore does not treat the PyPI Apache package label as sufficient production terms clearance.",
+      "observed_at": "2026-09-02T06:28:47Z",
+      "sha256": "0eb5adfc35e03c6d18bd82f09995d99e6b7d1ea4c6150b1d501cfc03ddd29832",
+      "source_ref": "https://raw.githubusercontent.com/dgtlmoon/changedetection.io/master/COMMERCIAL_LICENCE.md"
+    }
+  ],
+  "valid_from": "2026-09-02T06:28:47Z"
+}

@@ -1,35 +1,27 @@
 ---
 name: source-qualification-auditor
-description: Unified external capability qualification and decision execution; fixed version/hash, License/ToS, data rights, true upstream, PIT/provenance, credential handling, SBOM, security record, performance, cost, fault, validity, revocation, exit verification
+description: Audit external capability qualification evidence, M-06 admission gates, revocation, and safe fallback without granting source authority.
 ---
 
-# Source Qualification Auditor
+# External Capability Qualification Auditor
 
-## Responsibility
-Unified external capability qualification and decision execution: fixed version/hash, License/ToS, data rights, true upstream, PIT/provenance, credential handling, SBOM, security record, performance, cost, fault, validity, revocation, exit verification. This Skill only organizes existing deterministic capability commands and artifacts, does not independently grant source authority.
+1. Start from the canonical registry with `uv run astock external-capability-list` and inspect the target with `uv run astock external-capability-status <capability_id>`.
+2. Read `uv run astock external-capability-schema` before preparing a qualification. The report must use the existing `CapabilityQualificationReport`; do not create a parallel admission model.
+3. Verify every M-06 gate from current evidence: fixed candidate identity, License, terms of service, data rights, PIT, provenance, credential handling, SBOM, security review, maintenance, cost, latency, cache behavior, offline behavior, failure behavior, and exit/uninstall.
+4. Treat recorded validation and controlled-live validation as separate gates. A fixture, package import, README claim, stars, download count, or registry listing never substitutes for a controlled-live capability check.
+5. Store the evidence bundle in the existing ObjectStore before `uv run astock external-capability-qualify <report.json>` so every `evidence_object_hashes` entry is verifiable. A `PRODUCTION_BACKUP` report is valid only when every M-06 check and both validations are `PASS`.
+6. For Provider-backed capabilities, keep `SourceAccessRouter`, Provider Registry, SourcePolicyGate, SourceSnapshot and Evidence as the only source path. The backup may be selected only after the standard route is unavailable and the active qualification report remains valid.
+7. Revoke with `uv run astock external-capability-revoke <revocation.json>` when evidence expires, drifts, is withdrawn, or an exit drill fails. Verify that stored evidence and primary routes remain usable after revocation.
+8. Record the Skill selection/completion through `uv run astock agent-observation-register <request.json>` and inspect aggregate telemetry with `uv run astock agent-observability-report --lookback-days 30`.
 
-## Triggers
-- **Negative**: When qualification checks fail (license, ToS, data rights, PIT, provenance, SBOM, security review, maintenance, cost, latency, cache behavior, offline behavior, failure behavior, exit uninstall), the skill returns `REJECTED` with specific reason codes.
-- **Conflict routing**: When multiple capabilities conflict for the same resource, the skill resolves routing through the existing `SourceAccessRouter` without establishing a second bus.
-- **Fact/permission protection**: Ensures qualification artifacts and evidence objects are read-only append-only; no modification of existing qualification records.
-- **Recovery**: When a capability is revoked or expires, the skill ensures existing Provider Registry routes and stored snapshots remain authoritative.
-- **Exit/Uninstall**: On skill unload, all qualification records and evidence objects are preserved; adapter deregistration follows the exit contract of the associated capability definition.
+## Output
 
-## Workflow
-1. Accept `ExternalCapabilityQualificationRequest` with candidate version, source metadata, and qualification checks.
-2. Validate fixed version, License, ToS, data rights, PIT provenance, SBOM, security review, maintenance, cost, latency, cache behavior, offline behavior, failure behavior, and exit uninstall.
-3. If all checks pass, produce `CapabilityQualificationReport` and advance stage per capability maximum.
-4. If any check fails, produce `REJECTED` verdict with reason codes; candidate remains in `SHADOW` or `DISCOVERY_ONLY`.
-5. On revocation, produce `CapabilityRevocation` artifact; existing routes remain available.
-6. On uninstall, deregister adapter per exit contract; qualification history preserved in append-only storage.
+Return the capability id and fixed version, immutable evidence hashes, per-gate PASS/FAIL state, recorded/live results, admitted stage, reason codes, validity window, and revocation/exit result. Explicitly separate package/tool licensing from upstream data rights and source authority.
 
-## Observability
-- Records selection reasons, hits, failures, fallback, latency, cost, qualification validity and revocation status per `agent-observation-register`.
-- Emits `agent-observability-report` compatible metrics via ResearchRun checkpoint.
+## Prohibitions
 
-## Hard Contracts
-- Does not establish second facts source, routing, evidence, user state, agent scheduling or trading execution system.
-- All passing items enter existing `M-06 ExternalCapabilityRegistry/QualificationRelease` Router fallback, not a second bus.
-- Execution-type broker MCP permanently rejected: `broker_execution_allowed=false` remains.
-- Large dependency/lazy loading does not enter core minimal installation.
-- Public live only read-only low-frequency: prohibited account/Secret/write operations.
+- Do not infer License, terms, data rights, PIT, security, maintenance, latency, or SBOM from popularity or configuration declarations.
+- Do not admit `PRODUCTION_BACKUP` when any M-06 check, recorded validation, controlled-live validation, or disable/uninstall regression is missing or failed.
+- Do not let a Skill, parser, crawler, MCP, or secondary Provider upgrade the authority of the underlying source material.
+- Do not create a second Router, Provider registry, Evidence store, ObjectStore, qualification index, or mutable copy of qualification history.
+- Do not enable broker order execution. `broker_execution_allowed=false` and the M-06 permanent rejection of execution-capable broker MCPs remain unchanged.

@@ -1,0 +1,53 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "2.124.0",
+  "capability_id": "docling",
+  "checks": {
+    "cache_behavior": "FAIL",
+    "cost": "FAIL",
+    "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "FAIL",
+    "maintenance": "PASS",
+    "offline_behavior": "FAIL",
+    "pit": "PASS",
+    "provenance": "PASS",
+    "sbom": "FAIL",
+    "security_review": "FAIL",
+    "terms_of_service": "PASS"
+  },
+  "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
+  "created_at": "2026-09-02T06:16:28Z",
+  "evidence_version": "e02-qualification-evidence-v1",
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "CONTROLLED_LIVE_DOCUMENT_PARSE_NOT_RUN",
+    "MODEL_LICENSE_SET_NOT_FROZEN",
+    "RECORDED_DOCUMENT_CROSSCHECK_NOT_RUN",
+    "RESOURCE_CACHE_FAILURE_NOT_VALIDATED",
+    "SBOM_SECURITY_NOT_FROZEN"
+  ],
+  "recorded_validation": "FAIL",
+  "requested_stage": "SHADOW",
+  "schema_version": "1.0",
+  "source_class_ceiling": "UNKNOWN",
+  "sources": [
+    {
+      "assertion": "{\"artifact_filename\": \"docling-2.124.0-py3-none-any.whl\", \"artifact_sha256\": \"bff775aea776429e3bc1d20972dc173e80cd748b1202ebadc4c3ab64c156cdb5\", \"artifact_size\": 5225, \"license\": null, \"license_expression\": \"MIT\", \"name\": \"docling\", \"project_urls\": {\"changelog\": \"https://github.com/docling-project/docling/blob/main/CHANGELOG.md\", \"homepage\": \"https://github.com/docling-project/docling\", \"issues\": \"https://github.com/docling-project/docling/issues\", \"repository\": \"https://github.com/docling-project/docling\"}, \"requires_dist_count\": 11, \"requires_python\": \"<4.0,>=3.10\", \"uploaded_at\": \"2026-08-31T13:39:08.973092Z\", \"version\": \"2.124.0\"}",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "bff775aea776429e3bc1d20972dc173e80cd748b1202ebadc4c3ab64c156cdb5",
+      "source_ref": "https://pypi.org/pypi/docling/json"
+    },
+    {
+      "assertion": "Current Docling package metadata states the code is MIT but individual model usage is governed by model-specific licenses; no model set was frozen for this pilot.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "847a1a2e4553ba92ec07d3cdcbec189a5a1649a891a087c31ad6e5f57e5aad81",
+      "source_ref": "https://pypi.org/pypi/docling/2.124.0/json#info.description"
+    }
+  ],
+  "valid_from": "2026-09-02T06:16:28Z"
+}

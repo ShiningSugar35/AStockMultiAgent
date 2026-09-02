@@ -1,0 +1,61 @@
+{
+  "admitted_stage": "SHADOW",
+  "candidate_version": "sha256:a9b8d0a5d76f88bd5a327dd331487ec918a2992b1aabfec2516784bc7312f188",
+  "capability_id": "report-visual-qa",
+  "checks": {
+    "cache_behavior": "PASS",
+    "cost": "PASS",
+    "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "PASS",
+    "pit": "PASS",
+    "provenance": "PASS",
+    "sbom": "PASS",
+    "security_review": "PASS",
+    "terms_of_service": "PASS"
+  },
+  "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
+  "created_at": "2026-09-02T06:16:28Z",
+  "evidence_version": "e02-qualification-evidence-v1",
+  "expires_at": "2026-10-02T06:16:28Z",
+  "reason_codes": [
+    "RENDERED_PAGE_CONTROLLED_LIVE_NOT_RUN",
+    "VISUAL_LATENCY_AND_FAILURE_BEHAVIOR_NOT_VALIDATED"
+  ],
+  "recorded_validation": "PASS",
+  "requested_stage": "SHADOW",
+  "schema_version": "1.0",
+  "source_class_ceiling": "UNKNOWN",
+  "sources": [
+    {
+      "assertion": "Tracked Repo Skill contract used by the qualification pilot.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "a9b8d0a5d76f88bd5a327dd331487ec918a2992b1aabfec2516784bc7312f188",
+      "source_ref": "repo:.agents/skills/report-visual-qa/SKILL.md"
+    },
+    {
+      "assertion": "The project is proprietary; these Repo Skills are project-owned and introduce no third-party runtime license or service ToS.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "00a15a216fe51decf4a8c0e0d2e75c49b78db90a1782467f494649c31dd071cb",
+      "source_ref": "repo:pyproject.toml"
+    },
+    {
+      "assertion": "The Repo Skill integration adds no runtime package dependency; the existing locked dependency graph is unchanged.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "94f782183326f4e6e02ab316009b1046c4abe3c8c05b8d357590765094efb3e2",
+      "source_ref": "repo:uv.lock"
+    },
+    {
+      "assertion": "Recorded and controlled-live/exit assertions are bound to the repository test contract; a passing test run is required before the final status may claim PASS.",
+      "observed_at": "2026-09-02T06:16:28Z",
+      "source_ref": "contract:tests/unit/test_e02_external_qualification.py"
+    }
+  ],
+  "valid_from": "2026-09-02T06:16:28Z"
+}

@@ -1,38 +1,26 @@
 ---
 name: schema-drift-recorder
-description: Raw-first response saving, difference generation, minimal regression fixture, Provider dialect/Schema Repair proposal, validation/rollback; does not bypass existing access flow to directly modify active production parser
+description: Record provider schema drift from immutable raw snapshots, validate repair proposals, and roll back candidates without mutating production parsers.
 ---
 
 # Schema Drift Recorder
 
-## Responsibility
-Raw-first response saving, difference generation, minimal regression fixture, Provider dialect or Schema Repair proposal, validation and rollback. This Skill does not bypass existing access flow to directly modify active production parser.
+1. Start from the existing SourceSnapshot/ObjectStore material. Never reconstruct a drift sample from normalized fields when the original raw response is available.
+2. Inspect `uv run astock adaptive-edge-schema` and the active provider dialect before proposing a repair. A drift proposal must name the provider, base dialect version, sample snapshot ids, official cross-check artifacts and repository contract tests.
+3. Use `uv run astock adaptive-schema-repair-validate <proposal.json>` to validate the candidate against the existing `AdaptiveEdgeService`. Missing raw snapshots, insufficient diverse samples, missing official evidence, unknown canonical fields or absent contract tests must fail closed.
+4. `uv run astock adaptive-schema-repair-admit <validation_id> --approve` may create only a reviewed candidate dialect release. It must not mutate the active production parser or write formal market/financial facts.
+5. Audit frozen artifacts with `uv run astock adaptive-artifact-audit <artifact_id>` and use `uv run astock adaptive-dialect-rollback <release_id>` for the exit drill. The active dialect remains the last separately validated production configuration.
+6. Preserve all raw responses, validation findings and candidate releases in the existing ObjectStore/State lineage. Do not create a parallel response archive or mutable shadow parser registry.
+7. Record Skill selection/completion through `uv run astock agent-observation-register <request.json>` and inspect `uv run astock agent-observability-report --lookback-days 30` for routing telemetry.
 
-## Triggers
-- **Negative**: When raw response saving fails (disk full, permission denied, invalid path), when difference generation produces empty or corrupt fixtures, or when dialect proposal contains invalid syntax, the skill returns `REJECTED` with specific error codes.
-- **Conflict routing**: When multiple drift recordings compete for the same response contract, the skill resolves through the existing Provider dialect management without establishing a second access path.
-- **Fact/permission protection**: Ensures recorded raw responses are immutable append-only; no modification of existing Provider responses or dialect configurations.
-- **Recovery**: When a drift recording or fixture is lost, the skill re-generates from the original SourceSnapshot; existing production parser remains unchanged.
-- **Exit/Uninstall**: On skill unload, all recorded raw responses, diff fixtures, and dialect proposals are preserved in ObjectStore; Provider dialect registry reverts to last validated state.
+## Output
 
-## Workflow
-1. Capture a raw provider response and associate it with a SourceSnapshot.
-2. Generate structural diff against last validated response for the same capability.
-3. Produce minimal regression fixture (smallest input that reproduces any drift observed).
-4. Propose a Provider dialect or Schema Repair patch if drift exceeds tolerance threshold.
-5. Submit proposal for validation: must pass active policy's multi-sample SourceSnapshot test and repository true contract test.
-6. If validated, generate ADMITTED candidate dialect; does not automatically modify active dialect/config or write formal facts.
-7. If not validated, return `REJECTED`; proposal can be resubmitted after correction.
-8. On rollback, revert to last ADMITTED dialect; all prior recordings remain as audit evidence.
+Return the raw SourceSnapshot ids, immutable object hashes, structural drift summary, validation id/status, rejection codes, candidate release id when explicitly approved, contract-test evidence, and rollback result. State clearly that a candidate release is not an active production parser mutation.
 
-## Observability
-- Records drift detection events, fixture hashes, proposal outcomes per `agent-observation-register`.
-- Emits `agent-observability-report` compatible metrics via ResearchRun checkpoint.
+## Prohibitions
 
-## Hard Contracts
-- Does not bypass existing access flow to directly modify active production parser.
-- All passing items enter existing `M-06 ExternalCapabilityRegistry/QualificationRelease` Router fallback, not a second bus.
-- Execution-type broker MCP permanently rejected: `broker_execution_allowed=false` remains.
-- Large dependency/lazy loading does not enter core minimal installation.
-- Public live only read-only low-frequency: prohibited account/Secret/write operations.
-- Raw-first: must satisfy active policy's multi-sample SourceSnapshot, official artifact type, and repository true contract test before PROPOSED → VALIDATED entry.
+- Do not overwrite or delete raw SourceSnapshot/ObjectStore evidence.
+- Do not infer schema fields, units, scope, currency, PIT time or source authority when the upstream response omits them.
+- Do not auto-admit a schema repair or modify the active provider dialect from a single sample.
+- Do not create a second Provider route, parser registry, facts store or Evidence system.
+- Do not enable broker execution; `broker_execution_allowed=false` remains unchanged.

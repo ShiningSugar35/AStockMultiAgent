@@ -178,6 +178,9 @@ class TransportCapability(AStockModel):
     cost_efficiency_score: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
     auth_ease_score: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
     retryable_failure: bool = False
+    production_backup: bool = False
+    external_capability_id: str | None = None
+    qualification_valid: bool = True
 
 
 class SourceAccessRequest(AStockModel):

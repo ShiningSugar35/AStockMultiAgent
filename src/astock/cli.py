@@ -55,6 +55,7 @@ from astock.documents import (
     OfficialWebDocumentCaptureService,
     PdfParseService,
 )
+from astock.external_capability_cli import register_external_capability_commands
 from astock.financial_integrity import (
     FinancialIntegrityRepository,
     FinancialIntegrityService,
@@ -402,6 +403,7 @@ def _jsonable(value: Any) -> Any:
 register_knowledge_completion_commands(app, _services, _emit)
 register_knowledge_storage_commands(app, _services, _emit)
 register_local_portfolio_commands(app, _services)
+register_external_capability_commands(app, _services, _emit)
 register_report_commands(app, _services, _emit)
 register_research_runtime_commands(
     app,

@@ -23,6 +23,7 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
         "sina-reference",
         "eastmoney-financial",
         "sina-financial",
+        "gdelt-news-leads",
     ]
     assert "corporate_actions.ledger_ready" in registry.capability_gaps
     assert "financial.structured" not in registry.capability_gaps

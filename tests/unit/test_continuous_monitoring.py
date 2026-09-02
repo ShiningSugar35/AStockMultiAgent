@@ -48,7 +48,7 @@ NOW = datetime(2026, 8, 22, 8, 0, tzinfo=UTC)
 
 def _repo(tmp_path: Path) -> ContinuousMonitorRepository:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
-    assert state.migrate()[-1] == "0063"
+    assert state.migrate()[-1] == "0064"
     return ContinuousMonitorRepository(state, ObjectStore(tmp_path / "objects"))
 
 

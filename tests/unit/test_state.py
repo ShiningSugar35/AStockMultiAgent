@@ -84,6 +84,7 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0061",
         "0062",
         "0063",
+        "0064",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -136,6 +137,24 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         for trigger in (
             "external_account_event_no_update",
             "external_account_event_no_delete",
+        ):
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?",
+                (trigger,),
+            ).fetchone()
+        for table in (
+            "external_capability_qualification",
+            "external_capability_revocation",
+        ):
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+        for trigger in (
+            "external_capability_qualification_no_update",
+            "external_capability_qualification_no_delete",
+            "external_capability_revocation_no_update",
+            "external_capability_revocation_no_delete",
         ):
             assert connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?",

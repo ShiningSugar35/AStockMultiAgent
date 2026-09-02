@@ -29,6 +29,7 @@ from astock.core.source_resilience import (
 )
 from astock.core.source_router import SourceAccessRouter
 from astock.core.state import StateStore
+from astock.external_capabilities import ExternalCapabilityService
 from astock.providers.config import get_provider, load_provider_registry
 from astock.providers.dialects import ProviderDialect
 from astock.providers.http_resilience import HttpClientLike, ResilientHttpClient
@@ -86,6 +87,9 @@ class ProviderFactory:
         self.fixture_scope = fixture_scope.resolve() if fixture_scope is not None else None
         self.dialects = dialects or {}
         self.source_breaker = SourceCircuitBreaker(state)
+        self.external_capabilities = ExternalCapabilityService(
+            resolve_project_root(module_file=Path(__file__)), state, objects
+        )
         self._instances: dict[str, object] = {}
 
     def capability_health_status(
@@ -311,6 +315,26 @@ class ProviderFactory:
             "MEDIUM": Decimal("0.5"),
             "HIGH": Decimal("0"),
         }[definition.cost_class]
+        qualification_valid = True
+        if definition.production_backup:
+            external_id = definition.external_capability_id
+            if external_id is None:
+                qualification_valid = False
+            else:
+                try:
+                    external_definition = self.external_capabilities.definition(external_id)
+                    qualification_valid = bool(
+                        definition.source_class is external_definition.source_class_ceiling
+                        and semantics is external_definition.completeness_ceiling
+                        and self.external_capabilities.production_backup_allowed(
+                            external_id,
+                            capability,
+                            primary_available=False,
+                        )
+                    )
+                except (OSError, TypeError, ValueError):
+                    qualification_valid = False
+            available = available and qualification_valid
         return TransportCapability(
             source_id=definition.provider_id,
             transport=AccessTransport.API,
@@ -333,6 +357,9 @@ class ProviderFactory:
             cost_efficiency_score=cost_efficiency,
             auth_ease_score=Decimal("1"),
             retryable_failure=health_status == ProviderHealthStatus.DEGRADED.value,
+            production_backup=definition.production_backup,
+            external_capability_id=definition.external_capability_id,
+            qualification_valid=qualification_valid,
         )
 
     def claim_capability_attempt(

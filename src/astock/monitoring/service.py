@@ -23,7 +23,10 @@ from astock.monitoring.repository import ContinuousMonitorRepository
 from astock.paper_trading.ledger import LedgerService
 from astock.paper_trading.operation import MarketReferencePaperVerifier
 from astock.paper_trading.replay import PaperReplayService, load_fee_schedule
+from astock.providers.config import load_provider_registry
+from astock.providers.dialects import load_provider_dialects
 from astock.providers.eastmoney import EastMoney5mProvider
+from astock.providers.runtime import ProviderFactory, load_transport_profiles
 from astock.providers.sina import Sina5mProvider
 from astock.schemas import (
     AdjustmentMode,
@@ -107,12 +110,26 @@ class ContinuousMonitorService:
         self.canonical = CanonicalMarketStore(paths.parquet, paths.manifests)
         self._market_sync_factory = market_sync_factory
         self.disclosures = disclosure_provider or CninfoDisclosureProvider(objects, state)
-        self.news = news_provider or GdeltNewsLeadProvider(
-            objects,
-            state,
-            endpoint=config.news.endpoint,
-            timeout_seconds=config.news.timeout_seconds,
-        )
+        self._provider_factory: ProviderFactory | None = None
+        if news_provider is not None:
+            self.news = news_provider
+        else:
+            if config.news.endpoint != GdeltNewsLeadProvider.default_endpoint:
+                raise ValueError(
+                    "continuous monitor GDELT endpoint diverges from Provider Registry adapter"
+                )
+            self._provider_factory = ProviderFactory(
+                load_provider_registry(paths.root / "configs" / "provider_registry.yaml"),
+                load_transport_profiles(paths.root / "configs" / "transport_profiles.yaml"),
+                objects,
+                state,
+                paths.root / "tests" / "fixtures",
+                dialects=load_provider_dialects(paths.root / "configs" / "provider_dialects.yaml"),
+            )
+            self.news = self._provider_factory.create_for_capability(
+                GdeltNewsLeadProvider.capability,
+                GdeltNewsLeadProvider,
+            )
 
     def enroll(
         self,
@@ -311,12 +328,8 @@ class ContinuousMonitorService:
                 "target_count": len(targets),
                 "event_count": event_count,
                 "task_count": task_count,
-                "source_success": {
-                    key.value: value for key, value in success.items()
-                },
-                "source_failure": {
-                    key.value: value for key, value in failure.items()
-                },
+                "source_success": {key.value: value for key, value in success.items()},
+                "source_failure": {key.value: value for key, value in failure.items()},
             },
         )
         return report

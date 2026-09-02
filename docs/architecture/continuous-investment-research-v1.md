@@ -367,7 +367,7 @@ continuous-monitor-tasks [--pending-only]
 
 ## 10. External Dependency Resilience 现行集成校正
 
-- Continuous Monitor 的 market/CNINFO/GDELT lane 复用现有 ProviderFactory、SourceAccessRouter、capability health/breaker、ObjectStore 与 Evidence；不得自建第二套 provider 状态或事件外证据库。
+- Continuous Monitor 的 market/CNINFO/GDELT lane 复用现有 ProviderFactory、SourceAccessRouter、capability health/breaker、ObjectStore 与 Evidence；不得自建第二套 provider 状态或事件外证据库。GDELT 已注册为 `gdelt-news-leads`，仅具备 `news.discovery.lead / DISCOVERY_ONLY` 语义；其后续是否作为受控生产备用还必须通过统一 ExternalCapability 有效资格门，不能由监控配置自行提升。
 - 单 source/capability 故障只产生结构化 `DATA_SOURCE_DEGRADED` 与 bounded backoff，不阻塞其他 source/target。OPEN 或有效 HALF_OPEN claim 时不重复撞击同一失败 capability；stale claim 可恢复。
 - CNINFO known-item/disclosure discovery 可经正式官方 exact-item 路恢复；公告“没有发生”的 negative proof 仍必须依赖 exhaustive pagination，Search/Web 未命中没有该权限。
 - 5m 仅在 paper path ambiguity 时按需使用。单一备用源成功不能覆盖已有双源 canonical，也不能伪造成交；所有 Paper Ledger 与 `broker_execution_allowed=false` 边界保持不变。

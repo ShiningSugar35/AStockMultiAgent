@@ -1,0 +1,124 @@
+schema_version: external-capability-registry-v1
+registry_version: external-capabilities-v1
+capabilities:
+  - capability_id: akshare
+    display_name: AKShare
+    kind: PYTHON_LIBRARY
+    logical_capabilities: [fund.product.backup, market.reference.backup]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: SECONDARY_STRUCTURED
+    completeness_ceiling: EXACT_ITEM
+    qualification_validity_days: 60
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Remove the optional adapter and qualification record; existing Provider Registry routes remain available.
+  - capability_id: arelle
+    display_name: Arelle
+    kind: PARSER
+    logical_capabilities: [financial.xbrl.validation]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: UNKNOWN
+    completeness_ceiling: NOT_APPLICABLE
+    qualification_validity_days: 90
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Disable the optional validator and retain the existing financial-integrity path.
+  - capability_id: changedetection-io
+    display_name: changedetection.io
+    kind: CRAWLER
+    logical_capabilities: [web.change.lead]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: UNKNOWN
+    completeness_ceiling: DISCOVERY_ONLY
+    qualification_validity_days: 60
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Stop the optional change monitor; canonical source snapshots and monitor state remain authoritative.
+  - capability_id: crawl4ai
+    display_name: Crawl4AI
+    kind: CRAWLER
+    logical_capabilities: [web.extract.backup]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: UNKNOWN
+    completeness_ceiling: EXACT_ITEM
+    qualification_validity_days: 60
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Remove the optional extraction adapter; existing source acquisition routes remain intact.
+  - capability_id: docling
+    display_name: Docling
+    kind: PARSER
+    logical_capabilities: [document.structure.parse]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: UNKNOWN
+    completeness_ceiling: NOT_APPLICABLE
+    qualification_validity_days: 90
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Disable the optional parser and fall back to the existing PDF/DOCX parsing path.
+  - capability_id: gdelt-news-api
+    display_name: GDELT DOC API
+    kind: API
+    logical_capabilities: [news.discovery.lead]
+    default_stage: DISCOVERY_ONLY
+    maximum_stage: PRODUCTION_BACKUP
+    provider_id: gdelt-news-leads
+    source_class_ceiling: SECONDARY_STRUCTURED
+    completeness_ceiling: DISCOVERY_ONLY
+    qualification_validity_days: 90
+    fixed_version_required: true
+    optional_dependency: false
+    exit_contract: Disable the optional capability admission; the Provider Registry contract and stored lead snapshots remain auditable.
+  - capability_id: playwright-mcp
+    display_name: Microsoft Playwright MCP
+    kind: MCP
+    logical_capabilities: [web.dynamic.capture]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: UNKNOWN
+    completeness_ceiling: NOT_APPLICABLE
+    qualification_validity_days: 45
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Disconnect the optional MCP capability; source acquisition continues through existing Provider and Web paths.
+  - capability_id: report-visual-qa
+    display_name: Report Visual QA
+    kind: SKILL
+    logical_capabilities: [report.visual.qa]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: UNKNOWN
+    completeness_ceiling: NOT_APPLICABLE
+    qualification_validity_days: 180
+    fixed_version_required: true
+    optional_dependency: false
+    exit_contract: Disable the Skill route; report generation and deterministic document validation remain available.
+  - capability_id: schema-drift-recorder
+    display_name: Schema Drift Recorder
+    kind: SKILL
+    logical_capabilities: [provider.schema.drift]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: UNKNOWN
+    completeness_ceiling: NOT_APPLICABLE
+    qualification_validity_days: 180
+    fixed_version_required: true
+    optional_dependency: false
+    exit_contract: Disable the Skill route; production parsers remain unchanged until normal reviewed code changes occur.
+  - capability_id: source-qualification-auditor
+    display_name: Source Qualification Auditor
+    kind: SKILL
+    logical_capabilities: [governance.external.qualification]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: UNKNOWN
+    completeness_ceiling: NOT_APPLICABLE
+    qualification_validity_days: 180
+    fixed_version_required: true
+    optional_dependency: false
+    exit_contract: Disable the Skill route; qualification schemas and deterministic validation remain available.

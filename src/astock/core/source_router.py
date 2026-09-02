@@ -134,6 +134,24 @@ class SourceAccessRouter:
             automated = [item for item in automated if item.formal_eligible]
         if request.require_complete:
             automated = [item for item in automated if item.completeness_score == Decimal("1")]
+        standard_available = any(
+            item.available and not item.production_backup for item in automated
+        )
+        automated = [
+            item.model_copy(
+                update={
+                    "available": False,
+                    "reason": (
+                        f"{item.reason}; production backup qualification is not active"
+                        if not item.qualification_valid
+                        else f"{item.reason}; standard route remains available"
+                    ),
+                }
+            )
+            if item.production_backup and (not item.qualification_valid or standard_available)
+            else item
+            for item in automated
+        ]
 
         strong_official = any(
             token in request.requested_capability.lower()

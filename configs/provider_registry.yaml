@@ -1,4 +1,4 @@
-registry_version: provider-registry-v6
+registry_version: provider-registry-v7
 capability_gaps:
   - corporate_actions.ledger_ready
   - model.inference
@@ -201,3 +201,21 @@ providers:
     probe_operation: financial-period
     probe_target: {symbol: "600519", market: XSHG, period_end: "2025-12-31"}
     recorded_fixture: tests/fixtures/providers/sina-financial-success.json
+  - provider_id: gdelt-news-leads
+    adapter_class: astock.monitoring.news:GdeltNewsLeadProvider
+    capabilities: [news.discovery.lead]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics: {news.discovery.lead: DISCOVERY_ONLY}
+    independence_group: GDELT
+    cache_ttl_seconds: 0
+    cost_class: LOW
+    transport: HTTP
+    transport_profile: public-json-v1
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    priority: 70
+    probe_operation: news-lead
+    probe_target: {symbol: "600519", name: "贵州茅台"}
+    recorded_fixture: tests/fixtures/providers/gdelt-news-leads-success.json

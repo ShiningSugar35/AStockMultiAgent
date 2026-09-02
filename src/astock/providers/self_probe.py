@@ -52,6 +52,8 @@ class ProviderSelfProbeRunner:
             record_count, quality = self._financial_period(provider, definition.probe_target)
         elif operation == "disclosure-search":
             record_count, quality = self._disclosure_search(provider, definition.probe_target)
+        elif operation == "news-lead":
+            record_count, quality = self._news_lead(provider, definition.probe_target)
         else:
             raise ValueError(f"Unknown provider self-probe operation: {operation}")
         checked = tuple(_checked_capabilities(definition))
@@ -159,6 +161,21 @@ class ProviderSelfProbeRunner:
         # A valid zero-result official index still proves the search endpoint/schema is healthy.
         return len(announcements), True
 
+    @staticmethod
+    def _news_lead(provider: object, target: dict[str, str | int]) -> tuple[int, bool]:
+        search = getattr(provider, "search", None)
+        if not callable(search):
+            return 0, False
+        now = datetime.now(UTC)
+        leads = search(
+            names=[str(target.get("name") or target.get("symbol") or "")],
+            symbol=str(target["symbol"]),
+            start=now - timedelta(days=1),
+            end=now,
+            max_records=1,
+        )
+        return (len(leads), isinstance(leads, list)) if isinstance(leads, list) else (0, False)
+
 
 def validate_recorded_probe_payload(
     definition: ProviderDefinition,
@@ -178,6 +195,8 @@ def validate_recorded_probe_payload(
         return _recorded_financial(payload)
     if operation == "disclosure-search":
         return _recorded_disclosure(payload)
+    if operation == "news-lead":
+        return _generic_self_probe(payload, definition) or (False, 0)
     return False, 0
 
 
@@ -200,6 +219,8 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
         ]
     elif operation == "disclosure-search":
         selected = [item for item in capabilities if item == "disclosure.discover"]
+    elif operation == "news-lead":
+        selected = [item for item in capabilities if item == "news.discovery.lead"]
     else:
         selected = []
     return list(dict.fromkeys(selected))

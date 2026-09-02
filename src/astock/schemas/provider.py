@@ -68,6 +68,10 @@ class ProviderDefinition(_StrictModel):
     probe_operation: str = Field(min_length=1)
     probe_target: dict[str, str | int] = Field(default_factory=dict)
     recorded_fixture: str = Field(min_length=1)
+    external_capability_id: str | None = Field(
+        default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    )
+    production_backup: bool = False
 
     @field_validator("capabilities")
     @classmethod
@@ -121,6 +125,10 @@ class ProviderDefinition(_StrictModel):
             self.officiality is not ProviderOfficiality.SECONDARY_STRUCTURED
         ):
             raise ValueError("SECONDARY_STRUCTURED sources must use matching officiality")
+        if self.production_backup and not self.external_capability_id:
+            raise ValueError("production backup provider requires external_capability_id")
+        if self.external_capability_id and not self.production_backup:
+            raise ValueError("external_capability_id is reserved for production backup providers")
         return self
 
 

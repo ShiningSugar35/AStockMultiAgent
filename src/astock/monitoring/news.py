@@ -15,6 +15,7 @@ import httpx
 
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
+from astock.core.source_resilience import SourceCircuitBreaker, classify_source_error
 from astock.core.state import StateStore
 from astock.schemas import FetchStatus, SourceSnapshot
 
@@ -42,14 +43,16 @@ class NewsLead:
 
 class GdeltNewsLeadProvider:
     provider_id = "gdelt-news-leads"
+    capability = "news.discovery.lead"
+    default_endpoint = "https://api.gdeltproject.org/api/v2/doc/doc"
 
     def __init__(
         self,
         objects: ObjectStore,
         state: StateStore,
         *,
-        endpoint: str,
-        timeout_seconds: float,
+        endpoint: str = default_endpoint,
+        timeout_seconds: float = 20.0,
         client: httpx.Client | None = None,
     ) -> None:
         parsed = urlparse(endpoint)
@@ -58,6 +61,7 @@ class GdeltNewsLeadProvider:
         self.objects = objects
         self.state = state
         self.endpoint = endpoint
+        self.breaker = SourceCircuitBreaker(state)
         self.client = client or httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=True,
@@ -78,27 +82,38 @@ class GdeltNewsLeadProvider:
             terms.append(symbol)
         query_terms = [f'"{item}"' if " " in item else item for item in terms[:8]]
         query = " OR ".join(query_terms)
-        response = self.client.get(
-            self.endpoint,
-            params={
-                "query": query,
-                "mode": "artlist",
-                "format": "json",
-                "maxrecords": str(max_records),
-                "sort": "datedesc",
-                "startdatetime": start.astimezone(UTC).strftime("%Y%m%d%H%M%S"),
-                "enddatetime": end.astimezone(UTC).strftime("%Y%m%d%H%M%S"),
-            },
-        )
-        response.raise_for_status()
-        snapshot = self._persist(response)
+        if not self.breaker.claim_attempt(self.provider_id, self.capability):
+            raise RuntimeError("GDELT news capability is temporarily unavailable")
         try:
-            payload = response.json()
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise ValueError("GDELT returned malformed JSON") from exc
-        raw_articles = payload.get("articles", []) if isinstance(payload, dict) else []
-        if not isinstance(raw_articles, list):
-            raise ValueError("GDELT articles field is malformed")
+            response = self.client.get(
+                self.endpoint,
+                params={
+                    "query": query,
+                    "mode": "artlist",
+                    "format": "json",
+                    "maxrecords": str(max_records),
+                    "sort": "datedesc",
+                    "startdatetime": start.astimezone(UTC).strftime("%Y%m%d%H%M%S"),
+                    "enddatetime": end.astimezone(UTC).strftime("%Y%m%d%H%M%S"),
+                },
+            )
+            response.raise_for_status()
+            snapshot = self._persist(response)
+            try:
+                payload = response.json()
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError("GDELT returned malformed JSON") from exc
+            raw_articles = payload.get("articles", []) if isinstance(payload, dict) else []
+            if not isinstance(raw_articles, list):
+                raise ValueError("GDELT articles field is malformed")
+        except Exception as exc:
+            self.breaker.record_failure(
+                self.provider_id,
+                self.capability,
+                classify_source_error(exc),
+            )
+            raise
+        self.breaker.record_success(self.provider_id, self.capability)
         leads: list[NewsLead] = []
         for raw in raw_articles:
             if not isinstance(raw, dict):

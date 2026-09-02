@@ -1,0 +1,34 @@
+{
+  "capability_id": "humanizer-zh-risk-profile",
+  "capability_type": "SKILL_RISK_PROFILE",
+  "external_skill_executed": false,
+  "license_observed": "MIT",
+  "maintenance_snapshot": {
+    "commit_count_display": "6",
+    "forks_display": "1.1k",
+    "repository_public": true,
+    "stars_display": "16.4k"
+  },
+  "observed_at": "2026-09-02T02:15:00+09:00",
+  "observed_public_rules": [
+    "encourage_concrete_details",
+    "encourage_first_person_voice",
+    "encourage_personal_feelings",
+    "remove_template_like_ai_style"
+  ],
+  "production_status": "NOT_ADMITTED",
+  "qualification_reason_codes": [
+    "ACTUAL_SKILL_NOT_EXECUTED",
+    "FINANCIAL_FACT_DRIFT_RISK",
+    "HUMAN_BLIND_REVIEW_PENDING",
+    "PROMPT_AND_EXAMPLES_CAN_ADD_UNSUPPORTED_DETAILS",
+    "RISK_PROFILE_ONLY"
+  ],
+  "repository": "https://github.com/op7418/Humanizer-zh",
+  "schema_version": "external-capability-qualification-snapshot-v1",
+  "source_review_method": "official GitHub repository page and repository documentation reviewed; no repository content vendored or executed",
+  "mutable_metadata": true,
+  "network_access_during_experiment": false,
+  "production_import_allowed": false,
+  "source_authority_upgrade_allowed": false
+}

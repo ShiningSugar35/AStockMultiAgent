@@ -1,0 +1,27 @@
+{
+  "arms": [
+    "RULE_BASELINE",
+    "PROJECT_CONSTRAINED",
+    "HUMANIZER_ZH_RISK_PROFILE"
+  ],
+  "blind_seed": "astock-e01-frozen-blind-seed-v1",
+  "experiment_id": "E-01-presentation-humanize-20260902",
+  "external_model_calls_allowed": false,
+  "frozen_at": "2026-09-02T02:15:00+09:00",
+  "human_review_required_for_admission": true,
+  "network_requests_allowed": false,
+  "production_default_enabled": false,
+  "schema_version": "presentation-humanize-preregistration-v1",
+  "source_input_must_be_redacted": true,
+  "thresholds": {
+    "clarity_gain_min": 0.005,
+    "concision_gain_min": 0.005,
+    "estimated_cost_usd_max": 0.0,
+    "fact_drift_rate_max": 0.0,
+    "minimum_human_reviewers_per_candidate": 2,
+    "minimum_human_score_gain": 0.25,
+    "naturalness_gain_min": 0.005,
+    "sensitive_leak_count_max": 0,
+    "unsupported_experience_count_max": 0
+  }
+}

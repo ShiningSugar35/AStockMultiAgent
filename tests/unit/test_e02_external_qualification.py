@@ -149,7 +149,7 @@ def test_unmet_akshare_backup_gate_remains_in_development_plan() -> None:
     assert "AKShare 至少有一个明确 endpoint 达到 `PRODUCTION_BACKUP`" in plan
 
 
-def test_acceptance_does_not_claim_unearned_source_auditor_backup() -> None:
+def test_current_docs_do_not_claim_unearned_source_auditor_backup() -> None:
     source_auditor = _load("source-qualification-auditor")
     if source_auditor.admitted_stage is ExternalCapabilityStage.PRODUCTION_BACKUP:
         return
@@ -157,8 +157,19 @@ def test_acceptance_does_not_claim_unearned_source_auditor_backup() -> None:
     acceptance_path = PROJECT_ROOT / "进度验收.md"
     if not acceptance_path.exists():
         acceptance_path = PROJECT_ROOT / "验收报告.md"
-    acceptance = acceptance_path.read_text(encoding="utf-8")
-    assert "`source-qualification-auditor` 达到 `PRODUCTION_BACKUP`" not in acceptance
+    current_fact_docs = (
+        PROJECT_ROOT / "AGENTS.md",
+        PROJECT_ROOT / "README.md",
+        PROJECT_ROOT / "docs/architecture/external-dependency-resilience-v1.md",
+        acceptance_path,
+    )
+    forbidden_claims = (
+        "`source-qualification-auditor` 达到 `PRODUCTION_BACKUP`",
+        "`$source-qualification-auditor` 作为治理 Skill 为 `PRODUCTION_BACKUP`",
+    )
+    for path in current_fact_docs:
+        text = path.read_text(encoding="utf-8")
+        assert not any(claim in text for claim in forbidden_claims), path
 
 
 def test_e02_skill_evidence_hashes_bind_actual_repo_contracts() -> None:

@@ -124,7 +124,7 @@ class UserPortfolioSnapshot(AStockModel):
     trade_count: int = Field(ge=0)
     cash_cny: Decimal | None = Field(default=None, ge=0)
     cash_known: bool = False
-    source: Literal["LOCAL_USER_STATE"] = "LOCAL_USER_STATE"
+    source: Literal["LOCAL_USER_STATE", "EXTERNAL_ACCOUNT_DEFAULT"] = "LOCAL_USER_STATE"
     paper_ledger_write_allowed: Literal[False] = False
     broker_execution_allowed: Literal[False] = False
 

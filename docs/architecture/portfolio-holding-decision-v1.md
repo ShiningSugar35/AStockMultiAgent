@@ -15,7 +15,9 @@
 
 ## 2. 事实源
 
-### 2.1 外部既成交易
+### 2.1 外部真实账户事实
+
+外部真实账户与模拟盘彻底分 lane。SQLite `external_account / external_account_event` 是真实账户事实的权威源：事件只追加、不覆写，按 `account_id` 隔离账户；`TRADE / CASH_* / SECURITY_TRANSFER_* / REVERSAL` 与 replacement 共同覆盖真实交易、现金、转托管/非交易过户和历史更正。`user_state/*.md` 只做人类可读投影或旧单账户兼容镜像，不得反向制造事实。
 
 用户明确陈述已经发生的真实交易时：
 
@@ -23,12 +25,14 @@
 UserDeclaredTradeCapture
   → exact field validation + visible instrument identity
   → ValidatedExternalTradeImport
-  → LocalPortfolioService.record_validated_external_trade
-  → trades.md (canonical external/local trade facts)
-  → deterministic replay
-  → portfolio.md (human-readable projection)
+  → ExternalAccountEvent(default / TRADE)
+  → paper-fill economic conflict guard
+  → legacy LocalPortfolio compatibility projection refresh
+  → external_accounts.md / portfolio.md (human-readable projections)
   → ExternalTradeImportReceipt
 ```
+
+批量/多账户入口固定为 `CSV/JSON → raw ObjectStore → schema/timezone/account/secret/correction validation → ExternalAccountImportPreview → explicit confirm + source-hash recheck → 单一 SQLite transaction → append-only events → external_accounts.md`。preview 失败不写 batch/event；confirm 后整批成功或整批回滚。
 
 硬边界：
 
@@ -36,9 +40,11 @@ UserDeclaredTradeCapture
 - 缺字段不得用当前价格或声明时间猜测；
 - exact economic duplicate 幂等；
 - 与 PAPER_FILL 的同一经济事实冲突时阻断双计；
-- external trade 永不写 SQLite paper ledger。
+- external-account event 永不写 SQLite paper ledger，也不保存券商密码、Token、Cookie 或 API key；
+- 更正只能引用同账户目标，历史行永不 UPDATE/DELETE；同批 correction 即使排在 target 前，也按依赖拓扑安全插入；
+- 旧 `trades.md` 的 `IMPORT` 可显式幂等迁移到 `default`，`PAPER_FILL` 永远留在 paper lane；legacy Markdown 刷新失败时 canonical event 仍成立，重试只补投影。
 
-`UserPortfolioSnapshot` 将当前持仓、首次建仓时间、最近交易、数量、平均成本、最近 review 与 open orders 冻结成可恢复研究边界。外部现金未记录时 `cash_known=false`，不推断 NAV。
+`ExternalAccountProjection` 按账户确定性回放 cash-known/cash、持仓数量与平均成本，多账户不会互串；`UserPortfolioSnapshot` 继续冻结默认持仓研究边界、最近 review 与 open orders。外部现金尚未形成账户事件时 `cash_known=false`，不推断 NAV。
 
 ### 2.2 模拟交易
 

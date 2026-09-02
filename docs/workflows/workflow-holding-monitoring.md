@@ -8,9 +8,10 @@ Primary skill: `$holding-monitor`; use `$portfolio-manager` for aggregate alloca
 
 ## Flow
 
-1. **Refresh account → Markdown mirror**
+1. **Restore external accounts + paper state**
+   - Read `external-account-list`; for legacy installations run `external-account-migrate-legacy-default` once, then use `external-account-projection <account_id>` / `external-account-audit <account_id>` for authoritative external holdings, cash and corrections.
    - If the paper account exists, run `local-portfolio-sync-paper` and read `local-portfolio-status`.
-   - The paper ledger owns orders/fills; Git-ignored `user_state/*.md` is the Agent-facing compact state.
+   - SQLite `external_account_event` owns real-account facts; the paper ledger separately owns simulated orders/fills. Git-ignored `user_state/*.md` is only the Agent-facing projection/compatibility mirror.
 
 2. **Catch up pending execution first**
    - For held symbols/open orders, synchronize the missing hourly interval and replay to the current boundary.

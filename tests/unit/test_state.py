@@ -81,6 +81,9 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0058",
         "0059",
         "0060",
+        "0061",
+        "0062",
+        "0063",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -121,6 +124,23 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_circuit_breaker'"
         ).fetchone()
+        for table in (
+            "external_account",
+            "external_account_event",
+            "external_account_import_batch",
+        ):
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+        for trigger in (
+            "external_account_event_no_update",
+            "external_account_event_no_delete",
+        ):
+            assert connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?",
+                (trigger,),
+            ).fetchone()
         source_access_columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(source_access_decision)")
         }

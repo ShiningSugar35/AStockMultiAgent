@@ -5,9 +5,9 @@ description: Persist complete user-declared external trades, restore holding pos
 
 # 持仓事实、增量复核与再平衡
 
-1. **先恢复而不是重新询问**。若 paper account 存在先 `local-portfolio-sync-paper`，随后读取 `local-portfolio-status`、`portfolio-local-snapshot` 和 `continuous-monitor-status`。`trades.md` 记录外部既成交易与 paper fills 的来源事实，`portfolio.md` 由它确定性回放；不要依赖聊天记忆恢复购买时间、数量或成本。
-2. 当用户第一次明确陈述一笔**已经发生的外部真实交易**时，若市场/证券身份、BUY/SELL、数量、价格和实际成交时间完整且无歧义，同一轮生成 typed capture 并调用 `portfolio-import-declared-trade`。完整事实 exactly-once 落入本地 trade lane；重复陈述必须去重。缺字段时只询问真正缺失的成交事实，不得用当前价、提问时间或模型猜测补齐。
-3. 外部既成交易不得写入 SQLite paper ledger；paper position 仍只来自确认订单后的 fill。若同一经济交易同时出现在 external import 与 `PAPER_FILL`，必须冲突阻断，不能双计。
+1. **先恢复而不是重新询问**。先读取 `external-account-list`；旧单账户安装只需幂等执行一次 `external-account-migrate-legacy-default`，随后按账户读取 `external-account-projection` / `external-account-audit`。若 paper account 存在再执行 `local-portfolio-sync-paper`，随后读取 `local-portfolio-status`、`portfolio-local-snapshot` 和 `continuous-monitor-status`。SQLite append-only `external_account_event` 是外部真实账户权威事实；`user_state/*.md` 只是 Git-ignore 投影/兼容镜像，不要依赖聊天记忆恢复购买时间、数量、成本或现金。
+2. 当用户第一次明确陈述一笔**已经发生的外部真实交易**时，若市场/证券身份、BUY/SELL、数量、价格和实际成交时间完整且无歧义，同一轮生成 typed capture 并调用 `portfolio-import-declared-trade`；它会把权威 `TRADE` 事件 exactly-once 写入 `default` 外部账户，再刷新 legacy 本地投影。CSV/JSON 历史账单、多账户现金/转托管或更正必须走 `external-account-import-preview` → `external-account-import-confirm`；错误批次不得部分落库。缺字段时只询问真正缺失的成交事实，不得用当前价、提问时间或模型猜测补齐。
+3. 外部真实账户事件不得写入 SQLite paper ledger；paper position 仍只来自确认订单后的 fill。若同一经济交易同时出现在 external import 与 `PAPER_FILL`，必须冲突阻断，不能双计。更正只允许 append `REVERSAL`/replacement，不得覆写历史，也不得保存券商密码、Token、Cookie 或 API key。
 4. 每次投资类 Agent 任务都对已有持仓做**增量**复核。先消费 material unresolved monitor event/task，从 `last_review_at` 到当前检查新增官方披露、财务/KPI、估值、竞争格局、政策/治理、催化剂、执行状态和组合暴露；没有 material delta 是有效结果，不为显得活跃重复整份公司研究。
 5. 新闻/社媒只允许进入 `UNVERIFIED_LEAD`。在交易所、CNINFO、监管机构或发行人正式来源验证之前，只能触发 REVIEW/证据调查，不能直接产生 ADD/TRIM/EXIT。
 6. 事件语义固定为：`THESIS_INVALIDATING / THESIS_WEAKENING / THESIS_STRENGTHENING / VALUATION_ONLY / PORTFOLIO_RISK_ONLY / TEMPORARY_NOISE / UNVERIFIED_LEAD`。前四类 material 语义必须绑定本轮可见正式证据；调用方单独写一个 severity 没有交易权威。

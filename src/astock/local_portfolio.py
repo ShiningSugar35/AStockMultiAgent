@@ -14,6 +14,8 @@ import yaml
 from astock.core.atomic import atomic_write_text
 from astock.core.hashing import content_hash
 from astock.core.state import StateStore
+from astock.external_accounts import ExternalAccountRepository
+from astock.schemas.external_accounts import ExternalAccountEventDraft, ExternalAccountEventType
 from astock.schemas.portfolio_decision import ValidatedExternalTradeImport
 
 _PORTFOLIO_SCHEMA = "astock-local-portfolio-v1"
@@ -25,7 +27,7 @@ _ALLOWED_ACTIONS = {"HOLD", "ADD", "TRIM", "EXIT"}
 
 
 class LocalPortfolioService:
-    """Human-readable local state with deterministic replay and atomic writes."""
+    """Git-ignored compatibility projections; external account authority stays in SQLite."""
 
     def __init__(self, project_root: Path, state: StateStore | None = None) -> None:
         self.root = project_root.resolve() / "user_state"
@@ -77,6 +79,12 @@ class LocalPortfolioService:
             "last_trade_at": trades[-1]["occurred_at"] if trades else None,
         }
 
+    def trade_facts(self) -> list[dict[str, Any]]:
+        """Return a copy of legacy local trade facts for one-time compatibility migration."""
+
+        self.initialize()
+        return [dict(item) for item in self._load_trades()]
+
     def record_trade(
         self,
         *,
@@ -125,21 +133,16 @@ class LocalPortfolioService:
         replayed = self._replay(proposed)
         current = self._load_portfolio()
         replayed = self._merge_review_state(replayed, current.get("positions", []))
-        # trades.md is canonical; portfolio.md is a replayed human-readable projection.
+        # Within this legacy mirror, trades.md replays portfolio.md; external authority is SQLite.
         self._write_trades(proposed)
         self._write_portfolio(replayed, settings=current.get("settings", self._default_settings()))
         return {"status": "RECORDED", "trade": trade, "positions": replayed}
 
-    def record_validated_external_trade(
+    def inspect_validated_external_trade(
         self,
         trade: ValidatedExternalTradeImport,
-    ) -> dict[str, object]:
-        """Exactly-once import of one user-declared external trade fact.
-
-        User-declared broker facts remain outside the paper ledger. An exact duplicate
-        imported previously is idempotent; an economic collision with a PAPER_FILL is
-        blocked so the same real-world event cannot silently enter two fact lanes.
-        """
+    ) -> dict[str, object] | None:
+        """Check legacy local facts without writing, for canonical-event preflight."""
 
         self.initialize()
         economic_key = self._external_trade_key(
@@ -168,6 +171,17 @@ class LocalPortfolioService:
                 "trade": existing,
                 "positions": self.status()["positions"],
             }
+        return None
+
+    def record_validated_external_trade(
+        self,
+        trade: ValidatedExternalTradeImport,
+    ) -> dict[str, object]:
+        """Exactly-once compatibility projection of one validated external trade."""
+
+        existing = self.inspect_validated_external_trade(trade)
+        if existing is not None:
+            return existing
         result = self.record_trade(
             market=trade.market.value,
             symbol=trade.symbol,
@@ -708,19 +722,84 @@ def register_local_portfolio_commands(
         note: Annotated[str, typer.Option()] = "",
         occurred_at: Annotated[str | None, typer.Option()] = None,
     ) -> None:
-        timestamp = datetime.fromisoformat(occurred_at) if occurred_at else None
+        timestamp = datetime.fromisoformat(occurred_at) if occurred_at else datetime.now(UTC)
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise typer.BadParameter("occurred_at must include a timezone")
+        normalized_market = market.strip().upper()
+        normalized_symbol = symbol.strip()
+        normalized_side = side.strip().upper()
+        price = LocalPortfolioService._decimal(price_cny)
+        identity = {
+            "market": normalized_market,
+            "symbol": normalized_symbol,
+            "side": normalized_side,
+            "quantity": quantity,
+            "price_cny": LocalPortfolioService._decimal_text(price),
+            "occurred_at": timestamp.astimezone(UTC).isoformat(),
+        }
+        identity_hash = content_hash(identity)
+        paths, state, objects = services()
+        local = LocalPortfolioService(paths.root, state)
+        repository = ExternalAccountRepository(state, objects)
+        repository.create_account(
+            account_id="default",
+            display_name="默认外部账户",
+            created_at=timestamp,
+        )
+        draft = ExternalAccountEventDraft.model_validate(
+            {
+                "account_id": "default",
+                "event_type": ExternalAccountEventType.TRADE.value,
+                "occurred_at": timestamp,
+                "available_to_system_at": timestamp,
+                "market": normalized_market,
+                "symbol": normalized_symbol,
+                "side": normalized_side,
+                "quantity": quantity,
+                "price_cny": price,
+                "idempotency_key": f"local-portfolio-cli:{identity_hash}",
+                "note": note.strip(),
+                "created_at": timestamp,
+            }
+        )
+        inserted, duplicates = repository.append_drafts([draft])
+        validated = ValidatedExternalTradeImport.model_validate(
+            {
+                "capture_artifact_id": f"local-portfolio-cli:{identity_hash}",
+                "instrument_id": f"{normalized_market}:{normalized_symbol}",
+                "market": normalized_market,
+                "symbol": normalized_symbol,
+                "side": normalized_side,
+                "quantity": quantity,
+                "price_cny": price,
+                "occurred_at": timestamp,
+                "raw_statement": note.strip() or "local-portfolio-import-trade",
+                "created_at": timestamp,
+            }
+        )
+        reason_codes: list[str] = []
+        try:
+            compatibility = local.record_validated_external_trade(validated)
+        except (OSError, ValueError):
+            compatibility = {"status": "PROJECTION_FAILED"}
+            reason_codes.append("LEGACY_LOCAL_PROJECTION_REFRESH_FAILED")
+        try:
+            projection = repository.write_markdown_projection(paths.root, as_of=timestamp)
+        except (OSError, ValueError):
+            projection = {"status": "PROJECTION_FAILED"}
+            reason_codes.append("EXTERNAL_ACCOUNT_MARKDOWN_PROJECTION_REFRESH_FAILED")
+        event_ids = inserted or duplicates
         typer.echo(
             yaml.safe_dump(
-                service().record_trade(
-                    market=market,
-                    symbol=symbol,
-                    side=side,
-                    quantity=quantity,
-                    price_cny=price_cny,
-                    source="IMPORT",
-                    note=note,
-                    occurred_at=timestamp,
-                ),
+                {
+                    "status": "RECORDED" if inserted else "DUPLICATE",
+                    "event_id": event_ids[0],
+                    "reason_codes": sorted(set(reason_codes)),
+                    "compatibility_projection": compatibility,
+                    "external_projection": projection,
+                    "paper_ledger_write_allowed": False,
+                    "broker_execution_allowed": False,
+                },
                 allow_unicode=True,
                 sort_keys=False,
             )

@@ -13,8 +13,11 @@ from pydantic import HttpUrl
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.local_portfolio import LocalPortfolioService
+from astock.paper_trading import LedgerService
 from astock.portfolio.decision import PortfolioDecisionService
 from astock.portfolio.service import PortfolioService, _History
+from astock.schemas import OrderSide
+from astock.schemas.external_accounts import ExternalAccountEventDraft, ExternalAccountEventType
 from astock.schemas.knowledge import PositionAction
 from astock.schemas.market import InstrumentType, Market, SourceClass
 from astock.schemas.portfolio import (
@@ -228,6 +231,10 @@ def test_declared_external_trade_is_exactly_once_and_restores_position(tmp_path:
     local = service.local_portfolio.status()
     assert local["trade_count"] == 1
     assert local["position_count"] == 1
+    external_events = service.external_accounts.list_events("default")
+    assert len(external_events) == 1
+    assert external_events[0].event_type.value == "TRADE"
+    assert external_events[0].note.startswith("user-declared:")
     position = cast(list[dict[str, object]], local["positions"])[0]
     assert position["quantity"] == 300
     assert position["average_cost_cny"] == "50.0000"
@@ -243,6 +250,98 @@ def test_declared_external_trade_is_exactly_once_and_restores_position(tmp_path:
     assert len(snapshot_artifact["input_hashes"]) == 1
     assert service.audit(f"UserPortfolioSnapshot:{snapshot.snapshot_id}")["status"] == "PASS"
     assert service.audit(f"ExternalTradeImportReceipt:{second.receipt_id}")["status"] == "PASS"
+
+
+def test_canonical_external_event_survives_legacy_projection_failure_and_retry_recovers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    capture = UserDeclaredTradeCapture(
+        raw_statement="2026-08-20 以 50 元买入 600519 共 300 股",
+        declared_at=AS_OF,
+        market=Market.XSHG,
+        symbol="600519",
+        side="BUY",
+        quantity=300,
+        price_cny=Decimal("50"),
+        occurred_at=datetime(2026, 8, 20, 2, 0, tzinfo=UTC),
+        created_at=AS_OF,
+    )
+    original = service.local_portfolio.record_validated_external_trade
+
+    def fail_projection(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("projection write failed")
+
+    monkeypatch.setattr(service.local_portfolio, "record_validated_external_trade", fail_projection)
+    first = service.import_declared_trade(capture)
+    assert first.status is DeclaredTradeValidationStatus.READY
+    assert first.reason_codes == ["LEGACY_LOCAL_PROJECTION_REFRESH_FAILED"]
+    assert len(service.external_accounts.list_events("default")) == 1
+    assert service.local_portfolio.status()["trade_count"] == 0
+
+    monkeypatch.setattr(service.local_portfolio, "record_validated_external_trade", original)
+    recovered = service.import_declared_trade(capture)
+    assert recovered.status is DeclaredTradeValidationStatus.DUPLICATE
+    assert recovered.trade_id == first.trade_id
+    assert recovered.reason_codes == []
+    assert len(service.external_accounts.list_events("default")) == 1
+    assert service.local_portfolio.status()["trade_count"] == 1
+
+
+def test_local_snapshot_uses_external_account_authority_over_stale_markdown(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    event_time = AS_OF - timedelta(hours=1)
+    service.local_portfolio.record_trade(
+        market="XSHG",
+        symbol="600519",
+        side="BUY",
+        quantity=300,
+        price_cny="1",
+        source="IMPORT",
+        occurred_at=event_time,
+    )
+    service.external_accounts.create_account(
+        account_id="default",
+        display_name="默认外部账户",
+        created_at=event_time,
+    )
+    service.external_accounts.append_drafts(
+        [
+            ExternalAccountEventDraft(
+                account_id="default",
+                event_type=ExternalAccountEventType.CASH_DEPOSIT,
+                occurred_at=event_time,
+                available_to_system_at=event_time,
+                amount_cny=Decimal("10000"),
+                idempotency_key="snapshot-cash",
+                created_at=event_time,
+            ),
+            ExternalAccountEventDraft(
+                account_id="default",
+                event_type=ExternalAccountEventType.TRADE,
+                occurred_at=event_time,
+                available_to_system_at=event_time,
+                market=Market.XSHG,
+                symbol="600519",
+                side="BUY",
+                quantity=100,
+                price_cny=Decimal("50"),
+                idempotency_key="snapshot-buy",
+                created_at=event_time,
+            ),
+        ]
+    )
+
+    snapshot = service.snapshot_local_portfolio(as_of=AS_OF)
+    assert snapshot.source == "EXTERNAL_ACCOUNT_DEFAULT"
+    assert snapshot.trade_count == 1
+    assert snapshot.cash_known is True
+    assert snapshot.cash_cny == Decimal("5000")
+    assert len(snapshot.positions) == 1
+    assert snapshot.positions[0].quantity == 100
+    assert snapshot.positions[0].average_cost_cny == Decimal("50")
 
 
 def test_declared_trade_outside_listed_period_is_rejected(tmp_path: Path, monkeypatch) -> None:
@@ -296,13 +395,22 @@ def test_incomplete_declared_trade_does_not_create_position(tmp_path: Path) -> N
 def test_external_trade_conflicting_with_paper_fill_is_blocked(tmp_path: Path) -> None:
     service = _service(tmp_path)
     occurred_at = datetime(2026, 8, 20, 2, 0, tzinfo=UTC)
-    service.local_portfolio.record_trade(
-        market="XSHG",
+    ledger = LedgerService(service.state)
+    ledger.initialize_account("paper", 1_000_000)
+    order = ledger.place_order(
+        account_id="paper",
+        client_request_id="portfolio-decision-paper-buy",
         symbol="600519",
-        side="BUY",
-        quantity=100,
-        price_cny="50",
-        source="PAPER_FILL",
+        side=OrderSide.BUY,
+        qty=100,
+        limit_price_fen=5_000,
+        fee_reserve_fen=0,
+    )
+    ledger.record_fill(
+        fill_id="portfolio-decision-paper-fill",
+        order_id=order.order_id,
+        qty=100,
+        price_fen=5_000,
         occurred_at=occurred_at,
     )
     receipt = service.import_declared_trade(
@@ -319,7 +427,8 @@ def test_external_trade_conflicting_with_paper_fill_is_blocked(tmp_path: Path) -
         )
     )
     assert receipt.status is DeclaredTradeValidationStatus.CONFLICT
-    assert service.local_portfolio.status()["trade_count"] == 1
+    assert service.external_accounts.list_events("default") == []
+    assert service.local_portfolio.status()["trade_count"] == 0
 
 
 def test_formal_hedge_claim_requires_frozen_provenance() -> None:

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
+import typer
+from typer.testing import CliRunner
 
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.local_portfolio import LocalPortfolioService
+from astock.external_accounts import ExternalAccountRepository
+from astock.local_portfolio import LocalPortfolioService, register_local_portfolio_commands
 from astock.paper_trading import LedgerService
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -134,3 +138,45 @@ def test_local_portfolio_auto_selects_default_paper_account(tmp_path: Path) -> N
 
     assert result["account_id"] == "default"
     assert result["position_count"] == 0
+
+
+def test_legacy_import_cli_writes_canonical_external_event_before_markdown(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    app = typer.Typer()
+    paths = SimpleNamespace(root=tmp_path)
+    register_local_portfolio_commands(app, lambda: (paths, state, objects))
+    runner = CliRunner()
+    args = [
+        "local-portfolio-import-trade",
+        "BUY",
+        "XSHG",
+        "600519",
+        "100",
+        "10",
+        "--occurred-at",
+        "2026-08-20T02:00:00+00:00",
+    ]
+
+    first = runner.invoke(app, args)
+    second = runner.invoke(app, args)
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    repository = ExternalAccountRepository(state, objects)
+    events = repository.list_events("default")
+    assert len(events) == 1
+    migrated = repository.migrate_legacy_default_account(
+        LocalPortfolioService(tmp_path, state),
+        migrated_at=datetime(2026, 8, 20, 4, 0, tzinfo=UTC),
+    )
+    assert migrated["inserted_event_ids"] == []
+    assert len(repository.list_events("default")) == 1
+    projection = repository.projection(
+        "default",
+        as_of=datetime(2026, 8, 20, 3, 0, tzinfo=UTC),
+    )
+    assert projection.positions[0].quantity == 100
+    assert projection.positions[0].average_cost_cny == 10
+    assert LocalPortfolioService(tmp_path, state).status()["trade_count"] == 1

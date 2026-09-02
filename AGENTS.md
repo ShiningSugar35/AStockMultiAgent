@@ -16,7 +16,7 @@
 - 当前投资咨询遇到数据缺口时，在单次任务内优先自动解决，自动恢复预算上限为 1800 秒：定位失败原因 → 对 retryable 故障有限重试/熔断 → 备用 provider/更合适的同源端点 → 交易所/CNINFO/发行人 IR/监管机构等权威 Web 多源核验。只有这些自动渠道都无法解决的必要事项，才允许在最终一次性整理成人工协助清单。
 - 自动渠道尚未完全闭合但已有足够权威材料时，可以给出明确标注的不确定性和研究层判断；不得为了“正式状态”而把后台阻塞详情倒给用户，也不得为了给结论而伪造精确买卖价。
 - INVESTOR_MODE 默认短答：**结论（1–2句）→ 2–4个决定性理由 → 最大风险/改变判断的条件**。禁止把同一观点在“为什么/总结/建议”里重复三遍；专业金融/统计术语、论文结论或公式只有确实影响判断时才出现，并在首次出现时用一句括号解释给普通股民。来源用正常引用呈现，不解释内部抓取链。
-- 每次投资类会话先恢复用户态：若 paper account 存在，先同步到账户本地镜像 `user_state/portfolio.md / orders.md / trades.md`，再冻结/读取 `portfolio-local-snapshot`，随后读取 Continuous Monitor 的未解决事件/研究任务并对当前持仓做**增量**复核；已持久化的购买时间、数量、平均成本不得在后续会话无故重复询问。外部真实交易事实只进入本机 trade lane，模拟成交仍只来自 SQLite paper fill。`user_state/` 永久 Git-ignore，不进入提交。低成本 deterministic monitor 可以常驻；需要语义判断的 Research Agent 只有在可用 worker/会话存在时消费持久任务，不得把排队状态冒充已完成分析。
+- 每次投资类会话先恢复用户态：若 paper account 存在，先同步到账户本地镜像；读取 append-only `ExternalAccountEvent` 的账户投影与 Git-ignore 的 `user_state/` 人类可读投影，再冻结/读取 `portfolio-local-snapshot`，随后读取 Continuous Monitor 的未解决事件/研究任务并对当前持仓做**增量**复核；已持久化的购买时间、数量、平均成本不得在后续会话无故重复询问。外部真实交易、现金、转托管/非交易过户及其更正按 `account_id` 进入 SQLite external-account event lane，旧 `user_state/trades.md` 只保留兼容投影；模拟成交仍只来自 SQLite paper fill。`user_state/` 永久 Git-ignore，不进入提交。低成本 deterministic monitor 可以常驻；需要语义判断的 Research Agent 只有在可用 worker/会话存在时消费持久任务，不得把排队状态冒充已完成分析。
 - 用户明确说“买入/卖出/加仓/减仓”时，其指令覆盖模型的投资意见，但不覆盖模拟账户机械约束：现金/可用股数、工具特定交易单位、可交易状态、价格限制、账户确认和成交回放仍必须成立。当前 paper order/replay **只准入 STOCK**；ETF 当前仅开放正式研究/组合评估基础，未准入模拟执行，不能套用股票 100 股/T+1 规则。AI 主动下模拟单只允许在正式研究结果允许模拟、当前入场条件实际满足且本地 `auto_ai_paper_order_on_approved_entry=true` 时进入既有订单确认流程；下单不等于持仓，只有 fill 后才更新持仓。
 
 ## 唯一事实源
@@ -60,7 +60,7 @@
 - 模拟账户保留账户、订单、冻结现金、成交、费用、T+1、确认和回放。Continuous Monitor 可对**已确认开放模拟订单**常驻执行 deterministic replay，但不得创建新订单或直接改持仓；Agent 会话仍负责用户态镜像、语义复核和需要人工/Agent 判断的动作。
 - 默认回放使用未复权原始 **60m**，东方财富/新浪交叉质量校验后仍标记 `PROVIDER_1H_APPROX`；小时 OHLC 只能证明限价在该小时内被触及，不能证明盘口队列或小时内先后路径，因此小时级限价成交采用保守价。存在执行路径歧义时才显式切换 `--resolution 5m`。
 - 5m 保留为高精度 fallback，不再作为月/年级策略的默认存储/回放负担；1m 不在默认链。缺失数据不得静默插值或虚构。
-- Git-ignore 的 `user_state/portfolio.md / orders.md / trades.md` 是 Agent/用户可读本机状态；其中外部既成交易以 `trades.md` 的 IMPORT 事实确定性回放到 `portfolio.md`，paper fills 由 SQLite paper ledger 同步投影。SQLite paper ledger 仍是模拟订单/成交/资金的唯一事实源；本地外部持仓不得反向写入 paper ledger，镜像也不得绕过账本制造 fill。
+- 外部真实账户事实的权威源为 SQLite append-only `external_account_event`；`external_account` 隔离账户身份，现金/交易/转托管和 `REVERSAL`/replacement 只追加不覆写。`user_state/portfolio.md / orders.md / trades.md / external_accounts.md` 均是 Git-ignore 的 Agent/用户可读投影或旧单账户兼容镜像，不能反向制造事实。SQLite paper ledger 仍是模拟订单/成交/资金的唯一事实源；同一经济交易若与 paper fill 冲突必须 fail closed，外部账户事件绝不写 paper ledger。
 - 组合风险研究序列由原始价格与**当时可见且 TERMS_VERIFIED 的版本化公司行为**派生 gross total-return 研究序列；原始未复权价继续拥有真实成交/数量语义。公司行动 release 缺失时必须明确降级，复权/总回报研究价不得当作真实成交价。
 - 免费 reference 的 provider/operation 顺序只能读取 `market-reference-v2` route；业务代码不得另写 BaoStock/EastMoney/Sina 固定顺序。BaoStock 可用时仍保留批量/低频能力并受 active preflight/circuit policy 保护；live route 会结合 provider health 跳过 UNAVAILABLE/CORRUPT。原始响应先入 ObjectStore，未复权日线在上海收盘前不可见。
 - 公司行动结构化结果只作线索；精确官方文档和条款核验完成前不得写模拟账本。
@@ -96,6 +96,8 @@
 ## 稳定命令
 
 使用 `uv run astock --help` 查看完整参数。稳定入口包括：`init`、`probe`、`sync-market`、`sync-hourly`、`sync-5m`、`quality-report`、`market-canonical-gc`、`agent-observation-register`、`agent-observability-report`、`pit-temporal-schema`、`pit-temporal-audit`、`pit-knowledge-cutoff-diagnostic`、`pit-temporal-artifact-audit`、`paper-status`、`paper-replay`、`local-portfolio-init/status/sync-paper/review/audit/rebuild`、`portfolio-import-declared-trade`、`portfolio-local-snapshot`、`portfolio-etf-profile-register`、`portfolio-etf-metrics`、`portfolio-complement-screen`、`portfolio-hedge-evaluate`、`portfolio-transition`、`portfolio-decision-status`、`portfolio-decision-audit`、`context-plan`、`codex-run-init`、`codex-run-import`。`probe` 只做轻量只读 capability/schema 健康检查，不再执行全库 `PRAGMA integrity_check`；完整 SQLite 体检必须显式使用 `state-integrity-audit`。Phase 3 M3.1 入口包括：`financial-audit-schema`、`financial-audit`、`financial-audit-status`；同行分位和 PyOD 尚未启用。
+
+外部真实账户稳定入口包括 `external-account-schema/create/list/event-append/import-preview/import-confirm/projection/audit/migrate-legacy-default`。批量导入必须先 preview 再 confirm；`migrate-legacy-default` 只迁移旧 `IMPORT` 到 `default`，`PAPER_FILL` 保留在模拟账本链；所有命令都保持 `paper_ledger_write_allowed=false / broker_execution_allowed=false`。
 
 Phase 5 论证链入口包括：`knowledge-semantic-plan`、`knowledge-semantic-run`、`knowledge-semantic-status`、`knowledge-semantic-model-status`、`knowledge-semantic-embedding-run` 和 `knowledge-semantic-packet-export`。未校准相似度不得自动删除，DeepSeek 包不得自动外发。
 

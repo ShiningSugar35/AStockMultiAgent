@@ -16,9 +16,14 @@ from astock.core.errors import PolicyError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.external_accounts import ExternalAccountRepository
 from astock.local_portfolio import LocalPortfolioService
 from astock.portfolio.analytics import portfolio_risk_statistics
 from astock.portfolio.service import PortfolioService, _History
+from astock.schemas.external_accounts import (
+    ExternalAccountEventDraft,
+    ExternalAccountEventType,
+)
 from astock.schemas.knowledge import PositionAction
 from astock.schemas.market import InstrumentType, Market, SourceClass
 from astock.schemas.portfolio import (
@@ -74,6 +79,7 @@ class PortfolioDecisionService:
         self.state = state
         self.objects = objects
         self.local_portfolio = local_portfolio
+        self.external_accounts = ExternalAccountRepository(state, objects)
         self.portfolio = portfolio
         self.project_root = project_root.resolve()
         self._config = self._load_config(self.project_root / "configs" / "portfolio_decision.yaml")
@@ -173,7 +179,31 @@ class PortfolioDecisionService:
             if self.objects.verify(instrument_hash):
                 input_hashes.append(instrument_hash)
         try:
-            result = self.local_portfolio.record_validated_external_trade(validation)
+            if self.external_accounts.get_account("default") is None:
+                self.external_accounts.create_account(
+                    account_id="default",
+                    display_name="默认外部账户",
+                    created_at=capture.declared_at,
+                )
+            inserted_event_ids, duplicate_event_ids = self.external_accounts.append_drafts(
+                [
+                    ExternalAccountEventDraft(
+                        account_id="default",
+                        event_type=ExternalAccountEventType.TRADE,
+                        occurred_at=capture.occurred_at,
+                        available_to_system_at=capture.declared_at,
+                        market=capture.market,
+                        symbol=capture.symbol,
+                        side=cast(Any, capture.side),
+                        quantity=capture.quantity,
+                        price_cny=capture.price_cny,
+                        source_artifact_hash=validation_hash,
+                        idempotency_key=f"validated-external:{validation_hash}",
+                        note=f"user-declared:{capture_id}",
+                        created_at=capture.declared_at,
+                    )
+                ]
+            )
         except ValueError as exc:
             receipt = ExternalTradeImportReceipt(
                 receipt_id="external-trade-receipt:"
@@ -186,25 +216,60 @@ class PortfolioDecisionService:
             )
             return self._persist_receipt(receipt, input_hashes)
 
-        trade = cast(dict[str, object], result["trade"])
-        positions = cast(list[dict[str, object]], result["positions"])
-        position_projection = next(
-            (
-                item
-                for item in positions
-                if str(item["market"]) == capture.market.value
-                and str(item["symbol"]) == capture.symbol
-            ),
-            None,
-        )
-        duplicate = str(result["status"]) == "DUPLICATE"
+        event_id = (inserted_event_ids or duplicate_event_ids)[0]
+        duplicate = not inserted_event_ids
+        reason_codes: list[str] = []
+        position_projection: dict[str, object] | None = None
+        try:
+            compatibility = self.local_portfolio.record_validated_external_trade(validation)
+            positions = cast(list[dict[str, object]], compatibility["positions"])
+            position_projection = next(
+                (
+                    item
+                    for item in positions
+                    if str(item["market"]) == capture.market.value
+                    and str(item["symbol"]) == capture.symbol
+                ),
+                None,
+            )
+        except (OSError, ValueError):
+            reason_codes.append("LEGACY_LOCAL_PROJECTION_REFRESH_FAILED")
+        try:
+            self.external_accounts.write_markdown_projection(
+                self.project_root,
+                as_of=capture.declared_at,
+            )
+        except (OSError, ValueError):
+            reason_codes.append("EXTERNAL_ACCOUNT_MARKDOWN_PROJECTION_REFRESH_FAILED")
+        if position_projection is None:
+            projected = self.external_accounts.projection("default", as_of=capture.declared_at)
+            canonical_position = next(
+                (
+                    item
+                    for item in projected.positions
+                    if item.market is capture.market and item.symbol == capture.symbol
+                ),
+                None,
+            )
+            if canonical_position is not None:
+                position_projection = {
+                    "market": canonical_position.market.value,
+                    "symbol": canonical_position.symbol,
+                    "quantity": canonical_position.quantity,
+                    "average_cost_cny": str(canonical_position.average_cost_cny),
+                    "opened_at": canonical_position.opened_at.isoformat(),
+                    "last_trade_at": canonical_position.last_event_at.isoformat(),
+                }
+        reason_codes = sorted(set(reason_codes))
+        trade_id = f"external-account-event:{event_id}"
         receipt = ExternalTradeImportReceipt(
             receipt_id="external-trade-receipt:"
             + content_hash(
                 {
                     "validation": validation_hash,
-                    "trade_id": str(trade["trade_id"]),
+                    "trade_id": trade_id,
                     "duplicate": duplicate,
+                    "reason_codes": reason_codes,
                 }
             ),
             status=(
@@ -214,8 +279,8 @@ class PortfolioDecisionService:
             ),
             capture_artifact_id=capture_id,
             validation_artifact_id=validation_id,
-            trade_id=str(trade["trade_id"]),
-            reason_codes=[],
+            trade_id=trade_id,
+            reason_codes=reason_codes,
             deduplicated=duplicate,
             position_projection=position_projection,
             created_at=capture.declared_at,
@@ -223,52 +288,117 @@ class PortfolioDecisionService:
         return self._persist_receipt(receipt, input_hashes)
 
     def snapshot_local_portfolio(self, *, as_of: datetime) -> UserPortfolioSnapshot:
-        """Freeze the current Git-ignored local user-state projection for research reuse."""
+        """Freeze the default external-account authority plus local review/order projections."""
 
         status = self.local_portfolio.status()
-        positions = [
-            UserPortfolioPosition(
-                market=Market(str(item["market"])),
-                symbol=str(item["symbol"]),
-                quantity=int(str(item["quantity"])),
-                average_cost_cny=Decimal(str(item["average_cost_cny"])),
-                opened_at=datetime.fromisoformat(str(item["opened_at"])),
-                last_trade_at=datetime.fromisoformat(str(item["last_trade_at"])),
-                last_review_at=(
-                    datetime.fromisoformat(str(item["last_review_at"]))
-                    if item.get("last_review_at")
-                    else None
-                ),
-                last_action=str(item.get("last_action", "HOLD")),
-                thesis_status=str(item.get("thesis_status", "UNREVIEWED")),
-                review_note=str(item.get("review_note", "")),
-                created_at=as_of,
-            )
-            for item in cast(list[dict[str, object]], status["positions"])
-        ]
+        legacy_positions = cast(list[dict[str, object]], status["positions"])
+        review_by_key = {
+            (str(item["market"]), str(item["symbol"])): item for item in legacy_positions
+        }
         open_orders = [
             {str(key): value for key, value in item.items()}
             for item in cast(list[dict[str, object]], status["open_orders"])
         ]
+        external_account = self.external_accounts.get_account("default")
+        if external_account is not None:
+            external_projection = self.external_accounts.projection("default", as_of=as_of)
+            external_events = self.external_accounts.list_events("default", as_of=as_of)
+            if (
+                external_projection.cash_known
+                and external_projection.cash_cny is not None
+                and external_projection.cash_cny < 0
+            ):
+                raise ValueError("external account cash cannot be negative for portfolio snapshot")
+            positions = []
+            for item in external_projection.positions:
+                review = review_by_key.get((item.market.value, item.symbol), {})
+                positions.append(
+                    UserPortfolioPosition(
+                        market=item.market,
+                        symbol=item.symbol,
+                        quantity=item.quantity,
+                        average_cost_cny=item.average_cost_cny,
+                        opened_at=item.opened_at,
+                        last_trade_at=item.last_event_at,
+                        last_review_at=(
+                            datetime.fromisoformat(str(review["last_review_at"]))
+                            if review.get("last_review_at")
+                            else None
+                        ),
+                        last_action=str(review.get("last_action", "HOLD")),
+                        thesis_status=str(review.get("thesis_status", "UNREVIEWED")),
+                        review_note=str(review.get("review_note", "")),
+                        created_at=as_of,
+                    )
+                )
+            trade_count = sum(
+                1
+                for item in external_events
+                if item.event_type is ExternalAccountEventType.TRADE
+            )
+            cash_cny = external_projection.cash_cny
+            cash_known = external_projection.cash_known
+            snapshot_source = "EXTERNAL_ACCOUNT_DEFAULT"
+            boundary_payload: dict[str, object] = {
+                "as_of": as_of.isoformat(),
+                "authority": snapshot_source,
+                "external_projection": external_projection.model_dump(mode="json"),
+                "open_orders": open_orders,
+                "legacy_review_projection": legacy_positions,
+            }
+        else:
+            positions = [
+                UserPortfolioPosition(
+                    market=Market(str(item["market"])),
+                    symbol=str(item["symbol"]),
+                    quantity=int(str(item["quantity"])),
+                    average_cost_cny=Decimal(str(item["average_cost_cny"])),
+                    opened_at=datetime.fromisoformat(str(item["opened_at"])),
+                    last_trade_at=datetime.fromisoformat(str(item["last_trade_at"])),
+                    last_review_at=(
+                        datetime.fromisoformat(str(item["last_review_at"]))
+                        if item.get("last_review_at")
+                        else None
+                    ),
+                    last_action=str(item.get("last_action", "HOLD")),
+                    thesis_status=str(item.get("thesis_status", "UNREVIEWED")),
+                    review_note=str(item.get("review_note", "")),
+                    created_at=as_of,
+                )
+                for item in legacy_positions
+            ]
+            trade_count = int(str(status["trade_count"]))
+            cash_cny = None
+            cash_known = False
+            snapshot_source = "LOCAL_USER_STATE"
+            boundary_payload = {
+                "as_of": as_of.isoformat(),
+                "authority": snapshot_source,
+                "status": status,
+            }
         seed = {
             "as_of": as_of.isoformat(),
+            "source": snapshot_source,
             "positions": [item.model_dump(mode="json") for item in positions],
             "open_orders": open_orders,
-            "trade_count": int(str(status["trade_count"])),
+            "trade_count": trade_count,
+            "cash_cny": str(cash_cny) if cash_cny is not None else None,
+            "cash_known": cash_known,
         }
         _, boundary_hash = self._freeze(
-            "LocalPortfolioStateBoundary",
-            "local-portfolio-state-v1",
-            {"as_of": as_of.isoformat(), "status": status},
+            "UserPortfolioStateBoundary",
+            "user-portfolio-state-v2",
+            boundary_payload,
         )
         snapshot = UserPortfolioSnapshot(
             snapshot_id="user-portfolio:" + content_hash(seed),
             as_of=as_of,
             positions=positions,
             open_orders=open_orders,
-            trade_count=int(str(status["trade_count"])),
-            cash_cny=None,
-            cash_known=False,
+            trade_count=trade_count,
+            cash_cny=cash_cny,
+            cash_known=cash_known,
+            source=cast(Any, snapshot_source),
             created_at=as_of,
         )
         self._freeze_exact(

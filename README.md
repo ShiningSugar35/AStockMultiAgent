@@ -285,6 +285,12 @@ uv run astock research-plan 600519 --as-of 2026-08-11T10:00:00+08:00
 uv run astock local-portfolio-init
 uv run astock local-portfolio-sync-paper
 uv run astock local-portfolio-status
+# 外部真实账户：append-only 事件、两阶段批量导入、账户投影/审计
+uv run astock external-account-list
+uv run astock external-account-import-preview account-events.csv
+uv run astock external-account-import-confirm <batch-id> --source-file account-events.csv
+uv run astock external-account-projection default
+uv run astock external-account-audit default
 uv run astock sync-hourly 600519 --market XSHG
 uv run astock paper-replay 600519 --market XSHG --cursor <ISO时间>
 # 小时线存在成交路径歧义时才切 5m

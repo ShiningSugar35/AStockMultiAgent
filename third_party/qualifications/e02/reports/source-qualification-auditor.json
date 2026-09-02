@@ -22,14 +22,14 @@
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
   "evidence_object_hashes": [
-    "fcf2d2e9fdb83f4ae5777c23ec34daf6c777a819311074ecc6b7757533133b42"
+    "55f0949caadebb9306e6e6326e93647305a7162291cc9654cebfb3d786a4b9eb"
   ],
   "expires_at": "2026-12-01T06:16:28Z",
   "reason_codes": [
     "CONTROLLED_LIVE_SKILL_EXECUTION_NOT_FROZEN"
   ],
   "recorded_validation": "PASS",
-  "report_id": "341e4118e1195e59c1560e6763821c1e0920f235a2e4f7228e88e6d230e754f2",
+  "report_id": "6100b4374ed2b74fe566cf5105e8db4f094a53ff7f8e9844ffec22b0363a7c80",
   "requested_stage": "PRODUCTION_BACKUP",
   "schema_version": "capability-qualification-report-v1",
   "source_class_ceiling": "UNKNOWN",

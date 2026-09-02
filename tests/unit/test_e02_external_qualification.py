@@ -79,8 +79,9 @@ def _load(capability_id: str) -> CapabilityQualificationEvidence:
     return load_capability_qualification_evidence(EVIDENCE_ROOT / f"{capability_id}.json")
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _canonical_text_sha256(path: Path) -> str:
+    normalized = path.read_text(encoding="utf-8")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _transport(source_id: str, *, available: bool, backup: bool = False) -> TransportCapability:
@@ -173,6 +174,13 @@ def test_current_docs_do_not_claim_unearned_source_auditor_backup() -> None:
 
 
 def test_e02_skill_evidence_hashes_bind_actual_repo_contracts() -> None:
+    shared_repo_sources = {
+        "repo:pyproject.toml": PROJECT_ROOT / "pyproject.toml",
+        "repo:uv.lock": PROJECT_ROOT / "uv.lock",
+        "contract:tests/unit/test_e02_external_qualification.py": (
+            PROJECT_ROOT / "tests/unit/test_e02_external_qualification.py"
+        ),
+    }
     for capability_id in SKILL_CANDIDATES:
         evidence = _load(capability_id)
         skill_path = PROJECT_ROOT / ".agents" / "skills" / capability_id / "SKILL.md"
@@ -181,12 +189,11 @@ def test_e02_skill_evidence_hashes_bind_actual_repo_contracts() -> None:
             for item in evidence.sources
             if item.source_ref.endswith(f"/{capability_id}/SKILL.md")
         )
-        assert skill_source.sha256 == _sha256(skill_path)
-        assert evidence.candidate_version == f"sha256:{_sha256(skill_path)}"
-    source_auditor = _load("source-qualification-auditor")
-    assert next(
-        item for item in source_auditor.sources if item.source_ref == "repo:uv.lock"
-    ).sha256 == _sha256(PROJECT_ROOT / "uv.lock")
+        assert skill_source.sha256 == _canonical_text_sha256(skill_path)
+        assert evidence.candidate_version == f"sha256:{_canonical_text_sha256(skill_path)}"
+        for source_ref, source_path in shared_repo_sources.items():
+            source = next(item for item in evidence.sources if item.source_ref == source_ref)
+            assert source.sha256 == _canonical_text_sha256(source_path)
 
 
 def test_e02_all_tracked_evidence_materializes_through_canonical_m06(tmp_path: Path) -> None:
@@ -254,6 +261,18 @@ def test_e02_qualification_evidence_freeze_is_line_ending_invariant(tmp_path: Pa
         crlf_path,
     )
     assert lf_report == crlf_report
+
+
+def test_e02_tracked_text_contract_hash_is_line_ending_invariant(tmp_path: Path) -> None:
+    text = "alpha\nbeta\n"
+    lf_path = tmp_path / "contract-lf.txt"
+    crlf_path = tmp_path / "contract-crlf.txt"
+    lf_path.write_bytes(text.encode("utf-8"))
+    crlf_path.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+
+    expected = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert _canonical_text_sha256(lf_path) == expected
+    assert _canonical_text_sha256(crlf_path) == expected
 
 
 def test_source_qualification_skill_recorded_contract_and_exit_drill_stay_shadow(

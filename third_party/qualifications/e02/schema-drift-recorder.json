@@ -41,7 +41,7 @@
     {
       "assertion": "The project is proprietary; these Repo Skills are project-owned and introduce no third-party runtime license or service ToS.",
       "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "bc77467e23297ddd1622620bd6eeca1f5967bc29c1600c8db91dd92d4a352056",
+      "sha256": "e9851f2e6212989f69c1cd0ba2471da46c34d65a28aa35731634db6abfac88b9",
       "source_ref": "repo:pyproject.toml"
     },
     {
@@ -53,6 +53,7 @@
     {
       "assertion": "Recorded and controlled-live/exit assertions are bound to the repository test contract; a passing test run is required before the final status may claim PASS.",
       "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "ca0724bae8e57a6b0491c3c377486c6317f8e243321642b76311f2bd7b25e1fa",
       "source_ref": "contract:tests/unit/test_e02_external_qualification.py"
     }
   ],

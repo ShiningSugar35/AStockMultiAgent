@@ -1,15 +1,15 @@
 {
-  "admitted_stage": "PRODUCTION_BACKUP",
+  "admitted_stage": "SHADOW",
   "candidate_version": "sha256:b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
   "capability_id": "source-qualification-auditor",
   "checks": {
-    "cache_behavior": "PASS",
+    "cache_behavior": "NOT_APPLICABLE",
     "cost": "PASS",
     "credential_handling": "PASS",
     "data_rights": "PASS",
     "exit_uninstall": "PASS",
     "failure_behavior": "PASS",
-    "latency": "PASS",
+    "latency": "FAIL",
     "license": "PASS",
     "maintenance": "PASS",
     "offline_behavior": "PASS",
@@ -20,14 +20,16 @@
     "terms_of_service": "PASS"
   },
   "completeness_ceiling": "NOT_APPLICABLE",
-  "controlled_live_validation": "PASS",
+  "controlled_live_validation": "FAIL",
   "evidence_object_hashes": [
-    "a11176f3cc4f87c036fb8ce8cde50e48990696894e78f458fdbb57a2f87997d3"
+    "fcf2d2e9fdb83f4ae5777c23ec34daf6c777a819311074ecc6b7757533133b42"
   ],
   "expires_at": "2026-12-01T06:16:28Z",
-  "reason_codes": [],
+  "reason_codes": [
+    "CONTROLLED_LIVE_SKILL_EXECUTION_NOT_FROZEN"
+  ],
   "recorded_validation": "PASS",
-  "report_id": "3a911f8799436221bf7055e76136756bc37788282c59c1c2f9c4fcd8357f3696",
+  "report_id": "341e4118e1195e59c1560e6763821c1e0920f235a2e4f7228e88e6d230e754f2",
   "requested_stage": "PRODUCTION_BACKUP",
   "schema_version": "capability-qualification-report-v1",
   "source_class_ceiling": "UNKNOWN",

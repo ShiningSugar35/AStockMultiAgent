@@ -1,15 +1,15 @@
 {
-  "admitted_stage": "PRODUCTION_BACKUP",
+  "admitted_stage": "SHADOW",
   "candidate_version": "sha256:b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
   "capability_id": "source-qualification-auditor",
   "checks": {
-    "cache_behavior": "PASS",
+    "cache_behavior": "NOT_APPLICABLE",
     "cost": "PASS",
     "credential_handling": "PASS",
     "data_rights": "PASS",
     "exit_uninstall": "PASS",
     "failure_behavior": "PASS",
-    "latency": "PASS",
+    "latency": "FAIL",
     "license": "PASS",
     "maintenance": "PASS",
     "offline_behavior": "PASS",
@@ -20,11 +20,13 @@
     "terms_of_service": "PASS"
   },
   "completeness_ceiling": "NOT_APPLICABLE",
-  "controlled_live_validation": "PASS",
+  "controlled_live_validation": "FAIL",
   "created_at": "2026-09-02T06:16:28Z",
   "evidence_version": "e02-qualification-evidence-v1",
   "expires_at": "2026-12-01T06:16:28Z",
-  "reason_codes": [],
+  "reason_codes": [
+    "CONTROLLED_LIVE_SKILL_EXECUTION_NOT_FROZEN"
+  ],
   "recorded_validation": "PASS",
   "requested_stage": "PRODUCTION_BACKUP",
   "schema_version": "1.0",
@@ -49,14 +51,15 @@
       "source_ref": "repo:uv.lock"
     },
     {
-      "assertion": "Recorded and controlled-live/exit assertions are bound to the repository test contract; a passing test run is required before the final status may claim PASS.",
+      "assertion": "Recorded contract, observability, revocation and uninstall checks are covered by the repository test; they do not substitute for a frozen controlled-live Skill run.",
       "observed_at": "2026-09-02T06:16:28Z",
+      "sha256": "9346bf27af40c18180eb86d50e2627da657cfbd037f7e388adcd98dc7f2bffd2",
       "source_ref": "contract:tests/unit/test_e02_external_qualification.py"
     },
     {
-      "assertion": "Controlled-live means the actual tracked Skill is discovered by AgentObservabilityService, its tracked evidence is frozen into ObjectStore, the canonical M-06 report is registered, primary-route precedence is preserved, revocation fails closed, and a temporary uninstall leaves core routing operational.",
+      "assertion": "No actual controlled-live Skill task input, command/output trace and immutable result bundle has been frozen; production-backup admission is therefore prohibited.",
       "observed_at": "2026-09-02T06:16:28Z",
-      "source_ref": "runtime:source-qualification-auditor-controlled-live"
+      "source_ref": "gap:source-qualification-auditor-controlled-live"
     }
   ],
   "valid_from": "2026-09-02T06:16:28Z"

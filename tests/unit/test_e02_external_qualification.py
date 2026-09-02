@@ -120,10 +120,17 @@ def test_e02_tracked_evidence_covers_exact_candidate_set_and_freezes_current_ver
         assert not evidence.checks.all_pass()
 
     source_auditor = _load("source-qualification-auditor")
-    assert source_auditor.admitted_stage is ExternalCapabilityStage.PRODUCTION_BACKUP
-    assert source_auditor.checks.all_pass()
+    assert source_auditor.admitted_stage is ExternalCapabilityStage.SHADOW
+    assert not source_auditor.checks.all_pass()
     assert source_auditor.recorded_validation is QualificationCheckStatus.PASS
-    assert source_auditor.controlled_live_validation is QualificationCheckStatus.PASS
+    assert source_auditor.controlled_live_validation is QualificationCheckStatus.FAIL
+    assert source_auditor.reason_codes == [
+        "CONTROLLED_LIVE_SKILL_EXECUTION_NOT_FROZEN"
+    ]
+    assert all(
+        _load(capability_id).admitted_stage is not ExternalCapabilityStage.PRODUCTION_BACKUP
+        for capability_id in CANDIDATES
+    )
 
     for capability_id in {"report-visual-qa", "schema-drift-recorder"}:
         evidence = _load(capability_id)
@@ -175,12 +182,15 @@ def test_e02_all_tracked_evidence_materializes_through_canonical_m06(tmp_path: P
 
     source_auditor = _load("source-qualification-auditor")
     at = source_auditor.valid_from + timedelta(seconds=1)
-    assert service.production_backup_allowed(
+    assert not service.production_backup_allowed(
         capability_id="source-qualification-auditor",
         logical_capability="governance.external.qualification",
         primary_available=False,
         at=at,
     )
+    assert service.effective_stage(
+        "source-qualification-auditor", at=at
+    ) is ExternalCapabilityStage.SHADOW
     assert not service.production_backup_allowed(
         capability_id="source-qualification-auditor",
         logical_capability="governance.external.qualification",
@@ -213,7 +223,7 @@ def test_e02_qualification_evidence_freeze_is_line_ending_invariant(tmp_path: Pa
     assert lf_report == crlf_report
 
 
-def test_source_qualification_skill_controlled_live_observability_and_exit_drill(
+def test_source_qualification_skill_recorded_contract_and_exit_drill_stay_shadow(
     tmp_path: Path,
 ) -> None:
     service, state, objects = _service(tmp_path)
@@ -223,6 +233,8 @@ def test_source_qualification_skill_controlled_live_observability_and_exit_drill
         objects,
         EVIDENCE_ROOT / "source-qualification-auditor.json",
     )
+    assert evidence.controlled_live_validation is QualificationCheckStatus.FAIL
+    assert saved.admitted_stage is ExternalCapabilityStage.SHADOW
 
     observability = AgentObservabilityService(
         state,
@@ -232,7 +244,7 @@ def test_source_qualification_skill_controlled_live_observability_and_exit_drill
     )
     observation = observability.register(
         AgentTaskObservationRequest(
-            task_id="e02-source-qualification-controlled-live",
+            task_id="e02-source-qualification-recorded-contract",
             task_status=AgentTaskStatus.COMPLETED,
             eligible_skill_ids=["source-qualification-auditor"],
             selected_skill_ids=["source-qualification-auditor"],
@@ -254,13 +266,15 @@ def test_source_qualification_skill_controlled_live_observability_and_exit_drill
     primary = _transport("primary", available=True)
     backup = _transport("qualified-skill", available=True, backup=True)
     assert router.decide(request, [primary, backup]).selected_source_id == "primary"
-    assert (
-        router.decide(request, [_transport("primary", available=False), backup]).selected_source_id
-        == "qualified-skill"
+    assert not service.production_backup_allowed(
+        capability_id=evidence.capability_id,
+        logical_capability="governance.external.qualification",
+        primary_available=False,
+        at=evidence.valid_from + timedelta(seconds=1),
     )
 
     revoked_at = evidence.valid_from + timedelta(minutes=1)
-    reason = "E-02 controlled exit drill"
+    reason = "E-02 recorded-contract exit drill"
     revocation = CapabilityRevocation(
         revocation_id=capability_revocation_id(
             capability_id=evidence.capability_id,
@@ -447,7 +461,20 @@ def test_e02_production_backup_fails_closed_on_incomplete_gate_or_authority_elev
     tmp_path: Path,
 ) -> None:
     evidence = _load("source-qualification-auditor")
-    incomplete = evidence.model_dump(mode="json")
+    promoted = evidence.model_copy(
+        update={
+            "admitted_stage": ExternalCapabilityStage.PRODUCTION_BACKUP,
+            "checks": evidence.checks.model_copy(
+                update={
+                    "cache_behavior": QualificationCheckStatus.PASS,
+                    "latency": QualificationCheckStatus.PASS,
+                }
+            ),
+            "controlled_live_validation": QualificationCheckStatus.PASS,
+            "reason_codes": [],
+        }
+    )
+    incomplete = promoted.model_dump(mode="json")
     incomplete["checks"]["license"] = "FAIL"
     with pytest.raises(
         ValidationError, match="production backup evidence requires every M-06 check"

@@ -139,6 +139,28 @@ def test_e02_tracked_evidence_covers_exact_candidate_set_and_freezes_current_ver
         assert evidence.reason_codes
 
 
+def test_unmet_akshare_backup_gate_remains_in_development_plan() -> None:
+    akshare = _load("akshare")
+    if akshare.admitted_stage is ExternalCapabilityStage.PRODUCTION_BACKUP:
+        return
+
+    plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
+    assert "### E-02" in plan
+    assert "AKShare 至少有一个明确 endpoint 达到 `PRODUCTION_BACKUP`" in plan
+
+
+def test_acceptance_does_not_claim_unearned_source_auditor_backup() -> None:
+    source_auditor = _load("source-qualification-auditor")
+    if source_auditor.admitted_stage is ExternalCapabilityStage.PRODUCTION_BACKUP:
+        return
+
+    acceptance_path = PROJECT_ROOT / "进度验收.md"
+    if not acceptance_path.exists():
+        acceptance_path = PROJECT_ROOT / "验收报告.md"
+    acceptance = acceptance_path.read_text(encoding="utf-8")
+    assert "`source-qualification-auditor` 达到 `PRODUCTION_BACKUP`" not in acceptance
+
+
 def test_e02_skill_evidence_hashes_bind_actual_repo_contracts() -> None:
     for capability_id in SKILL_CANDIDATES:
         evidence = _load(capability_id)

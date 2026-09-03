@@ -86,15 +86,21 @@ class ShadowRepository:
             (study_id,),
         )
 
-    def latest_study_summary(self) -> dict[str, object] | None:
-        return self._one(
+    def latest_study_summary(
+        self,
+        *,
+        policy_version: str | None = None,
+    ) -> dict[str, object] | None:
+        select = (
             "SELECT study_id,study_name,study_mode,effective_from,observation_end,"
             "candidate_policy_id,candidate_policy_version,candidate_set_id,policy_version,"
             "engine_version,evidence_status,arm_count,object_hash,request_hash,study_hash,"
             "created_at,registered_at,prospective_eligible FROM shadow_study_index "
-            "ORDER BY COALESCE(registered_at,created_at) DESC,study_id DESC LIMIT 1",
-            (),
         )
+        order = "ORDER BY COALESCE(registered_at,created_at) DESC,study_id DESC LIMIT 1"
+        if policy_version is None:
+            return self._one(select + order, ())
+        return self._one(select + "WHERE policy_version=? " + order, (policy_version,))
 
     def get_study(self, study_id: str) -> ShadowStudyManifest | None:
         row = self.study_summary(study_id)

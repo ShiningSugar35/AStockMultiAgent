@@ -114,6 +114,8 @@
 
 本层不调用大模型，不写真实券商订单。Windows detached 启动的权威身份是 SQLite daemon lease 的 `owner_id`，不是虚拟环境 launcher 的 OS PID：`continuous-monitor-start` 必须生成唯一 owner、通过隐藏参数传给 daemon，并在最多 30 秒冷启动窗口内确认同 owner 已进入 `RUNNING`；launcher PID 与实际 Python lease PID 不一致不应误报启动失败。daemon 在同步 `run_cycle` 执行期间必须由独立 heartbeat worker 按 `heartbeat_seconds` 续租，并在 source/target/持久化边界检查 owner；任何 heartbeat 返回 owner 已丢失时都必须 fail closed。stale heartbeat 还不足以授权第二 owner 接管：`acquire_daemon()` 对不同 owner 的 stale lease 必须继续检查 SQLite 中记录的真实 Python daemon PID，只有旧进程已经不存活时才允许 crash recovery。这样即使失租检测发生在单个 handler 或 paper replay 的副作用区间，旧 daemon 进程存活期间也不会出现第二 daemon 并发处理；PID 复用/权限不明按“仍存活”保守处理。
 
+持久化 `MonitorEvent` 是事件事实；`MonitorResearchTask` 与规则 cooldown 是其可恢复副作用。若进程/lease 在事件写入后、task 或 `last_triggered_at` 写入前中断，下一轮必须先从既有 Event/ObjectStore 恢复缺失 task 与 trigger state，再处理新来源；重复恢复必须幂等，不重新制造事件，也不得因重复 `ensure_task` 生成未引用 ObjectStore 对象。
+
 **层 B：Research Agents（事件触发、按需、高价值）**
 
 职责：

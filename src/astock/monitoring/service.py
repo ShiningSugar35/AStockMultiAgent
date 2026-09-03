@@ -155,9 +155,16 @@ class ContinuousMonitorService:
             )
         )
 
-    def sync_paper_targets(self, *, at: datetime | None = None) -> list[str]:
+    def sync_paper_targets(
+        self,
+        *,
+        at: datetime | None = None,
+        lease_guard: Callable[[], None] | None = None,
+    ) -> list[str]:
         """Auto-enrol open paper positions/orders without creating trades."""
 
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
         now = at or datetime.now(UTC)
         enrolled: list[str] = []
         with closing(self.state.connect()) as connection:
@@ -174,10 +181,12 @@ class ContinuousMonitorService:
                 "ON i.account_id=o.account_id AND i.symbol=o.symbol "
                 "WHERE o.status IN ('NEW','ACCEPTED','PARTIALLY_FILLED') ORDER BY o.symbol"
             ).fetchall()
+        assert_lease()
         for row in position_rows:
             market = _market_from_text(str(row["market"]))
             if market is None:
                 continue
+            assert_lease()
             target = self.enroll(
                 symbol=str(row["symbol"]),
                 market=market,
@@ -189,6 +198,7 @@ class ContinuousMonitorService:
             enrolled.append(target.target_id)
         for row in order_rows:
             market = _market_from_text(str(row["market"])) or _infer_market(str(row["symbol"]))
+            assert_lease()
             target = self.enroll(
                 symbol=str(row["symbol"]),
                 market=market,
@@ -200,12 +210,31 @@ class ContinuousMonitorService:
             enrolled.append(target.target_id)
         return sorted(set(enrolled))
 
+    def _repair_incomplete_event_side_effects(
+        self,
+        *,
+        lease_guard: Callable[[], None],
+    ) -> tuple[int, int]:
+        """Recover durable rule/task side effects left incomplete by a prior interrupted cycle."""
+
+        lease_guard()
+        repaired_rules = self.repo.repair_rule_trigger_state()
+        repaired_tasks = 0
+        limit = max(1, self.config.max_targets_per_cycle * 10)
+        for event in self.repo.events_missing_research_tasks(limit=limit):
+            lease_guard()
+            _, inserted = self.repo.ensure_task(event)
+            repaired_tasks += int(inserted)
+        lease_guard()
+        return repaired_rules, repaired_tasks
+
     def run_cycle(
         self,
         *,
         owner_id: str,
         live: bool,
         now: datetime | None = None,
+        lease_guard: Callable[[], None] | None = None,
     ) -> MonitorRunReport:
         started = (now or datetime.now(UTC)).astimezone(UTC)
         findings: list[str] = []
@@ -213,12 +242,24 @@ class ContinuousMonitorService:
         failure: Counter[MonitorSource] = Counter()
         event_count = 0
         task_count = 0
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
+        repaired_rules, repaired_tasks = self._repair_incomplete_event_side_effects(
+            lease_guard=assert_lease
+        )
+        task_count += repaired_tasks
+        if repaired_rules:
+            findings.append(f"RECOVERED_RULE_TRIGGER_STATE:{repaired_rules}")
+        if repaired_tasks:
+            findings.append(f"RECOVERED_RESEARCH_TASKS:{repaired_tasks}")
         try:
-            self.sync_paper_targets(at=started)
+            self.sync_paper_targets(at=started, lease_guard=assert_lease)
         except Exception as exc:
             findings.append(f"PAPER_TARGET_SYNC_FAILED:{type(exc).__name__}")
+        assert_lease()
         targets = self.repo.active_targets(limit=self.config.max_targets_per_cycle)
         for target in targets:
+            assert_lease()
             for source, handler in (
                 (MonitorSource.MARKET_60M, self._process_market),
                 (MonitorSource.CNINFO, self._process_disclosures),
@@ -236,18 +277,16 @@ class ContinuousMonitorService:
                     continue
                 if not live and source in {MonitorSource.CNINFO, MonitorSource.GDELT}:
                     continue
+                assert_lease()
                 try:
-                    events, tasks, cursor = handler(target, started, live)
-                    event_count += events
-                    task_count += tasks
-                    self.repo.source_success(
-                        target.target_id,
-                        source,
-                        cursor=cursor,
-                        at=started,
+                    events, tasks, cursor = handler(
+                        target,
+                        started,
+                        live,
+                        lease_guard=assert_lease,
                     )
-                    success[source] += 1
                 except Exception as exc:
+                    assert_lease()
                     failure[source] += 1
                     count = self.repo.source_failure(
                         target.target_id,
@@ -283,6 +322,19 @@ class ContinuousMonitorService:
                     )
                     _, inserted = self.repo.record_event(degraded)
                     event_count += int(inserted)
+                else:
+                    assert_lease()
+                    event_count += events
+                    task_count += tasks
+                    self.repo.source_success(
+                        target.target_id,
+                        source,
+                        cursor=cursor,
+                        at=started,
+                    )
+                    success[source] += 1
+                assert_lease()
+        assert_lease()
         ended = datetime.now(UTC)
         run_status = (
             MonitorRunStatus.SUCCEEDED
@@ -316,6 +368,7 @@ class ContinuousMonitorService:
             source_failure=dict(failure),
             findings=findings,
         )
+        assert_lease()
         self.repo.record_run(report)
         emit_operational_event(
             component="continuous_monitor",
@@ -343,10 +396,15 @@ class ContinuousMonitorService:
         target: ContinuousMonitorTarget,
         now: datetime,
         live: bool,
+        *,
+        lease_guard: Callable[[], None] | None = None,
     ) -> tuple[int, int, str | None]:
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
         request = self._bar_request(target, now)
         if live:
             self._market_sync().sync_intraday(request)
+            assert_lease()
         bars = [
             item
             for item in self.canonical.read_bars(request)
@@ -361,6 +419,7 @@ class ContinuousMonitorService:
         events = tasks = 0
         latest_price = float(latest.close)
         pre_update_target = target
+        assert_lease()
         self.repo.update_market_state(
             target.target_id,
             last_price=latest_price,
@@ -380,6 +439,7 @@ class ContinuousMonitorService:
                 requires_research=False,
                 dedupe_suffix=latest.observation_id,
             )
+            assert_lease()
             _, inserted = self.repo.record_event(event)
             events += int(inserted)
         metrics = calculate_monitor_metrics(
@@ -420,12 +480,14 @@ class ContinuousMonitorService:
                 requires_research=bool(rule.affected_modules),
                 dedupe_suffix=f"{rule.rule_id}:{latest.timestamp.astimezone(UTC).isoformat()}",
             )
+            assert_lease()
             stored, inserted = self.repo.record_event(event)
             events += int(inserted)
-            if inserted:
-                self.repo.mark_rule_triggered(rule.rule_id, at=now)
-                _, task_inserted = self.repo.ensure_task(stored)
-                tasks += int(task_inserted)
+            assert_lease()
+            self.repo.mark_rule_triggered(rule.rule_id, at=stored.available_at)
+            assert_lease()
+            _, task_inserted = self.repo.ensure_task(stored)
+            tasks += int(task_inserted)
         return events, tasks, latest.timestamp.astimezone(UTC).isoformat()
 
     def _process_disclosures(
@@ -433,8 +495,12 @@ class ContinuousMonitorService:
         target: ContinuousMonitorTarget,
         now: datetime,
         live: bool,
+        *,
+        lease_guard: Callable[[], None] | None = None,
     ) -> tuple[int, int, str | None]:
         del live
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
         exchange = _disclosure_exchange(target.market)
         if exchange is None:
             return 0, 0, now.isoformat()
@@ -457,6 +523,7 @@ class ContinuousMonitorService:
                 page_size=100,
             )
         )
+        assert_lease()
         events = tasks = 0
         latest = cursor_dt
         for item in sorted(batch.announcements, key=lambda value: value.published_at):
@@ -481,11 +548,12 @@ class ContinuousMonitorService:
                 requires_research=material,
                 dedupe_suffix=item.announcement_id,
             )
+            assert_lease()
             stored, inserted = self.repo.record_event(event)
             events += int(inserted)
-            if inserted:
-                _, task_inserted = self.repo.ensure_task(stored)
-                tasks += int(task_inserted)
+            assert_lease()
+            _, task_inserted = self.repo.ensure_task(stored)
+            tasks += int(task_inserted)
         return events, tasks, (latest.astimezone(UTC).isoformat() if latest else now.isoformat())
 
     def _process_news(
@@ -493,8 +561,12 @@ class ContinuousMonitorService:
         target: ContinuousMonitorTarget,
         now: datetime,
         live: bool,
+        *,
+        lease_guard: Callable[[], None] | None = None,
     ) -> tuple[int, int, str | None]:
         del live
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
         cursor = self.repo.cursor(target.target_id, MonitorSource.GDELT)
         cursor_dt = _cursor_datetime(cursor)
         start = cursor_dt or now - timedelta(minutes=self.config.news.lookback_minutes)
@@ -505,6 +577,7 @@ class ContinuousMonitorService:
             end=now,
             max_records=self.config.news.max_records_per_target,
         )
+        assert_lease()
         events = tasks = 0
         latest = cursor_dt
         for lead in sorted(leads, key=lambda item: item.seen_at):
@@ -540,11 +613,12 @@ class ContinuousMonitorService:
                 dedupe_suffix=lead.lead_id,
                 news_lead_only=True,
             )
+            assert_lease()
             stored, inserted = self.repo.record_event(event)
             events += int(inserted)
-            if inserted:
-                _, task_inserted = self.repo.ensure_task(stored)
-                tasks += int(task_inserted)
+            assert_lease()
+            _, task_inserted = self.repo.ensure_task(stored)
+            tasks += int(task_inserted)
         return events, tasks, (latest.astimezone(UTC).isoformat() if latest else now.isoformat())
 
     def _process_catalysts(
@@ -552,8 +626,12 @@ class ContinuousMonitorService:
         target: ContinuousMonitorTarget,
         now: datetime,
         live: bool,
+        *,
+        lease_guard: Callable[[], None] | None = None,
     ) -> tuple[int, int, str | None]:
         del live
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
         events = tasks = 0
         with closing(self.state.connect()) as connection:
             rows = connection.execute(
@@ -562,6 +640,7 @@ class ContinuousMonitorService:
                 "AND status NOT IN ('CLOSED','INVALIDATED') ORDER BY expected_from,catalyst_id",
                 (target.company_id,),
             ).fetchall()
+        assert_lease()
         for row in rows:
             catalyst = CatalystRecord.model_validate_json(
                 self.objects.get_bytes(str(row["object_hash"]))
@@ -596,11 +675,12 @@ class ContinuousMonitorService:
                 requires_research=True,
                 dedupe_suffix=f"{catalyst.catalyst_id}:{phase}",
             )
+            assert_lease()
             stored, inserted = self.repo.record_event(event)
             events += int(inserted)
-            if inserted:
-                _, task_inserted = self.repo.ensure_task(stored)
-                tasks += int(task_inserted)
+            assert_lease()
+            _, task_inserted = self.repo.ensure_task(stored)
+            tasks += int(task_inserted)
         return events, tasks, now.isoformat()
 
     def _process_schedule(
@@ -608,8 +688,12 @@ class ContinuousMonitorService:
         target: ContinuousMonitorTarget,
         now: datetime,
         live: bool,
+        *,
+        lease_guard: Callable[[], None] | None = None,
     ) -> tuple[int, int, str | None]:
         del live
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
         baseline = target.last_review_at or target.enrolled_at
         due = baseline + timedelta(days=self.config.scheduled_review_days)
         if now < due:
@@ -637,10 +721,10 @@ class ContinuousMonitorService:
             requires_research=True,
             dedupe_suffix=due.date().isoformat(),
         )
+        assert_lease()
         stored, inserted = self.repo.record_event(event)
-        task_inserted = False
-        if inserted:
-            _, task_inserted = self.repo.ensure_task(stored)
+        assert_lease()
+        _, task_inserted = self.repo.ensure_task(stored)
         return int(inserted), int(task_inserted), due.isoformat()
 
     def _process_paper(
@@ -648,10 +732,14 @@ class ContinuousMonitorService:
         target: ContinuousMonitorTarget,
         now: datetime,
         live: bool,
+        *,
+        lease_guard: Callable[[], None] | None = None,
     ) -> tuple[int, int, str | None]:
         """Replay confirmed open paper orders without creating new orders or positions."""
 
         del live
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
         if MonitorTargetReason.OPEN_PAPER_ORDER not in target.reasons:
             return 0, 0, now.isoformat()
         with closing(self.state.connect()) as connection:
@@ -662,6 +750,7 @@ class ContinuousMonitorService:
                 "ORDER BY o.account_id,b.instrument_type",
                 (target.symbol,),
             ).fetchall()
+        assert_lease()
         if not rows:
             return 0, 0, now.isoformat()
         references = MarketReferenceService(
@@ -682,6 +771,7 @@ class ContinuousMonitorService:
         stock_fees = load_fee_schedule(self.paths.root / "configs" / "fee_rules.yaml")
         events = tasks = 0
         for row in rows:
+            assert_lease()
             instrument_type = InstrumentType(str(row["instrument_type"]))
             request = self._bar_request(target, now, instrument_type=instrument_type)
             fees = etf_policy.fee_schedule if instrument_type is InstrumentType.ETF else stock_fees
@@ -691,6 +781,7 @@ class ContinuousMonitorService:
                 requested_cursor=now.astimezone(_SHANGHAI),
                 fee_schedule=fees,
             )
+            assert_lease()
             event = self._event(
                 target,
                 event_type=MonitorEventType.PAPER_REPLAY_DUE,
@@ -718,11 +809,12 @@ class ContinuousMonitorService:
                     f"{report.checkpoint.market_cursor if report.checkpoint else now.isoformat()}"
                 ),
             )
+            assert_lease()
             stored, inserted = self.repo.record_event(event)
             events += int(inserted)
-            if inserted:
-                _, task_inserted = self.repo.ensure_task(stored)
-                tasks += int(task_inserted)
+            assert_lease()
+            _, task_inserted = self.repo.ensure_task(stored)
+            tasks += int(task_inserted)
         return events, tasks, now.isoformat()
 
     def _bar_request(

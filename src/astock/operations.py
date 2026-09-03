@@ -407,36 +407,27 @@ class StorageLifecycleService:
         return plan
 
     def record_audit(self, report: StorageLifecycleAudit) -> None:
-        """Record one immutable safety audit receipt for operational traceability."""
+        """Record one immutable, idempotent safety-audit receipt."""
 
-        created_at = datetime.now(UTC).isoformat()
         run_id = content_hash(
             {
                 "kind": "storage_lifecycle_audit",
                 "plan_id": report.plan_id,
                 "status": report.status,
                 "finding_codes": report.finding_codes,
-                "created_at": created_at,
             }
         )
-        with self.state.transaction() as connection:
-            connection.execute(
-                "INSERT INTO storage_lifecycle_audit_run("
-                "run_id,plan_id,run_kind,status,finding_codes_json,eligible_file_count,eligible_bytes,"
-                "deleted_file_count,deleted_bytes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (
-                    run_id,
-                    report.plan_id,
-                    "AUDIT",
-                    report.status,
-                    json.dumps(report.finding_codes, ensure_ascii=False),
-                    report.eligible_file_count,
-                    report.eligible_bytes,
-                    0,
-                    0,
-                    created_at,
-                ),
-            )
+        self._record_storage_receipt(
+            run_id=run_id,
+            plan_id=report.plan_id,
+            run_kind="AUDIT",
+            status=report.status,
+            finding_codes_json=json.dumps(report.finding_codes, ensure_ascii=False),
+            eligible_file_count=report.eligible_file_count,
+            eligible_bytes=report.eligible_bytes,
+            deleted_file_count=0,
+            deleted_bytes=0,
+        )
 
     def record_slo_snapshot(self, report: OperationsSLOReport) -> None:
         """Persist a bounded SLO snapshot without creating another metrics store."""
@@ -568,9 +559,8 @@ class StorageLifecycleService:
         )
 
     def record_run(self, run: StorageLifecycleRun) -> None:
-        """Persist one cleanup execution receipt without mutating canonical facts."""
+        """Persist one immutable, idempotent cleanup-execution receipt."""
 
-        created_at = datetime.now(UTC).isoformat()
         run_id = content_hash(
             {
                 "kind": "storage_lifecycle_execution",
@@ -578,27 +568,65 @@ class StorageLifecycleService:
                 "deleted_file_count": run.deleted_file_count,
                 "deleted_bytes": run.deleted_bytes,
                 "skip_reasons": run.skip_reasons,
-                "created_at": created_at,
             }
         )
+        self._record_storage_receipt(
+            run_id=run_id,
+            plan_id=run.plan_id,
+            run_kind="EXECUTION",
+            status="PASS",
+            finding_codes_json=json.dumps(run.skip_reasons, ensure_ascii=False),
+            eligible_file_count=0,
+            eligible_bytes=0,
+            deleted_file_count=run.deleted_file_count,
+            deleted_bytes=run.deleted_bytes,
+        )
+
+    def _record_storage_receipt(
+        self,
+        *,
+        run_id: str,
+        plan_id: str,
+        run_kind: Literal["AUDIT", "EXECUTION"],
+        status: Literal["PASS", "FAIL"],
+        finding_codes_json: str,
+        eligible_file_count: int,
+        eligible_bytes: int,
+        deleted_file_count: int,
+        deleted_bytes: int,
+    ) -> None:
+        """Insert once and verify any existing semantic receipt before reuse."""
+
+        expected = (
+            plan_id,
+            run_kind,
+            status,
+            finding_codes_json,
+            eligible_file_count,
+            eligible_bytes,
+            deleted_file_count,
+            deleted_bytes,
+        )
+        created_at = datetime.now(UTC).isoformat()
         with self.state.transaction() as connection:
             connection.execute(
                 "INSERT INTO storage_lifecycle_audit_run("
                 "run_id,plan_id,run_kind,status,finding_codes_json,eligible_file_count,eligible_bytes,"
-                "deleted_file_count,deleted_bytes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (
-                    run_id,
-                    run.plan_id,
-                    "EXECUTION",
-                    "PASS",
-                    json.dumps(run.skip_reasons, ensure_ascii=False),
-                    0,
-                    0,
-                    run.deleted_file_count,
-                    run.deleted_bytes,
-                    created_at,
-                ),
+                "deleted_file_count,deleted_bytes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(run_id) DO NOTHING",
+                (run_id, *expected, created_at),
             )
+            row = connection.execute(
+                "SELECT plan_id,run_kind,status,finding_codes_json,eligible_file_count,"
+                "eligible_bytes,deleted_file_count,deleted_bytes "
+                "FROM storage_lifecycle_audit_run WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("storage lifecycle receipt disappeared after insert")
+            actual = tuple(row[index] for index in range(8))
+            if actual != expected:
+                raise ValueError("storage lifecycle receipt identity collision")
 
     def operations_slo_report(
         self,

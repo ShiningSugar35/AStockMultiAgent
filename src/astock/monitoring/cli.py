@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import uuid4
 
 import typer
 from pydantic import ValidationError
@@ -21,6 +22,19 @@ from astock.schemas.continuous_monitoring import (
     MonitorTaskStatus,
 )
 from astock.schemas.reference_data import Market
+
+_DAEMON_START_TIMEOUT_SECONDS = 30.0
+
+
+def _daemon_start_matches(status: Any, owner_id: str) -> bool:
+    """Match the durable daemon lease, not an OS launcher pid.
+
+    On Windows a virtual-environment launcher can have a different pid from the
+    interpreter process that owns the SQLite daemon lease. The owner id is the
+    stable start-attempt identity across that process boundary.
+    """
+
+    return status.state.value == "RUNNING" and status.owner_id == owner_id
 
 
 def register_continuous_monitor_commands(
@@ -120,6 +134,7 @@ def register_continuous_monitor_commands(
     def continuous_monitor_daemon(
         live: Annotated[bool, typer.Option("--live")] = False,
         interval_seconds: Annotated[int | None, typer.Option(min=30, max=3600)] = None,
+        owner_id: Annotated[str | None, typer.Option("--owner-id", hidden=True)] = None,
     ) -> None:
         _, repo, service, config = build()
         code = run_daemon(
@@ -128,6 +143,7 @@ def register_continuous_monitor_commands(
             config,
             live=live,
             interval_seconds=interval_seconds,
+            owner_id=owner_id,
         )
         if code:
             raise typer.Exit(code=code)
@@ -144,20 +160,29 @@ def register_continuous_monitor_commands(
         ):
             emit({"status": "ALREADY_RUNNING", **current.model_dump(mode="json")})
             return
-        pid = spawn_daemon(
+        owner_id = f"continuous-monitor:{uuid4().hex}"
+        launcher_pid = spawn_daemon(
             paths.root,
             live=live,
             interval_seconds=interval_seconds or config.wake_interval_seconds,
+            owner_id=owner_id,
         )
-        deadline = time.monotonic() + 8.0
+        deadline = time.monotonic() + _DAEMON_START_TIMEOUT_SECONDS
         status = repo.daemon_status()
         while time.monotonic() < deadline:
             status = repo.daemon_status()
-            if status.state.value == "RUNNING" and status.pid == pid:
+            if _daemon_start_matches(status, owner_id):
                 emit({"status": "STARTED", **status.model_dump(mode="json")})
                 return
             time.sleep(0.2)
-        emit({"status": "START_FAILED", "pid": pid, "daemon": status.model_dump(mode="json")})
+        emit(
+            {
+                "status": "START_FAILED",
+                "pid": launcher_pid,
+                "owner_id": owner_id,
+                "daemon": status.model_dump(mode="json"),
+            }
+        )
         raise typer.Exit(code=2)
 
     @app.command("continuous-monitor-stop")

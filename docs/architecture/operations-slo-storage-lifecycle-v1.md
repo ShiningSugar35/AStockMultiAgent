@@ -10,7 +10,7 @@ R-03 为现有运行时补充有界存储治理和业务 SLO 视图，不建立�
 
 `storage-lifecycle-audit` 从 SQLite 读取同一个 plan 并重新校验内容哈希。路径越界或“已引用但标记删除”属于阻断缺陷；达到 scan limit 只记录 `SCAN_TRUNCATED`，允许后续以有界批次继续推进，避免积压越大越无法清理。
 
-`storage-lifecycle-run --confirm` 才执行删除。执行前再次读取实时引用，并检查路径、文件大小和 mtime：对象后来被引用、报告后来被发布、staging 后来恢复为活动状态、文件被改写、文件已消失或 Windows 锁定都会跳过而不是强删。每次执行写入审计回执。
+`storage-lifecycle-run --confirm` 才执行删除。执行前再次读取实时引用，并检查路径、文件大小和 mtime：对象后来被引用、报告后来被发布、staging 后来恢复为活动状态、文件被改写、文件已消失或 Windows 锁定都会跳过而不是强删。AUDIT/EXECUTION 回执使用确定性的语义 `run_id`：相同语义重跑必须幂等复用既有回执；同一 `run_id` 若对应字段发生漂移则 fail closed，禁止用随机 ID 或静默覆盖掩盖审计冲突。
 
 ## 被治理的受控存储
 

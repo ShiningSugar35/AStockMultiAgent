@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -24,6 +25,46 @@ from astock.schemas.continuous_monitoring import (
     MonitorTargetStatus,
     MonitorTaskPriority,
 )
+
+
+def _process_is_alive(pid: int) -> bool:
+    """Fail closed when a recorded daemon PID still refers to a live process."""
+
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            # ERROR_INVALID_PARAMETER is Windows' ordinary "no such PID" result.
+            # All other OpenProcess failures are treated as alive to preserve
+            # singleton safety when liveness cannot be proven.
+            return ctypes.get_last_error() != 87
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 class ContinuousMonitorRepository:
@@ -352,6 +393,43 @@ class ContinuousMonitorRepository:
         )
         return task, True
 
+    def events_missing_research_tasks(self, *, limit: int = 500) -> list[MonitorEvent]:
+        """Return durable research events whose idempotent task materialization is missing."""
+
+        if limit <= 0:
+            return []
+        with closing(self.state.connect()) as connection:
+            rows = connection.execute(
+                "SELECT e.object_hash FROM continuous_monitor_event e "
+                "LEFT JOIN continuous_monitor_task t ON t.event_id=e.event_id "
+                "WHERE e.requires_research=1 AND t.event_id IS NULL "
+                "ORDER BY e.available_at,e.event_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            MonitorEvent.model_validate_json(self.objects.get_bytes(str(row["object_hash"])))
+            for row in rows
+        ]
+
+    def repair_rule_trigger_state(self) -> int:
+        """Restore cooldown timestamps from trigger events after a partial cycle."""
+
+        with self.state.transaction() as connection:
+            rows = connection.execute(
+                "SELECT r.rule_id,MAX(e.available_at) AS triggered_at "
+                "FROM continuous_monitor_rule r "
+                "JOIN continuous_monitor_event e ON e.source_ref=r.rule_id "
+                "WHERE e.event_type IN ('PRICE_TRIGGER','DRAWDOWN_TRIGGER') "
+                "AND (r.last_triggered_at IS NULL OR r.last_triggered_at<e.available_at) "
+                "GROUP BY r.rule_id ORDER BY r.rule_id"
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    "UPDATE continuous_monitor_rule SET last_triggered_at=? WHERE rule_id=?",
+                    (str(row["triggered_at"]), str(row["rule_id"])),
+                )
+        return len(rows)
+
     def list_events(
         self, *, unresolved_only: bool = False, limit: int = 100
     ) -> list[dict[str, Any]]:
@@ -591,23 +669,24 @@ class ContinuousMonitorRepository:
         now = at.astimezone(UTC)
         with self.state.transaction() as connection:
             row = connection.execute(
-                "SELECT owner_id,state,heartbeat_at FROM continuous_monitor_daemon "
+                "SELECT owner_id,pid,state,heartbeat_at FROM continuous_monitor_daemon "
                 "WHERE singleton_id='default'"
             ).fetchone()
             if row is None:
                 raise RuntimeError("continuous monitor daemon singleton is missing")
             heartbeat = _optional_datetime(row["heartbeat_at"])
-            active = (
-                str(row["state"])
-                in {
-                    MonitorDaemonState.RUNNING.value,
-                    MonitorDaemonState.STOPPING.value,
-                }
-                and heartbeat is not None
-            )
+            active = str(row["state"]) in {
+                MonitorDaemonState.RUNNING.value,
+                MonitorDaemonState.STOPPING.value,
+            }
             stale = heartbeat is None or heartbeat + timedelta(seconds=lease_seconds) < now
-            if active and not stale and str(row["owner_id"]) != owner_id:
-                return False
+            different_owner = str(row["owner_id"]) != owner_id
+            if active and different_owner:
+                if not stale:
+                    return False
+                recorded_pid = int(row["pid"] or 0)
+                if _process_is_alive(recorded_pid):
+                    return False
             connection.execute(
                 "UPDATE continuous_monitor_daemon SET owner_id=?,pid=?,state='RUNNING',started_at=?,"  # noqa: E501
                 "heartbeat_at=?,stop_requested=0,details_json=?,updated_at=? WHERE singleton_id='default'",  # noqa: E501
@@ -633,7 +712,8 @@ class ContinuousMonitorRepository:
         with self.state.transaction() as connection:
             changed = connection.execute(
                 "UPDATE continuous_monitor_daemon SET heartbeat_at=?,last_run_id=COALESCE(?,last_run_id),"  # noqa: E501
-                "updated_at=? WHERE singleton_id='default' AND owner_id=? AND state='RUNNING'",
+                "updated_at=? WHERE singleton_id='default' AND owner_id=? "
+                "AND state IN ('RUNNING','STOPPING')",
                 (now.isoformat(), last_run_id, now.isoformat(), owner_id),
             ).rowcount
         return changed == 1

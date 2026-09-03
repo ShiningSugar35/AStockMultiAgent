@@ -1000,22 +1000,45 @@ class TestOperationalReceipts:
         service.persist_plan(plan)
         audit = service.audit(plan)
         service.record_audit(audit)
+        service.record_audit(audit)
         run = service.run(plan, confirm=True)
+        service.record_run(run)
         service.record_run(run)
         slo = service.operations_slo_report()
         service.record_slo_snapshot(slo)
         with state.connect() as connection:
-            kinds = {
-                row[0]
+            receipt_counts = {
+                str(row["run_kind"]): int(row["count"])
                 for row in connection.execute(
-                    "SELECT run_kind FROM storage_lifecycle_audit_run"
+                    "SELECT run_kind,COUNT(*) AS count FROM storage_lifecycle_audit_run "
+                    "GROUP BY run_kind"
                 ).fetchall()
             }
             slo_count = connection.execute(
                 "SELECT COUNT(*) FROM operations_slo_snapshot"
             ).fetchone()[0]
-        assert kinds == {"AUDIT", "EXECUTION"}
+        assert receipt_counts == {"AUDIT": 1, "EXECUTION": 1}
         assert slo_count == 1
+
+    def test_duplicate_audit_receipt_fails_closed_if_existing_semantics_drift(
+        self, tmp_path: Path
+    ) -> None:
+        paths = _make_paths(tmp_path)
+        paths.ensure_directories()
+        state = _make_state(tmp_path)
+        service = StorageLifecycleService(paths, state, ObjectStore(paths.objects), _make_policy())
+        plan = service.plan()
+        service.persist_plan(plan)
+        audit = service.audit(plan)
+        service.record_audit(audit)
+        with state.connect() as connection:
+            connection.execute(
+                "UPDATE storage_lifecycle_audit_run SET eligible_bytes=eligible_bytes+1 "
+                "WHERE run_kind='AUDIT'"
+            )
+
+        with pytest.raises(ValueError, match="receipt identity collision"):
+            service.record_audit(audit)
 
 
 # ---------------------------------------------------------------------------

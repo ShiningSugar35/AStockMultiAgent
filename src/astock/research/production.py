@@ -561,6 +561,31 @@ class ResearchProductionService:
     def efficiency_report(self) -> SkillEfficiencyReport:
         policy = self.register_policy()
         events = self._usage_events()
+        report_id = "skill-efficiency:" + content_hash(
+            {
+                "policy": policy.policy_version,
+                "usage": sorted(content_hash(item) for item in events),
+            }
+        )
+        input_hashes = sorted({str(row["object_hash"]) for row in self._usage_rows()})
+        existing = self.state.artifact_record(report_id)
+        if existing is not None:
+            if (
+                str(existing["type"]) != "SkillEfficiencyReport"
+                or list(existing["input_hashes"]) != input_hashes
+                or not self.objects.verify(str(existing["object_hash"]))
+            ):
+                raise ValueError("Skill efficiency report identity collision")
+            existing_report = SkillEfficiencyReport.model_validate_json(
+                self.objects.get_bytes(str(existing["object_hash"]))
+            )
+            if (
+                existing_report.report_id != report_id
+                or existing_report.policy_version != policy.policy_version
+            ):
+                raise ValueError("Skill efficiency report lineage mismatch")
+            return existing_report
+        report_created_at = datetime.now(UTC)
         grouped: dict[tuple[str, str], list[SkillUsageEvent]] = defaultdict(list)
         for event in events:
             grouped[(event.skill_id, event.skill_version)].append(event)
@@ -603,20 +628,14 @@ class ResearchProductionService:
                     near_duplicate_skill_ids=duplicates,
                     conflict_skill_ids=conflicts,
                     recommendation=recommendation,
-                    created_at=datetime.now(UTC),
+                    created_at=report_created_at,
                 )
             )
         report = SkillEfficiencyReport(
-            report_id="skill-efficiency:"
-            + content_hash(
-                {
-                    "policy": policy.policy_version,
-                    "usage": sorted(content_hash(item) for item in events),
-                }
-            ),
+            report_id=report_id,
             policy_version=policy.policy_version,
             summaries=summaries,
-            created_at=datetime.now(UTC),
+            created_at=report_created_at,
         )
         object_ref = self.objects.put_json(report.model_dump(mode="json"))
         self.state.register_artifact(
@@ -624,7 +643,7 @@ class ResearchProductionService:
             artifact_type="SkillEfficiencyReport",
             schema_version=report.schema_version,
             object_hash=object_ref.sha256,
-            input_hashes=sorted({str(row["object_hash"]) for row in self._usage_rows()}),
+            input_hashes=input_hashes,
         )
         return report
 

@@ -58,7 +58,12 @@ class _FakeRepository:
     def study_summary(self, study_id: str) -> dict[str, object] | None:
         return {"study_id": study_id} if self.has_study else None
 
-    def latest_study_summary(self) -> dict[str, object] | None:
+    def latest_study_summary(
+        self,
+        *,
+        policy_version: str | None = None,
+    ) -> dict[str, object] | None:
+        del policy_version
         return {"study_id": "study:ready"} if self.has_study else None
 
     def latest_report_summary(self, study_id: str) -> dict[str, object] | None:

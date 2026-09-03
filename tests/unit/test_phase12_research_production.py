@@ -330,7 +330,9 @@ def test_phase12_efficiency_never_retires_skill_without_prospective_evidence(
     service, _, _ = _service(tmp_path)
 
     report = service.efficiency_report()
+    repeated = service.efficiency_report()
 
+    assert repeated == report
     assert report.summaries
     assert {item.recommendation for item in report.summaries} == {
         SkillLifecycleRecommendation.INSUFFICIENT_PROSPECTIVE_EVIDENCE

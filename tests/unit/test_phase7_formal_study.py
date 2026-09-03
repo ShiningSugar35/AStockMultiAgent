@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from astock.adaptive import AdaptiveResearchStatusService
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.schemas.shadow import ShadowArmType
 from astock.shadow.config import load_shadow_evaluation_policy
-from astock.shadow.formal_study import ensure_default_formal_study
+from astock.shadow.formal_study import (
+    build_default_formal_study_request,
+    ensure_default_formal_study,
+)
 from astock.shadow.service import ShadowEvaluationService
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -51,3 +55,49 @@ def test_phase7_default_formal_study_is_idempotent_and_never_creates_samples(
     assert status.observation_count == 0
     audit = service.audit(first.study_id)
     assert audit["status"] == "PASS"
+
+def test_current_policy_ignores_newer_study_from_other_policy(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    policy = load_shadow_evaluation_policy(PROJECT_ROOT / "configs" / "shadow_evaluation.yaml")
+    service = ShadowEvaluationService(state, objects, policy, clock=lambda: NOW)
+
+    current, current_reused = ensure_default_formal_study(service, now=NOW)
+    assert not current_reused
+
+    foreign_policy = policy.model_copy(
+        update={"policy_version": "shadow-evaluation-policy-foreign-test"}
+    )
+    foreign_service = ShadowEvaluationService(
+        state,
+        objects,
+        foreign_policy,
+        clock=lambda: NOW + timedelta(minutes=2),
+    )
+    foreign_request = build_default_formal_study_request(
+        foreign_policy,
+        created_at=NOW + timedelta(minutes=2),
+        effective_from=NOW + timedelta(minutes=3),
+        candidate_set_id="foreign-policy-candidates",
+    )
+    foreign = foreign_service.create_study(foreign_request).manifest
+    assert foreign.study_id != current.study_id
+    latest_any = service.repository.latest_study_summary()
+    assert latest_any is not None
+    assert latest_any["study_id"] == foreign.study_id
+
+    latest_current = service.repository.latest_study_summary(
+        policy_version=policy.policy_version
+    )
+    assert latest_current is not None
+    assert latest_current["study_id"] == current.study_id
+    assert service.status().study_id == current.study_id
+    assert AdaptiveResearchStatusService(service).status().study_id == current.study_id
+
+    reused, reused_existing = ensure_default_formal_study(
+        service,
+        now=NOW + timedelta(minutes=10),
+    )
+    assert reused_existing
+    assert reused.study_id == current.study_id

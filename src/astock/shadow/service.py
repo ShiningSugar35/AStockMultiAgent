@@ -256,7 +256,9 @@ class ShadowEvaluationService:
         summary = (
             self.repository.study_summary(study_id)
             if study_id is not None
-            else self.repository.latest_study_summary()
+            else self.repository.latest_study_summary(
+                policy_version=self.configured_policy.policy_version
+            )
         )
         if summary is None:
             required = self.configured_policy.minimum_independent_decisions

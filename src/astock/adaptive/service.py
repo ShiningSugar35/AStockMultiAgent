@@ -84,7 +84,9 @@ class AdaptiveResearchStatusService:
         study_summary = (
             self.repository.study_summary(study_id)
             if study_id is not None
-            else self.repository.latest_study_summary()
+            else self.repository.latest_study_summary(
+                policy_version=self.shadow_service.configured_policy.policy_version
+            )
         )
         if study_summary is None:
             return self._build(

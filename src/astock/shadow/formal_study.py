@@ -133,7 +133,9 @@ def ensure_default_formal_study(
 
     if effective_delay_seconds < 1:
         raise ValueError("formal study effective delay must be positive")
-    latest = service.repository.latest_study_summary()
+    latest = service.repository.latest_study_summary(
+        policy_version=service.configured_policy.policy_version
+    )
     existing = service.repository.get_study(str(latest["study_id"])) if latest is not None else None
     if (
         existing is not None

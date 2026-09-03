@@ -137,9 +137,11 @@ def test_event_and_task_are_idempotent(tmp_path: Path) -> None:
     task, task_inserted = repo.ensure_task(stored)
     assert task_inserted is True
     assert task is not None
+    object_count = sum(1 for path in (tmp_path / "objects").rglob("*") if path.is_file())
     again, again_inserted = repo.ensure_task(stored)
     assert again_inserted is False
     assert again is not None and again.task_id == task.task_id
+    assert sum(1 for path in (tmp_path / "objects").rglob("*") if path.is_file()) == object_count
     assert repo.update_task_status(task.task_id, status=MonitorTaskStatus.CLAIMED, at=NOW)
     assert repo.update_task_status(task.task_id, status=MonitorTaskStatus.COMPLETED, at=NOW)
     assert repo.list_tasks(pending_only=True) == []

@@ -334,20 +334,7 @@ class ContinuousMonitorRepository:
         if not event.requires_research or not event.affected_modules:
             return None, False
         priority = _priority_for_event(event)
-        now = datetime.now(UTC)
         task_id = "monitor-task:" + content_hash({"event_id": event.event_id})
-        task = MonitorResearchTask(
-            task_id=task_id,
-            event_id=event.event_id,
-            target_id=event.target_id,
-            company_id=event.company_id,
-            requested_modules=event.affected_modules,
-            priority=priority,
-            available_at=event.available_at,
-            created_at=now,
-            updated_at=now,
-        )
-        ref = self.objects.put_json(task.model_dump(mode="json"))
         with self.state.transaction() as connection:
             existing = connection.execute(
                 "SELECT object_hash FROM continuous_monitor_task WHERE event_id=?",
@@ -358,6 +345,19 @@ class ContinuousMonitorRepository:
                     self.objects.get_bytes(str(existing["object_hash"]))
                 )
                 return stored, False
+            now = datetime.now(UTC)
+            task = MonitorResearchTask(
+                task_id=task_id,
+                event_id=event.event_id,
+                target_id=event.target_id,
+                company_id=event.company_id,
+                requested_modules=event.affected_modules,
+                priority=priority,
+                available_at=event.available_at,
+                created_at=now,
+                updated_at=now,
+            )
+            ref = self.objects.put_json(task.model_dump(mode="json"))
             connection.execute(
                 "INSERT INTO continuous_monitor_task("
                 "task_id,event_id,target_id,company_id,requested_modules_json,priority,status,"

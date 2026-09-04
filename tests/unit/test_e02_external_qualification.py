@@ -140,14 +140,22 @@ def test_e02_tracked_evidence_covers_exact_candidate_set_and_freezes_current_ver
         assert evidence.reason_codes
 
 
-def test_unmet_akshare_backup_gate_remains_in_development_plan() -> None:
+def test_unmet_akshare_backup_gate_is_not_a_development_backlog_item() -> None:
     akshare = _load("akshare")
     if akshare.admitted_stage is ExternalCapabilityStage.PRODUCTION_BACKUP:
         return
 
     plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
-    assert "### E-02" in plan
-    assert "AKShare 至少有一个明确 endpoint 达到 `PRODUCTION_BACKUP`" in plan
+    architecture = (
+        PROJECT_ROOT / "docs/architecture/external-dependency-resilience-v1.md"
+    ).read_text(encoding="utf-8")
+    assert "无未完成开发任务" in plan
+    assert "### E-02" not in plan
+    assert "`SHADOW` 是外部资格证据不足时的安全稳定终态" in architecture
+    assert (
+        "不得把 AKShare 或其他候选的 `PRODUCTION_BACKUP` 资格长期挂在《开发计划》"
+        in architecture
+    )
 
 
 def test_current_docs_do_not_claim_unearned_source_auditor_backup() -> None:

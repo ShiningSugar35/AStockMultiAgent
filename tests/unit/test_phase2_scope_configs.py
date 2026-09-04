@@ -133,4 +133,4 @@ def test_root_documents_name_current_sources_and_knowledge_boundaries() -> None:
         "`ParagraphUnit` 是原文存储和定位单位",
     ):
         assert text in design
-    assert "本文件只保存当前未完成任务" in plan
+    assert "本文件只保存当前仍需实现、修复、验证或发布的任务" in plan

@@ -55,6 +55,7 @@
 - Schema Repair 必须 raw-first：至少满足 active policy 的多样本 SourceSnapshot、官方 artifact type 与仓库真实 contract test，才能从 PROPOSED 进入 VALIDATED；之后还需显式批准才可生成 ADMITTED candidate dialect。Candidate release 不自动修改 active dialect/config、不写正式事实，可 audit/rollback。
 - Deterministic Core 继续永久强制：官方事实认证、PIT/未来函数、会计与数学恒等式、不可变 ObjectStore、账本平衡、模拟盘人工确认、`paper_ledger_write_allowed=false` 的研究链、`broker_execution_allowed=false`。AI 不得通过 prompt、proposal、Skill 或 fallback 绕过这些边界。
 - 外部能力生产备用只认 canonical M-06 资格报告。2026-09-02 E-02 固定证据下，Arelle、Docling、Playwright MCP、AKShare、Crawl4AI、changedetection.io、`source-qualification-auditor`、`report-visual-qa`、`schema-drift-recorder` **全部保持 `SHADOW`**：`source-qualification-auditor` 尚未冻结真实 controlled-live Skill 执行输入/输出与延迟证据；AKShare 的包许可证和安装成功也不等于 endpoint-specific 上游数据权利。任何候选缺 rights/PIT/provenance/recorded/live/SBOM/安全/退出门时都不得为满足计划配额硬升生产级；治理 Skill 也绝不能提升底层数据源的官方性或完整性。
+- Phase 7/8 前向样本门、Phase 11/12 SkillUsage/Catalyst/KPI 样本门、M-06 外部资格、认证行业 taxonomy release 与 Continuous Monitor 自然场景长稳样本都是**运行时/外部 enablement 条件**，不是永久开发 backlog。除非用户明确重新开启某项专项验证/资格任务，缺样本、缺授权或缺自然场景只意味着对应能力继续 `NOT_ADMITTED` / `SHADOW` / fail-closed；不得把它们长期留在《开发计划》冒充未完成代码，也不得为清计划而制造样本、随意 enroll 标的或放宽安全门。
 - `CurrentResearchSchedule / ValidatedResearchPlan / ProviderRecoveryValidation / SchemaRepairValidation / ProviderDialectCandidateRelease` 等内部 artifact 只在 DEVELOPER_MODE 可见；INVESTOR_MODE 继续只输出自然语言投资判断，并由动态 internal vocabulary audit 拦截内部术语。
 
 ## 行情与模拟盘

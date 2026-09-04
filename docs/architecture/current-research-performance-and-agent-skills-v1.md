@@ -65,6 +65,12 @@ The six new canonical Skills bind directly to existing Research Team tasks, outp
 
 Each Skill specifies primary-source priority, PIT boundaries, method steps, exact CLI registration, abstention conditions and prohibitions. They are method contracts, not personality prompts. Bull and Bear remain independent contexts; the red team starts only after both are frozen. The model-risk validator cannot promote a model from a single backtest or mutate paper/production weights.
 
+## Prospective admission boundaries vs. development completion
+
+Phase 7/8 forward evaluation and Phase 11/12 Skill efficiency are implemented as disabled-by-default runtime boundaries, not as perpetual software-development work. The active Phase 8 contract remains fail-closed until its configured prospective sample/time/fold/regime gates are genuinely satisfied; production Skill auto-modification/retirement likewise stays disabled without prospective `SkillUsageEvent`/outcome evidence. A lack of real samples therefore means `NOT_ADMITTED`/`INSUFFICIENT_PROSPECTIVE_EVIDENCE`, not “unfinished code”. Unless a dedicated validation campaign is explicitly opened, these sample-accumulation conditions must not remain in `开发计划.md`, and no fixture, historical replay, arbitrary watch target or owner override may be used to manufacture admission.
+
+Shadow-study lookup is scoped to the active configured policy version: a later study created under a different/foreign policy cannot silently replace the current policy’s study in Phase status or Adaptive Edge status. Deterministic efficiency reports are content-addressed and idempotently reused only when type, inputs, lineage and ObjectStore identity all match; repeated identical computation must not fail on report-identity collisions or create a semantically divergent duplicate.
+
 ## BJSE stability evidence
 
 The BJSE official reference Provider keeps slow-changing official membership separate from fast-changing quotes. The durable run recorded ten corrected live rounds, each with 339 securities, 17 pages, explicit terminal proof and no duplicate members; latency was 9.057–13.023 seconds with a 9.485-second median. Recorded fault tests cover total drift, duplicate securities, terminal contradiction, malformed/empty pages, official-source failure and route fallback. The official member denominator is never inferred from Web search or a quote subset.

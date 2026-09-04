@@ -116,6 +116,8 @@
 
 持久化 `MonitorEvent` 是事件事实；`MonitorResearchTask` 与规则 cooldown 是其可恢复副作用。若进程/lease 在事件写入后、task 或 `last_triggered_at` 写入前中断，下一轮必须先从既有 Event/ObjectStore 恢复缺失 task 与 trigger state，再处理新来源；重复恢复必须幂等，不重新制造事件，也不得因重复 `ensure_task` 生成未引用 ObjectStore 对象。
 
+Continuous Monitor 的 uptime、crash takeover、provider degradation、worker unavailable 与自然 target/event/task 都属于运行期可观测证据，而不是需要人为“补齐”的开发 backlog。0-target daemon 的持续运行只能证明 lease/heartbeat/空载 cycle；只有真实持仓、已分析/推荐标的、开放模拟订单或用户显式 MANUAL watch 自然进入 Watch Universe 后产生的场景，才能计入相应运行经验。不得为凑样本随意 enroll 股票、伪造 event/task，或把空载时长写成持仓/荐股场景验证。
+
 **层 B：Research Agents（事件触发、按需、高价值）**
 
 职责：

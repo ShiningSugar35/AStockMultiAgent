@@ -1,38 +1,38 @@
 {
-  "admitted_stage": "SHADOW",
-  "candidate_version": "sha256:191aa0f2d527ccca5dc574d26daee51b6e49d83cbad7d5ccae9774a0930d8202",
+  "schema_version": "capability-qualification-report-v1",
+  "report_id": "0951f024f9b878d70cd8336c7e1be5599bd448dcbd46ed7cd8bdad5c2693ced5",
   "capability_id": "report-visual-qa",
+  "candidate_version": "sha256:191aa0f2d527ccca5dc574d26daee51b6e49d83cbad7d5ccae9774a0930d8202",
+  "requested_stage": "SHADOW",
+  "admitted_stage": "SHADOW",
   "checks": {
-    "cache_behavior": "PASS",
-    "cost": "PASS",
-    "credential_handling": "PASS",
-    "data_rights": "PASS",
-    "exit_uninstall": "PASS",
-    "failure_behavior": "FAIL",
-    "latency": "FAIL",
     "license": "PASS",
-    "maintenance": "PASS",
-    "offline_behavior": "PASS",
+    "terms_of_service": "PASS",
+    "data_rights": "PASS",
     "pit": "PASS",
     "provenance": "PASS",
+    "credential_handling": "PASS",
     "sbom": "PASS",
     "security_review": "PASS",
-    "terms_of_service": "PASS"
+    "maintenance": "PASS",
+    "cost": "PASS",
+    "latency": "FAIL",
+    "cache_behavior": "PASS",
+    "offline_behavior": "PASS",
+    "failure_behavior": "FAIL",
+    "exit_uninstall": "PASS"
   },
-  "completeness_ceiling": "NOT_APPLICABLE",
+  "recorded_validation": "PASS",
   "controlled_live_validation": "FAIL",
+  "source_class_ceiling": "UNKNOWN",
+  "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "771d7c8e0197993ae7a36548ba3fe1a156872ba55cd715c8235b4206030d5acb"
+    "7fd638cdd8b41fe6edf8a7c817a3571ad18405a358d59267395d5908939cd494"
   ],
-  "expires_at": "2026-10-02T06:16:28Z",
+  "valid_from": "2026-09-04T01:47:30Z",
+  "expires_at": "2026-10-04T01:47:30Z",
   "reason_codes": [
     "RENDERED_PAGE_CONTROLLED_LIVE_NOT_RUN",
     "VISUAL_LATENCY_AND_FAILURE_BEHAVIOR_NOT_VALIDATED"
-  ],
-  "recorded_validation": "PASS",
-  "report_id": "0c9041b59fbc739cd08b9dfe13b148490b0ff549631aebb904a9a442ba94b788",
-  "requested_stage": "SHADOW",
-  "schema_version": "capability-qualification-report-v1",
-  "source_class_ceiling": "UNKNOWN",
-  "valid_from": "2026-09-02T06:16:28Z"
+  ]
 }

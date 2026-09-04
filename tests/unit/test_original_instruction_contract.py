@@ -46,9 +46,9 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     ):
         assert required in design
     for required in (
-        "本文件只保存当前未完成任务",
-        "维护契约",
-        "独立长期运行/数据义务",
+        "本文件只保存当前仍需实现、修复、验证或发布的任务",
+        "当前未完成任务",
+        "无未完成开发任务",
     ):
         assert required in plan
     for completed_history in (
@@ -65,8 +65,8 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     for required in (
         "这里只保留**最近一次任务**",
         "当前任务",
-        "本次任务范围",
-        "发布终态",
+        "本次结论",
+        "验证摘要",
     ):
         assert required in acceptance
     for historical_detail in (
@@ -101,11 +101,14 @@ def test_release_closeout_workflow_is_machine_enforced() -> None:
         "禁止为 L0/L1 机械跑全仓 pytest",
     ):
         assert required in agents
-    assert "独立长期运行/数据义务" in plan
+    assert "当前未完成任务" in plan
+    assert "独立长期运行/数据义务" not in plan
+    assert "运行时/外部 enablement 条件" in plan
+    assert "不是永久开发 backlog" in agents
     assert "进度验收.md" in agents
     assert "验收报告.md" not in agents
     assert "v0.2.0 最终正式发布仍必须" not in acceptance
-    assert "发布终态" in acceptance
+    assert "验证摘要" in acceptance
 
 
 def test_original_instruction_public_schemas_keep_all_required_fields() -> None:

@@ -21,9 +21,9 @@
   },
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
-  "created_at": "2026-09-02T06:16:28Z",
+  "created_at": "2026-09-04T01:47:30Z",
   "evidence_version": "e02-qualification-evidence-v1",
-  "expires_at": "2026-10-02T06:16:28Z",
+  "expires_at": "2026-10-04T01:47:30Z",
   "reason_codes": [
     "RENDERED_PAGE_CONTROLLED_LIVE_NOT_RUN",
     "VISUAL_LATENCY_AND_FAILURE_BEHAVIOR_NOT_VALIDATED"
@@ -53,10 +53,10 @@
     },
     {
       "assertion": "Recorded and controlled-live/exit assertions are bound to the repository test contract; a passing test run is required before the final status may claim PASS.",
-      "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "ca0724bae8e57a6b0491c3c377486c6317f8e243321642b76311f2bd7b25e1fa",
+      "observed_at": "2026-09-04T01:47:30Z",
+      "sha256": "e5b0ea738c26be7381061d67b1e4602d26a0c7e872c0392d7581d85b88b74397",
       "source_ref": "contract:tests/unit/test_e02_external_qualification.py"
     }
   ],
-  "valid_from": "2026-09-02T06:16:28Z"
+  "valid_from": "2026-09-04T01:47:30Z"
 }

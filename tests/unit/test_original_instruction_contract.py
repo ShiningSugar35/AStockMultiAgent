@@ -38,7 +38,7 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
     acceptance = (PROJECT_ROOT / "进度验收.md").read_text(encoding="utf-8")
     for required in (
-        "总方案只写长期设计",
+        "HISTORICAL / FROZEN",
         "不自动向券商发送订单",
         "官方/已验证 API 或本地数据 → MCP → Browser → Manual Task",
         "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate",
@@ -46,9 +46,10 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
     ):
         assert required in design
     for required in (
-        "本文件只保存当前仍需实现、修复、验证或发布的任务",
-        "当前未完成任务",
-        "无未完成开发任务",
+        "本文件只保存尚未完成的工作",
+        "## WP-01：",
+        "## WP-11：",
+        "不作为开发 backlog 的门",
     ):
         assert required in plan
     for completed_history in (
@@ -63,10 +64,10 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
         assert completed_history not in plan
     assert not (PROJECT_ROOT / "验收报告.md").exists()
     for required in (
-        "这里只保留**最近一次任务**",
-        "当前任务",
+        "LATEST VERIFIED SNAPSHOT",
+        "任务：",
         "本次结论",
-        "验证摘要",
+        "验证结果",
     ):
         assert required in acceptance
     for historical_detail in (
@@ -101,14 +102,14 @@ def test_release_closeout_workflow_is_machine_enforced() -> None:
         "禁止为 L0/L1 机械跑全仓 pytest",
     ):
         assert required in agents
-    assert "当前未完成任务" in plan
+    assert "本文件只保存尚未完成的工作" in plan
     assert "独立长期运行/数据义务" not in plan
-    assert "运行时/外部 enablement 条件" in plan
+    assert "不作为开发 backlog 的门" in plan
     assert "不是永久开发 backlog" in agents
     assert "进度验收.md" in agents
     assert "验收报告.md" not in agents
     assert "v0.2.0 最终正式发布仍必须" not in acceptance
-    assert "验证摘要" in acceptance
+    assert "验证结果" in acceptance
 
 
 def test_original_instruction_public_schemas_keep_all_required_fields() -> None:

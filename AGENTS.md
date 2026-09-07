@@ -26,7 +26,7 @@
 - 任务、游标、工件注册和模拟账本：SQLite。
 - Codex 草稿：`runtime/codex_runs/<run_id>/`，校验后才能进入 ArtifactStore。
 - 不直接编辑 SQLite，不在聊天结论和数据库之间建立旁路。
-- 根目录《低成本A股多Agent投研系统方案》只写长期设计，《开发计划》只写未完成项，《进度验收》只保留**最近一次任务**有证据的验收记录；会影响当前项目理解的稳定事实必须迁入 `AGENTS.md`、`docs/architecture/`、`docs/workflows/`、README 或 canonical Skill，不在《进度验收》中累积历史流水。验收时必须在同一次修改中迁移状态。
+- `docs/README.md` 是文档治理、事实层级与导航入口；根目录《低成本A股多Agent投研系统方案》是冻结的历史设计背景，不再承担当前计划或验收。重要架构取舍写入 `docs/adr/`，当前领域设计写入 `docs/architecture/`，跨能力协作写入 `docs/workflows/`；`planning/work_packages_v1.yaml` 是当前工作包 ID、依赖、状态、优先级和唯一写入 lane 的机器索引；《开发计划》只解释未完成项、验收与回滚，两者必须通过合同测试一致。《进度验收》只保留**最近一次任务**有证据的验收记录；`.ai-bridge/current-plan.md` 与 `agent-status.md` 仅是瞬时交接，冲突时不得覆盖机器索引、Git、运行事实或 canonical 文档。会影响当前项目理解的稳定事实必须迁入 `AGENTS.md`、机器合同、当前架构/Workflow、README 或 canonical Skill，不在《进度验收》中累积历史流水。验收时必须在同一次修改中迁移状态。
 
 ## 数据与证据
 

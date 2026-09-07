@@ -1,0 +1,110 @@
+schema_version: project-work-package-manifest-v1
+plan_id: investor-orchestration-and-regime-plan-v1
+status: CURRENT
+updated_on: 2026-09-07
+
+authority:
+  machine_index: planning/work_packages_v1.yaml
+  human_plan: 开发计划.md
+  governance: docs/README.md
+  recent_evidence: 进度验收.md
+
+rules:
+  allowed_statuses:
+    - PLANNED
+    - IN_PROGRESS
+    - BLOCKED
+    - REVIEW
+  completed_packages_removed_from_active_manifest: true
+  unique_writer_lane_required: true
+  dependency_ids_must_exist: true
+  markdown_consistency_check_required: true
+
+work_packages:
+  - id: WP-01
+    order: 1
+    title: 机器合同、migration 与场景 manifest
+    status: PLANNED
+    priority: P0
+    depends_on: []
+    owner_lane: schema-migration-and-planning-contracts
+
+  - id: WP-02
+    order: 2
+    title: 统一、分 lane、增量的请求前置恢复
+    status: PLANNED
+    priority: P0
+    depends_on: [WP-01]
+    owner_lane: account-and-session-state
+
+  - id: WP-03
+    order: 3
+    title: 跨会话研究标的登记与不完整持仓事实
+    status: PLANNED
+    priority: P1
+    depends_on: [WP-01]
+    owner_lane: account-and-session-state
+
+  - id: WP-04
+    order: 4
+    title: Capability Planner、Executor 与覆盖回执
+    status: PLANNED
+    priority: P0
+    depends_on: [WP-01]
+    owner_lane: orchestration-gateway-and-scenario-harness
+
+  - id: WP-05
+    order: 5
+    title: 官方 current macro 数据面
+    status: PLANNED
+    priority: P0
+    depends_on: []
+    owner_lane: official-macro-provider-and-data-contract
+
+  - id: WP-06
+    order: 6
+    title: Market Regime V2 特征、透明基线与概率 challenger
+    status: PLANNED
+    priority: P0
+    depends_on: [WP-01, WP-05]
+    owner_lane: regime-evaluation-and-policy
+
+  - id: WP-07
+    order: 7
+    title: 市场状态到风险预算和推荐供给的只读覆盖层
+    status: PLANNED
+    priority: P0
+    depends_on: [WP-06]
+    owner_lane: regime-evaluation-and-policy
+
+  - id: WP-08
+    order: 8
+    title: Investor Answer Gateway 与 10 类纵向切片
+    status: PLANNED
+    priority: P0
+    depends_on: [WP-02, WP-03, WP-04, WP-07]
+    owner_lane: orchestration-gateway-and-scenario-harness
+
+  - id: WP-09
+    order: 9
+    title: 68 个业务问题全量 E2E 与缺陷修复
+    status: PLANNED
+    priority: P0
+    depends_on: [WP-08]
+    owner_lane: orchestration-gateway-and-scenario-harness
+
+  - id: WP-10
+    order: 10
+    title: ChatGPT / Codex Scheduled Research Adapter
+    status: PLANNED
+    priority: P1
+    depends_on: [WP-02, WP-03, WP-04, WP-08]
+    owner_lane: scheduled-research-adapter
+
+  - id: WP-11
+    order: 11
+    title: Controlled live、prospective shadow、启用与回滚
+    status: PLANNED
+    priority: P0
+    depends_on: [WP-09, WP-10]
+    owner_lane: regime-evaluation-and-policy

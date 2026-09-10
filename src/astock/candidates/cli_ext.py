@@ -20,6 +20,7 @@ from astock.candidates.promotion import ResearchSeedPromotionService
 from astock.candidates.seeds import (
     ResearchSeedProviderRouter,
     ResearchSeedService,
+    SeedQuoteBatchProvider,
     SeedSnapshotProvider,
     UniverseCoverageProvider,
 )
@@ -89,20 +90,46 @@ def register_candidate_input_commands(
             fetch = getattr(candidate, "fetch_seed_snapshot", None)
             if callable(fetch):
                 seed_providers.append(cast(SeedSnapshotProvider, candidate))
-        coverage_providers: dict[Market, UniverseCoverageProvider] = {}
+        coverage_providers: dict[Market, list[UniverseCoverageProvider]] = {}
+        quote_fallbacks: list[SeedQuoteBatchProvider] = []
         if live:
-            official_bjse = reference.provider_factory.create("bse-official-reference")
-            if callable(getattr(official_bjse, "fetch_master", None)):
-                coverage_providers[Market.BJSE] = cast(
-                    UniverseCoverageProvider,
-                    official_bjse,
+            official_by_market = {
+                Market.XSHG: "sse-official-reference",
+                Market.XSHE: "szse-official-reference",
+                Market.BJSE: "bse-official-reference",
+            }
+            exchange_official_ids = set(official_by_market.values())
+            for market, official_id in official_by_market.items():
+                capability = (
+                    "instrument.bjse_coverage" if market is Market.BJSE else "instrument.master"
                 )
+                ordered_ids = [official_id]
+                for definition in reference.provider_factory.definitions_for_capability(
+                    capability,
+                    formal_use=False,
+                    require_complete=True,
+                ):
+                    if definition.provider_id in exchange_official_ids:
+                        continue
+                    if definition.provider_id not in ordered_ids:
+                        ordered_ids.append(definition.provider_id)
+                routed: list[UniverseCoverageProvider] = []
+                for provider_id in ordered_ids:
+                    candidate = reference.provider_factory.create(provider_id)
+                    if callable(getattr(candidate, "fetch_master", None)):
+                        routed.append(cast(UniverseCoverageProvider, candidate))
+                if routed:
+                    coverage_providers[market] = routed
+            tencent = reference.provider_factory.create("tencent-reference")
+            if callable(getattr(tencent, "fetch_seed_snapshot_for_symbols", None)):
+                quote_fallbacks.append(cast(SeedQuoteBatchProvider, tencent))
         provider = ResearchSeedProviderRouter(
             providers=seed_providers,
             minimum_rows_by_market=reference.config.minimum_instrument_records,
             state=state,
             objects=objects,
             coverage_providers=coverage_providers,
+            quote_fallbacks=quote_fallbacks,
         )
         return ResearchSeedService(
             project_root=paths.root,

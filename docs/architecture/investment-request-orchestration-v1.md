@@ -1,9 +1,9 @@
 # Investment Request Orchestration v1
 
 > 状态：CURRENT
-> 是否已实现：是；机器合同、统一 preflight、Capability Planner/Executor、注册输出认证、Investor Answer Gateway 与 actual/paper 分 lane 已完成，并由 68 个原始业务 ID 的真实领域 E2E 验收。运行时仍必须遵守 PIT、正式准入、账户歧义与经济写权限硬门。
+> 是否已实现：是；机器合同、统一 preflight、Capability Planner/Executor、注册输出认证、Investor Answer Gateway、material investment request 同轮终局门与 actual/paper 分 lane 均已完成。荐股/组合/买卖判断/完整公司研究在 canonical REQUIRED capability 未闭合时必须继续自动执行，Seed/Candidate/Acquisition/Team/Committee/Portfolio 中间态不得成为最终投资结论。
 > 当前恢复合同：账户读取只消费 canonical external-account 事件与 paper ledger；0068 revision 与同一只读事务冻结状态，禁止按表名推测事实。快照跨账户拒绝、变更失效、历史不可得阻断、并发复用及原子回滚继续由机器测试约束。生产启用状态不由“实现完成”自动改变。
-> 更新日期：2026-09-09
+> 更新日期：2026-09-10
 > 关联 ADR：`docs/adr/0001-documentation-as-code-with-machine-contracts.md`、`docs/adr/0002-market-regime-as-risk-overlay.md`
 > 关联验收：`docs/acceptance/business-question-capability-matrix-v1.md`
 

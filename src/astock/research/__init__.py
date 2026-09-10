@@ -37,6 +37,7 @@ from astock.research.lifecycle import (
 )
 from astock.research.lifecycle_repository import LifecycleRepository
 from astock.research.open_source_audit import (
+    load_local_adaptation_release,
     load_open_source_audit,
     validate_registry_open_source_audits,
     verify_open_source_tree,
@@ -92,6 +93,7 @@ __all__ = [
     "SkillRegistryExecution",
     "SpecialistDeltaExecution",
     "SpecialistRouteExecution",
+    "load_local_adaptation_release",
     "load_open_source_audit",
     "load_research_core_config",
     "load_research_diagnostic_config",

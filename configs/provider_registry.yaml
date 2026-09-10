@@ -1,4 +1,4 @@
-registry_version: provider-registry-v7
+registry_version: provider-registry-v8
 capability_gaps:
   - corporate_actions.ledger_ready
   - model.inference
@@ -194,6 +194,26 @@ providers:
     probe_operation: reference-identity
     probe_target: {symbol: "600519", market: XSHG}
     recorded_fixture: tests/fixtures/providers/sina-reference-success.json
+  - provider_id: tencent-reference
+    adapter_class: astock.providers.tencent_reference:TencentReferenceProvider
+    capabilities: [market.quote_batch]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics:
+      market.quote_batch: EXACT_ITEM
+    independence_group: TENCENT
+    cache_ttl_seconds: 300
+    cost_class: LOW
+    transport: HTTP
+    transport_profile: tencent-browser-v1
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 15
+    priority: 92
+    fixture_subdir: reference/tencent
+    probe_operation: quote-batch
+    probe_target: {symbol: "600519", market: XSHG}
+    recorded_fixture: tests/fixtures/providers/tencent-reference-success.json
   - provider_id: eastmoney-financial
     adapter_class: astock.providers.eastmoney_financial:EastMoneyFinancialProvider
     capabilities: [financial.balance_sheet.secondary, financial.income_statement.secondary, financial.cash_flow_statement.secondary, financial.statement_values]

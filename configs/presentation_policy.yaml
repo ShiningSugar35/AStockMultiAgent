@@ -74,7 +74,7 @@ budgets:
   FACT_QUERY: {min_chars: 40, max_chars: 180, max_reasons: 2}
   MARKET_STATUS: {min_chars: 80, max_chars: 300, max_reasons: 3}
   COMPANY_QUICK_VIEW: {min_chars: 120, max_chars: 600, max_reasons: 4}
-  PORTFOLIO_DECISION: {min_chars: 160, max_chars: 800, max_reasons: 4}
-  DEEP_RESEARCH: {min_chars: 200, max_chars: 900, max_reasons: 4}
+  PORTFOLIO_DECISION: {min_chars: 400, max_chars: 3500, max_reasons: 8}
+  DEEP_RESEARCH: {min_chars: 500, max_chars: 4000, max_reasons: 8}
   DEVELOPER_DIAGNOSTIC: {min_chars: 80, max_chars: 800, max_reasons: 4}
-  FORMAL_REPORT: {min_chars: 300, max_chars: 1600, max_reasons: 6}
+  FORMAL_REPORT: {min_chars: 800, max_chars: 8000, max_reasons: 8}

@@ -7,6 +7,8 @@ import pytest
 
 from astock.core.hashing import content_hash
 from astock.research import (
+    load_local_adaptation_release,
+    load_open_source_audit,
     load_research_skill_registry,
     validate_registry_open_source_audits,
 )
@@ -18,9 +20,20 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
     registry = load_research_skill_registry(PROJECT_ROOT / "configs" / "research_skills.yaml")
     manifests = validate_registry_open_source_audits(registry, PROJECT_ROOT)
 
+    assert registry.registry_version == "research-skills-v4"
+    assert registry.open_source_local_adaptation_release_file is not None
+    release = load_local_adaptation_release(
+        PROJECT_ROOT / registry.open_source_local_adaptation_release_file
+    )
+    assert release.release_id == "serenity-local-adaptation-v1"
+    assert content_hash(
+        [{"path": item.path, "sha256": item.sha256} for item in release.local_adaptation_files]
+    ) == release.local_adaptation_sha256
+    assert release.local_adaptation_files
+
     assert {manifest.audit_id for manifest in manifests} == {
-        "serenity-muxuuu-c2fe93de-local-v4",
-        "serenity-haskaomni-dedcf8f9-local-v4",
+        "serenity-muxuuu-c2fe93de-local-v5",
+        "serenity-haskaomni-dedcf8f9-local-v5",
     }
     assert all(manifest.license_id == "MIT" for manifest in manifests)
     assert all(not manifest.source_vendored for manifest in manifests)
@@ -29,7 +42,11 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
         content_hash(manifest.local_patch_set) == manifest.local_patch_sha256
         for manifest in manifests
     )
-    assert all(manifest.local_adaptation_files for manifest in manifests)
+    assert all(not manifest.local_adaptation_files for manifest in manifests)
+    assert all(manifest.local_adaptation_sha256 is None for manifest in manifests)
+    assert all(
+        manifest.local_adaptation_release_id == release.release_id for manifest in manifests
+    )
     assert {
         mapping.local_contract_version
         for manifest in manifests
@@ -43,13 +60,6 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
         "juglar-cycle-stage-v1",
         "research-memo-composer-v2",
     }
-    assert all(
-        content_hash(
-            [{"path": item.path, "sha256": item.sha256} for item in manifest.local_adaptation_files]
-        )
-        == manifest.local_adaptation_sha256
-        for manifest in manifests
-    )
     external_skills = [
         skill
         for skill in registry.skills
@@ -64,6 +74,8 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
         "JuglarCycleStageSkill",
         "ResearchMemoComposer",
     }
+    assert all(skill.source_family == "SERENITY" for skill in external_skills)
+    assert registry.source_family_limits == {"SERENITY": 2}
     assert all(
         not any(
             reference.startswith("https://github.com/") for reference in skill.source_references
@@ -72,21 +84,47 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
     )
 
 
-def test_serenity_audit_rejects_local_adaptation_drift(tmp_path: Path) -> None:
+def test_serenity_audit_rejects_shared_local_adaptation_drift(tmp_path: Path) -> None:
     registry = load_research_skill_registry(PROJECT_ROOT / "configs" / "research_skills.yaml")
-    manifests = validate_registry_open_source_audits(registry, PROJECT_ROOT)
+    assert registry.open_source_local_adaptation_release_file is not None
+    release = load_local_adaptation_release(
+        PROJECT_ROOT / registry.open_source_local_adaptation_release_file
+    )
     paths = {
         "configs/research_skills.yaml",
+        registry.open_source_local_adaptation_release_file,
         *registry.open_source_audit_manifest_files,
-        *(item.path for manifest in manifests for item in manifest.local_adaptation_files),
+        *(item.path for item in release.local_adaptation_files),
     }
     for relative in paths:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(PROJECT_ROOT / relative, destination)
 
-    tampered = tmp_path / manifests[0].local_adaptation_files[0].path
+    tampered = tmp_path / release.local_adaptation_files[0].path
     tampered.write_bytes(tampered.read_bytes() + b"\n# tampered\n")
 
     with pytest.raises(ValueError, match="open-source local adaptation drift"):
         load_research_skill_registry(tmp_path / "configs" / "research_skills.yaml")
+
+
+def test_serenity_v4_embedded_audits_remain_readable_for_history() -> None:
+    manifests = [
+        load_open_source_audit(
+            PROJECT_ROOT / "third_party" / "audits" / "serenity" / filename
+        )
+        for filename in (
+            "muxuuu-c2fe93de-v4.json",
+            "haskaomni-dedcf8f9-v4.json",
+        )
+    ]
+
+    assert all(manifest.local_adaptation_files for manifest in manifests)
+    assert all(manifest.local_adaptation_release_id is None for manifest in manifests)
+    assert all(
+        content_hash(
+            [{"path": item.path, "sha256": item.sha256} for item in manifest.local_adaptation_files]
+        )
+        == manifest.local_adaptation_sha256
+        for manifest in manifests
+    )

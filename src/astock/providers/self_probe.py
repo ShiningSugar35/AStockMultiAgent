@@ -48,6 +48,8 @@ class ProviderSelfProbeRunner:
             record_count, quality = self._market_bars(provider, definition.probe_target)
         elif operation == "reference-identity":
             record_count, quality = self._reference_identity(provider, definition.probe_target)
+        elif operation == "quote-batch":
+            record_count, quality = self._quote_batch(provider, definition.probe_target)
         elif operation == "reference-master":
             record_count, quality = self._reference_master(provider, definition.probe_target)
         elif operation == "financial-period":
@@ -125,6 +127,30 @@ class ProviderSelfProbeRunner:
                 return 0, False
             return len(rows), True
         return 0, False
+
+    @staticmethod
+    def _quote_batch(provider: object, target: dict[str, str | int]) -> tuple[int, bool]:
+        fetch = getattr(provider, "fetch_seed_snapshot_for_symbols", None)
+        if not callable(fetch):
+            return 0, False
+        market = Market(str(target["market"]))
+        symbol = str(target["symbol"])
+        result = fetch(market, [symbol], live=True)
+        if not isinstance(result, tuple) or len(result) != 2:
+            return 0, False
+        payload = result[0]
+        if not isinstance(payload, dict):
+            return 0, False
+        rows = payload.get("rows")
+        if not isinstance(rows, list):
+            return 0, False
+        quality = (
+            payload.get("complete") is True
+            and payload.get("requested_symbol_count") == 1
+            and payload.get("returned_symbol_count") == 1
+            and len(rows) == 1
+        )
+        return len(rows), quality
 
     @staticmethod
     def _reference_master(provider: object, target: dict[str, str | int]) -> tuple[int, bool]:
@@ -257,6 +283,8 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
         selected = [item for item in capabilities if item.startswith("market.raw_")]
     elif operation == "reference-identity":
         selected = [item for item in capabilities if item == "instrument.identity"]
+    elif operation == "quote-batch":
+        selected = [item for item in capabilities if item == "market.quote_batch"]
     elif operation == "reference-master":
         selected = [item for item in capabilities if item == "instrument.master"]
     elif operation == "financial-period":

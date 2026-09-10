@@ -426,6 +426,44 @@ def test_gateway_projects_complete_investor_fields_and_safe_report_reference() -
         assert required in rendered.text
 
 
+def test_deep_research_narrative_upgrades_quick_view_budget_and_preserves_risk_set() -> None:
+    gateway = ResponseGateway()
+    context = gateway.context("请完整分析这家公司现在是否值得买")
+    reasons = [
+        "基本面：核心产品量价和现金创造能力决定盈利中枢。",
+        "行业：供需、竞争格局和产业周期决定利润池变化。",
+        "财务：利润、现金流和资产负债表的一致性通过复核。",
+        "治理：资本配置、激励和关联交易质量影响长期回报。",
+        "催化：新品、渠道和政策时点可能改变未来两个季度预期。",
+        "估值：基准情景隐含回报不足以覆盖当前风险溢价。",
+        "反方：需求走弱和估值压缩同时发生时下行空间明显扩大。",
+        "组合：单股暴露需受总仓位、行业集中度和流动性预算约束。",
+    ]
+    narrative = ResearchNarrativeBundle(
+        subject="贵州茅台（600519）",
+        task_type=ResponseTaskType.DEEP_RESEARCH,
+        headline="当前结论为等待更好的赔率。",
+        conclusion_strength=ConclusionStrength.MODERATE,
+        valuation_or_odds=["当前估值已反映较高增长预期。"],
+        reasons=reasons,
+        risks=["需求下行会压低盈利。", "估值收缩会放大回撤。"],
+        change_conditions=["盈利预测显著上修。", "估值回到更有安全边际的位置。"],
+        data_as_of=NOW,
+    )
+
+    rendered = gateway.render(context, narrative=narrative)
+
+    assert rendered.task_type is ResponseTaskType.DEEP_RESEARCH
+    assert rendered.audit.character_budget == 4000
+    assert isinstance(rendered.payload, InvestorPresentationModel)
+    assert rendered.payload.reasons == reasons
+    assert rendered.payload.risk == "需求下行会压低盈利。；估值收缩会放大回撤。"
+    assert rendered.payload.change_condition == (
+        "盈利预测显著上修。；估值回到更有安全边际的位置。"
+    )
+    assert not rendered.safe_fallback_used
+
+
 def test_length_reduction_only_removes_noncritical_reasons() -> None:
     gateway = ResponseGateway()
     narrative = ResearchNarrativeBundle(

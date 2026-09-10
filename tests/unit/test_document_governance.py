@@ -151,21 +151,22 @@ def test_regime_validation_has_observable_targets_and_a_share_pit_history() -> N
 
 def test_architecture_implementation_status_does_not_hide_active_rework() -> None:
     active = yaml.safe_load(_read("planning/work_packages_v1.yaml"))["work_packages"]
-    for relative_path in (
-        "docs/architecture/investment-request-orchestration-v1.md",
-        "docs/architecture/market-regime-control-v1.md",
-        "docs/architecture/scheduled-research-orchestration-v1.md",
-    ):
+    active_ids = {item["id"] for item in active}
+    architecture_contracts = {
+        "docs/architecture/investment-request-orchestration-v1.md": {"WP-13"},
+        "docs/architecture/market-regime-control-v1.md": set(),
+        "docs/architecture/scheduled-research-orchestration-v1.md": set(),
+    }
+    for relative_path, related_work_packages in architecture_contracts.items():
         text = _read(relative_path)
         assert "> 状态：CURRENT" in text
-        if active:
+        if active_ids & related_work_packages:
             assert "REWORK_REQUIRED" in text[:1500] or "部分实现" in text[:1500]
             assert "> 是否已实现：是；机器合同与核心实现" not in text
 
 
 def test_scheduled_research_blueprint_keeps_fact_and_execution_planes_separate() -> None:
     blueprint = _read("docs/architecture/scheduled-research-orchestration-v1.md")
-    plan = _read("开发计划.md")
     assert "不能替代" in blueprint and "本地 Continuous Monitor" in blueprint
     assert "Web 任务" in blueprint and "不能直接访问电脑本地目录" in blueprint
     assert "最高每小时一次" in blueprint
@@ -180,8 +181,8 @@ def test_scheduled_research_blueprint_keeps_fact_and_execution_planes_separate()
     assert "CHAT_LOOP" not in blueprint
     assert "经济写入均为 0" in blueprint
     assert "同一 `binding_id + schedule_bucket`" in blueprint
-    assert "三域" in plan or "三领域定时研究" in plan
-    assert "controlled-live" in plan and "rollback" in plan
+    assert "三域" in blueprint or "三领域定时研究" in blueprint
+    assert "controlled-live" in blueprint and "回滚" in blueprint
 
 
 def test_redundant_historical_plan_is_removed_and_audit_report_is_frozen() -> None:

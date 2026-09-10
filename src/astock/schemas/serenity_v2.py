@@ -573,7 +573,9 @@ class MovingAverageV2(_EvidenceNode):
     calculated_at: AwareDatetime
     bars_used: int = Field(ge=20)
     dataset_version: str = Field(pattern=r"^[0-9a-f]{64}$")
-    calculation_status: Literal["CALLER_SUPPLIED_REPORT_ONLY"] = "CALLER_SUPPLIED_REPORT_ONLY"
+    calculation_status: Literal["CALLER_SUPPLIED_REPORT_ONLY", "CANONICAL_DETERMINISTIC"] = (
+        "CALLER_SUPPLIED_REPORT_ONLY"
+    )
 
     @model_validator(mode="after")
     def validate_window(self) -> MovingAverageV2:

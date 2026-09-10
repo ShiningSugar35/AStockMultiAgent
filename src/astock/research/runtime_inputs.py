@@ -202,13 +202,15 @@ class ResearchRunInputResolver:
             )
 
         route_artifact = existing.specialist_route_artifact_id
-        serenity_artifact = existing.serenity_delta_artifact_id
+        serenity_artifacts = list(existing.serenity_delta_artifact_ids)
+        if not serenity_artifacts and existing.serenity_delta_artifact_id is not None:
+            serenity_artifacts = [existing.serenity_delta_artifact_id]
         zhihu_artifact = existing.zhihu_delta_artifact_id
         memo_artifact = existing.research_memo_artifact_id
         if (
             request.auto_resolve_inputs
             and base_artifact is not None
-            and not all((route_artifact, serenity_artifact, zhihu_artifact, memo_artifact))
+            and not all((route_artifact, serenity_artifacts, zhihu_artifact, memo_artifact))
         ):
             base_case_id = base_artifact.removeprefix("BaseCasePack:")
             route_summary = self.research.latest_route_plan_summary(base_case_id)
@@ -229,16 +231,19 @@ class ResearchRunInputResolver:
                         for item in memo.delta_references
                     ]
                     valid_deltas = [item for item in deltas if item is not None]
-                    serenity = [
-                        item for item in valid_deltas if item.skill_id in _SERENITY_SKILL_IDS
-                    ]
+                    serenity = sorted(
+                        (item for item in valid_deltas if item.skill_id in _SERENITY_SKILL_IDS),
+                        key=lambda item: (item.skill_id, item.delta_id),
+                    )
                     zhihu = [item for item in valid_deltas if item.skill_id in _ZHIHU_SKILL_IDS]
-                    if len(serenity) == 1:
-                        serenity_artifact = f"SpecialistDelta:{serenity[0].delta_id}"
+                    if serenity:
+                        serenity_artifacts = [
+                            f"SpecialistDelta:{item.delta_id}" for item in serenity
+                        ]
                     if len(zhihu) == 1:
                         zhihu_artifact = f"SpecialistDelta:{zhihu[0].delta_id}"
         specialist_complete = all(
-            (route_artifact, serenity_artifact, zhihu_artifact, memo_artifact)
+            (route_artifact, serenity_artifacts, zhihu_artifact, memo_artifact)
         )
         if not specialist_complete and (
             request.route_draft is None or not request.specialist_delta_drafts
@@ -246,7 +251,6 @@ class ResearchRunInputResolver:
             missing.add("SPECIALIST_FROZEN_CHAIN_OR_DRAFTS_REQUIRED")
         for key, artifact_id in (
             ("specialist_route", route_artifact),
-            ("serenity_delta", serenity_artifact),
             ("zhihu_delta", zhihu_artifact),
             ("research_memo", memo_artifact),
         ):
@@ -258,6 +262,14 @@ class ResearchRunInputResolver:
                     "SPECIALIST_FROZEN_CHAIN_OR_DRAFTS_REQUIRED",
                     missing,
                 )
+        for index, artifact_id in enumerate(serenity_artifacts):
+            self._bind_or_missing(
+                bindings,
+                "serenity_delta" if index == 0 else f"serenity_delta_{index + 1}",
+                artifact_id,
+                "SPECIALIST_FROZEN_CHAIN_OR_DRAFTS_REQUIRED",
+                missing,
+            )
 
         knowledge_run_id = request.knowledge_run_id
         knowledge_query = request.knowledge_query
@@ -335,7 +347,8 @@ class ResearchRunInputResolver:
             frozen_evidence_pack_artifact_id=frozen_evidence,
             base_case_artifact_id=base_artifact,
             specialist_route_artifact_id=route_artifact,
-            serenity_delta_artifact_id=serenity_artifact,
+            serenity_delta_artifact_ids=serenity_artifacts,
+            serenity_delta_artifact_id=(serenity_artifacts[0] if serenity_artifacts else None),
             zhihu_delta_artifact_id=zhihu_artifact,
             research_memo_artifact_id=memo_artifact,
             financial_integrity_artifact_id=financial_artifact,

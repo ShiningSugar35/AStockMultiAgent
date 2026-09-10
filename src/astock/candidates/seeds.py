@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -78,6 +78,18 @@ class UniverseCoverageProvider(Protocol):
     ) -> tuple[dict[str, object], SourceSnapshot]: ...
 
 
+class SeedQuoteBatchProvider(Protocol):
+    provider_id: str
+
+    def fetch_seed_snapshot_for_symbols(
+        self,
+        market: Market,
+        symbols: Sequence[str],
+        *,
+        live: bool = False,
+    ) -> tuple[dict[str, object], SourceSnapshot]: ...
+
+
 class SeedMarketProvider(SeedSnapshotProvider, Protocol):
     def fetch_industry_boards(self, *, live: bool = False) -> tuple[dict[str, object], Any]: ...
 
@@ -98,7 +110,10 @@ class ResearchSeedProviderRouter:
         minimum_rows_by_market: dict[Market, int],
         state: StateStore | None = None,
         objects: ObjectStore | None = None,
-        coverage_providers: dict[Market, UniverseCoverageProvider] | None = None,
+        coverage_providers: (
+            Mapping[Market, UniverseCoverageProvider | Sequence[UniverseCoverageProvider]] | None
+        ) = None,
+        quote_fallbacks: Sequence[SeedQuoteBatchProvider] | None = None,
         cache_freshness: timedelta = _CURRENT_LIVE_TOLERANCE,
     ) -> None:
         configured: list[SeedSnapshotProvider] = (
@@ -121,7 +136,18 @@ class ResearchSeedProviderRouter:
         self.state = state
         self.objects = objects
         self.source_breaker = SourceCircuitBreaker(state) if state is not None else None
-        self.coverage_providers = dict(coverage_providers or {})
+        normalized_coverage: dict[Market, tuple[UniverseCoverageProvider, ...]] = {}
+        for market, configured_provider in (coverage_providers or {}).items():
+            if isinstance(configured_provider, (list, tuple)):
+                providers_for_market = tuple(
+                    cast(Sequence[UniverseCoverageProvider], configured_provider)
+                )
+            else:
+                providers_for_market = (cast(UniverseCoverageProvider, configured_provider),)
+            if providers_for_market:
+                normalized_coverage[market] = providers_for_market
+        self.coverage_providers = normalized_coverage
+        self.quote_fallbacks = tuple(quote_fallbacks or ())
         self.cache_freshness = cache_freshness
         self._coverage_lock = Lock()
         self._coverage_cache: dict[Market, tuple[dict[str, object], SourceSnapshot]] = {}
@@ -195,6 +221,56 @@ class ResearchSeedProviderRouter:
                         breaker_capability,
                         classify_source_error(exc),
                     )
+        if live and coverage_proof is not None and self.quote_fallbacks:
+            coverage_symbols = sorted(_official_coverage_symbols(coverage_proof[0], market))
+            quote_capability = scoped_source_capability("market.quote_batch", market.value)
+            for provider in self.quote_fallbacks:
+                provider_id = str(getattr(provider, "provider_id", "")).strip()
+                if (
+                    self.source_breaker is not None
+                    and provider_id
+                    and not self.source_breaker.claim_attempt(provider_id, quote_capability)
+                ):
+                    last_error = ValueError(f"MARKET_QUOTE_CIRCUIT_OPEN:{provider_id}")
+                    continue
+                try:
+                    payload, snapshot = provider.fetch_seed_snapshot_for_symbols(
+                        market,
+                        coverage_symbols,
+                        live=True,
+                    )
+                    payload, snapshot = self._bind_official_coverage(
+                        payload,
+                        snapshot,
+                        market,
+                        coverage_proof,
+                    )
+                    row_count = _seed_payload_row_count(payload)
+                    if row_count < self.minimum_rows_by_market[market]:
+                        raise ValueError("MARKET_QUOTE_BELOW_MINIMUM_COVERAGE")
+                    ratio = _seed_payload_coverage_ratio(payload, market)
+                    if ratio is not None and ratio >= _FULL_MARKET_COVERAGE_RATIO:
+                        if self.source_breaker is not None and provider_id:
+                            self.source_breaker.record_success(provider_id, quote_capability)
+                        return payload, snapshot
+                    if self.source_breaker is not None and provider_id:
+                        self.source_breaker.record_failure(
+                            provider_id,
+                            quote_capability,
+                            SourceFailureClass.COVERAGE_INCOMPLETE,
+                        )
+                    ranked_ratio = ratio if ratio is not None else -1.0
+                    if best_partial is None or ranked_ratio > best_partial_ratio:
+                        best_partial = (payload, snapshot)
+                        best_partial_ratio = ranked_ratio
+                except (AStockError, OSError, RuntimeError, ValueError) as exc:
+                    last_error = exc
+                    if self.source_breaker is not None and provider_id:
+                        self.source_breaker.record_failure(
+                            provider_id,
+                            quote_capability,
+                            classify_source_error(exc),
+                        )
         if live and best_partial is not None:
             return best_partial
         if last_error is not None:
@@ -207,45 +283,47 @@ class ResearchSeedProviderRouter:
         *,
         live: bool,
     ) -> tuple[dict[str, object], SourceSnapshot] | None:
-        provider = self.coverage_providers.get(market)
-        if provider is None or self.state is None or self.objects is None:
+        providers = self.coverage_providers.get(market, ())
+        if not providers or self.state is None or self.objects is None:
             return None
         with self._coverage_lock:
             cached = self._coverage_cache.get(market)
             if cached is not None:
                 return cached
             capability = _coverage_capability_for_market(market)
-            provider_id = provider.provider_id
-            if (
-                live
-                and self.source_breaker is not None
-                and not self.source_breaker.claim_attempt(provider_id, capability)
-            ):
-                return None
-            try:
-                payload, snapshot = provider.fetch_master(market, live=live)
-                _official_coverage_symbols(payload, market)
-                registered = self.state.get_snapshot(snapshot.snapshot_id)
+            for provider in providers:
+                provider_id = provider.provider_id
                 if (
-                    registered is None
-                    or registered.source_id != provider_id
-                    or registered.object_sha256 != snapshot.object_sha256
-                    or not self.objects.verify(snapshot.object_sha256)
+                    live
+                    and self.source_breaker is not None
+                    and not self.source_breaker.claim_attempt(provider_id, capability)
                 ):
-                    raise ValueError("Official Universe coverage snapshot failed verification")
-                if live and self.source_breaker is not None:
-                    self.source_breaker.record_success(provider_id, capability)
-            except (AStockError, OSError, RuntimeError, ValueError) as exc:
-                if live and self.source_breaker is not None:
-                    self.source_breaker.record_failure(
-                        provider_id,
-                        capability,
-                        classify_source_error(exc),
-                    )
-                return None
-            result = (payload, snapshot)
-            self._coverage_cache[market] = result
-            return result
+                    continue
+                try:
+                    payload, snapshot = provider.fetch_master(market, live=live)
+                    _official_coverage_symbols(payload, market)
+                    registered = self.state.get_snapshot(snapshot.snapshot_id)
+                    if (
+                        registered is None
+                        or registered.source_id != provider_id
+                        or registered.object_sha256 != snapshot.object_sha256
+                        or not self.objects.verify(snapshot.object_sha256)
+                    ):
+                        raise ValueError("Universe coverage snapshot failed verification")
+                    if live and self.source_breaker is not None:
+                        self.source_breaker.record_success(provider_id, capability)
+                except (AStockError, OSError, RuntimeError, ValueError) as exc:
+                    if live and self.source_breaker is not None:
+                        self.source_breaker.record_failure(
+                            provider_id,
+                            capability,
+                            classify_source_error(exc),
+                        )
+                    continue
+                result = (payload, snapshot)
+                self._coverage_cache[market] = result
+                return result
+            return None
 
     def _bind_official_coverage(
         self,
@@ -304,6 +382,10 @@ class ResearchSeedProviderRouter:
         )
         object_ref = self.objects.put_json(decorated)
         now = datetime.now(UTC)
+        # The decorated object did not exist until this derivation completed. Its
+        # availability must therefore be no earlier than its own fetch/creation time,
+        # even when every upstream raw snapshot was available earlier.
+        available_at = max(available_at, now)
         derived = SourceSnapshot(
             snapshot_id=(f"{snapshot.source_id}:official-covered:{object_ref.sha256}"),
             source_id=snapshot.source_id,
@@ -433,7 +515,11 @@ def _safe_float(value: object) -> float:
 
 
 def _sina_activity_unavailable(payload: dict[str, object]) -> bool:
-    if payload.get("_astock_source") != "SINA_MARKET_CENTER":
+    # Legacy helper name retained for compatibility. Both normalized list/quote
+    # fallbacks can be captured outside active trading; treat a market-wide zero
+    # activity snapshot with positive settlements as an activity proxy rather than
+    # silently eliminating the entire blind tranche.
+    if payload.get("_astock_source") not in {"SINA_MARKET_CENTER", "TENCENT_QUOTE_BATCH"}:
         return False
     rows = payload.get("rows")
     if not isinstance(rows, list) or not rows:
@@ -458,33 +544,59 @@ def _official_coverage_symbols(
     payload: dict[str, object],
     market: Market,
 ) -> set[str]:
-    if payload.get("_astock_source") != "BSE_OFFICIAL_LIST" or market is not Market.BJSE:
-        raise ValueError("Unsupported official Universe coverage proof")
+    """Validate a complete master snapshot before using it as a denominator.
+
+    The eventual authority (official versus secondary) is derived from the provider
+    registry, not from the payload shape. This validator therefore accepts either
+    normalized exchange rows or a complete self-reported secondary master, while
+    never inventing a denominator for a pagination-only payload.
+    """
+
     request = payload.get("_astock_request")
+    if not isinstance(request, dict) or request.get("market") != market.value:
+        raise ValueError("Universe coverage proof is bound to another market")
     rows = payload.get("rows")
-    if (
-        not isinstance(request, dict)
-        or request.get("market") != market.value
-        or payload.get("complete") is not True
-        or not isinstance(rows, list)
-        or any(not isinstance(item, dict) for item in rows)
-    ):
-        raise ValueError("Official Universe coverage proof is malformed")
+    if isinstance(rows, list):
+        if payload.get("complete") is not True or any(not isinstance(item, dict) for item in rows):
+            raise ValueError("Universe coverage proof is malformed")
+        try:
+            total = int(str(payload["total"]))
+            denominator = int(str(payload["coverage_denominator"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Universe coverage denominator is unavailable") from exc
+        symbols = {
+            str(item.get("code") or "")
+            for item in rows
+            if isinstance(item, dict)
+            and len(str(item.get("code") or "")) == 6
+            and str(item.get("code") or "").isdigit()
+            and bool(str(item.get("name") or "").strip())
+        }
+        if total <= 0 or denominator != total or len(rows) != total or len(symbols) != total:
+            raise ValueError("Universe coverage proof is incomplete")
+        return symbols
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("Universe coverage proof has no complete master rows")
+    diff = data.get("diff")
+    master_rows = list(diff.values()) if isinstance(diff, dict) else diff
+    if not isinstance(master_rows, list) or any(not isinstance(item, dict) for item in master_rows):
+        raise ValueError("Universe coverage proof rows are malformed")
     try:
-        total = int(str(payload["total"]))
-        denominator = int(str(payload["coverage_denominator"]))
+        total = int(str(data["total"]))
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("Official Universe coverage denominator is malformed") from exc
+        raise ValueError("Universe coverage denominator is unavailable") from exc
     symbols = {
-        str(item.get("code") or "")
-        for item in rows
+        str(item.get("f12") or "")
+        for item in master_rows
         if isinstance(item, dict)
-        and len(str(item.get("code") or "")) == 6
-        and str(item.get("code") or "").isdigit()
-        and bool(str(item.get("name") or "").strip())
+        and len(str(item.get("f12") or "")) == 6
+        and str(item.get("f12") or "").isdigit()
+        and bool(str(item.get("f14") or "").strip())
     }
-    if total <= 0 or denominator != total or len(rows) != total or len(symbols) != total:
-        raise ValueError("Official Universe coverage proof is incomplete")
+    if total <= 0 or len(master_rows) != total or len(symbols) != total:
+        raise ValueError("Universe coverage proof is incomplete")
     return symbols
 
 
@@ -492,7 +604,7 @@ def _seed_payload_symbols(payload: dict[str, object], market: Market) -> set[str
     request = payload.get("_astock_request")
     if not isinstance(request, dict) or request.get("market") != market.value:
         return set()
-    if payload.get("_astock_source") == "SINA_MARKET_CENTER":
+    if payload.get("_astock_source") in {"SINA_MARKET_CENTER", "TENCENT_QUOTE_BATCH"}:
         rows = payload.get("rows")
         prefix = {Market.XSHG: "sh", Market.XSHE: "sz", Market.BJSE: "bj"}.get(market)
         if not isinstance(rows, list) or prefix is None:
@@ -524,7 +636,7 @@ def _seed_payload_symbols(payload: dict[str, object], market: Market) -> set[str
 
 
 def _seed_payload_row_count(payload: dict[str, object]) -> int:
-    if payload.get("_astock_source") == "SINA_MARKET_CENTER":
+    if payload.get("_astock_source") in {"SINA_MARKET_CENTER", "TENCENT_QUOTE_BATCH"}:
         rows = payload.get("rows")
         request = payload.get("_astock_request")
         if not isinstance(rows, list) or not isinstance(request, dict):
@@ -592,7 +704,7 @@ def _seed_payload_coverage_ratio(payload: dict[str, object], market: Market) -> 
         ):
             return None
         return min(1.0, numerator / denominator)
-    if payload.get("_astock_source") == "SINA_MARKET_CENTER":
+    if payload.get("_astock_source") in {"SINA_MARKET_CENTER", "TENCENT_QUOTE_BATCH"}:
         rows = payload.get("rows")
         if payload.get("complete") is not True or not isinstance(rows, list) or not rows:
             return None
@@ -1524,9 +1636,10 @@ class ResearchSeedService:
             raise ValueError("research-seed market snapshot provenance mismatch")
         rows = self._payload_rows(payload)
         result: list[_RawMarketRow] = []
-        sina_market_center = payload.get("_astock_source") == "SINA_MARKET_CENTER"
+        normalized_source = payload.get("_astock_source")
+        normalized_rows = normalized_source in {"SINA_MARKET_CENTER", "TENCENT_QUOTE_BATCH"}
         for row in rows:
-            if sina_market_center:
+            if normalized_rows:
                 company_id = str(row.get("code") or "")
                 name = str(row.get("name") or "").strip()
                 trade_price = self._number(row.get("trade"))
@@ -1534,8 +1647,11 @@ class ResearchSeedService:
                 price = trade_price if trade_price > 0 else settlement_price
                 amount = self._number(row.get("amount"))
                 turnover = self._number(row.get("turnoverratio"))
-                raw_float_cap = self._number(row.get("nmc"))
-                float_cap = raw_float_cap * 10_000 if raw_float_cap >= 0 else -1.0
+                if normalized_source == "TENCENT_QUOTE_BATCH":
+                    float_cap = self._number(row.get("float_market_cap_cny"))
+                else:
+                    raw_float_cap = self._number(row.get("nmc"))
+                    float_cap = raw_float_cap * 10_000 if raw_float_cap >= 0 else -1.0
             else:
                 company_id = str(row.get("f12") or "")
                 name = str(row.get("f14") or "").strip()
@@ -1650,10 +1766,10 @@ class ResearchSeedService:
 
     @staticmethod
     def _payload_rows(payload: dict[str, object]) -> list[dict[str, object]]:
-        if payload.get("_astock_source") == "SINA_MARKET_CENTER":
+        if payload.get("_astock_source") in {"SINA_MARKET_CENTER", "TENCENT_QUOTE_BATCH"}:
             rows = payload.get("rows")
             if not isinstance(rows, list) or any(not isinstance(item, dict) for item in rows):
-                raise ValueError("Sina seed payload contains malformed rows")
+                raise ValueError("normalized seed payload contains malformed rows")
             return rows
         if payload.get("rc") != 0:
             raise ValueError("EastMoney seed request failed")

@@ -631,10 +631,18 @@ class ResearchRunService:
 
         stage_started = perf_counter()
         route_artifact = frozen_inputs.specialist_route_artifact_id if frozen_inputs else None
-        serenity_artifact = frozen_inputs.serenity_delta_artifact_id if frozen_inputs else None
+        serenity_artifacts = (
+            list(frozen_inputs.serenity_delta_artifact_ids) if frozen_inputs else []
+        )
+        if (
+            frozen_inputs
+            and not serenity_artifacts
+            and frozen_inputs.serenity_delta_artifact_id is not None
+        ):
+            serenity_artifacts = [frozen_inputs.serenity_delta_artifact_id]
         zhihu_artifact = frozen_inputs.zhihu_delta_artifact_id if frozen_inputs else None
         memo_artifact = frozen_inputs.research_memo_artifact_id if frozen_inputs else None
-        if route_artifact and serenity_artifact and zhihu_artifact and memo_artifact:
+        if route_artifact and serenity_artifacts and zhihu_artifact and memo_artifact:
             route = self._load_model(route_artifact, "SpecialistRoutePlan", SpecialistRoutePlan)
             memo = self._load_model(memo_artifact, "ResearchMemoArtifact", ResearchMemoArtifact)
             delta_artifacts = [f"SpecialistDelta:{item.delta_id}" for item in memo.delta_references]
@@ -642,9 +650,20 @@ class ResearchRunService:
                 self._load_model(item, "SpecialistDelta", SpecialistDelta)
                 for item in delta_artifacts
             ]
-            if serenity_artifact not in delta_artifacts or zhihu_artifact not in delta_artifacts:
+            memo_serenity_artifacts = sorted(
+                f"SpecialistDelta:{item.delta_id}"
+                for item in deltas
+                if item.skill_id in _SERENITY_SKILL_IDS
+            )
+            if sorted(serenity_artifacts) != memo_serenity_artifacts:
+                raise ValueError("frozen Serenity Delta set must exactly match ResearchMemo")
+            if zhihu_artifact not in delta_artifacts:
                 raise ValueError("frozen mandatory specialist Delta is absent from ResearchMemo")
-            serenity_delta = self._load_model(serenity_artifact, "SpecialistDelta", SpecialistDelta)
+            serenity_deltas = [
+                self._load_model(item, "SpecialistDelta", SpecialistDelta)
+                for item in serenity_artifacts
+            ]
+            serenity_artifact = serenity_artifacts[0]
             zhihu_delta = self._load_model(zhihu_artifact, "SpecialistDelta", SpecialistDelta)
             specialist_cache = True
         else:
@@ -725,9 +744,12 @@ class ResearchRunService:
                 )
                 deltas.append(execution.delta)
                 delta_artifacts.append(f"SpecialistDelta:{execution.delta.delta_id}")
-            serenity_candidates = [item for item in deltas if item.skill_id in _SERENITY_SKILL_IDS]
+            serenity_candidates = sorted(
+                (item for item in deltas if item.skill_id in _SERENITY_SKILL_IDS),
+                key=lambda item: (item.skill_id, item.delta_id),
+            )
             zhihu_candidates = [item for item in deltas if item.skill_id in _ZHIHU_SKILL_IDS]
-            if len(serenity_candidates) != 1 or len(zhihu_candidates) != 1:
+            if not serenity_candidates or len(zhihu_candidates) != 1:
                 reasons = ["MANDATORY_SERENITY_AND_ZHIHU_DELTAS_REQUIRED"]
                 add_checkpoint(
                     ResearchRunStage.SERENITY_DELTA,
@@ -741,9 +763,10 @@ class ResearchRunService:
                     ResearchRunStage.SERENITY_DELTA,
                     reasons,
                 )
-            serenity_delta = serenity_candidates[0]
+            serenity_deltas = serenity_candidates
+            serenity_artifacts = [f"SpecialistDelta:{item.delta_id}" for item in serenity_deltas]
             zhihu_delta = zhihu_candidates[0]
-            serenity_artifact = f"SpecialistDelta:{serenity_delta.delta_id}"
+            serenity_artifact = serenity_artifacts[0]
             zhihu_artifact = f"SpecialistDelta:{zhihu_delta.delta_id}"
             memo_execution = self.diagnostics.compose_memo(
                 ResearchMemoComposeRequest(
@@ -763,18 +786,21 @@ class ResearchRunService:
             raise ValueError("specialist route is outside the current BaseCase")
         if memo.base_case_id != base.base_case_id or memo.route_plan_id != route.route_plan_id:
             raise ValueError("ResearchMemo is outside the current specialist scope")
-        if serenity_delta.skill_id not in _SERENITY_SKILL_IDS:
-            raise ValueError("mandatory Serenity artifact is not a Serenity Skill")
+        if any(item.skill_id not in _SERENITY_SKILL_IDS for item in serenity_deltas):
+            raise ValueError("mandatory Serenity artifacts must all be Serenity Skills")
         if zhihu_delta.skill_id not in _ZHIHU_SKILL_IDS:
             raise ValueError("mandatory Zhihu artifact is not a Zhihu Skill")
         for key, artifact_id in (
             ("specialist_route", route_artifact),
-            ("serenity_delta", serenity_artifact),
             ("zhihu_delta", zhihu_artifact),
             ("research_memo", memo_artifact),
         ):
             assert artifact_id is not None
             outputs[key] = self._ref(artifact_id)
+        for index, artifact_id in enumerate(serenity_artifacts):
+            outputs["serenity_delta" if index == 0 else f"serenity_delta_{index + 1}"] = self._ref(
+                artifact_id
+            )
         add_checkpoint(
             ResearchRunStage.SERENITY_DELTA,
             artifact_ids=[route_artifact, *delta_artifacts, memo_artifact],

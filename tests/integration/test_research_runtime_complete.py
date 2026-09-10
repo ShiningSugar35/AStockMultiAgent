@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
+from typing import Any, cast
+
+import pytest
 
 from astock.acceptance.phase6 import Phase6RecordedService
 from astock.committee.repository import CommitteeRepository
@@ -18,7 +21,10 @@ from astock.schemas import (
     Market,
     OrderSide,
     PaperTradingClassification,
+    ResearchMemoArtifact,
+    ResearchMemoDeltaReference,
     SourceSnapshot,
+    SpecialistDelta,
 )
 from astock.schemas.institutional_research import (
     EvidenceBoundStatement,
@@ -47,6 +53,17 @@ from astock.schemas.research_runtime import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class _UnusedKnowledgeProvider:
+    def default_run_id(self) -> str | None:
+        return None
+
+    def status(self, _run_id: str):
+        raise AssertionError("knowledge provider should not be called before NEEDS_INFO")
+
+    def select(self, _run_id: str, _query: KnowledgeSkillQuery):
+        raise AssertionError("knowledge provider should not be called before NEEDS_INFO")
 
 
 class _RecordedKnowledgeProvider:
@@ -468,3 +485,111 @@ def test_recorded_inputs_drive_generic_runtime_to_classified_protocol(tmp_path: 
     assert preparation.execution_request.requires_user_confirmation
     paper_audit = PaperExecutionService(state, objects).audit(preparation.execution_request_id)
     assert paper_audit["status"] == "PASS"
+
+
+def test_runtime_accepts_multiple_frozen_serenity_deltas_before_knowledge(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+    parquet = tmp_path / "parquet"
+    recorded = Phase6RecordedService(PROJECT_ROOT, state, objects, parquet).run("300750")
+    report = recorded.report
+    as_of = recorded.committee_decision.as_of
+
+    serenity_artifact = report.specialist_delta_artifact_ids["SERENITY"]
+    serenity_record = state.artifact_record(serenity_artifact)
+    assert serenity_record is not None
+    serenity_delta = SpecialistDelta.model_validate_json(
+        objects.get_bytes(str(serenity_record["object_hash"]))
+    )
+    second_delta = serenity_delta.model_copy(
+        update={"delta_id": f"{serenity_delta.delta_id}:secondary"}
+    )
+    second_artifact = f"SpecialistDelta:{second_delta.delta_id}"
+    _register_artifact(
+        state,
+        objects,
+        artifact_id=second_artifact,
+        artifact_type="SpecialistDelta",
+        payload=second_delta.model_dump(mode="json"),
+    )
+
+    memo_record = state.artifact_record(report.research_memo_artifact_id)
+    assert memo_record is not None
+    memo = ResearchMemoArtifact.model_validate_json(
+        objects.get_bytes(str(memo_record["object_hash"]))
+    )
+    original_ref = next(
+        item for item in memo.delta_references if item.delta_id == serenity_delta.delta_id
+    )
+    second_ref = ResearchMemoDeltaReference.model_validate(
+        {
+            **original_ref.model_dump(mode="json"),
+            "delta_id": second_delta.delta_id,
+        }
+    )
+    multi_memo = ResearchMemoArtifact.model_validate(
+        {
+            **memo.model_dump(mode="json"),
+            "memo_id": f"{memo.memo_id}:multi-serenity",
+            "delta_references": [
+                *[item.model_dump(mode="json") for item in memo.delta_references],
+                second_ref.model_dump(mode="json"),
+            ],
+        }
+    )
+    multi_memo_artifact = f"ResearchMemoArtifact:{multi_memo.memo_id}"
+    _register_artifact(
+        state,
+        objects,
+        artifact_id=multi_memo_artifact,
+        artifact_type="ResearchMemoArtifact",
+        payload=multi_memo.model_dump(mode="json"),
+    )
+
+    request = ResearchRunRequest(
+        company_id="300750",
+        as_of=as_of,
+        mode=ResearchRunMode.RECORDED_INPUT,
+        frozen_inputs=ResearchRunFrozenInputs(
+            frozen_evidence_pack_artifact_id=report.frozen_evidence_pack_artifact_id,
+            base_case_artifact_id=report.base_case_artifact_id,
+            specialist_route_artifact_id=report.specialist_route_artifact_id,
+            serenity_delta_artifact_ids=[serenity_artifact, second_artifact],
+            zhihu_delta_artifact_id=report.specialist_delta_artifact_ids["ZHIHU_EXPERT"],
+            research_memo_artifact_id=multi_memo_artifact,
+            financial_integrity_artifact_id=report.financial_integrity_artifact_id,
+            created_at=as_of,
+        ),
+        auto_resolve_inputs=False,
+        sync_reference_inputs=False,
+        created_at=as_of,
+    )
+    service = ResearchRunService(
+        project_root=PROJECT_ROOT,
+        state=state,
+        objects=objects,
+        reference_parquet_root=parquet,
+        knowledge_provider=cast(Any, _UnusedKnowledgeProvider()),
+    )
+    assert request.frozen_inputs is not None
+    incomplete_request = request.model_copy(
+        update={
+            "frozen_inputs": request.frozen_inputs.model_copy(
+                update={"serenity_delta_artifact_ids": [serenity_artifact]}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="must exactly match ResearchMemo"):
+        service.run(incomplete_request)
+
+    result = service.run(request)
+
+    assert result.status is ResearchRunStatus.NEEDS_INFO
+    assert result.current_stage.value == "KNOWLEDGE_SKILL_DELTA"
+    assert "KNOWLEDGE_PROVIDER_INPUT_REQUIRED" in result.needs_info_codes
+    assert result.output_artifacts["serenity_delta"].artifact_id == serenity_artifact
+    assert result.output_artifacts["serenity_delta_2"].artifact_id == second_artifact
+    assert not result.broker_execution_allowed

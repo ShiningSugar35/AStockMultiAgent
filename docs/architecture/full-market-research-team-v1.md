@@ -124,6 +124,14 @@ NIST AI RMF / GenAI Profile 强调将可信度与风险管理纳入设计、开�
 - 只在 shortlist 收敛后运行估值/Committee；
 - 全部任务可 checkpoint，崩溃后只恢复未完成节点。
 
+### 3.3 2026-09-10 三市场 Universe 韧性加固
+
+本轮重新核验交易所公开入口后，正式 denominator 固定遵循“交易所定义证券全集、行情源只提供 numerator”的职责分离：上交所股票列表 `https://www.sse.com.cn/assortment/stock/list/share/`、深交所股票/上市公司目录 `https://www.szse.cn/market/stock/company/`、北交所股票列表 `https://www.bse.cn/nq/listedcompany.html` 继续作为三市场首选权威主表。运行时代码通过各自 official adapter 把真实抓取响应冻结进 ObjectStore，再形成 `UniverseCoverageProof`；Web 页面本身只用于来源核验，不绕过结构化快照和 PIT。
+
+行情 numerator 不再只依赖 EastMoney/Sina。同一官方 master 的精确 symbol set 可以驱动 Tencent Finance batch quote 作为第三独立 family；现场验证可同时返回 SH/SZ/BJ 报价。但 Tencent quote 没有被提升为 `PRIMARY_OFFICIAL`，也没有资格自行声明“全市场完整”：它只提供价格、成交额、换手率、流通市值等研究种子字段。官方 master 临时失败时可有界尝试声明 `FULL_UNIVERSE` 的 secondary master 维持 observation/research，但其 authority 保持 `SECONDARY_SELF_REPORTED`，即使覆盖率 100% 也只能 `ENGINEERING_HIGH_COVERAGE`，不能打开正式荐股门。
+
+路由顺序因此分为两层：**denominator：SSE/SZSE/BSE official → complete secondary master；numerator：EastMoney/Sina full snapshot → official-master-driven Tencent batch quote**。每个 provider/market 都受既有 cache、circuit breaker、retry budget 和 ObjectStore lineage 约束；任何 partial、重复代码、跨市场代码、无法核实 denominator、未来时间或对象 hash 失败均 fail closed，不通过降低 99.5% 阈值求绿。
+
 ## 4. P0：正式荐股必须 fail closed
 
 ### 4.1 Recommendation Readiness Gate
@@ -157,6 +165,12 @@ NIST AI RMF / GenAI Profile 强调将可信度与风险管理纳入设计、开�
 - `research-seeds --live` 得到 0 个有效 market seed 或无法证明 Universe 时，不允许聊天 Agent 手工挑股票接着跑正式荐股；
 - Web 搜索只能修复证据缺口，不能绕过 Universe/Candidate lineage；
 - 若用户明确点名股票，允许进入单公司研究，但它不能被伪装成“全市场最优”。
+
+### 4.3 Same-request 投资终局门
+
+用户提出荐股、投资组合推荐、买入/卖出判断、持仓处置或 material company research 时，Seed/Candidate/Acquisition/Team/Committee/Portfolio 都只是同一请求里的内部阶段。`InvestmentRequestClosurePolicy` 直接读取 canonical `CapabilityExecutionPlan + CapabilityCoverageReceipt`，不维护第二套必需能力清单；只要任一 REQUIRED capability 未 `COMPLETED/REUSED`、coverage 不完整、输出未验证、存在冲突或 prohibited call，就返回 `CONTINUE_AUTOMATICALLY` 并保持 `investment_conclusion_blocked=true`。
+
+因此公共层不再允许“先给半份分析，再告诉用户下一步可以跑财报/行业/估值/多空/仓位”。正式停止只有两个：① 全部必需能力和 Recommendation Gate/Portfolio 等 intent-specific 硬门完成，允许一次性完整 investor view；② 公共自动恢复与权威 Web 真正耗尽、剩余材料只能由用户私人输入补齐，此时只能请求最少必要资料且不得形成 BUY/组合结论。`broker_execution_allowed=false` 在所有状态保持不变。
 
 ## 5. P1：投研团队 DAG
 

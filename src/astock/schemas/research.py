@@ -478,6 +478,8 @@ class ResearchSkillManifest(AStockModel):
     skill_id: str = Field(min_length=1)
     skill_version: str = Field(min_length=1)
     kind: ResearchSkillKind
+    source_family: str = Field(default="LOCAL", min_length=1)
+    selection_group: str | None = Field(default=None, min_length=1)
     source_references: list[str] = Field(min_length=1)
     trigger_tags: list[str]
     industry_tags: list[str]
@@ -529,7 +531,9 @@ class ResearchSkillManifest(AStockModel):
 class ResearchSkillRegistry(AStockModel):
     registry_version: str = Field(min_length=1)
     open_source_audit_manifest_files: list[str] = Field(default_factory=list)
+    open_source_local_adaptation_release_file: str | None = None
     max_specialists: int = Field(ge=1, le=32)
+    source_family_limits: dict[str, int] = Field(default_factory=dict)
     coverage_confidence_caps: dict[SpecialistCoverageStatus, float]
     skills: list[ResearchSkillManifest] = Field(min_length=1)
 
@@ -539,6 +543,15 @@ class ResearchSkillRegistry(AStockModel):
             set(self.open_source_audit_manifest_files)
         ):
             raise ValueError("open-source audit manifest files must be unique")
+        if any(
+            not family or limit < 1 or limit > self.max_specialists
+            for family, limit in self.source_family_limits.items()
+        ):
+            raise ValueError("source family limits must be within the specialist budget")
+        known_families = {skill.source_family for skill in self.skills}
+        unknown_families = set(self.source_family_limits) - known_families
+        if unknown_families:
+            raise ValueError("source family limits must reference registered Skill families")
         skill_ids = [skill.skill_id for skill in self.skills]
         if len(skill_ids) != len(set(skill_ids)):
             raise ValueError("research Skill ids must be unique")

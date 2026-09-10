@@ -9,6 +9,11 @@ from astock.investor_orchestration.capabilities import (
     CapabilityHandler,
     CapabilityPlanner,
 )
+from astock.investor_orchestration.closure import (
+    InvestmentClosureDecision,
+    InvestmentRequestClosurePolicy,
+    InvestmentRequestNotTerminalError,
+)
 from astock.investor_orchestration.gateway import InvestorAnswerGateway
 from astock.investor_orchestration.models import (
     CapabilityCoverageReceipt,
@@ -289,6 +294,25 @@ class InvestorOrchestrationService:
         )
         return preflight, plan, coverage
 
+    def closure_status(
+        self,
+        request: InvestorRequestEnvelope,
+        plan: CapabilityExecutionPlan,
+        coverage: CapabilityCoverageReceipt,
+        *,
+        automatic_resolution_exhausted: bool = False,
+        private_user_input_required: bool = False,
+    ) -> InvestmentClosureDecision:
+        """Return the canonical same-request terminal decision for an investor request."""
+
+        return InvestmentRequestClosurePolicy.evaluate(
+            request,
+            plan,
+            coverage,
+            automatic_resolution_exhausted=automatic_resolution_exhausted,
+            private_user_input_required=private_user_input_required,
+        )
+
     def answer(
         self,
         request: InvestorRequestEnvelope,
@@ -297,11 +321,17 @@ class InvestorOrchestrationService:
         handlers: Mapping[str, CapabilityHandler],
         scenario_requirements: Mapping[str, Any] | None = None,
     ) -> InvestorAnswer:
-        preflight, _, coverage = self.execute(
+        preflight, plan, coverage = self.execute(
             request,
             handlers=handlers,
             scenario_requirements=scenario_requirements,
         )
+        closure = self.closure_status(request, plan, coverage)
+        if closure.same_request_continuation_required:
+            raise InvestmentRequestNotTerminalError(
+                "material investment request has unfinished automatic research capabilities: "
+                + ",".join(closure.missing_capabilities)
+            )
         return self.gateway.render(
             draft,
             preflight=preflight,

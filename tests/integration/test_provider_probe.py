@@ -766,6 +766,7 @@ def test_new_official_reference_and_macro_recorded_probes_are_fully_covered(
     expected = {
         "sse-official-reference": ["instrument.master"],
         "szse-official-reference": ["instrument.master"],
+        "tencent-reference": ["market.quote_batch"],
         "nbs-statistical-release": ["macro.statistical_release"],
         "pboc-monetary-policy-release": ["macro.monetary_policy_release"],
         "mof-fiscal-policy-release": ["macro.fiscal_policy_release"],

@@ -148,6 +148,7 @@ from astock.research import (
     ResearchRepository,
     ResearchRequestService,
     ResearchSkillService,
+    load_local_adaptation_release,
     load_position_lifecycle_config,
     load_research_core_config,
     load_research_diagnostic_config,
@@ -2852,10 +2853,26 @@ def open_source_audit_status() -> None:
     paths, _, _ = _services()
     registry = _research_skills(paths)
     manifests = validate_registry_open_source_audits(registry, paths.root)
+    local_release = (
+        load_local_adaptation_release(
+            paths.root / registry.open_source_local_adaptation_release_file
+        )
+        if registry.open_source_local_adaptation_release_file is not None
+        else None
+    )
     _emit(
         {
             "status": "PASS",
             "registry_version": registry.registry_version,
+            "local_adaptation_release": (
+                {
+                    "release_id": local_release.release_id,
+                    "release_version": local_release.release_version,
+                    "local_adaptation_file_count": len(local_release.local_adaptation_files),
+                }
+                if local_release is not None
+                else None
+            ),
             "audits": [
                 {
                     "audit_id": manifest.audit_id,
@@ -2868,8 +2885,7 @@ def open_source_audit_status() -> None:
                         mapping.local_contract_id for mapping in manifest.local_mappings
                     ],
                     "local_patch_sha256": manifest.local_patch_sha256,
-                    "local_adaptation_sha256": manifest.local_adaptation_sha256,
-                    "local_adaptation_file_count": len(manifest.local_adaptation_files),
+                    "local_adaptation_release_id": manifest.local_adaptation_release_id,
                     "normal_runtime_network_required": (manifest.normal_runtime_network_required),
                     "source_vendored": manifest.source_vendored,
                 }

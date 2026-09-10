@@ -40,6 +40,7 @@ from astock.research.production_cli import register_research_production_commands
 from astock.research.resource_policy import load_specialist_resource_policy
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
+from astock.research.serenity.cli import register_serenity_commands
 from astock.research.team_cli import register_research_team_commands
 from astock.research.trade_view import TradePlanViewService
 from astock.research.trading_classification import TradingClassificationService
@@ -104,6 +105,7 @@ def register_research_runtime_commands(
     register_portfolio_vnext_commands(app, services, emit)
     register_prospective_governance_commands(app, services, emit)
     register_research_production_commands(app, services, emit)
+    register_serenity_commands(app, services, emit)
     register_current_research_continuation_commands(app, services, emit)
     register_research_team_commands(app, services, emit)
 

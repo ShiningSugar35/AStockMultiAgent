@@ -1,8 +1,11 @@
-registry_version: research-skills-v3
+registry_version: research-skills-v4
 open_source_audit_manifest_files:
-  - third_party/audits/serenity/muxuuu-c2fe93de-v4.json
-  - third_party/audits/serenity/haskaomni-dedcf8f9-v4.json
+  - third_party/audits/serenity/muxuuu-c2fe93de-v5.json
+  - third_party/audits/serenity/haskaomni-dedcf8f9-v5.json
+open_source_local_adaptation_release_file: third_party/audits/serenity/local-adaptation-release-v1.json
 max_specialists: 3
+source_family_limits:
+  SERENITY: 2
 coverage_confidence_caps:
   SUFFICIENT: 0.90
   PARTIAL: 0.70
@@ -11,12 +14,14 @@ skills:
   - skill_id: IndustryBottleneckSkill
     skill_version: industry-bottleneck-v2
     kind: INDUSTRY_BOTTLENECK
+    source_family: SERENITY
+    selection_group: INDUSTRY_STRUCTURE
     source_references:
-      - audit:serenity-muxuuu-c2fe93de-local-v4#SKILL.md
-      - audit:serenity-muxuuu-c2fe93de-local-v4#references/deep-research-workflow.md
-      - audit:serenity-muxuuu-c2fe93de-local-v4#references/evidence-ladder.md
-      - audit:serenity-muxuuu-c2fe93de-local-v4#references/risk-and-compliance.md
-      - audit:serenity-muxuuu-c2fe93de-local-v4#assets/bottleneck-scorecard.json
+      - audit:serenity-muxuuu-c2fe93de-local-v5#SKILL.md
+      - audit:serenity-muxuuu-c2fe93de-local-v5#references/deep-research-workflow.md
+      - audit:serenity-muxuuu-c2fe93de-local-v5#references/evidence-ladder.md
+      - audit:serenity-muxuuu-c2fe93de-local-v5#references/risk-and-compliance.md
+      - audit:serenity-muxuuu-c2fe93de-local-v5#assets/bottleneck-scorecard.json
       - local:A-share-evidence-adaptation-v1
     trigger_tags: [industry, bottleneck, supply_chain, scarcity]
     industry_tags: [semiconductor, manufacturing, materials, equipment]
@@ -44,9 +49,11 @@ skills:
   - skill_id: EventToAlphaSkill
     skill_version: event-to-alpha-v2
     kind: EVENT_TO_ALPHA
+    source_family: SERENITY
+    selection_group: EVENT_TRANSMISSION
     source_references:
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/serenity-alpha/SKILL.md
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/serenity-alpha/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/serenity-alpha/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/serenity-alpha/references/original-framework.md
       - local:A-share-event-transmission-v1
     trigger_tags: [event, catalyst, policy, announcement]
     industry_tags: []
@@ -75,9 +82,11 @@ skills:
   - skill_id: GrowthProbabilitySkill
     skill_version: growth-probability-v2
     kind: GROWTH_PROBABILITY
+    source_family: SERENITY
+    selection_group: GROWTH_SCENARIO
     source_references:
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/bayesian-intrinsic-growth-valuation/SKILL.md
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/bayesian-intrinsic-growth-valuation/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/bayesian-intrinsic-growth-valuation/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/bayesian-intrinsic-growth-valuation/references/original-framework.md
       - local:A-share-growth-probability-v1
     trigger_tags: [growth, scenario, probability]
     industry_tags: []
@@ -106,9 +115,11 @@ skills:
   - skill_id: GrowthValuationLens
     skill_version: growth-valuation-v2
     kind: GROWTH_VALUATION
+    source_family: SERENITY
+    selection_group: VALUATION_EXPECTATIONS
     source_references:
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/tam-adj-peg/SKILL.md
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/tam-adj-peg/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/tam-adj-peg/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/tam-adj-peg/references/original-framework.md
       - local:A-share-valuation-expectations-v1
     trigger_tags: [valuation, growth, expectations]
     industry_tags: []
@@ -138,9 +149,11 @@ skills:
   - skill_id: DailyTrendHealthSkill
     skill_version: daily-trend-health-v2
     kind: DAILY_TREND_HEALTH
+    source_family: SERENITY
+    selection_group: MARKET_TIMING
     source_references:
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/gf-dma-health-index/SKILL.md
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/gf-dma-health-index/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/gf-dma-health-index/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/gf-dma-health-index/references/original-framework.md
       - local:A-share-daily-quality-gate-v1
     trigger_tags: [trend, daily, market_health]
     industry_tags: []
@@ -154,10 +167,10 @@ skills:
     required_evidence_grades: [SECONDARY]
     reasoning_steps:
       - Require a passing daily data-quality report.
-      - Treat caller-supplied, dataset-bound 20/50/100/200DMA values as unverified report-only inputs.
+      - Prefer canonical deterministic 20/50/100/200DMA values bound to one passing D1 manifest; caller-supplied values remain legacy report-only inputs.
       - Combine available fundamental growth and expectation revisions; degrade when absent.
       - Describe trend context without emitting a buy signal.
-    positive_signals: [daily_quality_pass, caller_supplied_components_reported]
+    positive_signals: [daily_quality_pass, canonical_dma_bound]
     negative_signals: [daily_quality_fail, caller_supplied_dma_unverified, unstable_trend]
     invalidation_conditions: [daily_series_revised, quality_gate_failed]
     known_failure_modes: [lookahead_window, threshold_transfer, trend_as_fundamental_fact]
@@ -171,9 +184,11 @@ skills:
   - skill_id: JuglarCycleStageSkill
     skill_version: juglar-cycle-stage-v1
     kind: JUGLAR_CYCLE_STAGE
+    source_family: SERENITY
+    selection_group: CYCLE_STAGE
     source_references:
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/juglar-cycle-stock-stage/SKILL.md
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/juglar-cycle-stock-stage/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/juglar-cycle-stock-stage/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/juglar-cycle-stock-stage/references/original-framework.md
       - local:A-share-fixed-asset-cycle-stage-v1
     trigger_tags: [cycle, capex, inventory, capacity, asp, industry_stage]
     industry_tags: [semiconductor, manufacturing, materials, equipment, chemicals, power, property]
@@ -203,6 +218,8 @@ skills:
   - skill_id: HourlySwingSkill
     skill_version: hourly-swing-v1
     kind: HOURLY_SWING
+    source_family: LOCAL
+    selection_group: MARKET_TIMING
     source_references:
       - local:A-share-independent-hourly-swing-v1
     trigger_tags: [swing, hourly, timing]
@@ -231,9 +248,10 @@ skills:
   - skill_id: ResearchMemoComposer
     skill_version: research-memo-composer-v2
     kind: RESEARCH_MEMO
+    source_family: SERENITY
     source_references:
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/buy-side-equity-research-memo/SKILL.md
-      - audit:serenity-haskaomni-dedcf8f9-local-v4#skills/buy-side-equity-research-memo/references/original-framework.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/buy-side-equity-research-memo/SKILL.md
+      - audit:serenity-haskaomni-dedcf8f9-local-v5#skills/buy-side-equity-research-memo/references/original-framework.md
       - local:citation-preserving-memo-v1
     trigger_tags: []
     industry_tags: []

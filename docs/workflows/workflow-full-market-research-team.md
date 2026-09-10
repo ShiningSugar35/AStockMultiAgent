@@ -11,6 +11,7 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
 - Default backend: `CHAT_ORCHESTRATED`.
 - No background LLM daemon or daily pre-sync is assumed.
 - User invocation starts one on-demand run. Current market/reference/evidence data are fetched in that run and immutable raw responses are reused through existing ObjectStore lineage.
+- **Same-request completion is mandatory for recommendation intent.** Seed/Candidate shortlist, acquisition recovery, partial company fan-out, unfinished debate/committee, and unfinished portfolio are internal checkpoints only. The Agent keeps the originating user turn active until the deterministic investment-closure/recommendation gate permits an investor view, or until all public automatic recovery is genuinely exhausted and only private user input can close the gap. Do not answer with “下一步可以继续深研/估值/配仓”。
 - Hardware budget comes from `research-runtime-profile`; lightweight laptops use bounded parallelism rather than maximum fan-out.
 - `AGENT_RUNTIME` is an optional future executor only; it must reuse the same task graph and readiness gate.
 
@@ -28,8 +29,8 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
 3. **Stage 1 — current environment and Universe, safely parallel**
    - CIO intent freezes scope/horizon.
    - Macro, Policy, Liquidity/Risk and current A-share Universe acquisition may run in parallel after CIO intent.
-   - XSHG/XSHE/BJSE market snapshots are fetched on demand with `market_fetch_workers` selected from the hardware profile.
-   - One provider/market failure must not cancel independent tasks. `coverage_ratio >= 99.5%` is only the engineering high-coverage threshold. Formal FULL requires a typed `UniverseCoverageProof` whose XSHG/XSHE/BJSE market reconciliations each reach `OFFICIAL_DENOMINATOR_RECONCILED` with verified denominator/numerator hashes and source snapshots no later than the research cutoff. A secondary source's self-reported 100% remains `ENGINEERING_HIGH_COVERAGE`.
+   - XSHG/XSHE/BJSE market snapshots are fetched on demand with `market_fetch_workers` selected from the hardware profile. **证券全集与行情 numerator 分权**：SSE/SZSE/BSE official Instrument Master 分别作为三市场首选 denominator；行情/流动性字段由独立 quote families 提供。EastMoney/Sina 失败或覆盖不足时，使用官方 master 的精确 symbol set 驱动 Tencent batch quote fallback，Tencent 不得自己定义 Universe。
+   - One provider/market failure must not cancel independent tasks. Denominator router 按 official → complete secondary master 有界回退；secondary master 只允许维持 observation/research 可用性。`coverage_ratio >= 99.5%` is only the engineering high-coverage threshold. Formal FULL requires a typed `UniverseCoverageProof` whose XSHG/XSHE/BJSE market reconciliations each reach `OFFICIAL_DENOMINATOR_RECONCILED` with verified denominator/numerator hashes and source snapshots no later than the research cutoff. A secondary source's self-reported 100% remains `ENGINEERING_HIGH_COVERAGE`.
    - PARTIAL and engineering-high-coverage Universes may continue into observation/research discovery, but `formal_full_market_coverage_allowed=false`; a complete high-coverage scan that yields zero eligible candidates is a valid zero-result state and must not be rewritten as Universe unavailable.
 
 4. **Stage 2 — blind discovery first**

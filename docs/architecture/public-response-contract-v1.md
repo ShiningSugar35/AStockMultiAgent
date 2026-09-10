@@ -51,7 +51,9 @@
 9. 必要引用；
 10. 安全化后的正式报告文件名。
 
-只要源叙事提供了风险、变化条件、数据时点、估值/赔率、引用或报告引用，这些内容即属于强制字段。长度控制不得删除它们。
+只要源叙事提供了风险、变化条件、数据时点、估值/赔率、引用或报告引用，这些内容即属于强制字段。长度控制不得删除它们。对于 `DEEP_RESEARCH / PORTFOLIO_DECISION / FORMAL_REPORT`，多个已冻结风险与多个改变判断/失效条件必须全部进入公共投影，不再只取第一条；可去重，但不得因旧“短答”策略静默丢弃。
+
+material investment request（荐股、买卖判断、持仓处置、组合推荐、完整公司研究）只有在同请求终局门允许 investor view 后才进入本合同。Seed/Candidate/Acquisition/Team/Committee/Portfolio 中间态不具公共投资结论资格；展示层不得用“下一步可以继续研究”把上游仍可自动完成的工作转交用户。此类任务使用 `DEEP_RESEARCH / PORTFOLIO_DECISION` 预算而不是 `COMPANY_QUICK_VIEW` 预算；canonical narrative 已明确 task type 时，网关允许把调用方遗漏的 legacy quick-view budget 升级到 narrative 的任务类型，但不得反向降级或改变研究事实。
 
 ## 4. 事实等价门
 
@@ -87,7 +89,7 @@
 3. 保留所有强制字段和必要引用；
 4. 若强制内容本身仍超过预算，返回固定安全摘要。
 
-禁止通过删除风险、改变判断的条件、数据时间、估值/赔率、引用、主体、结论或结论强度来满足字符预算。
+禁止通过删除风险、改变判断的条件、数据时间、估值/赔率、引用、主体、结论或结论强度来满足字符预算。`COMPANY_QUICK_VIEW` 继续保持紧凑；`DEEP_RESEARCH` 与 `PORTFOLIO_DECISION` 的 canonical budget 提升为完整决策说明级，允许最多 8 条去重后的决定性研究维度，并保留全部已冻结风险/失效条件；只有用户明确要求 SHORT 时才进一步压缩非关键理由，不能把 material investment request 默认压成 900 字/4 条理由。
 
 `PresentationAudit.budget_status` 明确区分：
 

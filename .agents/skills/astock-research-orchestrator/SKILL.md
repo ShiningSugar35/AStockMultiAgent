@@ -29,6 +29,8 @@ description: Route broad or multi-step A-share research requests across candidat
 17. Prospective 方法比较继续遵守 Phase 7/8。一次回测或一个更高 Sharpe 不自动改变 allocator、Skill 权重或 paper ledger。
 18. 项目任务结束后按 AGENTS 记录恰好一个 `agent-observation-register` 观测；普通运行不自行伪造 expected labels。
 19. Build every user-visible investment answer from one canonical `ResearchNarrativeBundle` and render it through `ResponseGateway`. Keep `research-investor-view` and `research-acquisition-investor-view` as stable machine JSON; use `research-public-view` and `research-acquisition-public-view` for audited public output. Only affirmative diagnostic intent or an explicit mode may enable Developer Mode. Negated diagnostic requests, ordinary “why” questions, and system error text remain Investor Mode. Length reduction may remove only non-critical reasons; mandatory content must survive or use a no-echo safe fallback.
+20. **Same-request terminal contract:** `RECOMMENDATION / BUY_DECISION / HOLDING_DECISION / PORTFOLIO_DECISION / material company RESEARCH` 不得把 Seed、Candidate、acquisition gap、team nonterminal、未完成 Committee 或未完成 Portfolio 当作用户终局。必须继续调用本 Skill 路由出的全部适用 Skills，直到 `InvestmentRequestClosurePolicy` 为当前 canonical capability plan 返回 `READY_FOR_INVESTOR_VIEW`；若它返回 `CONTINUE_AUTOMATICALLY`，继续本轮工作而不是回复“下一步可以继续……”。只有公共自动恢复预算与权威 Web 都真实耗尽且缺口只能来自私人输入时，才可停止为 `NEEDS_USER_INPUT`，且此时不得形成 BUY/组合建议。
+21. broad recommendation 的 bounded shortlist 不是最终答案。每个入围标的都必须在同一请求中进入 `$company-deep-research`，之后再完成 cross-name Red Team / Committee / `$portfolio-manager` / Recommendation Gate；被淘汰标的也要保留简洁的淘汰理由，避免幸存者偏差。用户资本/NAV 未知时给比例/风险预算，不编造具体股数；已知时才可把目标权重转换为合法交易单位。
 
 ## Workflows
 
@@ -56,7 +58,7 @@ description: Route broad or multi-step A-share research requests across candidat
 
 ## Output
 
-Lead with the investment answer, not the process. 默认 **主体 → 结论与强度 → 估值/赔率 → 2–4 个决定性理由 → 最大风险 → 改变判断的条件 → 数据时间与必要引用**；组合任务额外给当前/anchor/目标差异和目标区间，持仓任务额外给 HOLD/ADD/TRIM/EXIT。正常回复必须经过 `ResponseGateway` 和 investor-answer audit；压缩只能删除非关键理由，强制内容超预算时安全降级，不展示或回显 CLI、artifact、Schema、reason code、task/daemon、数据库细节或被拒绝草稿。
+Lead with the investment answer, not the process. 对 material investment request 输出一份**完整、一次性、闭环**的投资者报告：**主体/排序 → 结论与强度 → 当前价格与估值/赔率 → 公司质量与盈利驱动 → 行业/宏观位置 → 财务完整性与治理 → 催化与时点 → 独立 Bull/Bear/Reviewer/Red Team 的决定性分歧 → Committee/交易分类结果的自然语言翻译 → 组合权重/风险预算 → 入场条件 → 退出/止盈止损/基本面失效条件 → 数据截止与必要引用**。组合任务额外给候选淘汰理由、相关性/集中度和 CURRENT/ANCHOR/TARGET 差异，持仓任务额外给 HOLD/ADD/TRIM/EXIT；只有一般性非决策事实问题才压缩为 2–4 个理由。正常回复必须经过 `ResponseGateway` 和 investor-answer audit；压缩只能删除非关键理由，强制内容超预算时安全降级，不展示或回显 CLI、artifact、Schema、reason code、task/daemon、数据库细节或被拒绝草稿。
 
 ## Prohibitions
 

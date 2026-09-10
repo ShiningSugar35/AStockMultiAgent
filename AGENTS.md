@@ -13,9 +13,10 @@
 - INVESTOR_MODE 的最终回复只谈投资：结论与置信度、公司质量与盈利驱动、估值/赔率、催化因素、主要风险、什么情况会改变判断，以及确实仍需用户提供的资料。不得展示 CLI、阶段名、协议/Schema/Class 名、reason code、artifact/hash、SQLite/migration、provider 故障、内部 Agent/Committee 编排或“这套系统如何工作”的元评论。
 - INVESTOR_MODE 禁止直接出现 `MarketPriceAnchor / ClassifiedTradeProtocol / InstrumentReferenceRelease / FrozenEvidencePack / BaseCase / TradingClassification / NEEDS_INFO / CLAIM_IDS_REQUIRED / EVIDENCE_PACK_REQUIRED / research-plan / research-run-company / current_stage` 等内部词；也不得输出命令执行流水。发送前使用 `research-investor-answer-audit` 的同等规则自检，不通过就重写。
 - 运行时诊断、fallback 路径、错误码和工件身份可以完整保存在内部日志，供 DEVELOPER_MODE 复盘；**日志可观测性与投资者答案必须分层**。
-- 当前投资咨询遇到数据缺口时，在单次任务内优先自动解决，自动恢复预算上限为 1800 秒：定位失败原因 → 对 retryable 故障有限重试/熔断 → 备用 provider/更合适的同源端点 → 交易所/CNINFO/发行人 IR/监管机构等权威 Web 多源核验。只有这些自动渠道都无法解决的必要事项，才允许在最终一次性整理成人工协助清单。
-- 自动渠道尚未完全闭合但已有足够权威材料时，可以给出明确标注的不确定性和研究层判断；不得为了“正式状态”而把后台阻塞详情倒给用户，也不得为了给结论而伪造精确买卖价。
-- INVESTOR_MODE 默认短答：**结论（1–2句）→ 2–4个决定性理由 → 最大风险/改变判断的条件**。禁止把同一观点在“为什么/总结/建议”里重复三遍；专业金融/统计术语、论文结论或公式只有确实影响判断时才出现，并在首次出现时用一句括号解释给普通股民。来源用正常引用呈现，不解释内部抓取链。
+- 当前投资咨询遇到数据缺口时，在单次任务内优先自动解决，自动恢复预算上限为 1800 秒：定位失败原因 → 对 retryable 故障有限重试/熔断 → 备用 provider/更合适的同源端点 → 交易所/CNINFO/发行人 IR/监管机构等权威 Web 多源核验。只有这些自动渠道都无法解决、且缺口确实只能由用户的私人账户/文件/授权补齐时，才允许在最终一次性整理成人工协助清单；公开可得材料不得反问用户或留作“下一步”。
+- **荐股、投资组合推荐、买入/卖出判断、持仓处置、个股/公司完整分析属于 material investment request，没有短答捷径。** 必须在当前用户请求内自动跑完 intent 对应的 canonical capability graph 与全部适用 Repo Skills：全市场/当前环境 → bounded 候选 → 单股深研 → 财务完整性/治理/行业/事件 → 预测估值 → 独立 Bull/Bear/Reviewer/Red Team → Committee/交易分类 → Portfolio/仓位与入场/退出/失效条件 → Recommendation Gate。`ResearchSeed`、Candidate、外部资料待补、team nonterminal、未完成 Committee/Portfolio 都只是内部中间态，严禁据此直接给 BUY/组合结论，也严禁以“下一步可以继续使用 AStockMultiAgent……”结束本轮。
+- material investment request 只有两种合法停止点：① 全部必需能力经过机器终局门验证，输出一次性完整投资者报告；② 自动公共渠道真实耗尽且仍缺私人输入，此时明确“不形成投资结论”，一次性列出最少必要用户输入。一般性、非决策型的简单事实/状态问题才采用短答：**结论（1–2句）→ 2–4个决定性理由 → 最大风险/改变判断的条件**。禁止把同一观点在“为什么/总结/建议”里重复三遍；专业金融/统计术语、论文结论或公式只有确实影响判断时才出现，并在首次出现时用一句括号解释给普通股民。来源用正常引用呈现，不解释内部抓取链。
+- Repo Skill 自动发现为空、连接器未返回 skill inventory 或客户端未主动注入 Skill 时，不得视为“无 Skill 可用”。主 Agent 必须直接读取 canonical `.agents/skills/astock-research-orchestrator/SKILL.md`，再按其路由读取并执行 `$candidate-scan`、`$company-deep-research`、`$financial-integrity-audit`、`$industry-value-chain`、`$catalyst-event-research`、`$governance-management-quality`、`$investment-red-team`、`$model-risk-backtest-validation`、`$portfolio-manager` 等当前请求需要的 Repo Skills；预测/估值继续由 `$company-deep-research` 的机构级链与确定性 Python 计算承担，不新建平行 Skill。Skill 发现故障不能降低研究深度或终局门。
 - 每次投资类会话先恢复用户态：若 paper account 存在，先同步到账户本地镜像；读取 append-only `ExternalAccountEvent` 的账户投影与 Git-ignore 的 `user_state/` 人类可读投影，再冻结/读取 `portfolio-local-snapshot`，随后读取 Continuous Monitor 的未解决事件/研究任务并对当前持仓做**增量**复核；已持久化的购买时间、数量、平均成本不得在后续会话无故重复询问。外部真实交易、现金、转托管/非交易过户及其更正按 `account_id` 进入 SQLite external-account event lane，旧 `user_state/trades.md` 只保留兼容投影；模拟成交仍只来自 SQLite paper fill。`user_state/` 永久 Git-ignore，不进入提交。低成本 deterministic monitor 可以常驻；需要语义判断的 Research Agent 只有在可用 worker/会话存在时消费持久任务，不得把排队状态冒充已完成分析。
 - 用户明确说“买入/卖出/加仓/减仓”时，其指令覆盖模型的投资意见，但不覆盖模拟账户机械约束：现金/可用股数、工具特定交易单位、可交易状态、价格限制、账户确认和成交回放仍必须成立。STOCK 继续使用既有 100 股/0.01 元/T+1 规则；ETF 已具备独立、effective-dated 的 paper execution policy，但仓库默认 `execution_enabled=false`，只有存在精确 instrument rule、独立费用/交易单位/价格单位/结算绑定且经过既有确认流程时才可模拟，绝不得套用股票规则。AI 主动下模拟单只允许在正式研究结果允许模拟、当前入场条件实际满足且本地 `auto_ai_paper_order_on_approved_entry=true` 时进入既有订单确认流程；下单不等于持仓，只有 fill 后才更新持仓。
 
@@ -44,7 +45,7 @@
 - Phase 5 蒸馏粒度固定为 `SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate`；Paragraph 是存储、定位及本地语义辅助视图单位，只有完整 ArgumentUnit 可产生最终语义分数、DeepSeek 输入和 Skill 候选。
 - 图片证据必须经过不可变图片快照、PDF bbox 或 DOM 定位、逐图 OCR、类型和前后 Paragraph 回填；图片 Paragraph 永远不能独立蒸馏，夹在论点与结论之间时必须 `MERGE_WITH_BOTH`。OCR 或上下文不完整时 AU 保持 `NEEDS_REVIEW`。
 - 《价值投资功法》历史视觉覆盖证据仍为 249 页、57 个含图页、74/74 placements；71 个非装饰图映射到 55 个 AU，11 个 READY、44 个 REVIEW。三位知乎作者的真实视觉支线已于 2026-08-10 完成：2,503/2,503 placements、2,306 unique assets、2,503 READY、0 REVIEW/BLOCKED；三份 `VisualEvidencePack` 均 READY。visual Skill generation 的历史事实仍是 951 个真实视觉关联 AU、422 个 admitted overlay Skill、529 个 NO_SKILL，baseline 231 + overlay 422 = historical composite 653。2026-08-14 KGA-R1 对 653 条逐条裁决为 KEEP_SCOPED=190、REVISE=37、RETIRE=426，并新增 10 条多源权威证据支持的 curated Skills；2026-08-16 又为常见会计、估值、回测、动量/反转、交易成本/容量、集中/分散、周期和竞价命题增加 proposition-specific evidence routing；当前 audited active registry 为 237，`KnowledgeSkillProvider` 状态必须为 `AUDITED_REGISTRY_READY`。不得绕过 audited registry 直接读取 knowledge 表；historical composite 只允许 provenance/re-audit 显式读取。
-- Serenity 当前活动方法注册表为 `research-skills-v3`。muxuuu/haskaomni 上游代码只经版本化 v4 audit 编译成 typed Specialist contracts；`JuglarCycleStageSkill` 是当前新增的固定资产周期方法。任何 Serenity/scorecard/Juglar 输出都只是 evidence-bound Delta 或 report-only metric，不得直接产生交易权重、目标价、仓位或订单。
+- Serenity 当前活动方法注册表为 `research-skills-v4`。muxuuu/haskaomni 上游代码只经版本化 v5 audit + 共享 `LocalAdaptationRelease` 映射为 typed Specialist contracts；本地 runtime 支持在既有 Specialist 预算内选择多个互补 Serenity Delta，并用 `source_family` / `selection_group` 确定性去重，历史单 Delta frozen input 继续兼容。可机械复算的 20/50/100/200 日均线由 canonical D1 manifest + hash + frozen evidence 通过 `SerenityInputCompiler` 生成；Fundamental/Valuation 只绑定现有 Phase 9 artifact，不建立第二套数值账本。`JuglarCycleStageSkill` 继续作为固定资产周期方法。任何 Serenity/scorecard/Juglar 输出都只是 evidence-bound Delta 或 report-only metric，不得直接产生交易权重、目标价、仓位或订单。
 - 新当前公司研究默认要求 Phase 9 机构级基本面层：`EvidenceSufficiencyReport → IndustryProfile / CompanyEconomicsProfile → DriverTree → ForecastPack → ValuationPack → FundamentalModelBundle → InstitutionalDecisionContext`。Forecast/Valuation 数值由 Python 确定性复算；Serenity Growth/Valuation 不得维护第二套平行数值账本。expected return / market-implied expectations 只能使用绑定注册 artifact/hash 且满足 PIT 的 `MarketPriceAnchor`。Bundle/DecisionContext 作为 Committee 共享 PRIMARY 冻结输入，不新增投票席位或权重；历史 Phase 6 recorded 链只作兼容。
 
 ## Adaptive Edge / Deterministic Core
@@ -132,3 +133,15 @@ Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`pr
 - 外部 Provider 同时维护 recorded fixture 和低频 live smoke；日常测试不得依赖外网。
 - Windows 路径、UTF-8 中文文件名、原子写入和崩溃恢复必须有测试。
 - 不提交 `runtime/`、密钥、Cookie、浏览器 Profile、私有 PDF、`.ai-bridge/` 或缓存工件。
+- **项目目录写入边界**：本项目的开发、测试、构建、诊断、下载、临时脚本、日志、报告、缓存及其它生成物只能写入 `D:\AStockMultiAgent` 目录树；项目目录之外一律按只读处理，不得创建、修改或遗留任何本项目输出。若工具或第三方程序不慎在项目外产生了可明确归属于本任务的临时文件/目录，发现后必须及时删除，并在任务结束前的清理/终局审计中再次确认无残留；无法安全确认归属的外部文件不得擅自删除，应立即停止继续外写并如实报告。
+
+## Gemini 辅助 Agent 能力
+
+本机提供共享 Gemini 辅助 Agent 基础设施，权威调用协议位于 `D:\Environment\GeminiAgentBridge\AGENTS.md`。Codex/OpenCode 等主 Agent 可以在**不改变本项目事实源、投资者交互契约和风险边界**的前提下，把边界清晰、可独立验收的开发/研究辅助任务交给 Gemini worker/reviewer。Gemini 不是本项目 coordinator，主 Agent 始终负责计划、整合、验证、发布和最终用户答案。
+
+- Coding / 技术分析首选 `gemini-flash-latest`；Antigravity Coding 快捷入口为 `agy-code`。Chat / 摘要 / 分类 / 抽取等轻量任务首选 `gemini-flash-lite-latest`；详细调用方式与安全边界只以桥目录 `AGENTS.md` 为准。
+- 允许 Gemini 修改本项目文件时，必须显式限定 `ProjectPath=D:\AStockMultiAgent` 与窄写入范围，先确认没有其它 Agent/会话正在修改同一文件；不得 reset、回退、覆盖用户未提交工作或建立第二套事实源。
+- Gemini 必须继承本仓库 PIT、source-availability、Universe lineage、Evidence、账本、Provider、paper execution、人工确认和真实交易禁止等全部硬约束；不得把辅助 Agent 的意见直接提升为正式研究、正式推荐、模拟成交或交易动作。
+- 在 `INVESTOR_MODE` 中，Gemini 可以作为内部研究/复核 worker，但最终对用户的回答仍必须由主 Agent 按 `ResponseGateway` / investor-answer 审计规则收口；不得向投资者暴露内部 Agent/Committee 编排、命令流水或后台故障细节。
+- Gemini 输出只算候选实现、候选证据或第二意见，不能替代本仓库 L0–L3 分级测试、defect-first Review、durable run、release baseline、closeout 和终局 completion gate。
+- 禁止递归委派其它 Agent；禁止把真实 Google API Key、私有材料、账户私有状态、Cookie 或其它秘密复制到提示词、源码或业务项目配置中。

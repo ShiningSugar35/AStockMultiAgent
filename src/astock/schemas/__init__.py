@@ -510,6 +510,7 @@ from astock.schemas.market import (
 from astock.schemas.open_source import (
     OpenSourceAuditedFile,
     OpenSourceAuditManifest,
+    OpenSourceLocalAdaptationRelease,
     OpenSourceLocalMapping,
 )
 from astock.schemas.operational import (
@@ -1195,6 +1196,7 @@ __all__ = [
     "NormalBalance",
     "OpenSourceAuditedFile",
     "OpenSourceAuditManifest",
+    "OpenSourceLocalAdaptationRelease",
     "OpenSourceLocalMapping",
     "Order",
     "OrderSide",

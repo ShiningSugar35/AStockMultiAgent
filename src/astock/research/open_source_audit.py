@@ -6,25 +6,45 @@ import subprocess
 from pathlib import Path
 
 from astock.core.hashing import content_hash, sha256_bytes
-from astock.schemas import OpenSourceAuditManifest, ResearchSkillRegistry
+from astock.schemas import (
+    OpenSourceAuditedFile,
+    OpenSourceAuditManifest,
+    OpenSourceLocalAdaptationRelease,
+    ResearchSkillRegistry,
+)
 
 
 def load_open_source_audit(path: Path) -> OpenSourceAuditManifest:
     try:
-        manifest = OpenSourceAuditManifest.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
+        manifest = OpenSourceAuditManifest.model_validate_json(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise ValueError(f"cannot read open-source audit manifest: {path.name}") from exc
     if content_hash(manifest.local_patch_set) != manifest.local_patch_sha256:
         raise ValueError(f"open-source local patch hash mismatch: {manifest.audit_id}")
-    adaptation_identity = [
-        {"path": item.path, "sha256": item.sha256}
-        for item in manifest.local_adaptation_files
-    ]
-    if content_hash(adaptation_identity) != manifest.local_adaptation_sha256:
-        raise ValueError(f"open-source local adaptation hash mismatch: {manifest.audit_id}")
+    if manifest.local_adaptation_files:
+        adaptation_identity = [
+            {"path": item.path, "sha256": item.sha256} for item in manifest.local_adaptation_files
+        ]
+        if content_hash(adaptation_identity) != manifest.local_adaptation_sha256:
+            raise ValueError(f"open-source local adaptation hash mismatch: {manifest.audit_id}")
     return manifest
+
+
+def load_local_adaptation_release(path: Path) -> OpenSourceLocalAdaptationRelease:
+    try:
+        release = OpenSourceLocalAdaptationRelease.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except OSError as exc:
+        raise ValueError(f"cannot read open-source local adaptation release: {path.name}") from exc
+    adaptation_identity = [
+        {"path": item.path, "sha256": item.sha256} for item in release.local_adaptation_files
+    ]
+    if content_hash(adaptation_identity) != release.local_adaptation_sha256:
+        raise ValueError(
+            f"open-source local adaptation release hash mismatch: {release.release_id}"
+        )
+    return release
 
 
 def validate_registry_open_source_audits(
@@ -38,25 +58,31 @@ def validate_registry_open_source_audits(
     by_id = {manifest.audit_id: manifest for manifest in manifests}
     if len(by_id) != len(manifests):
         raise ValueError("open-source audit ids must be unique")
+
+    shared_release = None
+    if registry.open_source_local_adaptation_release_file is not None:
+        shared_release = load_local_adaptation_release(
+            _safe_project_path(project_root, registry.open_source_local_adaptation_release_file)
+        )
+        _validate_local_adaptation_files(project_root, shared_release.local_adaptation_files)
+
     skills = {skill.skill_id: skill for skill in registry.skills}
     mapped_contracts: set[str] = set()
     for manifest in manifests:
-        for local_file in manifest.local_adaptation_files:
-            local_path = _safe_project_path(project_root, local_file.path)
-            if not local_path.is_file():
-                raise ValueError(
-                    f"open-source local adaptation file is missing: {local_file.path}"
-                )
-            if sha256_bytes(local_path.read_bytes()) != local_file.sha256:
-                raise ValueError(
-                    f"open-source local adaptation drift: {local_file.path}"
-                )
+        if manifest.local_adaptation_release_id is not None:
+            if shared_release is None:
+                raise ValueError("open-source audit requires a shared local adaptation release")
+            if manifest.local_adaptation_release_id != shared_release.release_id:
+                raise ValueError("open-source audit local adaptation release id mismatch")
+        else:
+            _validate_local_adaptation_files(project_root, manifest.local_adaptation_files)
+
         audited_paths = {item.path for item in manifest.reviewed_files}
         for mapping in manifest.local_mappings:
             skill = skills.get(mapping.local_contract_id)
             if skill is None or skill.skill_version != mapping.local_contract_version:
                 raise ValueError(
-                    f"open-source mapping does not resolve to the frozen local contract: "
+                    "open-source mapping does not resolve to the frozen local contract: "
                     f"{mapping.local_contract_id}"
                 )
             mapped_contracts.add(mapping.local_contract_id)
@@ -116,6 +142,20 @@ def verify_open_source_tree(
     }
 
 
+def _validate_local_adaptation_files(
+    project_root: Path,
+    files: list[OpenSourceAuditedFile],
+) -> None:
+    for local_file in files:
+        path_value = local_file.path
+        expected_hash = local_file.sha256
+        local_path = _safe_project_path(project_root, path_value)
+        if not local_path.is_file():
+            raise ValueError(f"open-source local adaptation file is missing: {path_value}")
+        if sha256_bytes(local_path.read_bytes()) != expected_hash:
+            raise ValueError(f"open-source local adaptation drift: {path_value}")
+
+
 def _safe_project_path(project_root: Path, relative: str) -> Path:
     root = project_root.resolve()
     path = (root / relative).resolve()
@@ -125,6 +165,7 @@ def _safe_project_path(project_root: Path, relative: str) -> Path:
 
 
 __all__ = [
+    "load_local_adaptation_release",
     "load_open_source_audit",
     "validate_registry_open_source_audits",
     "verify_open_source_tree",

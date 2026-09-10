@@ -258,6 +258,17 @@ class ResponseGateway:
             return self._render_developer(context, diagnostics)
         if narrative is None:
             raise ValueError("Investor/Report presentation requires a narrative bundle")
+        # A completed deep/portfolio narrative must not be silently squeezed through
+        # the legacy COMPANY_QUICK_VIEW budget merely because a caller omitted the
+        # redundant task_type argument. The narrative is already a frozen canonical
+        # research artifact, so it may safely upgrade only this presentation budget.
+        if (
+            context.mode is ResponseMode.INVESTOR
+            and context.task_type is ResponseTaskType.COMPANY_QUICK_VIEW
+            and narrative.task_type
+            in {ResponseTaskType.DEEP_RESEARCH, ResponseTaskType.PORTFOLIO_DECISION}
+        ):
+            context = context.model_copy(update={"task_type": narrative.task_type})
 
         payload = _investor_payload(narrative, context=context, policy=self.policy)
         text = normalize_public_text(_render_investor_text(payload), policy=self.policy)
@@ -383,7 +394,11 @@ def narrative_from_investor_view(view: InvestorResearchView) -> ResearchNarrativ
     }[view.state]
     return ResearchNarrativeBundle(
         subject=view.company_id,
-        task_type=ResponseTaskType.COMPANY_QUICK_VIEW,
+        task_type=(
+            ResponseTaskType.DEEP_RESEARCH
+            if view.state is InvestorResearchState.DECISION_READY
+            else ResponseTaskType.COMPANY_QUICK_VIEW
+        ),
         headline=view.headline,
         conclusion_strength=strength,
         reasons=list(view.plain_language_gaps),
@@ -656,7 +671,7 @@ def audit_investor_answer(text: str) -> InvestorAnswerAudit:
 
     audit = audit_public_answer(
         text,
-        context=ResponseContext(task_type=ResponseTaskType.DEEP_RESEARCH),
+        context=ResponseContext(task_type=ResponseTaskType.COMPANY_QUICK_VIEW),
     )
     mapping = {
         "EMPTY_PUBLIC_ANSWER": "EMPTY_INVESTOR_ANSWER",
@@ -823,12 +838,24 @@ def _investor_payload(
         ],
         reasons=[normalize_public_text(item, policy=policy) for item in reasons],
         risk=(
-            normalize_public_text(narrative.risks[0], policy=policy)
+            "；".join(
+                normalize_public_text(item, policy=policy)
+                for item in _dedupe_semantic_items(
+                    narrative.risks,
+                    policy.semantic_duplicate_threshold,
+                )
+            )
             if narrative.risks
             else None
         ),
         change_condition=(
-            normalize_public_text(narrative.change_conditions[0], policy=policy)
+            "；".join(
+                normalize_public_text(item, policy=policy)
+                for item in _dedupe_semantic_items(
+                    narrative.change_conditions,
+                    policy.semantic_duplicate_threshold,
+                )
+            )
             if narrative.change_conditions
             else None
         ),

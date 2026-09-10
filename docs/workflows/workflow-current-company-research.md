@@ -59,7 +59,7 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
 9. **Render and audit the investor answer**
    - INVESTOR_MODE is the default for a stock question even if repo-skill discovery or one tool call fails. A system error string and a negated request such as “不要看日志” must not switch the mode.
    - Build one canonical `ResearchNarrativeBundle`, then project it through `ResponseGateway`; do not construct a parallel response object in a Workflow or Skill.
-   - Default structure: **主体 → 结论与强度 → 估值/赔率 → 2–4个决定性理由 → 最大风险 → 改变判断的条件 → 数据时间与必要引用**. Do not add a second summary that repeats the same conclusion.
+   - 对“能不能买/完整分析/持仓处置”等 material decision 使用完整结构：**主体 → 结论与强度 → 当前价格与估值/赔率 → 公司质量与盈利驱动 → 行业/宏观位置 → 财务完整性/治理 → 催化 → Bull/Bear/Reviewer/Red Team 的决定性分歧 → 自然语言交易分类 → 仓位/风险预算 → 入场条件 → 退出/止盈止损/基本面失效条件 → 数据时间与必要引用**。只有一般性非决策事实问题才压缩成 2–4 个理由。Do not add a second summary that repeats the same conclusion.
    - Length reduction may remove only non-critical reasons. It must never delete the subject, conclusion, conclusion strength, valuation/odds, largest risk, change condition, data cutoff, required citation or safe report reference; if mandatory content still exceeds the budget, return the safe fallback without echoing the draft.
    - Explain unfamiliar finance/statistics terms briefly on first use, then continue in plain language.
    - Keep provider paths, internal Agents/committee stages, protocol/schema/class names, machine states, reason codes, artifact IDs/hashes, SQL/SQLite, CLI logs and developer meta commentary in diagnostics only.

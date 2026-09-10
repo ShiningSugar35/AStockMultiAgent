@@ -11,6 +11,7 @@ from astock.providers.runtime import ProviderFactory, TransportProfile, load_tra
 from astock.providers.sina import Sina5mProvider
 from astock.providers.sina_financial import SinaFinancialProvider
 from astock.providers.sina_reference import SinaReferenceProvider
+from astock.providers.tencent_reference import TencentReferenceProvider
 
 __all__ = [
     "EastMoney5mProvider",
@@ -25,6 +26,7 @@ __all__ = [
     "Sina5mProvider",
     "SinaFinancialProvider",
     "SinaReferenceProvider",
+    "TencentReferenceProvider",
     "get_provider",
     "load_provider_registry",
     "load_transport_profiles",

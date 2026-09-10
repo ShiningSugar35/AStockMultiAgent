@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pymupdf
@@ -16,10 +17,13 @@ from astock.research import (
     load_research_core_config,
     load_research_skill_registry,
 )
+from astock.research.serenity.compiler import SerenityInputCompiler
 from astock.schemas import (
     BASE_CASE_SECTIONS,
     AdjustmentDirection,
+    AdjustmentMode,
     AvailabilityBasis,
+    BarRequest,
     BaseCaseBuildRequest,
     BaseCaseDraft,
     ClaimStatus,
@@ -31,7 +35,11 @@ from astock.schemas import (
     EvidenceRelation,
     FactStatus,
     FetchStatus,
+    Frequency,
+    Market,
+    MarketBar,
     PointInTimeStatus,
+    QualityStatus,
     ResearchCoverageStatus,
     ResearchFindingInput,
     ResearchFindingType,
@@ -43,10 +51,27 @@ from astock.schemas import (
     SpecialistEligibility,
     SpecialistMetricInput,
     SpecialistRouteRequest,
+    TimestampSemantics,
+    VolumeUnit,
 )
+from astock.schemas.serenity.compiler import CanonicalDailyTrendCompileRequest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _STATEMENT = "Synthetic cited BaseCase statement that must stay out of SQLite."
+
+
+class _CanonicalDailyFixtureStore:
+    def __init__(self, manifest: dict[str, object], bars: list[MarketBar]) -> None:
+        self.manifest = manifest
+        self.bars = bars
+
+    def load_manifest(self, request: BarRequest) -> dict[str, object] | None:
+        del request
+        return self.manifest
+
+    def read_bars(self, request: BarRequest) -> list[MarketBar]:
+        del request
+        return self.bars
 
 
 def _fixture(
@@ -253,6 +278,155 @@ def _specialist_fixture(
     return skills, base.pack, evidence
 
 
+def _canonical_daily_fixture(as_of: datetime, *, count: int = 200):
+    start = as_of - timedelta(days=count - 1)
+    bars = [
+        MarketBar(
+            observation_id=f"canonical-d1:{index}",
+            provider_id="canonical-test",
+            symbol="000001",
+            market=Market.XSHE,
+            frequency=Frequency.D1,
+            timestamp=start + timedelta(days=index),
+            timestamp_semantics=TimestampSemantics.DATE_ONLY,
+            open=Decimal(index + 1),
+            high=Decimal(index + 1),
+            low=Decimal(index + 1),
+            close=Decimal(index + 1),
+            volume=Decimal("1000"),
+            volume_unit=VolumeUnit.SHARE,
+            adjustment_mode=AdjustmentMode.NONE,
+        )
+        for index in range(count)
+    ]
+    manifest: dict[str, object] = {
+        "market": Market.XSHE.value,
+        "symbol": "000001",
+        "frequency": Frequency.D1.value,
+        "adjustment_mode": AdjustmentMode.NONE.value,
+        "quality_status": QualityStatus.PASS.value,
+        "quality_report_id": "quality:canonical-d1-test",
+        "content_hash": "a" * 64,
+        "actual_end": as_of.isoformat(),
+    }
+    return _CanonicalDailyFixtureStore(manifest, bars), bars
+
+
+def test_serenity_compiler_builds_exact_canonical_daily_moving_averages(
+    tmp_path: Path,
+    state,
+) -> None:
+    skills, base_case, evidence = _specialist_fixture(
+        tmp_path,
+        state,
+        suffix="serenity-compiler-daily",
+    )
+    evidence_pack = skills.repository.get_evidence_pack(base_case.evidence_pack_id)
+    assert evidence_pack is not None
+    store, bars = _canonical_daily_fixture(base_case.as_of)
+    request = CanonicalDailyTrendCompileRequest(
+        target_company_id=base_case.company_id,
+        symbol="000001",
+        market=Market.XSHE,
+        as_of=base_case.as_of,
+        requested_start=bars[0].timestamp,
+        adjustment_mode=AdjustmentMode.NONE,
+        daily_evidence_ids=[evidence.evidence_id],
+    )
+
+    contract = SerenityInputCompiler(
+        state,
+        skills.object_store,
+        store,
+    ).compile_daily_trend(request, evidence_pack=evidence_pack)
+
+    assert [item.window for item in contract.moving_averages] == [20, 50, 100, 200]
+    assert [item.value for item in contract.moving_averages] == [
+        Decimal("190.5"),
+        Decimal("175.5"),
+        Decimal("150.5"),
+        Decimal("100.5"),
+    ]
+    assert all(
+        item.calculation_status == "CANONICAL_DETERMINISTIC"
+        for item in contract.moving_averages
+    )
+    assert contract.daily_series.dataset_version == "a" * 64
+    assert contract.daily_series.quality_report_id == "quality:canonical-d1-test"
+
+
+def test_serenity_compiler_rejects_short_future_or_nonpassing_daily_inputs(
+    tmp_path: Path,
+    state,
+) -> None:
+    skills, base_case, evidence = _specialist_fixture(
+        tmp_path,
+        state,
+        suffix="serenity-compiler-invalid-daily",
+    )
+    evidence_pack = skills.repository.get_evidence_pack(base_case.evidence_pack_id)
+    assert evidence_pack is not None
+    store, bars = _canonical_daily_fixture(base_case.as_of, count=199)
+    request = CanonicalDailyTrendCompileRequest(
+        target_company_id=base_case.company_id,
+        symbol="000001",
+        market=Market.XSHE,
+        as_of=base_case.as_of,
+        requested_start=bars[0].timestamp,
+        daily_evidence_ids=[evidence.evidence_id],
+    )
+    compiler = SerenityInputCompiler(state, skills.object_store, store)
+    with pytest.raises(ValueError, match="at least 200"):
+        compiler.compile_daily_trend(request, evidence_pack=evidence_pack)
+
+    full_store, full_bars = _canonical_daily_fixture(base_case.as_of)
+    request = request.model_copy(update={"requested_start": full_bars[0].timestamp})
+    full_store.manifest["actual_end"] = (base_case.as_of + timedelta(days=1)).isoformat()
+    compiler = SerenityInputCompiler(state, skills.object_store, full_store)
+    with pytest.raises(ValueError, match="future bars"):
+        compiler.compile_daily_trend(request, evidence_pack=evidence_pack)
+
+    full_store.manifest["actual_end"] = base_case.as_of.isoformat()
+    full_store.manifest["quality_status"] = QualityStatus.FAIL.value
+    with pytest.raises(ValueError, match="quality gate"):
+        compiler.compile_daily_trend(request, evidence_pack=evidence_pack)
+
+
+def test_serenity_compiler_reuses_the_same_pit_evidence_gate(
+    tmp_path: Path,
+    state,
+) -> None:
+    skills, base_case, evidence = _specialist_fixture(
+        tmp_path,
+        state,
+        suffix="serenity-compiler-pit",
+    )
+    evidence_pack = skills.repository.get_evidence_pack(base_case.evidence_pack_id)
+    assert evidence_pack is not None
+    store, bars = _canonical_daily_fixture(base_case.as_of)
+    request = CanonicalDailyTrendCompileRequest(
+        target_company_id=base_case.company_id,
+        symbol="000001",
+        market=Market.XSHE,
+        as_of=base_case.as_of,
+        requested_start=bars[0].timestamp,
+        daily_evidence_ids=[evidence.evidence_id],
+    )
+    invalid_pack = evidence_pack.model_copy(
+        update={
+            "pit_status_by_evidence_id": {
+                evidence.evidence_id: PointInTimeStatus.APPROXIMATED,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="certified or reconstructed PIT"):
+        SerenityInputCompiler(state, skills.object_store, store).compile_daily_trend(
+            request,
+            evidence_pack=invalid_pack,
+        )
+
+
 def test_frozen_evidence_and_base_case_are_idempotent_cited_and_private(
     tmp_path: Path,
     state,
@@ -418,7 +592,7 @@ def test_base_case_rejects_evidence_outside_frozen_scope(tmp_path: Path, state) 
         )
 
 
-def test_specialist_router_is_deterministic_capped_and_explicitly_degraded(
+def test_specialist_router_is_deterministic_family_bounded_and_explicitly_degraded(
     tmp_path: Path,
     state,
 ) -> None:
@@ -441,21 +615,21 @@ def test_specialist_router_is_deterministic_capped_and_explicitly_degraded(
     first = skills.route(request)
     repeated = skills.route(request)
     assert first == repeated
-    assert len(first.plan.selected) == 3
+    assert len(first.plan.selected) == 2
+    assert all(item.skill_id != "ResearchMemoComposer" for item in first.plan.selected)
     assert first.plan.coverage_status is SpecialistCoverageStatus.PARTIAL
-    assert "ROUTE_CAPPED_AT_RESOURCE_BUDGET" in first.plan.degradation_codes
     assert "CONSENSUS_UNAVAILABLE" in first.plan.degradation_codes
     assert any(
-        "ROUTE_CAPPED_AT_RESOURCE_BUDGET" in reasons
+        reason == "SOURCE_FAMILY_LIMIT:SERENITY:2"
         for reasons in first.plan.excluded_skill_reasons.values()
+        for reason in reasons
     )
-    assert all(item.skill_id != "ResearchMemoComposer" for item in first.plan.selected)
     assert first.plan.excluded_skill_reasons["ResearchMemoComposer"] == [
         "NON_SPECIALIST_COMPOSER"
     ]
 
 
-def test_specialist_router_accepts_policy_bounded_budget_above_default(
+def test_specialist_router_keeps_source_family_limit_above_resource_default(
     tmp_path: Path,
     state,
 ) -> None:
@@ -480,7 +654,74 @@ def test_specialist_router_accepts_policy_bounded_budget_above_default(
     ).plan
 
     assert plan.max_specialists == 4
-    assert len(plan.selected) == 4
+    assert len(plan.selected) == 2
+    assert any(
+        reason == "SOURCE_FAMILY_LIMIT:SERENITY:2"
+        for reasons in plan.excluded_skill_reasons.values()
+        for reason in reasons
+    )
+
+
+def test_specialist_router_rejects_explicit_serenity_family_overflow(
+    tmp_path: Path,
+    state,
+) -> None:
+    skills, base_case, _ = _specialist_fixture(tmp_path, state, suffix="route-family-overflow")
+    with pytest.raises(ValueError, match="source family limit"):
+        skills.route(
+            SpecialistRouteRequest(
+                base_case_id=base_case.base_case_id,
+                thesis_tags=[],
+                industry_tags=[],
+                event_tags=[],
+                horizon="medium",
+                available_inputs=[],
+                available_frequencies=[],
+                explicit_skill_ids=[
+                    "IndustryBottleneckSkill",
+                    "EventToAlphaSkill",
+                    "GrowthProbabilitySkill",
+                ],
+            )
+        )
+
+
+def test_specialist_router_rejects_explicit_duplicate_selection_group(
+    tmp_path: Path,
+    state,
+) -> None:
+    skills, base_case, _ = _specialist_fixture(tmp_path, state, suffix="route-overlap")
+    registry = skills.configured_registry.model_copy(
+        update={
+            "registry_version": "research-skills-selection-overlap-test-v1",
+            "open_source_audit_manifest_files": [],
+            "open_source_local_adaptation_release_file": None,
+            "skills": [
+                item.model_copy(update={"selection_group": "GROWTH_STACK"})
+                if item.skill_id in {"GrowthProbabilitySkill", "GrowthValuationLens"}
+                else item
+                for item in skills.configured_registry.skills
+            ],
+        }
+    )
+    overlap_service = ResearchSkillService(
+        skills.state,
+        skills.object_store,
+        registry,
+    )
+    with pytest.raises(ValueError, match="duplicate selection groups"):
+        overlap_service.route(
+            SpecialistRouteRequest(
+                base_case_id=base_case.base_case_id,
+                thesis_tags=[],
+                industry_tags=[],
+                event_tags=[],
+                horizon="medium",
+                available_inputs=[],
+                available_frequencies=[],
+                explicit_skill_ids=["GrowthProbabilitySkill", "GrowthValuationLens"],
+            )
+        )
 
 
 def test_specialist_router_rejects_explicit_overflow_and_reports_missing_hourly_data(

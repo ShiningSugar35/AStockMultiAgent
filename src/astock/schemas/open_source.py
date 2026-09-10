@@ -27,6 +27,21 @@ class OpenSourceLocalMapping(AStockModel):
     adaptation_decision: str = Field(min_length=1)
 
 
+class OpenSourceLocalAdaptationRelease(AStockModel):
+    release_id: str = Field(min_length=1)
+    release_version: str = Field(min_length=1)
+    local_adaptation_files: list[OpenSourceAuditedFile] = Field(min_length=1)
+    local_adaptation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    upgrade_policy: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_release(self) -> OpenSourceLocalAdaptationRelease:
+        paths = [item.path for item in self.local_adaptation_files]
+        if len(paths) != len(set(paths)):
+            raise ValueError("open-source local adaptation release paths must be unique")
+        return self
+
+
 class OpenSourceAuditManifest(AStockModel):
     audit_manifest_version: str = Field(min_length=1)
     audit_id: str = Field(min_length=1)
@@ -39,8 +54,9 @@ class OpenSourceAuditManifest(AStockModel):
     local_mappings: list[OpenSourceLocalMapping] = Field(min_length=1)
     local_patch_set: list[str] = Field(min_length=1)
     local_patch_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    local_adaptation_files: list[OpenSourceAuditedFile] = Field(min_length=1)
-    local_adaptation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    local_adaptation_files: list[OpenSourceAuditedFile] = Field(default_factory=list)
+    local_adaptation_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    local_adaptation_release_id: str | None = Field(default=None, min_length=1)
     normal_runtime_network_required: bool = False
     source_vendored: bool = False
     upgrade_policy: str = Field(min_length=1)
@@ -60,14 +76,20 @@ class OpenSourceAuditManifest(AStockModel):
             raise ValueError("open-source local contract mappings must be unique")
         known_paths = set(paths)
         if any(
-            path not in known_paths
-            for item in self.local_mappings
-            for path in item.upstream_files
+            path not in known_paths for item in self.local_mappings for path in item.upstream_files
         ):
             raise ValueError("open-source mappings must reference audited upstream files")
         local_paths = [item.path for item in self.local_adaptation_files]
         if len(local_paths) != len(set(local_paths)):
             raise ValueError("open-source local adaptation file paths must be unique")
+        legacy_local = bool(self.local_adaptation_files)
+        shared_release = self.local_adaptation_release_id is not None
+        if legacy_local == shared_release:
+            raise ValueError("open-source audit must use exactly one local adaptation mode")
+        if legacy_local and self.local_adaptation_sha256 is None:
+            raise ValueError("legacy open-source audit requires a local adaptation hash")
+        if shared_release and self.local_adaptation_sha256 is not None:
+            raise ValueError("shared open-source audit must not duplicate a local adaptation hash")
         if self.normal_runtime_network_required or self.source_vendored:
             raise ValueError("adapted research methods must remain offline and non-vendored")
         return self
@@ -76,5 +98,6 @@ class OpenSourceAuditManifest(AStockModel):
 __all__ = [
     "OpenSourceAuditedFile",
     "OpenSourceAuditManifest",
+    "OpenSourceLocalAdaptationRelease",
     "OpenSourceLocalMapping",
 ]

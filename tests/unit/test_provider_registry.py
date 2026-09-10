@@ -23,6 +23,7 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
         "baostock-reference",
         "eastmoney-reference",
         "sina-reference",
+        "tencent-reference",
         "eastmoney-financial",
         "sina-financial",
         "gdelt-news-leads",

@@ -2,7 +2,7 @@
 
 ## When to use
 
-Use for broad discovery questions such as “现在有哪些 A 股值得研究”“给我一个观察池”“从全市场筛一批候选”。 This workflow creates **research priority**, not BUY recommendations.
+Use for broad discovery questions such as “现在有哪些 A 股值得研究”“给我一个观察池”“从全市场筛一批候选”。 This workflow creates **research priority**, not BUY recommendations. If the originating user intent is “推荐现在可买的股票/组合” or another investment decision, this workflow is only an internal same-request stage and must automatically continue into company research, debate/committee, portfolio and the recommendation gate before any final answer.
 
 Primary skill: `$candidate-scan`.
 
@@ -10,7 +10,7 @@ Primary skill: `$candidate-scan`.
 
 1. **Low-cost seed discovery**
    - Run `uv run astock research-seeds --live`.
-   - Reuse a fresh, ObjectStore/Manifest-verified COMPLETE Instrument Master where possible; refresh through capability-routed providers only when freshness or scope requires it. The registered 2026 official trading calendar is local-official-first and must be consulted before treating a date as an expected trading day.
+   - Reuse a fresh, ObjectStore/Manifest-verified COMPLETE Instrument Master where possible; refresh through capability-routed providers only when freshness or scope requires it. For formal current-market coverage, use SSE/SZSE/BSE official masters as the three market denominators; public quote providers are numerators only. EastMoney/Sina failure may fall through to an official-master-driven Tencent batch quote route, while a complete secondary master may preserve research continuity without upgrading formal authority. The registered 2026 official trading calendar is local-official-first and must be consulted before treating a date as an expected trading day.
    - Merge existing `RESEARCH_READY` candidates, current market liquidity/scale Seeds, and Expert Domain Seeds derived from published Knowledge Skills and current public industry constituents.
    - ResearchSeed is research scope only and has no trading authority.
 

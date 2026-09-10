@@ -403,6 +403,7 @@ class ResearchRunFrozenInputs(AStockModel):
     frozen_evidence_pack_artifact_id: str | None = None
     base_case_artifact_id: str | None = None
     specialist_route_artifact_id: str | None = None
+    serenity_delta_artifact_ids: list[str] = Field(default_factory=list)
     serenity_delta_artifact_id: str | None = None
     zhihu_delta_artifact_id: str | None = None
     research_memo_artifact_id: str | None = None
@@ -414,6 +415,16 @@ class ResearchRunFrozenInputs(AStockModel):
 
     @model_validator(mode="after")
     def validate_committee_pair(self) -> ResearchRunFrozenInputs:
+        if len(self.serenity_delta_artifact_ids) != len(set(self.serenity_delta_artifact_ids)):
+            raise ValueError("frozen Serenity Delta artifact ids must be unique")
+        if (
+            self.serenity_delta_artifact_id is not None
+            and self.serenity_delta_artifact_ids
+            and self.serenity_delta_artifact_id not in self.serenity_delta_artifact_ids
+        ):
+            raise ValueError(
+                "legacy Serenity Delta must belong to the canonical Serenity Delta set"
+            )
         if (self.decision_pack_artifact_id is None) != (
             self.committee_protocol_artifact_id is None
         ):

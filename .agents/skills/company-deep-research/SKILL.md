@@ -64,7 +64,7 @@ continuation until it reaches one of the explicit terminal states below.
    and resume from the interrupted task rather than opening a new research chain.
 6. Intermediate statuses must set `investment_conclusion_blocked=true`; they are not an
    excuse to return an incomplete conclusion. Broker execution remains forbidden in every
-   state.
+   state. Do not end the user turn with “下一步可以继续跑财报/行业/估值/多空/仓位”等本 Skill 本就能自动完成的工作；continue the same request until a legal terminal state.
 
 The runtime may use `CurrentResearchContinuationService.run_to_terminal` with an Agent-owned
 external resolver and team executor. The CLI-equivalent loop uses

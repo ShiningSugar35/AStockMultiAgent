@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0",
+  "created_at": "2026-09-10T06:00:00Z",
+  "release_id": "serenity-local-adaptation-v1",
+  "release_version": "serenity-local-adaptation-v1",
+  "local_adaptation_files": [
+    {
+      "path": "configs/research_skills.yaml",
+      "sha256": "aea1f6071acd85a8f1a6981b070cf6b5d1ea0737aec226d4356a5390e74c75ea",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "configs/research_diagnostics.yaml",
+      "sha256": "ae45f1272e194982af9c23594b763bd004a3d7989b851a951f1f9b42e79cbba4",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/cli.py",
+      "sha256": "f2ce31f7515401d4559ca13b9771f4fccc5717bb8b6898a270669794f0ff665b",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/__init__.py",
+      "sha256": "a388ba907dedfbcb090a37278538887950415a05f03b2c9c1b6dc961d4146943",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/open_source_audit.py",
+      "sha256": "34d0739ae774c6ca9fe2df4bac12a3121df370333461824b5ab099a4a45238c5",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/skills.py",
+      "sha256": "73c81669dbbca3b94cf3ce123452ae0f2002a29564c719022ce68dbade9e1fa3",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/diagnostics.py",
+      "sha256": "724a48b8df9ee3f138282742b93f0feb764761cefc4489dad8ba8cb9e506ea21",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/runtime.py",
+      "sha256": "66bf758013aab04e2a9567c00ca7d9759e1aecebe615fa5275f394c2ba96989b",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/runtime_inputs.py",
+      "sha256": "ce353d871020760130efba92a5ecff8ccd0149390bf7d7135aad5d5dc2eecf55",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/runtime_cli.py",
+      "sha256": "fd5131d61514446d777c5059e669aa28e3e3afe6192096e555fc67845a03ecf3",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/serenity/__init__.py",
+      "sha256": "97fec0494e4d279cca62bfa63394234990d217c2cecf688669c815200bcfad1a",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/serenity/cli.py",
+      "sha256": "f1836519922964df7686a99c2cfbff3077b90472c75778a0d55e22e6f120f2c9",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/serenity/compiler.py",
+      "sha256": "bbf6b2a8871fda73ad3f428fd6bbf5172466dddc25776f90381edb83eb87e38d",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/research/serenity/policy.py",
+      "sha256": "e4987e8209eca01b1168a592e5d12eff905c3e6c2e105bd3ffa96ec25197bfec",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/schemas/__init__.py",
+      "sha256": "ad02cf7c11b083a7135fe20f0210ec77ee9075fee93bb8d69a6b8ba4ef13a02b",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/schemas/open_source.py",
+      "sha256": "4efeaea468efa15129d618c7dcd0f2f7af714f5b93a7319b0819693652fc68e7",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/schemas/research.py",
+      "sha256": "bc2f3146e70258ed70604a79dd24ab9493119f0f9ce59b47e28f8b08e1d152b0",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/schemas/research_runtime.py",
+      "sha256": "a24664841ff5527bdb896df0fb5ae877352d408e0427707f3388143ee23fc3d9",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/schemas/serenity_v2.py",
+      "sha256": "32d18326af88def2f713f8f898a566cdc1949bf75361f630d763496d9163b343",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/schemas/serenity/__init__.py",
+      "sha256": "494c95c2a2f073ed2b1b1fb85b018012287a900f05bcfeccf951c6024982202a",
+      "purpose": "shared Serenity local adaptation"
+    },
+    {
+      "path": "src/astock/schemas/serenity/compiler.py",
+      "sha256": "ba4e140d8c7d14893557e54d3c371fe318efee5e146db024980355e656ea58a4",
+      "purpose": "shared Serenity local adaptation"
+    }
+  ],
+  "local_adaptation_sha256": "f8dd9c1683ec1f87ac772789639a9c5e4d528c3906a7cb8c4be2d44f1df3db53",
+  "upgrade_policy": "Any local adaptation content change requires a new immutable release id before production registration; upstream audit manifests remain independently frozen."
+}

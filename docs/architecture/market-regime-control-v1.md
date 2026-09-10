@@ -1,8 +1,8 @@
 # Market Regime & Risk Budget Control v1
 
-> 状态：PROPOSED
-> 是否已实现：否；当前生产/研究代码仍只有 shadow 链中的 `market-regime-v1` 规则分类
-> 更新日期：2026-09-07
+> 状态：CURRENT
+> 是否已实现：是；PIT 特征、透明基线、概率 challenger、历史/注册完整性检查、风险预算与推荐供给只读覆盖层均已接入并通过稳定回归。正式生产准入仍保持关闭：prospective shadow、controlled-live 与 owner approval 是独立运行启用门，不得由 schema/阈值单测或历史回放替代。
+> 更新日期：2026-09-09
 > 关联 ADR：`docs/adr/0002-market-regime-as-risk-overlay.md`
 > 关联计划：根目录 `开发计划.md`
 
@@ -53,7 +53,7 @@
 
 ### 2.3 数据平面的关键缺口
 
-`src/astock/providers/macro_authority.py` 中 NBS、PBOC、MOF、NDRC authority adapter 当前均为 recorded-first；`live=True` 明确未实现。因此，“当前宏观判断”不能仅靠已有 recorded fixture 宣称已经闭环。下一步首先要补 current official capture 与 PIT vintage，而不是先训练复杂模型。
+旧 `src/astock/providers/macro_authority.py` authority adapter 仍保持 recorded-first、`live_supported=false`，用于既有 Provider/fixture 合同；新的 current 宏观数据面由 `src/astock/investor_orchestration/macro.py` 的 `OfficialMacroCaptureService` 独立承担 raw-first 官方抓取、最终 URL/host 校验、不可变原文与 capture receipt。当前 NBS `manufacturing-pmi-current` 与 PBOC `monetary-credit-social-financing-current` 已能在版本化 parser 成功时形成结构化 observation，MOF/NDRC 允许 document-only；这仍只是具名 family 覆盖，不能据此宣称 current macro 全面闭环。来源发布时间与 `available_to_system_at` 分离，HTML `PubDate`/HTTP `Last-Modified` 只能提供 publication time，系统历史可得时间不得早于真实抓取冻结时刻；first observed 也不得冒充已验证 first release。
 
 ## 3. 设计原则
 

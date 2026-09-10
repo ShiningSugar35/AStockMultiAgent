@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -87,6 +88,10 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0064",
         "0065",
         "0066",
+        "0067",
+        "0068",
+        "0069",
+        "0070",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -209,6 +214,185 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             ).fetchone()
+
+
+def test_0069_macro_capture_editions_preserve_legacy_row_and_add_version_key(
+    tmp_path: Path,
+) -> None:
+    legacy_migrations = tmp_path / "legacy-migrations"
+    legacy_migrations.mkdir()
+    for migration in sorted((PROJECT_ROOT / "migrations").glob("*.sql")):
+        if int(migration.name[:4]) <= 68:
+            shutil.copy2(migration, legacy_migrations / migration.name)
+    state = StateStore(tmp_path / "legacy-macro.sqlite", legacy_migrations)
+    assert state.migrate()[-1] == "0068"
+    now = "2026-09-08T00:00:00+00:00"
+    source_hash = "a" * 64
+    payload = json.dumps(
+        {
+            "release_id": "legacy-macro",
+            "authority": "NBS",
+            "release_family": "legacy-family",
+            "source_url": "https://www.stats.gov.cn/legacy",
+            "source_hash": source_hash,
+            "captured_at": now,
+            "published_at": now,
+            "content_type": "text/plain",
+            "raw_object_id": f"sha256:{source_hash}",
+            "observations": [],
+            "parse_status": "PARTIAL",
+            "warnings": ["LEGACY_FIXTURE"],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    with state.transaction() as connection:
+        connection.execute(
+            "INSERT INTO macro_release_snapshots_v2("
+            "release_id,authority,release_family,source_url,source_hash,captured_at,published_at,"
+            "parse_status,payload_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-macro",
+                "NBS",
+                "legacy-family",
+                "https://www.stats.gov.cn/legacy",
+                source_hash,
+                now,
+                now,
+                "PARTIAL",
+                payload,
+                now,
+            ),
+        )
+
+    migration = PROJECT_ROOT / "migrations" / "0069_macro_capture_editions.sql"
+    shutil.copy2(migration, legacy_migrations / migration.name)
+    assert state.migrate() == ["0069"]
+    assert state.migrate() == []
+    with state.connect() as connection:
+        row = connection.execute(
+            "SELECT release_id,payload_json,capture_mode,capture_policy_hash "
+            "FROM macro_release_snapshots_v2 WHERE release_id='legacy-macro'"
+        ).fetchone()
+        assert tuple(row) == ("legacy-macro", payload, "RECORDED", "")
+        connection.execute(
+            "INSERT INTO macro_release_snapshots_v2("
+            "release_id,authority,release_family,source_url,source_hash,captured_at,published_at,"
+            "parse_status,payload_json,created_at,capture_mode,capture_policy_hash) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "live-macro",
+                "NBS",
+                "legacy-family",
+                "https://www.stats.gov.cn/legacy",
+                source_hash,
+                now,
+                now,
+                "PARTIAL",
+                payload,
+                now,
+                "LIVE",
+                "b" * 64,
+            ),
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM macro_release_snapshots_v2 WHERE authority='NBS' "
+                "AND release_family='legacy-family' AND source_hash=?",
+                (source_hash,),
+            ).fetchone()[0]
+            == 2
+        )
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert state.integrity_check() == "ok"
+
+
+def test_0070_moves_legacy_degraded_runs_to_append_only_attempts(tmp_path: Path) -> None:
+    legacy_migrations = tmp_path / "scheduled-legacy-migrations"
+    legacy_migrations.mkdir()
+    for migration in sorted((PROJECT_ROOT / "migrations").glob("*.sql")):
+        if int(migration.name[:4]) <= 69:
+            shutil.copy2(migration, legacy_migrations / migration.name)
+    state = StateStore(tmp_path / "scheduled-legacy.sqlite", legacy_migrations)
+    assert state.migrate()[-1] == "0069"
+    now = "2026-09-09T00:00:00+00:00"
+    payload = json.dumps(
+        {
+            "receipt_id": "legacy-degraded",
+            "run_id": "legacy-run",
+            "binding_id": "legacy-binding",
+            "schedule_bucket": "2026-09-09:PRE_OPEN:09:10",
+            "request_fingerprint": "f" * 64,
+            "outcome": "DEGRADED",
+            "completed_at": now,
+            "receipt_hash": "e" * 64,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    with state.transaction() as connection:
+        connection.execute(
+            "INSERT INTO scheduled_task_bindings("
+            "binding_id,platform_task_id,creation_mode,execution_surface,schedule_expression,"
+            "timezone,policy_id,policy_hash,active,payload_json,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-binding",
+                None,
+                "LOCAL_ONLY",
+                "LOCAL_DAEMON",
+                "LEGACY",
+                "Asia/Shanghai",
+                "scheduled-investor-tracking",
+                "a" * 64,
+                1,
+                "{}",
+                now,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO scheduled_research_runs("
+            "receipt_id,run_id,binding_id,schedule_bucket,idempotency_key,outcome,next_watermark,"
+            "notification_required,economic_write_count,receipt_hash,payload_json,completed_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-degraded",
+                "legacy-run",
+                "legacy-binding",
+                "2026-09-09:PRE_OPEN:09:10",
+                "legacy-idempotency",
+                "DEGRADED",
+                None,
+                0,
+                0,
+                "e" * 64,
+                payload,
+                now,
+            ),
+        )
+
+    migration = PROJECT_ROOT / "migrations" / "0070_scheduled_research_attempts.sql"
+    shutil.copy2(migration, legacy_migrations / migration.name)
+    assert state.migrate() == ["0070"]
+    assert state.migrate() == []
+    with state.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM scheduled_research_runs").fetchone()[0] == 0
+        row = connection.execute(
+            "SELECT attempt_id,request_fingerprint,attempt_hash,payload_json "
+            "FROM scheduled_research_attempts"
+        ).fetchone()
+        assert tuple(row) == ("legacy-degraded", "f" * 64, "e" * 64, payload)
+        with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+            connection.execute(
+                "UPDATE scheduled_research_attempts SET outcome='DEGRADED' "
+                "WHERE attempt_id='legacy-degraded'"
+            )
+        with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+            connection.execute(
+                "DELETE FROM scheduled_research_attempts WHERE attempt_id='legacy-degraded'"
+            )
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert state.integrity_check() == "ok"
 
 
 def test_0066_upgrades_existing_stock_binding_without_changing_stock_contract(

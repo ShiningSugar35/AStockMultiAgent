@@ -41,4 +41,4 @@ ADR 用于记录会影响多个模块、多个 Agent 或长期维护成本的重
 | ADR | 状态 | 决策 |
 |---|---|---|
 | [0001](0001-documentation-as-code-with-machine-contracts.md) | ACCEPTED | Markdown 保留为解释与决策层，机器合同和运行存储拥有执行权 |
-| [0002](0002-market-regime-as-risk-overlay.md) | PROPOSED | 市场状态只调整风险预算和研究供给，不替代个股证据与估值 |
+| [0002](0002-market-regime-as-risk-overlay.md) | ACCEPTED | 市场状态只调整风险预算和研究供给，不替代个股证据与估值 |

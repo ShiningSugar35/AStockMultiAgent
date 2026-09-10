@@ -473,7 +473,7 @@ class PositionLifecycleService:
                 {
                     *plan.manual_information_needs,
                     *(
-                        item.signal_code
+                        item.description
                         for item in conditions
                         if item.rule_id not in triggered_rules
                     ),

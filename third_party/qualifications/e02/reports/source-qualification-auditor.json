@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "597c542520d4f3e620ef91b43a726d9c1a02c8faf02f7fc2a0c658cf3c00f547",
+  "report_id": "aa34624c0497fae9eb37f40afd79f1ab5b3d6daaecf68da826d02d2bfa3d866e",
   "capability_id": "source-qualification-auditor",
   "candidate_version": "sha256:b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
   "requested_stage": "PRODUCTION_BACKUP",
@@ -27,10 +27,10 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "1a6015111b07c76575996944938ee73107b85d2a96349e0d7ecdab005571a985"
+    "8e793fa372e073e03af1c3ab0fbd12a236e2d6e566c74d3ee84b70591f9e2ed6"
   ],
-  "valid_from": "2026-09-04T01:47:30Z",
-  "expires_at": "2026-12-03T01:47:30Z",
+  "valid_from": "2026-09-09T04:05:13Z",
+  "expires_at": "2026-12-08T04:05:13Z",
   "reason_codes": [
     "CONTROLLED_LIVE_SKILL_EXECUTION_NOT_FROZEN"
   ]

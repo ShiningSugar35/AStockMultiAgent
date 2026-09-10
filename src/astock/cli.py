@@ -1897,6 +1897,8 @@ def paper_status(
     _, state, _ = _services()
     service = LedgerService(state)
     status = service.status(account_id)
+    # paper-status-prime-single-snapshot-v1
+    service.prime_status_snapshot(status)
     status["nav"] = service.portfolio_nav(account_id)
     _emit(status)
 
@@ -5532,3 +5534,9 @@ def codex_run_recover(
     _emit(report)
     if not report.valid:
         raise typer.Exit(code=2)
+
+
+# investor-orchestration-subapp-v1
+from astock.investor_orchestration.cli import app as investor_orchestration_app  # noqa: E402
+
+app.add_typer(investor_orchestration_app, name="investor")

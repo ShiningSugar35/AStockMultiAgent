@@ -78,6 +78,9 @@ class LedgerService:
     def __init__(self, state: StateStore, objects: ObjectStore | None = None) -> None:
         self.state = state
         self.objects = objects
+        self._nav_snapshot: ContextVar[dict[str, Any] | None] = ContextVar(
+            "paper_nav_request_snapshot", default=None
+        )
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -199,9 +202,7 @@ class LedgerService:
         if position_identity is not None:
             expected_market, expected_instrument_id = position_identity
             if expected_instrument_id != f"{expected_market.value}:{symbol}":
-                raise ValueError(
-                    "paper order position identity must match market:symbol"
-                )
+                raise ValueError("paper order position identity must match market:symbol")
         if lot_size <= 0:
             raise ValueError("paper order lot_size must be positive")
         if qty <= 0 or qty % lot_size != 0:
@@ -1603,6 +1604,8 @@ class LedgerService:
 
     def status(self, account_id: str) -> dict[str, Any]:
         with closing(self.state.connect()) as connection:
+            # Freeze balances, positions and revision in one read transaction.
+            connection.execute("BEGIN")
             self._require_account(connection, account_id)
             balances = {
                 code: self._balance(connection, account_id, code) for code in _ACCOUNT_SPECS
@@ -1653,6 +1656,34 @@ class LedgerService:
             "integrity": self.state.integrity_check(),
         }
 
+    # paper-status-single-snapshot-v1
+    def prime_status_snapshot(self, status_snapshot: dict[str, Any]) -> None:
+        """Reuse a detached, audited status once within this execution context."""
+        from copy import deepcopy
+
+        self._nav_snapshot.set(deepcopy(status_snapshot))
+
+    def _consume_prefetched_status(self, account_id: str) -> dict[str, Any] | None:
+        snapshot = self._nav_snapshot.get()
+        self._nav_snapshot.set(None)
+        if snapshot is None:
+            return None
+        if snapshot.get("account_id") != account_id:
+            raise ValueError("paper NAV snapshot belongs to a different account")
+        if snapshot.get("integrity") != "ok" or snapshot.get("imbalanced_events") != 0:
+            raise ValueError("paper NAV snapshot has not passed the account audit")
+        for position in snapshot.get("positions", ()):
+            if position.get("account_id") != account_id:
+                raise ValueError("paper NAV position belongs to a different account")
+        with closing(self.state.connect()) as connection:
+            revision = connection.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM journal WHERE paper_account_id=?",
+                (account_id,),
+            ).fetchone()[0]
+        if revision != snapshot.get("last_event_seq"):
+            return None
+        return snapshot
+
     def portfolio_nav(
         self,
         account_id: str,
@@ -1665,7 +1696,7 @@ class LedgerService:
         market_prices_fen = market_prices_fen or {}
         market_prices_milli_yuan = market_prices_milli_yuan or {}
         mark_time = as_of or datetime.now(UTC)
-        status = self.status(account_id)
+        status = self._consume_prefetched_status(account_id) or self.status(account_id)
         market_value = 0
         data_quality = "MARK_TO_COST"
         for position in status["positions"]:

@@ -53,10 +53,15 @@ def _register(
     input_hashes: list[str] | None = None,
 ) -> str:
     ref = objects.put_json(payload)
+    schema_version = "1.0"
+    if isinstance(payload, dict):
+        declared_version = payload.get("schema_version")
+        if isinstance(declared_version, str) and declared_version.strip():
+            schema_version = declared_version
     state.register_artifact(
         artifact_id=artifact_id,
         artifact_type=artifact_type,
-        schema_version="1.0",
+        schema_version=schema_version,
         object_hash=ref.sha256,
         input_hashes=input_hashes or [],
     )

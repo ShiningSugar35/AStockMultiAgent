@@ -23,7 +23,7 @@ NOW = datetime(2026, 8, 14, 1, 0, tzinfo=UTC)
 def _service(tmp_path: Path) -> KnowledgeSkillAuditService:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
     applied = state.migrate()
-    assert applied[-1] == "0066"
+    assert applied[-1] == "0070"
     return KnowledgeSkillAuditService(
         state,
         ObjectStore(tmp_path / "objects"),
@@ -81,9 +81,9 @@ def test_accounting_visual_corrections_and_conflict_scope_are_explicit(tmp_path:
     assert "普通股加权平均数" in templates["ACCOUNTING_EPS_WEIGHTED_AVERAGE"]["core_principle"]
     assert "交付义务" in templates["ACCOUNTING_DEBT_EQUITY_SUBSTANCE"]["core_principle"]
     assert "可抵扣暂时性差异" in templates["ACCOUNTING_DEFERRED_TAX_TEMP_DIFF"]["core_principle"]
-    assert "母公司个别报表并非“没用”" in templates["ACCOUNTING_CONSOLIDATED_SCOPE"][
-        "core_principle"
-    ]
+    assert (
+        "母公司个别报表并非“没用”" in templates["ACCOUNTING_CONSOLIDATED_SCOPE"]["core_principle"]
+    )
     assert "CG_MOMENTUM_VS_REVERSAL" in service.audit_policy["conflict_groups"]
     assert "CG_CONCENTRATION_VS_DIVERSIFICATION" in service.audit_policy["conflict_groups"]
     assert len(service.audit_policy["visual_revise_templates"]) == 6

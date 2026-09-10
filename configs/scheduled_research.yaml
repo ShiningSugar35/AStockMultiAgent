@@ -1,0 +1,75 @@
+schema_version: scheduled-research-policy-v1
+policy_id: astock-three-domain-tracking
+version: 1.0.0
+timezone: Asia/Shanghai
+disclosure_level: MINIMUM
+field_allowlist:
+  - subject_id
+  - symbol
+  - market
+  - tracking_domain
+  - exposure_weight_band
+  - cost_basis_band
+  - current_price
+  - price_change
+  - liquidity_status
+  - material_event_summary
+  - thesis_delta
+  - recommended_action
+  - next_review_condition
+redacted_fields:
+  - account_number
+  - broker_credential
+  - exact_cash_balance
+  - full_trade_history
+  - local_absolute_path
+  - raw_private_document
+max_subjects_per_run: 50
+max_events_per_subject: 20
+max_external_calls: 100
+max_catchup_buckets: 3
+no_change_notification: false
+economic_write_count_limit: 0
+broker_execution_allowed: false
+
+windows:
+  - {window: PRE_OPEN, local_time: "09:10:00", timezone: Asia/Shanghai, trading_days_only: true, max_delay_minutes: 20, enabled: true}
+  - {window: OPEN_CONFIRM, local_time: "09:45:00", timezone: Asia/Shanghai, trading_days_only: true, max_delay_minutes: 25, enabled: true}
+  - {window: INTRADAY_AM, local_time: "10:45:00", timezone: Asia/Shanghai, trading_days_only: true, max_delay_minutes: 30, enabled: true}
+  - {window: INTRADAY_PM, local_time: "14:15:00", timezone: Asia/Shanghai, trading_days_only: true, max_delay_minutes: 30, enabled: true}
+  - {window: POST_CLOSE, local_time: "15:30:00", timezone: Asia/Shanghai, trading_days_only: true, max_delay_minutes: 60, enabled: true}
+
+domain_policies:
+  - domain: WATCHLIST
+    enabled_windows: [PRE_OPEN, OPEN_CONFIRM, INTRADAY_PM, POST_CLOSE]
+    check_market_data: true
+    check_company_news: true
+    check_industry_news: true
+    check_policy_changes: true
+    update_research_state: true
+    may_prepare_paper_adjustment: false
+    may_write_paper_order: false
+    may_write_actual_account: false
+    notify_on_material_change: false
+  - domain: PAPER_POSITION
+    enabled_windows: [OPEN_CONFIRM, INTRADAY_AM, INTRADAY_PM, POST_CLOSE]
+    check_market_data: true
+    check_company_news: true
+    check_industry_news: true
+    check_policy_changes: true
+    update_research_state: true
+    may_prepare_paper_adjustment: true
+    may_write_paper_order: false
+    may_write_actual_account: false
+    notify_on_material_change: true
+  - domain: ACTUAL_POSITION
+    enabled_windows: [PRE_OPEN, OPEN_CONFIRM, INTRADAY_PM, POST_CLOSE]
+    check_market_data: true
+    check_company_news: true
+    check_industry_news: true
+    check_policy_changes: true
+    update_research_state: true
+    may_prepare_paper_adjustment: false
+    may_write_paper_order: false
+    may_write_actual_account: false
+    notify_on_material_change: true

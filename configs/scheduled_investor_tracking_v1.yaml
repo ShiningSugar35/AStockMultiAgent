@@ -1,0 +1,43 @@
+version: scheduled-investor-tracking-v1
+market_timezone: Asia/Shanghai
+trading_days_only: true
+windows:
+  PRE_OPEN:
+    local_time: "09:10"
+    purpose: overnight company, industry and policy changes plus prior-close risk
+  INTRADAY:
+    local_times: ["10:30", "14:00"]
+    minimum_interval_minutes: 90
+    purpose: material price, liquidity, announcement and policy changes only
+  POST_CLOSE:
+    local_time: "15:30"
+    purpose: close snapshot, daily material changes and next-session actions
+domains:
+  WATCHLIST:
+    action_policy: ANALYSIS_ONLY
+    notification_min_severity: CRITICAL
+    update_analysis_on_material_change: true
+  PAPER_HOLDING:
+    action_policy: REPLAY_CONFIRMED_RULES_ONLY
+    notification_min_severity: HIGH
+    allow_confirmed_order_replay: true
+  ACTUAL_HOLDING:
+    action_policy: PUSH_ADVISORY_ONLY
+    notification_min_severity: HIGH
+    account_writes_allowed: false
+material_severities: [HIGH, CRITICAL]
+max_subjects_per_run: 50
+max_external_calls_per_run: 40
+disclosure_level: MINIMUM
+field_allowlist:
+  - domain
+  - instrument_id
+  - anonymous_account_lane
+  - exposure_ratio
+  - material_event
+  - price_change_band
+  - thesis_delta
+  - recommended_review_action
+  - evidence_as_of
+no_change_notification: false
+economic_writes_allowed: false

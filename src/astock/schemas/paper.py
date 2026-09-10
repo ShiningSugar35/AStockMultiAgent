@@ -427,6 +427,40 @@ class PaperOperationRequest(AStockModel):
         return self
 
 
+class PaperPreparationReceipt(AStockModel):
+    schema_version: str = "paper-preparation-receipt-v1"
+    request_id: str = Field(min_length=1, max_length=256)
+    account_id: str = Field(min_length=1, max_length=128)
+    status: Literal["READY_FOR_CONFIRMATION", "NEEDS_INFO"]
+    instrument_id: str | None = Field(default=None, min_length=1)
+    side: Literal["BUY", "SELL"] | None = None
+    quantity: int | None = Field(default=None, gt=0)
+    operation_artifact_id: str | None = None
+    operation_object_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    missing_fields: list[str] = Field(default_factory=list)
+    requires_user_confirmation: Literal[True] = True
+    order_created: Literal[False] = False
+    position_changed: Literal[False] = False
+    paper_ledger_write_allowed: Literal[False] = False
+    broker_execution_allowed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_preparation_receipt(self) -> PaperPreparationReceipt:
+        if self.missing_fields != sorted(set(self.missing_fields)):
+            raise ValueError("paper preparation missing fields must be sorted and unique")
+        if self.status == "READY_FOR_CONFIRMATION":
+            if self.operation_artifact_id is None or self.operation_object_hash is None:
+                raise ValueError("ready paper preparation requires one canonical operation request")
+            if self.missing_fields:
+                raise ValueError("ready paper preparation cannot carry missing fields")
+        else:
+            if not self.missing_fields:
+                raise ValueError("NEEDS_INFO paper preparation requires missing fields")
+            if self.operation_artifact_id is not None or self.operation_object_hash is not None:
+                raise ValueError("incomplete paper preparation cannot claim an operation request")
+        return self
+
+
 class PaperUserConfirmation(AStockModel):
     schema_version: str = "paper-user-confirmation-v2"
     confirmation_id: str = Field(pattern=r"^[0-9a-f]{64}$")

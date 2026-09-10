@@ -95,6 +95,7 @@ def test_natural_language_skills_route_company_trade_and_portfolio_questions() -
 
 
 def test_scheme_safety_boundary_disallows_model_risk_bypass_and_default_broker_orders() -> None:
-    scheme = (PROJECT_ROOT / "低成本A股多Agent投研系统方案.md").read_text(encoding="utf-8")
-    assert "不允许大模型绕过风险规则" in scheme
-    assert "不保留默认自动连接券商下单接口" in scheme
+    rules = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "不自动向券商发单" in rules
+    assert "broker_execution_allowed=false" in rules
+    assert "AI 不得通过 prompt、proposal、Skill 或 fallback 绕过这些边界" in rules

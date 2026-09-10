@@ -1032,7 +1032,47 @@ def test_gdelt_adapter_persists_only_news_leads(tmp_path: Path) -> None:
             "SELECT source_id FROM source_snapshot_index WHERE snapshot_id=?",
             (leads[0].snapshot_id,),
         ).fetchone()
-    assert snapshot is not None and snapshot["source_id"] == "gdelt-news-leads:index"
+    assert snapshot is not None and snapshot["source_id"].startswith("gdelt-news-leads:index:")
+    capture = state.get_snapshot(leads[0].snapshot_id)
+    assert capture is not None
+    assert capture.snapshot_id == f"{capture.source_id}:{capture.object_sha256}"
+    assert objects.verify(capture.object_sha256)
+
+
+def test_gdelt_adapter_rejects_schema_less_empty_object_as_source_failure(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(tmp_path / "objects")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.gdeltproject.org"
+        return httpx.Response(200, request=request, json={})
+
+    provider = GdeltNewsLeadProvider(
+        objects,
+        state,
+        endpoint="https://api.gdeltproject.org/api/v2/doc/doc",
+        timeout_seconds=5,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(ValueError, match="not an articles result"):
+        provider.search_checked(
+            names=["贵州茅台"],
+            symbol="600519",
+            start=NOW - timedelta(hours=1),
+            end=NOW,
+            max_records=20,
+        )
+
+    with state.connect() as connection:
+        row = connection.execute(
+            "SELECT snapshot_id FROM source_snapshot_index "
+            "WHERE source_id LIKE 'gdelt-news-leads:index:%' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    capture = state.get_snapshot(str(row["snapshot_id"]))
+    assert capture is not None
+    assert objects.get_bytes(capture.object_sha256) == b"{}"
 
 
 def _bar(index: int, *, close: int, volume: int) -> MarketBar:

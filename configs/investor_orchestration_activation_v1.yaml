@@ -1,0 +1,53 @@
+version: investor-orchestration-activation-v1
+# Independent review pins canonical release/approval artifacts by id AND hash.
+# Empty pins are intentionally NOT_ADMITTED; CLI counts/strings cannot replace evidence.
+accepted_evidence: {}
+feature_status:
+  unified_preflight: IMPLEMENTED_DISABLED
+  capability_coverage: IMPLEMENTED_DISABLED
+  research_subject_registry: IMPLEMENTED_DISABLED
+  market_regime_v2: SHADOW_ONLY
+  regime_decision_overlay: SHADOW_ONLY
+  scheduled_research: SHADOW_ONLY
+feature_flags:
+  unified_preflight_enabled: false
+  capability_coverage_required: false
+  research_subject_registry_enabled: false
+  market_regime_v2_enabled: false
+  regime_decision_overlay_enabled: false
+  scheduled_research_enabled: false
+  scheduled_actual_holding_notifications_enabled: false
+  scheduled_paper_proposals_enabled: false
+  scheduled_watchlist_updates_enabled: false
+activation_policy:
+  policy_id: investor-orchestration-activation
+  required_recorded_scenarios: 68
+  minimum_shadow_observations: 100
+  minimum_shadow_days: 20
+  maximum_material_error_rate: 0.0
+  minimum_required_capability_coverage: 1.0
+  maximum_prohibited_calls: 0
+  maximum_economic_writes: 0
+  require_current_macro_controlled_live: true
+  require_schedule_controlled_live: true
+  require_owner_approval: true
+rollback:
+  disables:
+    - unified_preflight_enabled
+    - capability_coverage_required
+    - research_subject_registry_enabled
+    - market_regime_v2_enabled
+    - regime_decision_overlay_enabled
+    - scheduled_research_enabled
+    - scheduled_actual_holding_notifications_enabled
+    - scheduled_paper_proposals_enabled
+    - scheduled_watchlist_updates_enabled
+  preserve_tables:
+    - external_account_events
+    - paper_accounts
+    - paper_orders
+    - paper_fills
+    - research_subject_events
+    - market_regime_snapshots_v2
+    - scheduled_research_runs
+    - watchlist_analysis_revisions

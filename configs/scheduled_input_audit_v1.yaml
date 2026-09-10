@@ -1,0 +1,8 @@
+schema_version: scheduled-input-audit-policy-v1
+version: scheduled-input-audit-v1
+maximum_price_age_seconds:
+  PRE_OPEN: 345600
+  INTRADAY: 600
+  POST_CLOSE: 21600
+maximum_search_age_seconds: 21600
+maximum_policy_capture_age_seconds: 21600

@@ -15,14 +15,8 @@ def test_active_semantic_funnel_config_is_exact_three_view_v3() -> None:
     config = load_yaml("knowledge_semantic_funnel.yaml")
     assert config["schema_version"] == "3.0"
     assert config["pipeline_version"] == "knowledge-semantic-funnel-three-view-v3"
-    assert (
-        config["embedding_contract_version"]
-        == "PARAGRAPH_AUX_ARGUMENT_FINAL_V3"
-    )
-    assert config["local_context"] == {
-        "previous_paragraphs": 1,
-        "following_paragraphs": 2,
-    }
+    assert config["embedding_contract_version"] == "PARAGRAPH_AUX_ARGUMENT_FINAL_V3"
+    assert config["local_context"] == {"previous_paragraphs": 1, "following_paragraphs": 2}
     assert config["argument_builder"]["maximum_argument_unit_chars"] == 1800
 
 
@@ -30,16 +24,11 @@ def test_knowledge_allowlist_is_exact_and_online_identities_are_confirmed() -> N
     sources = load_yaml("knowledge_sources.yaml")["sources"]
     by_name = {source["display_name"]: source for source in sources}
     assert set(by_name) == {"MR Dang", "黄彦臻", "派大星皮皮", "寒武纪的鳄鱼"}
-
     mr_dang = by_name["MR Dang"]
     assert mr_dang["url_token"] == "mr-dang-77"
     assert mr_dang["identity_status"] == "CONFIRMED"
     assert mr_dang["enabled"] is True
-
-    expected_tokens = {
-        "黄彦臻": "huang-wei-yan-30",
-        "派大星皮皮": "xiao-peng-61-47",
-    }
+    expected_tokens = {"黄彦臻": "huang-wei-yan-30", "派大星皮皮": "xiao-peng-61-47"}
     for display_name, token in expected_tokens.items():
         source = by_name[display_name]
         assert source["profile_url"] == f"https://www.zhihu.com/people/{token}"
@@ -55,12 +44,10 @@ def test_knowledge_allowlist_is_exact_and_online_identities_are_confirmed() -> N
         assert scope["include_required_comment_pages"] is False
         assert scope["include_nested_replies"] is False
         assert scope["derive_author_participation_chains"] is False
-
     assert all(
         source["collection_scope"]["derive_author_participation_chains"] is False
         for source in sources
     )
-
     hanwuji = by_name["寒武纪的鳄鱼"]
     assert hanwuji["source_id"] == "zhihu:hanwujideeyu"
     assert hanwuji["identity_status"] == "LOCAL_EXPORT_USER_CONFIRMED_COMPLETE"
@@ -108,8 +95,9 @@ def test_private_docx_is_user_confirmed_complete_without_online_collection() -> 
     seed = source["local_seed_sources"][0]
     assert seed["source_id"] == "zhihu-export:hanwujideeyu:articles"
     assert seed["source_type"] == "PRIVATE_DOCX_EXPORT"
-    assert seed["expected_sha256"] == (
-        "197ec18e6fabac4401f6412331e9aa50f919498d4e40cfddb481eeab9788852d"
+    assert (
+        seed["expected_sha256"]
+        == "197ec18e6fabac4401f6412331e9aa50f919498d4e40cfddb481eeab9788852d"
     )
     assert seed["online_history_coverage"] == "USER_CONFIRMED_COMPLETE_EXPORT"
     assert source["online_collection_required"] is False
@@ -117,20 +105,12 @@ def test_private_docx_is_user_confirmed_complete_without_online_collection() -> 
 
 
 def test_root_documents_name_current_sources_and_knowledge_boundaries() -> None:
-    design = (PROJECT_ROOT / "低成本A股多Agent投研系统方案.md").read_text(
-        encoding="utf-8"
-    )
+    agents = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
-    for text in (
-        "MR Dang",
-        "黄彦臻",
-        "派大星皮皮",
-        "寒武纪的鳄鱼",
-    ):
-        assert text in design
-    for text in (
-        "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate",
-        "`ParagraphUnit` 是原文存储和定位单位",
-    ):
-        assert text in design
-    assert "本文件只保存尚未完成的工作" in plan
+    # Source identities remain machine-governed rather than copied into retired prose.
+    names = {item["display_name"] for item in load_yaml("knowledge_sources.yaml")["sources"]}
+    assert names == {"MR Dang", "黄彦臻", "派大星皮皮", "寒武纪的鳄鱼"}
+    assert "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate" in agents
+    assert "只有完整 ArgumentUnit" in agents
+    assert "原始" in agents and "不可变" in agents
+    assert "只保存尚未完成的工作" in plan

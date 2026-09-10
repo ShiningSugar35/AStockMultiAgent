@@ -1,8 +1,8 @@
 # ADR-0002: 市场状态是风险预算覆盖层，不是个股结论替代器
 
-> 状态：PROPOSED
+> 状态：ACCEPTED
 > 日期：2026-09-07
-> 决策者：待下一步实现评审
+> 决策者：仓库机器合同与验收门已落地；生产启用仍需独立 owner approval
 > 关联设计：`docs/architecture/market-regime-control-v1.md`
 
 ## Context

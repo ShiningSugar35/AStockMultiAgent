@@ -20,12 +20,12 @@ AStockMultiAgent 是一套**本地优先、可审计、可恢复**的 A 股多 A
 | 全市场与组合 | 三市场候选链、正式荐股门、组合风险/构建/迁移、ETF 深度事实与对冲评估已具备；不以初筛冒充推荐 |
 | 账户与模拟交易 | 外部真实账户 append-only 事件、多账户投影、模拟订单/成交/T+1/恢复已具备；ETF 模拟执行默认关闭 |
 | 持续研究 | Watch Universe、行情/公告/news lead、Catalyst、typed rule、持久任务和已确认模拟订单回放已具备 |
-| 定时语义研究 | 本地 Monitor 已具备确定性轮询；ChatGPT / Codex 的定时唤醒、语义复核、幂等通知和 missed-run 恢复尚未接入 |
-| 用户输出 | Investor Mode、公共回复审计与内部诊断分层已具备 |
-| 宏观 current data | NBS/PBOC/MOF/NDRC 当前仍是 recorded-first；正式 live 数据面尚未闭合 |
-| 市场状态总控 | 现有 `market-regime-v1` 仅用于 shadow 分层；多维状态、风险预算与荐股数量联动仍是拟议能力 |
-| 统一投资请求编排 | “每问先恢复实际/模拟持仓、强制能力覆盖回执、历史研究标的登记”已完成设计，尚未实现为统一运行时硬门 |
-| Phase 7/8 | 前向样本仍在积累，自适应准入保持关闭；历史回放不能替代真实前向证据 |
+| 定时语义研究 | 三域本地调度、五类来源准备、语义 lease 单一 owner、typed submit、幂等通知与 missed-run 恢复已接入；平台原生任务与完整 controlled-live/prospective 仍需真实运行证据 |
+| 用户输出 | Investor Mode、Verified Answer Gateway、公共回复审计与内部诊断分层已具备 |
+| 宏观 current data | NBS/PBOC 具名官方 family 的 raw-first live capture、版本化 vintage/期间/单位语义与冲突 fail-closed 已具备；MOF/NDRC 保持 document-only，正式启用仍由 activation 证据门控制 |
+| 市场状态总控 | PIT 特征、透明基线、概率 challenger、风险预算与推荐供给只读覆盖层已具备；生产使用保持 SHADOW，等待真实 prospective/approval 门 |
+| 统一投资请求编排 | 请求级 actual/paper/monitor preflight、required/conditional/prohibited capability DAG、typed coverage receipt 与公共回答硬门已接入 |
+| Phase 7/8 | 软件路径已闭合；真实前向样本与持续天数仍按 activation 合同自然积累，历史回放不能替代真实前向证据 |
 
 能力的详细实现状态以 Schema、配置、CLI、测试、SQLite/Parquet/ObjectStore 和正式审计结果为准，不以本表单独证明。
 
@@ -70,7 +70,7 @@ uv run astock continuous-monitor-status
   → 投资者可读结论
 ```
 
-拟议的下一版统一入口将固定为：
+统一投资请求运行时入口固定为：
 
 ```text
 Request
@@ -80,7 +80,7 @@ Request
   → investor answer audit
 ```
 
-该入口尚未实现，不能把架构设计当成当前运行事实。
+该入口已由机器合同和真实领域 E2E 约束；缺数据、冲突或未准入能力仍按运行时规则 fail closed。
 
 ## 事实源
 
@@ -100,7 +100,6 @@ Request
 4. [进度验收.md](进度验收.md)：最近一次任务的验证结果与未完成边界。
 5. [docs/workflows/README.md](docs/workflows/README.md)：跨 Skill 工作流。
 6. [skills/README.md](skills/README.md)：人类可见 Skill 目录；canonical Skill 位于 `.agents/skills/`。
-7. [低成本A股多Agent投研系统方案.md](低成本A股多Agent投研系统方案.md)：冻结的历史总体设计背景，不再承担当前状态或开发计划。
 
 下一阶段重点设计：
 

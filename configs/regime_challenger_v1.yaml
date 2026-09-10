@@ -1,0 +1,20 @@
+schema_version: regime-challenger-policy-v1
+version: gaussian-hmm-core-v1
+history_tier: CORE_LONG_HISTORY
+# Prototype mapping is frozen in feature space; never rename states by holdout returns.
+feature_fields: [trend_score, breadth_score, tail_risk_score, liquidity_score]
+state_prototypes:
+  HEALTHY_BULL: [0.65, 0.60, 0.35, 0.35]
+  SPECULATIVE_BULL: [0.55, -0.10, -0.30, 0.00]
+  NEUTRAL_RANGE: [0.00, 0.00, 0.10, 0.10]
+  RISK_OFF_RANGE: [-0.10, -0.10, -0.40, -0.40]
+  TREND_BEAR: [-0.60, -0.55, -0.35, -0.20]
+  PANIC: [-0.85, -0.80, -0.90, -0.85]
+minimum_train_samples: 120
+maximum_train_samples: 10000
+maximum_iterations: 50
+convergence_tolerance: 0.00001
+variance_floor: 0.0025
+transition_pseudocount: 0.01
+initial_persistence: 0.85
+maximum_gap_days: 10

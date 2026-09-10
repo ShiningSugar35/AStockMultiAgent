@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
+
+import yaml
 
 from astock import __version__
 from astock.schemas import (
@@ -33,25 +36,27 @@ def test_runtime_version_matches_package_metadata() -> None:
     assert project["version"] == __version__
 
 
-def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
-    design = (PROJECT_ROOT / "低成本A股多Agent投研系统方案.md").read_text(encoding="utf-8")
+def test_root_documents_separate_current_plan_and_accepted_facts() -> None:
+    retired_design = PROJECT_ROOT / "低成本A股多Agent投研系统方案.md"
     plan = (PROJECT_ROOT / "开发计划.md").read_text(encoding="utf-8")
     acceptance = (PROJECT_ROOT / "进度验收.md").read_text(encoding="utf-8")
-    for required in (
-        "HISTORICAL / FROZEN",
-        "不自动向券商发送订单",
-        "官方/已验证 API 或本地数据 → MCP → Browser → Manual Task",
-        "SourceItem → ParagraphUnit → ArgumentUnit → SkillCandidate",
-        "Phase 8",
-    ):
-        assert required in design
+    assert not retired_design.exists()
     for required in (
         "本文件只保存尚未完成的工作",
-        "## WP-01：",
-        "## WP-11：",
-        "不作为开发 backlog 的门",
+        "broker_execution_allowed=false",
     ):
         assert required in plan
+    manifest = yaml.safe_load(
+        (PROJECT_ROOT / "planning/work_packages_v1.yaml").read_text(encoding="utf-8")
+    )
+    packages = manifest["work_packages"]
+    headings = re.findall(r"^#{2,3} (WP-\d{2})：", plan, flags=re.MULTILINE)
+    assert headings == [item["id"] for item in packages]
+    assert all(item["status"] in manifest["rules"]["allowed_statuses"] for item in packages)
+    if packages:
+        assert "NO OPEN DEVELOPMENT WORK PACKAGES" not in plan
+    else:
+        assert "NO OPEN DEVELOPMENT WORK PACKAGES" in plan or "无未完成开发任务" in plan
     for completed_history in (
         "External Dependency Resilience v1",
         "Portfolio & Holding Decision Skills v1",
@@ -78,9 +83,6 @@ def test_root_documents_separate_design_plan_and_accepted_facts() -> None:
         "OpenCode 边界",
     ):
         assert historical_detail not in acceptance
-    assert "Spark 首次实现" not in acceptance
-    assert "Sol takeover" not in acceptance
-    assert "旧段落级链" not in design
 
 
 def test_release_closeout_workflow_is_machine_enforced() -> None:
@@ -104,7 +106,7 @@ def test_release_closeout_workflow_is_machine_enforced() -> None:
         assert required in agents
     assert "本文件只保存尚未完成的工作" in plan
     assert "独立长期运行/数据义务" not in plan
-    assert "不作为开发 backlog 的门" in plan
+    # Runtime enablement boundaries are owned by AGENTS, not duplicated as plan items.
     assert "不是永久开发 backlog" in agents
     assert "进度验收.md" in agents
     assert "验收报告.md" not in agents

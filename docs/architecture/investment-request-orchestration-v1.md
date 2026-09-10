@@ -1,8 +1,9 @@
 # Investment Request Orchestration v1
 
-> 状态：PROPOSED
-> 是否已实现：否；本文是下一阶段机器合同与编排蓝图
-> 更新日期：2026-09-07
+> 状态：CURRENT
+> 是否已实现：是；机器合同、统一 preflight、Capability Planner/Executor、注册输出认证、Investor Answer Gateway 与 actual/paper 分 lane 已完成，并由 68 个原始业务 ID 的真实领域 E2E 验收。运行时仍必须遵守 PIT、正式准入、账户歧义与经济写权限硬门。
+> 当前恢复合同：账户读取只消费 canonical external-account 事件与 paper ledger；0068 revision 与同一只读事务冻结状态，禁止按表名推测事实。快照跨账户拒绝、变更失效、历史不可得阻断、并发复用及原子回滚继续由机器测试约束。生产启用状态不由“实现完成”自动改变。
+> 更新日期：2026-09-09
 > 关联 ADR：`docs/adr/0001-documentation-as-code-with-machine-contracts.md`、`docs/adr/0002-market-regime-as-risk-overlay.md`
 > 关联验收：`docs/acceptance/business-question-capability-matrix-v1.md`
 
@@ -166,6 +167,22 @@ aggregate_research_view
 - policy version。
 
 Agent 文字中说“综合宏观、行业、财务”不算覆盖证据；必须有对应 typed output 或明确的已验证复用。
+
+### 4.7 已落地的认证与只读发布接缝
+
+`output_validation.py` 只读取现有 `StateStore.artifact_registry` 与内容寻址 ObjectStore，不建立第二份事实库。能力完成要求真实注册的预期类型、对象哈希、可得时间和适用账户/实体；任意非空字符串、内联字典、错误类型、损坏对象或未知输出合同均不能认证完成。请求、计划和 preflight 身份必须一致，必需节点、依赖及 side-effect lane 不得被场景覆盖或重新计算哈希后绕过。Coverage 额外绑定 `outputs_verified`、`preflight_receipt_id` 与 `request_fingerprint`，公开层重新核验持久记录和内容，不能只相信调用者的 `coverage_complete=true`。
+
+发布分为执行与展示两步。`VerifiedAnswerProjector`（`answer_projection.py`）只读取已认证请求、preflight、coverage 与真实领域工件，从这些输入确定性生成正文，不接收任意自由草稿。`publish_verified` 生成并冻结答复，绑定全部来源对象及 preflight/coverage 哈希；`publish_registered` 读取原冻结答复时重新生成同一份正文并逐字段比较。工件登记只能证明字节与来源，不能使草稿中虚构的余额、动作或风险成为事实。整个发布过程不重跑经济处理器。公开层统一审计结论、理由、风险、动作、改变条件及持仓段落；错误来源、损坏对象、未知时间、任意字段改写均拒绝或整体降级，不保留未经核验的精确价格和交易指令。
+
+模拟账户余额还必须与同一 preflight 的现金及净值恒等式对账。账户选择来自显式请求；未给账户时仅在恰好存在一个账户时自动解析，多个账户必须明确指定，不能把调用者传入的某个净值工件或未认证的 metadata 默认值当作用户选择。空持仓章节继续静默。其他已接入的只读呈现分支包括公司研究、条件式投资结论、组合风险、持仓复核和事件研究；渲染合同测试不等于它们的全部业务准入已完成。
+
+CLI 新增 `investor publish <coverage_receipt_id>` 与 `investor execute-registered <input.json>`，仅消费已注册、类型与来源通过验证的只读结果。`--current` 显式执行既有采集后冻结；缺状态库不自动创建空库，经济权限和安全边界覆盖被拒绝；普通输出只给投资者答复，诊断身份仅在显式 `--diagnostics` 下输出。`ScenarioContractRunner` 未提供草稿时走确定性发布，并把降级答案记为 `ANSWER_NOT_CERTIFIED`、未认证覆盖记为 `COVERAGE_NOT_CERTIFIED`，不能再以 coverage=1 而正文全部降级计作成功。研究标的回执按本次 event 主键核验，要求完整覆盖本次已解析实体，不扫描全部历史。
+
+领域输出已绑定现有模型：行业使用 `IndustryProfile`，财务使用 `FinancialIntegrityEvidencePack`，公司研究使用 `InstitutionalDecisionContext`，组合使用 `PortfolioAnalysisReport`，持仓复核使用 `HoldingReviewPack`，全市场准入使用 `RecommendationReadinessReport`，ETF研究使用 `ETFResearchMetrics`。`domain_contracts.py` 对完成状态、缺口、证据及角色语义另行检查；治理、催化剂和独立复核即使都通过 `ResearchRoleOutput` 传输，也必须绑定对应的真实 Research Team 计划、角色、完成 checkpoint、成员与依赖哈希，不能互相替代。依赖在单次校验内复用，结束时复核 checkpoint，避免旧结果与新依赖混合。来源数组按注册关系核验，不按两个独立排序数组的位置配对；嵌套可得时间必须通过有界递归检查，预测年份不视为输入可得时间。
+
+当前研究采用唯一的 `DecisionFreezeService`：保留原始 `question_time` 与民用日期解释，在采集完成后冻结独立 `decision_time`，子请求通过 `evidence_cutoff` 读取该截止时间；历史请求不能推进截止时间。`freeze_current_request`、`execute_registered_inputs` 及其薄入口 `execute_registered`／`execute_current_registered` 消费现有注册工件，不自行采集数据，也不调用经济写入处理器。完整请求内容绑定原 request ID；同 ID 换文本或语义被拒绝。子请求工件必须属于已认证冻结清单，禁止能力在发出覆盖回执前即拒绝；稳定重试复用原回执并重新校验输入，不创建第二个调度或事实账本。
+
+正反回归位于 `tests/unit/test_investor_orchestration_guards.py`、`test_investor_domain_contracts.py`、`test_investor_decision_inputs.py` 和 `test_investor_registered_execution.py`，包含真实隔离账本净值、机构研究服务确定性计算、Research Team 登记、错误角色／来源／时间拒绝，以及重启重试零经济表变化。记录式上游输入与这些服务接缝验证**不等于**全类型研究答案生成器或68场景业务E2E已经完成：自动采集与专业研究到这些已校验工件的完整编排、正式准入到最终答复的完整装配、所有旧 public 入口强制接入，以及原矩阵逐场景独立业务期望，仍须按原工作包验证。不得用单一成功桩、全部降级或守卫通过数替代这些验收门。
 
 ## 5. 统一请求前置流程
 

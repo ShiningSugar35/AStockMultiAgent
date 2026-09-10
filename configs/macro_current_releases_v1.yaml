@@ -1,0 +1,88 @@
+version: macro-current-release-policy-v2
+publication_timezone: Asia/Shanghai
+transport:
+  maximum_redirects: 3
+  timeout_seconds: 20
+  connect_timeout_seconds: 8
+  maximum_decoded_bytes: 8388608
+official_hosts:
+  NBS:
+    - stats.gov.cn
+    - www.stats.gov.cn
+  PBOC:
+    - pbc.gov.cn
+    - www.pbc.gov.cn
+  MOF:
+    - mof.gov.cn
+    - www.mof.gov.cn
+  NDRC:
+    - ndrc.gov.cn
+    - www.ndrc.gov.cn
+release_specs:
+  - authority: NBS
+    release_family: latest-statistical-releases
+    url: https://www.stats.gov.cn/sj/zxfb/
+    parser: document-only
+    max_age_days: 45
+  - authority: NBS
+    release_family: manufacturing-pmi-current
+    url: https://www.stats.gov.cn/sj/zxfb/202608/t20260831_1965154.html
+    parser: regex-v1
+    max_age_days: 45
+    regex_observations:
+      - series_key: manufacturing_pmi
+        pattern: '(?P<period>20\d{2}年\s*\d{1,2}月).*?制造业采购经理指数\s*(?:（\s*PMI\s*）|\(\s*PMI\s*\))?\s*为\s*(?P<value>-?\d+(?:\.\d+)?)\s*%'
+        unit: percent
+        min_value: 0
+        max_value: 100
+      - series_key: manufacturing_production_index
+        pattern: '生产指数\s*为\s*(?P<value>-?\d+(?:\.\d+)?)\s*%'
+        scope_start_pattern: '(?:一、)?(?:中国)?制造业采购经理指数运行情况|制造业采购经理指数'
+        scope_end_pattern: '(?:二、)?(?:中国)?非制造业(?:采购经理指数|商务活动指数)运行情况|$'
+        document_period_pattern: '(?P<period>20\d{2}年\s*\d{1,2}月)\s*中国采购经理指数运行情况'
+        unit: percent
+        min_value: 0
+        max_value: 100
+      - series_key: manufacturing_new_orders_index
+        pattern: '新订单指数\s*为\s*(?P<value>-?\d+(?:\.\d+)?)\s*%'
+        scope_start_pattern: '(?:一、)?(?:中国)?制造业采购经理指数运行情况|制造业采购经理指数'
+        scope_end_pattern: '(?:二、)?(?:中国)?非制造业(?:采购经理指数|商务活动指数)运行情况|$'
+        document_period_pattern: '(?P<period>20\d{2}年\s*\d{1,2}月)\s*中国采购经理指数运行情况'
+        unit: percent
+        min_value: 0
+        max_value: 100
+  - authority: PBOC
+    release_family: latest-data-and-policy-releases
+    url: http://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html
+    parser: document-only
+    max_age_days: 45
+  - authority: PBOC
+    release_family: monetary-credit-social-financing-current
+    url: https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/2026081414193264304/index.html
+    parser: regex-v1
+    max_age_days: 45
+    regex_observations:
+      - series_key: social_financing_stock
+        pattern: '(?P<period>20\d{2}年\d{1,2}月)末社会融资规模存量为(?P<value>-?\d+(?:\.\d+)?)万亿元'
+        unit: trillion_cny
+        min_value: 0
+      - series_key: social_financing_stock_yoy
+        pattern: '(?P<period>20\d{2}年\d{1,2}月)末社会融资规模存量为.*?同比增长(?P<value>-?\d+(?:\.\d+)?)%'
+        unit: percent
+        min_value: -100
+        max_value: 100
+      - series_key: m2_yoy
+        pattern: '(?P<period>20\d{2}年\d{1,2}月).*?广义货币(?:（M2）|\(M2\))余额.*?同比增长(?P<value>-?\d+(?:\.\d+)?)%'
+        unit: percent
+        min_value: -100
+        max_value: 100
+  - authority: MOF
+    release_family: fiscal-data-releases
+    url: https://www.mof.gov.cn/gkml/caizhengshuju/
+    parser: document-only
+    max_age_days: 90
+  - authority: NDRC
+    release_family: policy-and-price-releases
+    url: https://www.ndrc.gov.cn/xwdt/
+    parser: document-only
+    max_age_days: 90

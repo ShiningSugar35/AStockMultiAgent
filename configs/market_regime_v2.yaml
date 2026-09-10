@@ -1,0 +1,127 @@
+version: market-regime-v2-policy-2
+conservative_profile_defaults:
+  max_total_equity_weight: 0.50
+  max_single_name_weight: 0.08
+  minimum_cash_weight: 0.20
+feature_semantics: all normalized feature scores use [-1, 1], where positive is risk-supportive
+minimum_family_coverage: 0.65
+minimum_critical_family_coverage: 0.50
+critical_feature_families: [trend, breadth, tail, liquidity]
+ood_transition_threshold: 0.45
+ood_unclassified_threshold: 0.80
+emission_logit_scale: 4.0
+minimum_confidence: 0.48
+transition_confidence: 0.58
+minimum_dwell_days: 3
+snapshot_ttl_hours: 30
+panic:
+  tail_risk_max: -0.75
+  liquidity_max: -0.65
+  trend_max: -0.35
+healthy_bull:
+  trend_min: 0.35
+  breadth_min: 0.25
+  tail_risk_min: -0.15
+  liquidity_min: 0.0
+  earnings_min: 0.0
+  valuation_min: -0.45
+speculative_bull:
+  trend_min: 0.30
+  breadth_max: 0.05
+  tail_risk_max: 0.0
+trend_bear:
+  trend_max: -0.35
+  breadth_max: -0.20
+risk_off:
+  tail_risk_max: -0.25
+  liquidity_max: -0.20
+state_overlay:
+  HEALTHY_BULL:
+    total_risk_multiplier: 1.10
+    new_position_multiplier: 1.15
+    single_name_multiplier: 1.05
+    recommendation_cap: 10
+    minimum_liquidity_percentile: 0.35
+    margin_of_safety_adjustment: 0.00
+    tranche_count: 2
+    no_trade_band_multiplier: 1.00
+    red_team_depth: 1
+  SPECULATIVE_BULL:
+    total_risk_multiplier: 0.90
+    new_position_multiplier: 0.80
+    single_name_multiplier: 0.80
+    recommendation_cap: 4
+    minimum_liquidity_percentile: 0.60
+    margin_of_safety_adjustment: 0.08
+    tranche_count: 4
+    no_trade_band_multiplier: 1.35
+    red_team_depth: 2
+  NEUTRAL_RANGE:
+    total_risk_multiplier: 1.00
+    new_position_multiplier: 1.00
+    single_name_multiplier: 1.00
+    recommendation_cap: 6
+    minimum_liquidity_percentile: 0.45
+    margin_of_safety_adjustment: 0.04
+    tranche_count: 3
+    no_trade_band_multiplier: 1.15
+    red_team_depth: 1
+  RISK_OFF_RANGE:
+    total_risk_multiplier: 0.75
+    new_position_multiplier: 0.60
+    single_name_multiplier: 0.70
+    recommendation_cap: 3
+    minimum_liquidity_percentile: 0.65
+    margin_of_safety_adjustment: 0.10
+    tranche_count: 4
+    no_trade_band_multiplier: 1.40
+    red_team_depth: 2
+  TREND_BEAR:
+    total_risk_multiplier: 0.55
+    new_position_multiplier: 0.40
+    single_name_multiplier: 0.55
+    recommendation_cap: 2
+    minimum_liquidity_percentile: 0.75
+    margin_of_safety_adjustment: 0.15
+    tranche_count: 5
+    no_trade_band_multiplier: 1.55
+    red_team_depth: 2
+  PANIC:
+    total_risk_multiplier: 0.30
+    new_position_multiplier: 0.20
+    single_name_multiplier: 0.35
+    recommendation_cap: 1
+    minimum_liquidity_percentile: 0.85
+    margin_of_safety_adjustment: 0.22
+    tranche_count: 6
+    no_trade_band_multiplier: 1.80
+    red_team_depth: 3
+  TRANSITION:
+    total_risk_multiplier: 0.70
+    new_position_multiplier: 0.55
+    single_name_multiplier: 0.65
+    recommendation_cap: 3
+    minimum_liquidity_percentile: 0.65
+    margin_of_safety_adjustment: 0.10
+    tranche_count: 4
+    no_trade_band_multiplier: 1.40
+    red_team_depth: 2
+  UNCLASSIFIED:
+    total_risk_multiplier: 0.65
+    new_position_multiplier: 0.50
+    single_name_multiplier: 0.60
+    recommendation_cap: 2
+    minimum_liquidity_percentile: 0.70
+    margin_of_safety_adjustment: 0.12
+    tranche_count: 5
+    no_trade_band_multiplier: 1.50
+    red_team_depth: 2
+markov_transition:
+  HEALTHY_BULL: {HEALTHY_BULL: 0.74, SPECULATIVE_BULL: 0.10, NEUTRAL_RANGE: 0.10, RISK_OFF_RANGE: 0.02, TREND_BEAR: 0.01, PANIC: 0.01, TRANSITION: 0.02, UNCLASSIFIED: 0.00}
+  SPECULATIVE_BULL: {HEALTHY_BULL: 0.08, SPECULATIVE_BULL: 0.70, NEUTRAL_RANGE: 0.10, RISK_OFF_RANGE: 0.04, TREND_BEAR: 0.02, PANIC: 0.02, TRANSITION: 0.04, UNCLASSIFIED: 0.00}
+  NEUTRAL_RANGE: {HEALTHY_BULL: 0.08, SPECULATIVE_BULL: 0.05, NEUTRAL_RANGE: 0.70, RISK_OFF_RANGE: 0.08, TREND_BEAR: 0.03, PANIC: 0.01, TRANSITION: 0.05, UNCLASSIFIED: 0.00}
+  RISK_OFF_RANGE: {HEALTHY_BULL: 0.01, SPECULATIVE_BULL: 0.01, NEUTRAL_RANGE: 0.10, RISK_OFF_RANGE: 0.68, TREND_BEAR: 0.10, PANIC: 0.04, TRANSITION: 0.06, UNCLASSIFIED: 0.00}
+  TREND_BEAR: {HEALTHY_BULL: 0.01, SPECULATIVE_BULL: 0.01, NEUTRAL_RANGE: 0.05, RISK_OFF_RANGE: 0.12, TREND_BEAR: 0.70, PANIC: 0.05, TRANSITION: 0.06, UNCLASSIFIED: 0.00}
+  PANIC: {HEALTHY_BULL: 0.00, SPECULATIVE_BULL: 0.00, NEUTRAL_RANGE: 0.02, RISK_OFF_RANGE: 0.12, TREND_BEAR: 0.18, PANIC: 0.62, TRANSITION: 0.06, UNCLASSIFIED: 0.00}
+  TRANSITION: {HEALTHY_BULL: 0.08, SPECULATIVE_BULL: 0.05, NEUTRAL_RANGE: 0.22, RISK_OFF_RANGE: 0.18, TREND_BEAR: 0.12, PANIC: 0.05, TRANSITION: 0.30, UNCLASSIFIED: 0.00}
+  UNCLASSIFIED: {HEALTHY_BULL: 0.00, SPECULATIVE_BULL: 0.00, NEUTRAL_RANGE: 0.10, RISK_OFF_RANGE: 0.10, TREND_BEAR: 0.05, PANIC: 0.05, TRANSITION: 0.10, UNCLASSIFIED: 0.60}

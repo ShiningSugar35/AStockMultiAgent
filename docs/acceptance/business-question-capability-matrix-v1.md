@@ -1,8 +1,8 @@
 # Business Question Capability & Acceptance Matrix v1
 
-> 状态：PROPOSED ACCEPTANCE DESIGN
-> 是否已执行：否；本文定义下一阶段 68 个业务问题的机器化验收，不代表系统已全部通过
-> 更新日期：2026-09-07
+> 状态：CURRENT ACCEPTANCE CONTRACT
+> 执行边界：68 个原始业务 ID 已全部接入真实领域服务 E2E；成功路径、缺失/冲突/PIT、actual append-only、paper prepare/confirm/replay、禁止能力与公开回答均按本矩阵断言。最新稳定套件为 70 个 pytest 用例，其中额外用例属于辅助安全断言，不改变 68 个业务 ID 口径。
+> 更新日期：2026-09-09
 > 关联架构：`docs/architecture/investment-request-orchestration-v1.md`、`docs/architecture/market-regime-control-v1.md`
 
 ## 1. 目标

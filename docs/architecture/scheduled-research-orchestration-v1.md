@@ -1,9 +1,9 @@
 # ChatGPT / Codex 定时投研适配架构 v1
 
-> 状态：PROPOSED
-> 是否已实现：否
+> 状态：CURRENT
+> 是否已实现：是；三领域本地调度、五类来源准备、窗口/水位/同意绑定、语义 lease 单一 owner、typed submit、通知 outbox/恢复与 missed-run 补偿均已有可执行产品入口。完整 controlled-live/prospective 与平台原生任务是否真实创建仍是运行证据门：无标的/无能力回执的空跑只计 smoke，recorded/DEGRADED 不得冒充 live，未真实创建与授权绑定的平台任务不得声明可用。
 > 版本：scheduled-research-orchestration-v1
-> 更新日期：2026-09-07
+> 更新日期：2026-09-09
 > 适用范围：AStockMultiAgent 的持续跟踪、定时语义研究与用户通知；不授权真实交易或无确认模拟交易
 
 ## 1. 结论
@@ -187,6 +187,32 @@ ChatGPT / Work / Codex Scheduled Task（语义研究/通知平面，按时唤醒
 - 动作：继续持有、复核、降低风险、等待、移出候选等，以及触发条件；
 - 置信度、缺口、何时复查；
 - 不含内部 CLI 流水、Schema、provider 故障细节。
+
+### 6.5 当前来源覆盖的价格与语义边界
+
+`ScheduledInputCoverageService` 是对既有不可变来源的审计，不是第二套行情或研究事实库。定时价格入口接受 canonical daily locator，或从同一已认证 `DatasetReleaseManifest` 的唯一未复权行派生的 `MarketPriceAnchor`。价格锚本身没有证券身份，故必须回溯原 release、raw lineage 和 Parquet 文件，核对目标证券、原价、观察时刻、发布/系统可得时间、对象哈希及注册输入链；单独注册一个泛型 `MarketReferenceRelease`、改价后重新计算哈希或把A证券价格用于B证券都不能获得覆盖。
+
+同一次来源审计内，对共享父release的多个价格锚只复验父数据一次；缓存不跨审计调用，后续来源变化/缺失不得沿用旧成功。新鲜度继续只读取版本化 `configs/scheduled_input_audit_v1.yaml`，盘前前收盘价规则与盘中即时性规则分开；过期日线返回 `STALE`，不会通过刷新锚或报告时间变成盘中报价。盘中另提供 `ScheduledIntradayViews` 的只读 `intraday-observation:<market>:<symbol>:<5m|60m>:<manifest_hash>:<bar_id>`；它绑定当前 canonical manifest 与唯一bar，并从既有 EastMoney/Sina 原始快照通过原解析器离线重放，重新执行原双源质量门。核验捕获URL的证券/频率/未复权参数、响应正文声明的证券、raw对象与metadata、来源可得时间、闭合bar、canonical文件hash及原价一致性；重算被篡改文件和manifest的hash不能替代raw证据。旧locator在manifest变化后失效，要求重新冻结；60m仍保留原近似粒度，不冒充逐笔报价。
+
+`astock investor schedule-market-locator XSHG:600519 --frequency 5m --database runtime/state.sqlite` 只读检查已存在的数据库和捕获数据，输出可供 `schedule-input-register` 使用的locator；`--at`须为带时区的ISO时间，默认当前时刻。结果区分 `MARKET_ONLY/CHECKED` 和 `STALE`，过期退出码3；缺库或来源异常失败，不创建缺失数据库目录，不发起网络请求。manifest及capture-metadata的hash是逻辑版本指纹，不冒充ObjectStore中另存的原始对象。
+
+每个父manifest的盘中复验最多读取256份raw快照、128个canonical文件、100000行，raw及canonical文件各限64MiB；校验前检查大小/行数，超界明确失败，不截断后声称完整。同批locator限同一证券，可分别核验5m/60m；定时来源审计在读取canonical文件前先拒绝目标证券错配，避免无关数据扫描。审计调用内共享父manifest重放，不跨调用缓存信任结果。这些接口不安装常驻任务、不生成语义研究、不替代三域自动采集和完整调度接线；其总体闭环仍需独立验收。
+
+五类来源检查与语义完成是两道独立门：完整来源报告不能替代同请求/时点/证券集合的已认证MONITOR能力回执；语义回执也不能弥补缺失、过期或错误来源。recorded正向夹具仅证明这些软件接口能正确组合，不是实时行情、三域完整controlled-live、自然前瞻shadow或平台原生任务创建证据。未满足这些运行/启用条件时保持降级和原启用硬门。
+
+### 6.6 本地 Windows 调度安装与卸载边界
+
+`install_investor_tracking_task.ps1` 只安装已有授权绑定的本地唤醒时钟，不负责初始化数据库、迁移、注册绑定或生成用户同意。安装前以 SQLite 只读连接校验既有 `LOCAL_ONLY/LOCAL_DAEMON` 绑定：处于活动状态、同意记录非空且确认时间不在未来、策略与当前三领域配置及市场时区一致。重新安装不刷新原确认时间；授权缺失或策略变化时先退出，不创建系统任务。
+
+`-WhatIf` 或用户拒绝 `ShouldProcess` 时，在调用 Python、数据库和 Scheduler 之前返回 `Registered=false/BindingValidated=false` 的预览结果。实际任务固定使用项目 `.venv` 解释器与工作目录，不依赖 PATH 中的 uv，也不隐式安装依赖；路径和绑定ID按 PowerShell 字符串规则转义。运行时临时目录限定在所选数据库父目录的 `.tracking-task/tmp`，任务把 Python 退出码原样交给 Task Scheduler，不能把业务失败包装成成功。
+
+Windows 时钟默认每10分钟唤醒一次，允许5至20分钟；全天按宿主本地时区重复，上海交易日与盘前/盘中/盘后窗口仍由原 Python 日历及版本化策略裁决，避免把宿主08:55误当上海08:55。安装后及幂等重装均读取并核对实际任务的动作、工作目录、唯一日触发器、重复间隔、持续时间和启用状态；同名外来任务或定义变化明确拒绝，不使用 `-Force` 覆盖。
+
+`uninstall_investor_tracking_task.ps1` 仅移除可识别归属的 Windows 唤醒时钟，并复核其确实消失后才返回 `Removed=true`。预览、权限错误、未知归属或静默删除失败不冒充成功。卸载不更改本地绑定、同意记录、持仓、账本或原始证据，也不宣称已经撤销授权或终止其他运行中的 worker。
+
+安装输出明确为 `SCHEDULE_TICK_ONLY`，`SemanticWorkerCreated=false`、`ResearchCoverageCertified=false`。脚本本身没有创建来源采集器、语义研究 worker 或平台原生任务；成功注册时钟不证明完整三域研究或端到端通知已部署。软件回归在真实 Windows PowerShell 进程和隔离 canonical 数据库上执行，Scheduler 的注册/删除用受控替身；原生动作与触发器对象另行只构造不注册，因此不把测试结果当作用户系统任务已安装的证据。
+
+实现依据：[PowerShell ShouldProcess](https://learn.microsoft.com/en-us/powershell/scripting/learn/deep-dives/everything-about-shouldprocess)、[New-ScheduledTaskTrigger](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasktrigger)、[New-ScheduledTaskAction](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskaction)。
 
 ## 7. 幂等、并发与恢复
 

@@ -149,8 +149,10 @@ def test_unmet_akshare_backup_gate_is_not_a_development_backlog_item() -> None:
     architecture = (
         PROJECT_ROOT / "docs/architecture/external-dependency-resilience-v1.md"
     ).read_text(encoding="utf-8")
-    assert "无未完成开发任务" in plan
+    # An unmet external qualification gate is not a software backlog item.
+    # Other unrelated development work may legitimately remain active.
     assert "### E-02" not in plan
+    assert "AKShare" not in plan
     assert "`SHADOW` 是外部资格证据不足时的安全稳定终态" in architecture
     assert (
         "不得把 AKShare 或其他候选的 `PRODUCTION_BACKUP` 资格长期挂在《开发计划》"

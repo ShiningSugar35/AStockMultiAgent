@@ -26,7 +26,7 @@
 - 任务、游标、工件注册和模拟账本：SQLite。
 - Codex 草稿：`runtime/codex_runs/<run_id>/`，校验后才能进入 ArtifactStore。
 - 不直接编辑 SQLite，不在聊天结论和数据库之间建立旁路。
-- `docs/README.md` 是文档治理、事实层级与导航入口；根目录《低成本A股多Agent投研系统方案》是冻结的历史设计背景，不再承担当前计划或验收。重要架构取舍写入 `docs/adr/`，当前领域设计写入 `docs/architecture/`，跨能力协作写入 `docs/workflows/`；`planning/work_packages_v1.yaml` 是当前工作包 ID、依赖、状态、优先级和唯一写入 lane 的机器索引；《开发计划》只解释未完成项、验收与回滚，两者必须通过合同测试一致。《进度验收》只保留**最近一次任务**有证据的验收记录；`.ai-bridge/current-plan.md` 与 `agent-status.md` 仅是瞬时交接，冲突时不得覆盖机器索引、Git、运行事实或 canonical 文档。会影响当前项目理解的稳定事实必须迁入 `AGENTS.md`、机器合同、当前架构/Workflow、README 或 canonical Skill，不在《进度验收》中累积历史流水。验收时必须在同一次修改中迁移状态。
+- `docs/README.md` 是文档治理、事实层级与导航入口；已被当前架构、ADR 和机器合同吸收的冗余总方案应删除，不保留第二套当前事实源。重要架构取舍写入 `docs/adr/`，当前领域设计写入 `docs/architecture/`，跨能力协作写入 `docs/workflows/`；`planning/work_packages_v1.yaml` 是当前工作包 ID、依赖、状态、优先级和唯一写入 lane 的机器索引；《开发计划》只解释未完成项、验收与回滚，两者必须通过合同测试一致。《进度验收》只保留**最近一次任务**有证据的验收记录；`.ai-bridge/current-plan.md` 与 `agent-status.md` 仅是瞬时交接，冲突时不得覆盖机器索引、Git、运行事实或 canonical 文档。会影响当前项目理解的稳定事实必须迁入 `AGENTS.md`、机器合同、当前架构/Workflow、README 或 canonical Skill，不在《进度验收》中累积历史流水。验收时必须在同一次修改中迁移状态。
 
 ## 数据与证据
 
@@ -34,7 +34,7 @@
 - 来源访问由版本化 `source-access-policy` 评分：官方性、capability match、recent health、freshness、transport、latency、cost/auth friction 与 retryability 共同决定自动路径；对强官方能力，只要存在可用 `PRIMARY_OFFICIAL`，低权威快源不得反超。Manual 永远最后，单个 provider 失败不是终止条件。
 - 数据源按稳定性分层：① 可确定/低频规则事实优先使用“权威 Web/Search 核验一次 → 版本化本地冻结 → 后续零网络运行”；② 公告、政策、制度日期等低频外部事实优先权威网页/Search，不为了结构化而强依赖脆弱 API；③ 实时价格、连续 K 线、全市场 Universe 等高频结构化数据才使用多 Provider API/fallback。Agent 动态发现或提议新的 Web/Search 来源时必须先通过 `uv run astock source-proposal-check` 的确定性能力/官方域名/完整性策略校验；`DISCOVERY_ONLY` 结果不得直接进入正式证据，`ADMIT_AFTER_SNAPSHOT` 也必须先形成不可变快照与 provenance。Search 不得替代 OHLCV、全市场覆盖证明，也不得用“没搜到”证明某事项不存在。
 - 交易日历属于低频确定性事实：当前年份若已有 `official_trading_calendar.yaml` 的交易所官方核验记录，`sync-calendar --live` 必须优先本地确定性生成，不得先打 BaoStock/API；新年份配置缺失时，Chat/Codex 自动 Search 上交所/深交所/北交所年度休市通知并交叉核验后更新版本化配置，再恢复任务。仅 Search/Provider 均无法形成可审计日历时才允许降级。
-- 沪深 `instrument.master` 已具备上交所/深交所官方分母冻结与对账；新的官方 freeze 只能从真实抓取的 `available_to_system_at` 起用于强证明，不得回填更早历史。北交所财报/公司行动当前只准 `OfficialWebDocumentCaptureService` 的 exact-item 正式证据，不能声称完整枚举或“未找到即不存在”。国家统计局、人民银行、财政部、发改委宏观 authority 当前保持 recorded-first，`live_supported=false`；replay 只认原始 `FETCH_OBSERVED` PIT，不把页面标示发布日期倒推成系统历史可得时间。
+- 沪深 `instrument.master` 已具备上交所/深交所官方分母冻结与对账；新的官方 freeze 只能从真实抓取的 `available_to_system_at` 起用于强证明，不得回填更早历史。北交所财报/公司行动当前只准 `OfficialWebDocumentCaptureService` 的 exact-item 正式证据，不能声称完整枚举或“未找到即不存在”。旧 `src/astock/providers/macro_authority.py` authority adapter 继续保持 recorded-first、`live_supported=false`；current 宏观由 `OfficialMacroCaptureService` 在具名官方 family 上独立执行 raw-first live capture，NBS/PBOC 可在版本化 parser 成功时产生结构化 observation，MOF/NDRC 可保持 document-only。来源发布日期（含 `Last-Modified`/官方 HTML `PubDate`）只描述 source publication time，`available_to_system_at` 仍必须取本系统真实抓取/冻结时刻，禁止历史回填；局部 family live 成功不得被解释为宏观全覆盖。
 - 上一层已满足时，不通过下一层重复抓取同一内容。
 - 投资结论必须引用 evidence_id/source_snapshot_id，或明确标记为推断/缺口。
 - 社区内容只能作线索；关键事实必须回到公告、交易所、财报等更强来源。

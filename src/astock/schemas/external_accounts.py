@@ -55,6 +55,7 @@ class ExternalAccountEventDraft(AStockModel):
     account_id: str = Field(pattern=_ACCOUNT_ID_PATTERN)
     event_type: ExternalAccountEventType
     occurred_at: AwareDatetime
+    occurred_at_precision: Literal["EXACT", "DATE_ONLY", "MONTH_ONLY", "UNKNOWN"] = "EXACT"
     sequence_no: int | None = Field(default=None, ge=0)
     available_to_system_at: AwareDatetime
     market: Market | None = None
@@ -238,10 +239,62 @@ class ExternalAccountProjection(AStockModel):
         return self
 
 
+class ExternalAccountOperationReceipt(AStockModel):
+    """Immutable orchestration receipt over canonical exact/provisional account facts."""
+
+    schema_version: str = "external-account-operation-receipt-v1"
+    operation_id: str = Field(min_length=1, max_length=256)
+    request_id: str = Field(min_length=1, max_length=256)
+    as_of: AwareDatetime
+    status: Literal["RECORDED", "PROVISIONAL", "NO_CHANGE"]
+    account_ids: list[str] = Field(min_length=1)
+    event_artifact_ids: list[str] = Field(default_factory=list)
+    provisional_assertion_artifact_ids: list[str] = Field(default_factory=list)
+    duplicate_event_ids: list[str] = Field(default_factory=list)
+    date_precisions: list[Literal["EXACT", "DATE_ONLY", "MONTH_ONLY", "UNKNOWN"]] = Field(
+        default_factory=list
+    )
+    artifact_object_hashes: dict[str, str] = Field(default_factory=dict)
+    paper_ledger_write_allowed: Literal[False] = False
+    broker_execution_allowed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_operation_receipt(self) -> ExternalAccountOperationReceipt:
+        for label, values in (
+            ("account_ids", self.account_ids),
+            ("event_artifact_ids", self.event_artifact_ids),
+            ("provisional_assertion_artifact_ids", self.provisional_assertion_artifact_ids),
+            ("duplicate_event_ids", self.duplicate_event_ids),
+        ):
+            if values != sorted(set(values)):
+                raise ValueError(f"{label} must be sorted and unique")
+        references = set(self.event_artifact_ids) | set(self.provisional_assertion_artifact_ids)
+        if set(self.artifact_object_hashes) != references:
+            raise ValueError("operation receipt hash bindings must match referenced artifacts")
+        if any(
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)
+            for digest in self.artifact_object_hashes.values()
+        ):
+            raise ValueError("operation receipt contains an invalid object hash")
+        if self.status == "RECORDED" and not self.event_artifact_ids:
+            raise ValueError("RECORDED operation requires at least one exact event")
+        if self.status == "PROVISIONAL" and not self.provisional_assertion_artifact_ids:
+            raise ValueError("PROVISIONAL operation requires at least one assertion")
+        if self.status == "NO_CHANGE" and not self.duplicate_event_ids:
+            raise ValueError("NO_CHANGE operation requires an existing duplicate identity")
+        if self.status != "PROVISIONAL" and self.provisional_assertion_artifact_ids:
+            raise ValueError("only PROVISIONAL operations may reference provisional assertions")
+        if self.status == "PROVISIONAL" and self.event_artifact_ids:
+            raise ValueError("provisional operation cannot also claim an exact account event")
+        return self
+
+
 def external_account_event_identity(
     event: ExternalAccountEventDraft | ExternalAccountEvent,
 ) -> dict[str, object]:
-    return {
+    identity: dict[str, object] = {
         "schema_version": "external-account-event-v1",
         "account_id": event.account_id,
         "event_type": event.event_type.value,
@@ -261,6 +314,11 @@ def external_account_event_identity(
         "idempotency_key": event.idempotency_key,
         "note": event.note,
     }
+    # Preserve every historical EXACT event identity. Only genuinely imprecise
+    # declarations add the new semantic discriminator to the event hash.
+    if event.occurred_at_precision != "EXACT":
+        identity["occurred_at_precision"] = event.occurred_at_precision
+    return identity
 
 
 def external_account_event_id(
@@ -309,6 +367,7 @@ __all__ = [
     "ExternalAccountImportPreview",
     "ExternalAccountImportReceipt",
     "ExternalAccountKind",
+    "ExternalAccountOperationReceipt",
     "ExternalAccountPosition",
     "ExternalAccountProjection",
     "ExternalAccountStatus",

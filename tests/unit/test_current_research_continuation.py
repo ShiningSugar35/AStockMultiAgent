@@ -166,13 +166,16 @@ def _service(
 
 
 def _request(
-    *, request_id: str = "request-1", max_rounds: int = 3
+    *,
+    request_id: str = "request-1",
+    max_rounds: int = 3,
+    budget_seconds: int = 1800,
 ) -> CurrentResearchContinuationRequest:
     return CurrentResearchContinuationRequest(
         request_id=request_id,
         company_id="600519",
         market=Market.XSHG,
-        automatic_resolution_budget_seconds=1800,
+        automatic_resolution_budget_seconds=budget_seconds,
         max_automatic_rounds=max_rounds,
         created_at=NOW,
     )
@@ -420,6 +423,13 @@ def test_same_request_automatically_continues_from_evidence_to_team_and_gate(
     assert not ready.broker_execution_allowed
     persisted = service.get(ready.continuation_id)
     assert persisted == ready
+
+
+def test_continuation_accepts_non_default_bounded_recovery_budget(tmp_path: Path) -> None:
+    service, _acquisition, _state, _objects = _service(tmp_path, gap_rounds=[True])
+    record = service.start(_request(request_id="budget-900", budget_seconds=900))
+    assert record.automatic_resolution_budget_seconds == 900
+    assert record.deadline_at == NOW + timedelta(seconds=900)
 
 
 def test_start_is_idempotent_for_the_same_request(tmp_path: Path) -> None:

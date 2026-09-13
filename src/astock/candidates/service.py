@@ -53,6 +53,7 @@ from astock.schemas.candidates import (
     CandidateWatchlistIntent,
 )
 from astock.schemas.financial import FinancialIntegrityEvidencePack
+from astock.schemas.market import DataQualityReport, QualityStatus
 
 
 class CandidateInterrupted(RuntimeError):
@@ -660,11 +661,16 @@ class CandidateScanService:
             CandidateArtifactRole.INSTRUMENT_TRADABILITY,
             CandidateArtifactRole.TRADING_CALENDAR,
             CandidateArtifactRole.DAILY_LOCAL_VERSIONED,
-            CandidateArtifactRole.CORPORATE_ACTION,
             CandidateArtifactRole.DATA_QUALITY,
-            CandidateArtifactRole.ANNOUNCEMENT_EVENTS,
-            CandidateArtifactRole.FINANCIAL_INTEGRITY,
         }
+        if release.source_mode is not CandidateSourceMode.LIVE:
+            required_roles.update(
+                {
+                    CandidateArtifactRole.CORPORATE_ACTION,
+                    CandidateArtifactRole.ANNOUNCEMENT_EVENTS,
+                    CandidateArtifactRole.FINANCIAL_INTEGRITY,
+                }
+            )
         for artifact in release.artifacts:
             if not self.objects.verify(artifact.object_hash):
                 issues.append(f"OBJECT_INVALID:{artifact.artifact_id}")
@@ -676,11 +682,28 @@ class CandidateScanService:
                     and artifact.coverage_status is CandidateCoverageStatus.PARTIAL
                     and self._financial_partial_is_research_safe(artifact)
                 )
-                if not financial_partial_allowed:
+                data_quality_partial_allowed = (
+                    artifact.role is CandidateArtifactRole.DATA_QUALITY
+                    and artifact.coverage_status is CandidateCoverageStatus.PARTIAL
+                    and self._data_quality_partial_is_research_safe(artifact)
+                )
+                daily_partial_allowed = (
+                    release.source_mode is CandidateSourceMode.LIVE
+                    and artifact.role is CandidateArtifactRole.DAILY_LOCAL_VERSIONED
+                    and artifact.coverage_status is CandidateCoverageStatus.PARTIAL
+                    and self._daily_partial_is_research_safe(artifact, release)
+                )
+                if not any(
+                    [
+                        financial_partial_allowed,
+                        data_quality_partial_allowed,
+                        daily_partial_allowed,
+                    ]
+                ):
                     issues.append(
                         f"COVERAGE_{artifact.coverage_status.value}:{artifact.artifact_id}"
                     )
-            if artifact.available_to_system_at > request.as_of:
+            if request.formal_historical and artifact.available_to_system_at > request.as_of:
                 issues.append(f"FUTURE_INPUT:{artifact.artifact_id}")
             if (
                 request.formal_historical
@@ -696,7 +719,7 @@ class CandidateScanService:
                 *company.holding_observations,
             ]
             for item in nested:
-                if item.available_to_system_at > request.as_of:
+                if request.formal_historical and item.available_to_system_at > request.as_of:
                     issues.append(
                         f"FUTURE_INPUT:{item.source_artifact_id}:{type(item).__name__}"
                     )
@@ -717,6 +740,62 @@ class CandidateScanService:
         except (AStockError, OSError, ValueError):
             return False
         return financial_pack_is_candidate_eligible(pack)
+
+    def _data_quality_partial_is_research_safe(self, artifact: CandidateInputArtifact) -> bool:
+        try:
+            report = DataQualityReport.model_validate_json(
+                self.objects.get_bytes(artifact.object_hash)
+            )
+        except (AStockError, OSError, ValueError):
+            return False
+        return (
+            report.quality_status is QualityStatus.PARTIAL
+            and report.duplicate_bars == 0
+            and report.ohlc_errors == 0
+            and report.bar_count >= self.config.minimum_trading_days
+            and bool(report.reasons)
+            and all(
+                reason == "daily amount missing; turnover proxy derived from close*volume"
+                for reason in report.reasons
+            )
+        )
+
+    def _daily_partial_is_research_safe(
+        self,
+        artifact: CandidateInputArtifact,
+        release: CandidateInputRelease,
+    ) -> bool:
+        bound = [
+            company
+            for company in release.companies
+            if company.daily_artifact_id == artifact.artifact_id
+        ]
+        if not bound:
+            return False
+        for company in bound:
+            points = company.daily_points
+            if len(points) < self.config.minimum_trading_days:
+                return False
+            if len({item.session_date for item in points}) != len(points):
+                return False
+            if any(item.close <= 0 or item.volume < 0 or item.turnover_cny < 0 for item in points):
+                return False
+            quality_artifact = next(
+                (
+                    item
+                    for item in release.artifacts
+                    if item.artifact_id == company.quality_artifact_id
+                ),
+                None,
+            )
+            if quality_artifact is None:
+                return False
+            if quality_artifact.coverage_status is CandidateCoverageStatus.PARTIAL:
+                if not self._data_quality_partial_is_research_safe(quality_artifact):
+                    return False
+            elif quality_artifact.coverage_status is not CandidateCoverageStatus.COMPLETE:
+                return False
+        return True
 
     def _release_verification_issues(self, release: CandidateInputRelease) -> list[str]:
         result = self.input_verifier.verify(release)
@@ -1065,7 +1144,7 @@ class CandidateScanService:
         severity: CandidateEvidenceSeverity | None = None,
     ) -> CandidateSignal:
         resolved_pit = pit_status or artifact.pit_status
-        if available_at > request.as_of:
+        if request.formal_historical and available_at > request.as_of:
             disposition = CandidateSignalDisposition.EXCLUDED_FUTURE
         elif (
             request.formal_historical
@@ -1108,7 +1187,7 @@ class CandidateScanService:
         available_at: datetime,
         pit_status: CandidatePitStatus,
     ) -> CandidateSignalDisposition:
-        if available_at > request.as_of:
+        if request.formal_historical and available_at > request.as_of:
             return CandidateSignalDisposition.EXCLUDED_FUTURE
         if (
             request.formal_historical
@@ -1126,12 +1205,12 @@ class CandidateScanService:
         safe = [
             item
             for item in points
-            if item.available_to_system_at <= request.as_of
-            and artifacts[item.source_artifact_id].available_to_system_at <= request.as_of
-            and (
+            if (
                 not request.formal_historical
                 or (
-                    item.pit_status in self.config.formal_historical_pit_statuses
+                    item.available_to_system_at <= request.as_of
+                    and artifacts[item.source_artifact_id].available_to_system_at <= request.as_of
+                    and item.pit_status in self.config.formal_historical_pit_statuses
                     and artifacts[item.source_artifact_id].pit_status
                     in self.config.formal_historical_pit_statuses
                 )
@@ -1214,7 +1293,6 @@ class CandidateScanService:
             eligible = (
                 complete_release
                 and strength in {CandidateStrength.MODERATE, CandidateStrength.STRONG}
-                and bool(evidence_ids)
                 and company.quality_status is not CandidateQualityStatus.FAIL
                 and liquidity_pass
                 and company.tradability is CandidateTradability.TRADABLE
@@ -1249,7 +1327,7 @@ class CandidateScanService:
                 miss_count=0,
                 reactivation_count=reactivation_count,
                 reasons=[
-                    "RESEARCH_EVIDENCE_AND_GATES_PASSED"
+                    "VERIFIED_RESEARCH_SIGNALS_AND_GATES_PASSED"
                     if eligible
                     else "OBSERVATION_ONLY"
                 ],

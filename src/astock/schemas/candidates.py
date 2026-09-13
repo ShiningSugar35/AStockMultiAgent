@@ -228,7 +228,7 @@ class CandidateAnnouncementEvent(AStockModel):
     observed_at: AwareDatetime
     available_to_system_at: AwareDatetime
     pit_status: CandidatePitStatus
-    evidence_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_availability(self) -> CandidateAnnouncementEvent:
@@ -317,10 +317,10 @@ class CandidateCompanyInput(AStockModel):
     instrument_artifact_id: str = Field(min_length=1)
     calendar_artifact_id: str = Field(min_length=1)
     daily_artifact_id: str = Field(min_length=1)
-    corporate_action_artifact_id: str = Field(min_length=1)
+    corporate_action_artifact_id: str | None = Field(default=None, min_length=1)
     quality_artifact_id: str = Field(min_length=1)
-    announcement_artifact_id: str = Field(min_length=1)
-    financial_artifact_id: str = Field(min_length=1)
+    announcement_artifact_id: str | None = Field(default=None, min_length=1)
+    financial_artifact_id: str | None = Field(default=None, min_length=1)
     quality_status: CandidateQualityStatus
     daily_points: list[CandidateDailyPoint] = Field(default_factory=list)
     announcement_events: list[CandidateAnnouncementEvent] = Field(default_factory=list)
@@ -369,29 +369,47 @@ class CandidateInputRelease(AStockModel):
             raise ValueError("expected company ids must be unique")
         if len(self.coverage_proof_artifact_ids) != len(set(self.coverage_proof_artifact_ids)):
             raise ValueError("coverage proof artifact ids must be unique")
-        required_roles = {
+        core_roles = {
             CandidateArtifactRole.INSTRUMENT_TRADABILITY,
             CandidateArtifactRole.TRADING_CALENDAR,
             CandidateArtifactRole.DAILY_LOCAL_VERSIONED,
-            CandidateArtifactRole.CORPORATE_ACTION,
             CandidateArtifactRole.DATA_QUALITY,
+        }
+        historical_enrichment_roles = {
+            CandidateArtifactRole.CORPORATE_ACTION,
             CandidateArtifactRole.ANNOUNCEMENT_EVENTS,
             CandidateArtifactRole.FINANCIAL_INTEGRITY,
         }
+        required_roles = (
+            core_roles
+            if self.source_mode is CandidateSourceMode.LIVE
+            else core_roles | historical_enrichment_roles
+        )
         if not required_roles.issubset({item.role for item in self.artifacts}):
             raise ValueError("candidate input release is missing required artifact roles")
-        expected_fields = {
+        core_fields = {
             "instrument_artifact_id": CandidateArtifactRole.INSTRUMENT_TRADABILITY,
             "calendar_artifact_id": CandidateArtifactRole.TRADING_CALENDAR,
             "daily_artifact_id": CandidateArtifactRole.DAILY_LOCAL_VERSIONED,
-            "corporate_action_artifact_id": CandidateArtifactRole.CORPORATE_ACTION,
             "quality_artifact_id": CandidateArtifactRole.DATA_QUALITY,
+        }
+        enrichment_fields = {
+            "corporate_action_artifact_id": CandidateArtifactRole.CORPORATE_ACTION,
             "announcement_artifact_id": CandidateArtifactRole.ANNOUNCEMENT_EVENTS,
             "financial_artifact_id": CandidateArtifactRole.FINANCIAL_INTEGRITY,
         }
         for company in self.companies:
-            for field_name, role in expected_fields.items():
+            for field_name, role in core_fields.items():
                 artifact = artifact_by_id.get(str(getattr(company, field_name)))
+                if artifact is None or artifact.role is not role:
+                    raise ValueError(f"{field_name} does not bind a {role.value} artifact")
+            for field_name, role in enrichment_fields.items():
+                artifact_id = getattr(company, field_name)
+                if artifact_id is None:
+                    if self.source_mode is not CandidateSourceMode.LIVE:
+                        raise ValueError(f"{field_name} is required outside CURRENT live discovery")
+                    continue
+                artifact = artifact_by_id.get(artifact_id)
                 if artifact is None or artifact.role is not role:
                     raise ValueError(f"{field_name} does not bind a {role.value} artifact")
             nested = [
@@ -450,7 +468,7 @@ class CandidateScanRequest(AStockModel):
     input_release_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     as_of: AwareDatetime
     rules_version: str = Field(default="candidate-scan-v1", min_length=1)
-    formal_historical: bool = True
+    formal_historical: bool = False
     live: bool = False
 
 
@@ -505,8 +523,10 @@ class CandidateRecord(AStockModel):
                 raise ValueError("RESEARCH_READY candidates must be evaluated")
             if self.strength not in {CandidateStrength.MODERATE, CandidateStrength.STRONG}:
                 raise ValueError("RESEARCH_READY requires MODERATE or STRONG evidence")
-            if not self.evidence_ids or not self.liquidity_gate_passed:
-                raise ValueError("RESEARCH_READY requires evidence and a liquidity pass")
+            if not self.signal_ids or not self.liquidity_gate_passed:
+                raise ValueError(
+                    "RESEARCH_READY requires verified research signals and a liquidity pass"
+                )
             if self.quality_status is CandidateQualityStatus.FAIL:
                 raise ValueError("RESEARCH_READY cannot pass a failed quality gate")
             if self.tradability is not CandidateTradability.TRADABLE:
@@ -519,7 +539,7 @@ class CandidateUniverseMember(AStockModel):
     candidate_version_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     company_id: str = Field(min_length=1)
     instrument_id: str = Field(min_length=1)
-    evidence_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class CandidateUniverseSnapshot(AStockModel):

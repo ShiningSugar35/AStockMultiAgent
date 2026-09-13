@@ -41,6 +41,7 @@ from astock.schemas.candidates import (
     CandidateInstrumentUniverseProof,
     CandidatePitStatus,
     CandidateQualityStatus,
+    CandidateSourceMode,
     CandidateTradability,
 )
 from astock.schemas.pit import PointInTimeStatus
@@ -95,7 +96,14 @@ _ROLE_CONTRACTS = {
 
 
 class ProductionCandidateInputVerifier:
-    """Fail-closed verifier backed by real registries, typed objects, and Parquet."""
+    """Verify current facts semantically; retain historical reconstruction checks only off LIVE."""
+
+    @staticmethod
+    def _current_live(release: Any) -> bool:
+        return (
+            getattr(release, "source_mode", CandidateSourceMode.LOCAL)
+            is CandidateSourceMode.LIVE
+        )
 
     def __init__(
         self,
@@ -114,11 +122,19 @@ class ProductionCandidateInputVerifier:
             fixture_root,
         )
 
+    def _current_source_snapshots_valid(self, snapshot_ids: list[str]) -> bool:
+        for snapshot_id in snapshot_ids:
+            snapshot = self.state.get_snapshot(snapshot_id)
+            if snapshot is None or not self.objects.verify(snapshot.object_sha256):
+                return False
+        return True
+
     def verify(self, release: CandidateInputRelease) -> CandidateVerificationResult:
         issues: list[str] = []
         proven: set[str] = set()
         proof_seen = False
         company_by_artifact: dict[str, set[str]] = {}
+        current_live = self._current_live(release)
         for artifact in release.artifacts:
             corporate_baseline = (
                 artifact.role is CandidateArtifactRole.CORPORATE_ACTION
@@ -129,16 +145,15 @@ class ProductionCandidateInputVerifier:
                 and artifact.artifact_type == "CandidateInstrumentUniverseProof"
             )
             role_contract = _ROLE_CONTRACTS[artifact.role]
-            if (
-                not corporate_baseline
-                and not instrument_proof
-                and (
-                    artifact.artifact_type,
-                    artifact.artifact_schema_version,
-                    artifact.dataset_kind,
+            contract_mismatch = (
+                artifact.artifact_type != role_contract[0]
+                or artifact.dataset_kind != role_contract[2]
+                or (
+                    not current_live
+                    and artifact.artifact_schema_version != role_contract[1]
                 )
-                != role_contract
-            ):
+            )
+            if not corporate_baseline and not instrument_proof and contract_mismatch:
                 issues.append(f"ARTIFACT_CONTRACT_MISMATCH:{artifact.artifact_id}")
                 continue
             if artifact.artifact_type.startswith("Fixture"):
@@ -146,6 +161,11 @@ class ProductionCandidateInputVerifier:
                 continue
             if not self.objects.verify(artifact.object_hash):
                 issues.append(f"OBJECT_INVALID:{artifact.artifact_id}")
+                continue
+            if current_live and not self._current_source_snapshots_valid(
+                artifact.source_snapshot_ids
+            ):
+                issues.append(f"SOURCE_SNAPSHOT_INVALID:{artifact.artifact_id}")
                 continue
             try:
                 if corporate_baseline:
@@ -186,44 +206,52 @@ class ProductionCandidateInputVerifier:
             self.objects.get_bytes(artifact.object_hash)
         )
         expected_kind = _REFERENCE_KINDS[artifact.role]
-        result = self.reference.status(
-            expected_kind,
-            manifest.scope_key,
-            as_of=release.as_of,
-        )
-        if result.get("status") != "AVAILABLE":
-            raise ValueError("reference release is unavailable or corrupt")
-        verified = DatasetReleaseManifest.model_validate(result["release"])
-        expected_artifact_id = f"market-reference:{verified.release_id}"
+        current_live = self._current_live(release)
+        verified = manifest
+        if not current_live:
+            result = self.reference.status(
+                expected_kind,
+                manifest.scope_key,
+                as_of=release.as_of,
+            )
+            if result.get("status") != "AVAILABLE":
+                raise ValueError("reference release is unavailable or corrupt")
+            verified = DatasetReleaseManifest.model_validate(result["release"])
+        expected_artifact_id = f"market-reference:{manifest.release_id}"
         expected_pit = {
             ReferencePitStatus.CERTIFIED: CandidatePitStatus.CERTIFIED,
             ReferencePitStatus.RECONSTRUCTED: CandidatePitStatus.DOCUMENT_RECONSTRUCTED,
-        }.get(verified.pit_status, CandidatePitStatus.NOT_PIT_SAFE)
+        }.get(manifest.pit_status, CandidatePitStatus.NOT_PIT_SAFE)
         expected_coverage = {
             ReferenceCoverageStatus.COMPLETE: CandidateCoverageStatus.COMPLETE,
             ReferenceCoverageStatus.PARTIAL: CandidateCoverageStatus.PARTIAL,
             ReferenceCoverageStatus.CONFLICTED: CandidateCoverageStatus.CONFLICTED,
             ReferenceCoverageStatus.FAILED: CandidateCoverageStatus.FAILED,
             ReferenceCoverageStatus.EMPTY: CandidateCoverageStatus.NOT_AVAILABLE,
-        }[verified.coverage.status]
+        }[manifest.coverage.status]
         if (
-            verified.release_id != manifest.release_id
-            or verified.dataset_kind is not expected_kind
+            manifest.dataset_kind is not expected_kind
             or artifact.artifact_id != expected_artifact_id
             or artifact.object_hash != self._registered_hash(expected_artifact_id)
             or artifact.coverage_status is not expected_coverage
-            or artifact.pit_status is not expected_pit
-            or artifact.formal_status != expected_pit.value
-            or artifact.available_to_system_at != verified.available_to_system_at
-            or artifact.source_family != verified.provider_id
-            or set(artifact.source_snapshot_ids) != set(verified.raw_snapshot_ids)
+            or artifact.source_family != manifest.provider_id
+            or set(artifact.source_snapshot_ids) != set(manifest.raw_snapshot_ids)
+            or (
+                not current_live
+                and (
+                    verified.release_id != manifest.release_id
+                    or artifact.pit_status is not expected_pit
+                    or artifact.formal_status != expected_pit.value
+                    or artifact.available_to_system_at != verified.available_to_system_at
+                )
+            )
         ):
             raise ValueError("reference wrapper differs from verified release")
         if artifact.role is CandidateArtifactRole.INSTRUMENT_TRADABILITY:
-            instruments = self._reference_records(verified, InstrumentRecord)
+            instruments = self._reference_records(manifest, InstrumentRecord)
             return self._verify_instrument_inputs(artifact, release, instruments)
         if artifact.role is CandidateArtifactRole.DAILY_LOCAL_VERSIONED:
-            daily = self._reference_records(verified, DailyBarObservation)
+            daily = self._reference_records(manifest, DailyBarObservation)
             self._verify_daily_inputs(artifact, release, daily)
         return set()
 
@@ -253,18 +281,24 @@ class ProductionCandidateInputVerifier:
         release: CandidateInputRelease,
     ) -> set[str]:
         self._verify_registered_artifact(artifact)
+        current_live = self._current_live(release)
         proof = CandidateInstrumentUniverseProof.model_validate_json(
             self.objects.get_bytes(artifact.object_hash)
         )
         if (
             artifact.artifact_id != f"CandidateInstrumentUniverseProof:{proof.proof_id}"
-            or artifact.artifact_schema_version != proof.schema_version
             or artifact.dataset_kind != "INSTRUMENT_TRADABILITY_SUBSET"
             or artifact.source_family != "seed-promotion-instrument-subset"
             or artifact.coverage_status is not CandidateCoverageStatus.COMPLETE
-            or artifact.available_to_system_at != proof.as_of
-            or artifact.source_snapshot_ids != proof.source_snapshot_ids
-            or proof.as_of > release.as_of
+            or set(artifact.source_snapshot_ids) != set(proof.source_snapshot_ids)
+            or (
+                not current_live
+                and (
+                    artifact.artifact_schema_version != proof.schema_version
+                    or artifact.available_to_system_at != proof.as_of
+                    or proof.as_of > release.as_of
+                )
+            )
         ):
             raise ValueError("instrument universe proof wrapper differs from typed proof")
 
@@ -300,22 +334,28 @@ class ProductionCandidateInputVerifier:
         if (
             parent.dataset_kind is not ReferenceDatasetKind.INSTRUMENT_MASTER
             or parent.release_id != proof.parent_release_id
-            or parent.available_to_system_at > proof.as_of
-            or proof.source_snapshot_ids != parent.raw_snapshot_ids
-            or artifact.pit_status is not expected_pit
-            or artifact.formal_status != expected_pit.value
+            or set(proof.source_snapshot_ids) != set(parent.raw_snapshot_ids)
+            or (
+                not current_live
+                and (
+                    parent.available_to_system_at > proof.as_of
+                    or artifact.pit_status is not expected_pit
+                    or artifact.formal_status != expected_pit.value
+                )
+            )
         ):
             raise ValueError("instrument universe proof parent metadata is invalid")
-        current = self.reference.status(
-            ReferenceDatasetKind.INSTRUMENT_MASTER,
-            parent.scope_key,
-            as_of=proof.as_of,
-        )
-        if current.get("status") != "AVAILABLE":
-            raise ValueError("instrument universe proof parent release is unavailable")
-        verified_parent = DatasetReleaseManifest.model_validate(current["release"])
-        if verified_parent.release_id != parent.release_id:
-            raise ValueError("instrument universe proof parent release is not the PIT head")
+        if not current_live:
+            current = self.reference.status(
+                ReferenceDatasetKind.INSTRUMENT_MASTER,
+                parent.scope_key,
+                as_of=proof.as_of,
+            )
+            if current.get("status") != "AVAILABLE":
+                raise ValueError("instrument universe proof parent release is unavailable")
+            verified_parent = DatasetReleaseManifest.model_validate(current["release"])
+            if verified_parent.release_id != parent.release_id:
+                raise ValueError("instrument universe proof parent release is not the PIT head")
 
         parent_by_id = {
             item.instrument_id: item for item in self._reference_records(parent, InstrumentRecord)
@@ -376,7 +416,10 @@ class ProductionCandidateInputVerifier:
                 or company.name != instrument.name
                 or company.instrument_type is not instrument.instrument_type
                 or company.tradability is not self._expected_tradability(instrument)
-                or instrument.available_to_system_at > release.as_of
+                or (
+                    not self._current_live(release)
+                    and instrument.available_to_system_at > release.as_of
+                )
                 or instrument.source_snapshot_id not in artifact.source_snapshot_ids
             ):
                 raise ValueError("candidate instrument fields differ from typed reference")
@@ -409,17 +452,26 @@ class ProductionCandidateInputVerifier:
                 raise ValueError("candidate daily sessions differ from typed reference")
             for session_date, point in supplied.items():
                 source = typed[session_date]
+                normalized_turnover = (
+                    source.amount
+                    if source.amount is not None
+                    else source.close * source.volume
+                )
                 if (
-                    source.amount is None
-                    or point.close != source.close
+                    point.close != source.close
                     or point.volume != source.volume
-                    or point.turnover_cny != source.amount
+                    or point.turnover_cny != normalized_turnover
                     or point.source_artifact_id != artifact.artifact_id
                     or point.observed_at != source.session_close_at
                     or point.available_to_system_at != source.available_to_system_at
-                    or point.pit_status is not artifact.pit_status
-                    or source.available_to_system_at > release.as_of
                     or source.source_snapshot_id not in artifact.source_snapshot_ids
+                    or (
+                        not self._current_live(release)
+                        and (
+                            point.pit_status is not artifact.pit_status
+                            or source.available_to_system_at > release.as_of
+                        )
+                    )
                 ):
                     raise ValueError("candidate daily values differ from typed reference")
 
@@ -429,6 +481,7 @@ class ProductionCandidateInputVerifier:
         release: CandidateInputRelease,
     ) -> None:
         self._verify_registered_artifact(artifact)
+        current_live = self._current_live(release)
         baseline = TradingClassificationCorporateActionBaseline.model_validate_json(
             self.objects.get_bytes(artifact.object_hash)
         )
@@ -440,24 +493,35 @@ class ProductionCandidateInputVerifier:
         if len(companies) != 1:
             raise ValueError("corporate-action baseline must bind exactly one candidate")
         company = companies[0]
+        expected_formal_status = (
+            "CERTIFIED_ABSENCE"
+            if baseline.absence_is_officially_certified
+            else "OFFICIAL_ENUMERATION_COMPLETE"
+        )
         if (
             baseline.company_id != company.company_id
             or baseline.symbol != company.symbol
             or baseline.market is not company.market
-            or not baseline.absence_is_officially_certified
-            or baseline.candidate_announcement_ids
             or not baseline.official_query_snapshot_ids
-            or artifact.artifact_schema_version != baseline.schema_version
             or artifact.dataset_kind != "CORPORATE_ACTION_BASELINE"
-            or artifact.formal_status != "CERTIFIED_ABSENCE"
             or artifact.coverage_status is not CandidateCoverageStatus.COMPLETE
-            or artifact.pit_status is not CandidatePitStatus.CERTIFIED
             or artifact.source_family != "cninfo-official-corporate-action-baseline"
-            or artifact.available_to_system_at != baseline.created_at
-            or artifact.source_snapshot_ids != baseline.official_query_snapshot_ids
+            or set(artifact.source_snapshot_ids) != set(baseline.official_query_snapshot_ids)
             or baseline.created_at > release.as_of
+            or (
+                not current_live
+                and (
+                    not baseline.absence_is_officially_certified
+                    or baseline.candidate_announcement_ids
+                    or artifact.artifact_schema_version != baseline.schema_version
+                    or artifact.formal_status != "CERTIFIED_ABSENCE"
+                    or artifact.pit_status is not CandidatePitStatus.CERTIFIED
+                    or artifact.available_to_system_at != baseline.created_at
+                )
+            )
+            or (current_live and artifact.formal_status != expected_formal_status)
         ):
-            raise ValueError("corporate-action baseline wrapper differs from certified object")
+            raise ValueError("corporate-action baseline wrapper differs from official object")
         for snapshot_id in baseline.official_query_snapshot_ids:
             snapshot = self.state.get_snapshot(snapshot_id)
             if (
@@ -474,6 +538,7 @@ class ProductionCandidateInputVerifier:
         release: CandidateInputRelease,
     ) -> None:
         self._verify_registered_artifact(artifact)
+        current_live = self._current_live(release)
         report = DataQualityReport.model_validate_json(self.objects.get_bytes(artifact.object_hash))
         companies = [
             item for item in release.companies if item.quality_artifact_id == artifact.artifact_id
@@ -490,7 +555,10 @@ class ProductionCandidateInputVerifier:
             or artifact.coverage_status is not expected_status
             or artifact.available_to_system_at != report.created_at
             or artifact.source_family != "market-data-quality"
-            or artifact.pit_status is not CandidatePitStatus.DOCUMENT_RECONSTRUCTED
+            or (
+                not current_live
+                and artifact.pit_status is not CandidatePitStatus.DOCUMENT_RECONSTRUCTED
+            )
             or report.actual_end is None
             or report.actual_end > report.created_at
             or any(item.symbol != report.symbol for item in companies)
@@ -504,6 +572,7 @@ class ProductionCandidateInputVerifier:
         release: CandidateInputRelease,
     ) -> None:
         self._verify_registered_artifact(artifact)
+        current_live = self._current_live(release)
         pack = CandidateAnnouncementEventPack.model_validate_json(
             self.objects.get_bytes(artifact.object_hash)
         )
@@ -525,23 +594,39 @@ class ProductionCandidateInputVerifier:
             pack.schema_version != "candidate-announcement-event-pack-v1"
             or artifact.artifact_id != f"candidate-announcement-events:{pack.pack_id}"
             or artifact.coverage_status is not pack.coverage_status
-            or artifact.pit_status is not pack.pit_status
-            or artifact.formal_status != pack.pit_status.value
-            or artifact.available_to_system_at != pack.created_at
             or artifact.source_family != "official-announcement-classifier"
-            or artifact.source_snapshot_ids != pack.source_snapshot_ids
+            or set(artifact.source_snapshot_ids) != set(pack.source_snapshot_ids)
             or set(artifact.evidence_ids) != evidence_ids
             or supplied != packed
             or any(item.source_artifact_id != artifact.artifact_id for item in pack.events)
-            or pack.as_of > pack.created_at
             or pack.created_at > release.as_of
-            or any(
-                item.available_to_system_at != pack.created_at
-                or item.observed_at > item.available_to_system_at
-                for item in pack.events
+            or any(item.observed_at > item.available_to_system_at for item in pack.events)
+            or (
+                not current_live
+                and (
+                    artifact.pit_status is not pack.pit_status
+                    or artifact.formal_status != pack.pit_status.value
+                    or artifact.available_to_system_at != pack.created_at
+                    or pack.as_of > pack.created_at
+                    or any(
+                        item.available_to_system_at != pack.created_at
+                        for item in pack.events
+                    )
+                )
             )
         ):
             raise ValueError("announcement wrapper differs from typed pack")
+        if current_live:
+            for snapshot_id in pack.source_snapshot_ids:
+                snapshot = self.state.get_snapshot(snapshot_id)
+                if (
+                    snapshot is None
+                    or snapshot.source_id != "cninfo-disclosures:index"
+                    or not self.objects.verify(snapshot.object_sha256)
+                ):
+                    raise ValueError(
+                        "announcement source snapshot is not current official evidence"
+                    )
         evidence_repository = EvidenceRepository(self.state)
         for event in pack.events:
             for evidence_id in event.evidence_ids:
@@ -560,9 +645,10 @@ class ProductionCandidateInputVerifier:
                     or not self.objects.verify(evidence.excerpt_object_sha256)
                 ):
                     raise ValueError("announcement evidence binding is invalid")
-        expected_pit = self._verified_snapshot_pit(pack.source_snapshot_ids, release)
-        if expected_pit is not pack.pit_status:
-            raise ValueError("announcement pack PIT status is invalid")
+        if not current_live:
+            expected_pit = self._verified_snapshot_pit(pack.source_snapshot_ids, release)
+            if expected_pit is not pack.pit_status:
+                raise ValueError("announcement pack PIT status is invalid")
 
     def _verify_financial(
         self,
@@ -570,6 +656,7 @@ class ProductionCandidateInputVerifier:
         release: CandidateInputRelease,
     ) -> None:
         self._verify_registered_artifact(artifact)
+        current_live = self._current_live(release)
         pack = FinancialIntegrityEvidencePack.model_validate_json(
             self.objects.get_bytes(artifact.object_hash)
         )
@@ -592,21 +679,26 @@ class ProductionCandidateInputVerifier:
             FinancialCoverageStatus.BLOCKED: CandidateCoverageStatus.NOT_AVAILABLE,
         }[pack.coverage_status]
         pit_metadata = [PointInTimeRepository(self.state).get(item) for item in pack.pit_ids]
-        if not pit_metadata or any(item is None for item in pit_metadata):
-            raise ValueError("financial pack PIT lineage is missing")
         typed_pit = [item for item in pit_metadata if item is not None]
-        if any(
-            item.available_to_system_at > release.as_of
-            or item.point_in_time_status
-            not in {PointInTimeStatus.CERTIFIED, PointInTimeStatus.DOCUMENT_RECONSTRUCTED}
-            for item in typed_pit
-        ):
-            raise ValueError("financial pack PIT lineage is unusable")
-        expected_pit = (
-            CandidatePitStatus.CERTIFIED
-            if all(item.point_in_time_status is PointInTimeStatus.CERTIFIED for item in typed_pit)
-            else CandidatePitStatus.DOCUMENT_RECONSTRUCTED
-        )
+        expected_pit = CandidatePitStatus.NOT_PIT_SAFE
+        if not current_live:
+            if not pit_metadata or any(item is None for item in pit_metadata):
+                raise ValueError("financial pack PIT lineage is missing")
+            if any(
+                item.available_to_system_at > release.as_of
+                or item.point_in_time_status
+                not in {PointInTimeStatus.CERTIFIED, PointInTimeStatus.DOCUMENT_RECONSTRUCTED}
+                for item in typed_pit
+            ):
+                raise ValueError("financial pack PIT lineage is unusable")
+            expected_pit = (
+                CandidatePitStatus.CERTIFIED
+                if all(
+                    item.point_in_time_status is PointInTimeStatus.CERTIFIED
+                    for item in typed_pit
+                )
+                else CandidatePitStatus.DOCUMENT_RECONSTRUCTED
+            )
         bound_companies = [
             item for item in release.companies if item.financial_artifact_id == artifact.artifact_id
         ]
@@ -643,17 +735,22 @@ class ProductionCandidateInputVerifier:
             artifact.artifact_id != f"FinancialIntegrityEvidencePack:{pack.audit_run_id}"
             or artifact.formal_status != pack.status.value
             or artifact.coverage_status is not expected_coverage
-            or artifact.available_to_system_at != pack.created_at
             or artifact.source_family != "financial-integrity"
-            or artifact.pit_status is not expected_pit
             or set(artifact.source_snapshot_ids) != set(pack.source_snapshot_ids)
             or len(bound_companies) != 1
             or bound_companies[0].company_id != pack.company_id
             or companies - {pack.company_id}
             or not set(artifact.evidence_ids).issubset(evidence)
             or set(supplied_flags) != set(expected_flags)
-            or pack.as_of > pack.created_at
             or pack.created_at > release.as_of
+            or (
+                not current_live
+                and (
+                    artifact.available_to_system_at != pack.created_at
+                    or artifact.pit_status is not expected_pit
+                    or pack.as_of > pack.created_at
+                )
+            )
         ):
             raise ValueError("financial wrapper differs from typed pack")
         for finding_id, flag in supplied_flags.items():
@@ -662,9 +759,14 @@ class ProductionCandidateInputVerifier:
                 flag.severity.value != severity.value
                 or not flag.evidence_closed
                 or set(flag.evidence_ids) != finding_evidence
-                or flag.observed_at != pack.as_of
-                or flag.available_to_system_at != pack.created_at
-                or flag.pit_status is not artifact.pit_status
+                or (
+                    not current_live
+                    and (
+                        flag.observed_at != pack.as_of
+                        or flag.available_to_system_at != pack.created_at
+                        or flag.pit_status is not artifact.pit_status
+                    )
+                )
             ):
                 raise ValueError("candidate financial flag differs from typed finding")
 
@@ -707,6 +809,7 @@ class ProductionCandidateInputVerifier:
         release: CandidateInputRelease,
     ) -> None:
         self._verify_registered_artifact(artifact)
+        current_live = self._current_live(release)
         payload = json.loads(self.objects.get_bytes(artifact.object_hash))
         if not isinstance(payload, dict):
             raise ValueError("watchlist root must be an object")
@@ -723,7 +826,7 @@ class ProductionCandidateInputVerifier:
             or payload.get("available_to_system_at") != artifact.available_to_system_at.isoformat()
             or artifact.formal_status != "USER_CONFIRMED"
             or artifact.source_family != "user-watchlist"
-            or artifact.pit_status is not CandidatePitStatus.CERTIFIED
+            or (not current_live and artifact.pit_status is not CandidatePitStatus.CERTIFIED)
             or artifact.source_snapshot_ids
         ):
             raise ValueError("watchlist wrapper differs from confirmed snapshot")
@@ -734,6 +837,7 @@ class ProductionCandidateInputVerifier:
         release: CandidateInputRelease,
     ) -> None:
         self._verify_registered_artifact(artifact)
+        current_live = self._current_live(release)
         review = HoldingReviewPack.model_validate_json(self.objects.get_bytes(artifact.object_hash))
         expected_ids = {
             item.review_id
@@ -772,7 +876,7 @@ class ProductionCandidateInputVerifier:
             or artifact.formal_status != "VERIFIED"
             or artifact.available_to_system_at != review.created_at
             or artifact.source_family != "holding-review"
-            or artifact.pit_status is not CandidatePitStatus.NOT_PIT_SAFE
+            or (not current_live and artifact.pit_status is not CandidatePitStatus.NOT_PIT_SAFE)
             or artifact.source_snapshot_ids
             or not set(artifact.evidence_ids).issubset(review.evidence_ids)
             or review.as_of > review.created_at
@@ -782,7 +886,9 @@ class ProductionCandidateInputVerifier:
             or set(observations[0].evidence_ids) != set(review.evidence_ids)
             or observations[0].observed_at != review.as_of
             or observations[0].available_to_system_at != review.created_at
-            or observations[0].pit_status is not artifact.pit_status
+            or (
+                not current_live and observations[0].pit_status is not artifact.pit_status
+            )
         ):
             raise ValueError("holding wrapper differs from typed review")
 

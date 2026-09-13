@@ -4,6 +4,14 @@
 
 This architecture record closes the 2026-08 current-company continuation, request-reuse and method-Skill gap without adding a second Router, state store, evidence model, research-team scheduler or execution ledger. The existing `CurrentResearchAcquisitionService`, `CurrentResearchContinuationService`, `ResearchTeamService`, ObjectStore, SourceSnapshot and checkpoint contracts remain the single deterministic core.
 
+## CURRENT means current-only forward research
+
+The production recommendation/simulation path is **CURRENT-information-only and forward-looking**. It is not a historical backtest and does not reconstruct what the system could have known at the user's question timestamp. During one investor request the system may continue acquiring, repairing and cross-checking public information; valid data obtained later in that same bounded acquisition/recovery round is current input, not look-ahead leakage.
+
+The CURRENT invariant is semantic rather than historical: identity must match; canonical objects must be readable and internally consistent; sources must remain attributable; conflicting material facts must be resolved; critical financial/governance vetoes and the final Publication Gate remain authoritative. Wrapper-field equality, source-snapshot ordering, an older release remaining the historical PIT head, or a legacy `NOT_PIT_SAFE` marker are not CURRENT stop conditions. Corrupt/missing canonical material triggers refetch/rebuild; public evidence gaps trigger provider fallback and then authoritative Web capture before any user-facing escalation.
+
+The system still freezes one **decision snapshot after acquisition/recovery completes** so the final receipt is reproducible. That freeze is a current-decision boundary, not an anti-lookahead boundary. Historical/prospective modes may retain separate source-availability/PIT rules, but those rules must not leak back into CURRENT recommendation.
+
 ## Measured baseline and result
 
 The pre-optimization continuation path reran the complete five-capability current-acquisition schedule after one resolvable evidence gap. A deterministic request-count benchmark in `tests/unit/test_current_research_productization.py::test_same_request_reuse_reruns_only_failed_capability_and_preserves_lineage` records:

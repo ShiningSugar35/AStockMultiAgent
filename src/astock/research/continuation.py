@@ -71,28 +71,9 @@ class CurrentResearchContinuationService:
             state=state,
             objects=objects,
         )
-        acquisition_policy = getattr(self.acquisition, "policy", None)
-        if (
-            acquisition_policy is not None
-            and acquisition_policy.automatic_resolution_budget_seconds
-            != self.policy.automatic_resolution_budget_seconds
-        ):
-            raise ValueError("current acquisition budget differs from the canonical policy")
-        if (
-            self.team.policy.automatic_resolution_budget_seconds
-            != self.policy.automatic_resolution_budget_seconds
-        ):
-            raise ValueError("research-team budget differs from the canonical policy")
         self.documents = DocumentRepository(state)
 
     def start(self, request: CurrentResearchContinuationRequest) -> CurrentResearchContinuation:
-        if (
-            request.automatic_resolution_budget_seconds
-            != self.policy.automatic_resolution_budget_seconds
-        ):
-            raise ValueError(
-                "current research continuation must use the canonical 1800-second budget"
-            )
         continuation_id = self._continuation_id(request)
         existing = self.get(continuation_id)
         if existing is not None:

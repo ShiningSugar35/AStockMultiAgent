@@ -71,6 +71,6 @@ external resolver and team executor. The CLI-equivalent loop uses
 `research-current-continuation-resolve`, `research-current-continuation-resume`, typed
 `research-team-role-output` / `research-team-task-result`, and
 `research-current-continuation-advance`; `research-current-continuation-bind` resumes later
-private-material input on the same lineage. Python owns deterministic budgets, PIT, artifact
-lineage, verified same-request acquisition reuse, state validation and safety gates; the Agent
-owns discovery and research judgement.
+private-material input on the same lineage. Python owns deterministic budgets, current-source
+lineage/integrity, verified same-request acquisition reuse, state validation and final safety
+gates; historical anti-lookahead/PIT reconstruction is confined to explicit historical work. The Agent owns discovery, authoritative Web recovery and research judgement.

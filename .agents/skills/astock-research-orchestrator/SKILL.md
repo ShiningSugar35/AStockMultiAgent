@@ -21,8 +21,8 @@ description: Route broad or multi-step A-share research requests across candidat
 9. 不要在每个投资问题前跑 `probe`。`probe` 仅为开发/恢复诊断；完整 SQLite 体检也只在显式诊断/发布门执行。
 10. Existing stable discovery/execution-readiness route remains: `research-seeds --live` → `research-seeds-promote ... --live` → Candidate；`RESEARCH_READY` 仍无 BUY 权威。`JuglarCycleStageSkill` 等 audited Skills 只能影响 bounded research priority。正式执行条件继续由 `ClassifiedTradeProtocol` 和 `trade-plan-view` 解释，不能被 portfolio/holding 新链绕过。
 11. Broad current stock-picking 继续遵守全市场 workflow：Research Team → current Universe/seeds → blind tranche → bounded Expert overlay → company Fundamental/Financial/Catalyst/Market → Valuation → independent Bull/Bear → Reviewer → Committee → Portfolio → `FullResearchInputReadiness` → Mandatory Research DAG → `RecommendationResearchReceipt` → Publication Gate。工程 `coverage_ratio >= 99.5%` 只能说明高覆盖；正式全市场推荐还要求 XSHG/XSHE/BJSE 均有 ObjectStore 可验证的 `UniverseCoverageProof` 且达到 `OFFICIAL_DENOMINATOR_RECONCILED`。Universe 不可证明或只有二级源自报覆盖时 fail closed，不可用 Web/news 人工补股票名单。
-12. 新 current named-stock opinion 先 `research-acquire-current <company_id> --market <market>`，使用 active current policy 的 mandatory evidence/PIT/financial/fundamental gates。Planner 只能改变 optional work，validator 会补回硬门。
-13. acquisition gap 要先耗尽 allowlisted provider/source fallback、transient retry、validated Recovery/SchemaRepair，再做 bounded authoritative Web research。只有自动路径和权威 Web 都失败后才可向用户一次性请求必要资料；provider 名称和后台故障不进入 INVESTOR_MODE。
+12. 新 current named-stock opinion 先 `research-acquire-current <company_id> --market <market>`。CURRENT 只要求本轮 bounded acquisition/recovery 结束后冻结的最新可信事实、来源 lineage、财务/基本面和最终发布门；不得用用户提问时刻做 anti-lookahead cutoff，也不得要求旧 reference release 继续保持历史 PIT head。历史模式如存在，必须独立显式启用，不能反向约束 CURRENT。Planner 只能改变 optional work，不能删掉公司质量、财务/治理、估值、风险或 Publication Gate。
+13. **任何 CURRENT `NEEDS_INFO` 都先视为内部恢复信号，而不是用户终态。** 先按缺口语义自动处理：对象/registry/schema 漂移 → 从可信源重抓并重建 canonical artifact；结构化 provider 覆盖不足 → 耗尽 allowlisted fallback、transient retry、validated Recovery/SchemaRepair；公开事实缺失或冲突 → `$evidence-investigation` 做 bounded authoritative Web 多源交叉验证并把结果捕获回既有 Evidence/ObjectStore。修复后回到原节点重跑并继续同一请求。只有公共自动恢复预算和权威 Web 都真实耗尽，且剩余信息只能来自用户私人事实时，才可一次性请求必要资料；provider 名称和后台故障不进入 INVESTOR_MODE。
 14. 正式公司研究使用机构级基本面链：evidence sufficiency → industry/company economics → driver tree → Bull/Base/Bear forecast → valuation/sensitivity → decision context → BaseCase → bounded Specialists/Knowledge → committee。Forecast/Valuation 数值由 deterministic Python 复算。
 15. 分离 research sufficiency 与 execution readiness。交易规则/公司行动细节可以阻断模拟执行但不一定阻断中长期基本面结论；精确 entry/exit mechanics 只使用 typed TradePlan，不猜价格。
 16. 对 material formal decision 保持 registered/audited path；Committee 不联网找证据。组合 transition、holding proposal、hedge effectiveness 都是只读研究工件，不直接写 paper ledger 或真实券商。
@@ -65,7 +65,7 @@ Lead with the investment answer, not the process. 对 material investment reques
 - Do not ask for persisted trade facts again unless the local state is missing/corrupt or the user reports a correction.
 - Do not stop at the first provider failure when an automatic fallback or bounded authoritative Web search is available.
 - Do not expose internal Agent/committee/runtime vocabulary, artifact/hash, SQL, provider diagnostics or command transcripts in a normal investor answer.
-- Do not disable PIT/source-availability safeguards.
+- Do not weaken current-source provenance, identity, or freshness checks. Historical anti-lookahead/PIT-head constraints apply only to explicit HISTORICAL/replay work and must not be imported into CURRENT recommendation as request-time cutoffs.
 - Do not turn a Candidate directly into a recommendation, portfolio weight or filled position.
 - Do not call low historical correlation an explicit hedge.
 - Do not treat an unfilled simulated order as a holding.

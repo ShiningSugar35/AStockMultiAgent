@@ -80,7 +80,9 @@ class _FakeCandidateService:
 
 
 class _FakePromotionService(ResearchSeedPromotionService):
-    def _promote_company(self, seed: ResearchSeed, **_: object) -> tuple[Any, list[Any], str]:
+    def _promote_company(
+        self, seed: ResearchSeed, **_: object
+    ) -> tuple[Any, list[Any], str | None, list[Any]]:
         if seed.company_id == "600002":
             raise _PromotionBlocked(
                 "FINANCIAL_INTEGRITY_REQUIRED",
@@ -142,7 +144,28 @@ class _FakePromotionService(ResearchSeedPromotionService):
             quality_status=CandidateQualityStatus.PASS,
             created_at=NOW,
         )
-        return company, artifacts, f"financial:{seed.company_id}"
+        return company, artifacts, f"financial:{seed.company_id}", []
+
+
+class _FakeEnrichmentGapPromotionService(_FakePromotionService):
+    def _promote_company(
+        self, seed: ResearchSeed, **kwargs: object
+    ) -> tuple[Any, list[Any], str | None, list[Any]]:
+        company, artifacts, financial_run_id, _blocks = super()._promote_company(
+            seed, **kwargs
+        )
+        return (
+            company,
+            artifacts,
+            financial_run_id,
+            [
+                _PromotionBlocked(
+                    "ANNOUNCEMENT_RECOVERY_REQUIRED",
+                    ["AUTHORITATIVE_PUBLIC_EVIDENCE_REQUIRED"],
+                    [],
+                )
+            ],
+        )
 
 
 def _seed(company_id: str, *, origins: list[ResearchSeedOrigin]) -> ResearchSeed:
@@ -233,6 +256,150 @@ def test_promotion_isolates_blocked_seed_and_reuses_existing_candidate(tmp_path:
     assert report.tasks[0].task_code == "FINANCIAL_INTEGRITY_REQUIRED"
     assert not report.recommendation_allowed
     assert service.audit(f"SeedPromotionReport:{report.promotion_id}")["status"] == "PASS"
+
+
+def test_promotion_keeps_core_candidate_when_enrichment_needs_recovery(
+    tmp_path: Path,
+) -> None:
+    state, objects = _runtime(tmp_path)
+    fake_candidates = _FakeCandidateService(state, objects)
+    service = _FakeEnrichmentGapPromotionService(
+        project_root=PROJECT_ROOT,
+        state=state,
+        objects=objects,
+        reference=cast(Any, object()),
+        candidates=cast(CandidateScanService, fake_candidates),
+        financial_sources=cast(Any, object()),
+        trading_classification=cast(Any, object()),
+        cninfo=cast(Any, object()),
+    )
+    seed_artifact = _register_seed_report(state, objects)
+
+    report = service.promote(
+        SeedPromotionRequest(
+            seed_report_artifact_id=seed_artifact,
+            max_seeds=1,
+            live=True,
+            created_at=NOW,
+        )
+    )
+
+    assert report.status.value == "PARTIAL"
+    assert report.promoted_company_count == 1
+    assert report.blocked_company_count == 0
+    assert report.tasks[0].task_code == "ANNOUNCEMENT_RECOVERY_REQUIRED"
+    assert report.tasks[0].retryable
+    assert report.company_results[0].status.value == "PROMOTED"
+    assert any(
+        code.startswith("ENRICHMENT_RECOVERY_PENDING:")
+        for code in report.company_results[0].reason_codes
+    )
+
+
+def test_current_instrument_proof_does_not_require_historical_pit_marker(
+    tmp_path: Path,
+) -> None:
+    state, objects = _runtime(tmp_path)
+    service = _FakePromotionService(
+        project_root=PROJECT_ROOT,
+        state=state,
+        objects=objects,
+        reference=cast(Any, object()),
+        candidates=cast(CandidateScanService, _FakeCandidateService(state, objects)),
+        financial_sources=cast(Any, object()),
+        trading_classification=cast(Any, object()),
+        cninfo=cast(Any, object()),
+    )
+    seed = _seed("600001", origins=[ResearchSeedOrigin.MARKET])
+    instrument = InstrumentRecord(
+        instrument_id="XSHG:600001",
+        market=Market.XSHG,
+        symbol="600001",
+        name="测试公司",
+        instrument_type=InstrumentType.STOCK,
+        tradable=True,
+        status_date=NOW.date(),
+        is_st=False,
+        source_snapshot_id="snapshot:current-unverified",
+        available_to_system_at=NOW,
+        created_at=NOW,
+    )
+    content_sha = "1" * 64
+    observation = ReferenceFileDescriptor(
+        path="observation.parquet",
+        sha256="2" * 64,
+        schema_fingerprint="3" * 64,
+        row_count=1,
+        logical_content_hash=content_sha,
+        created_at=NOW,
+    )
+    canonical = ReferenceFileDescriptor(
+        path="canonical.parquet",
+        sha256="4" * 64,
+        schema_fingerprint="5" * 64,
+        row_count=1,
+        logical_content_hash=content_sha,
+        created_at=NOW,
+    )
+    parent = DatasetReleaseManifest(
+        release_id="6" * 64,
+        content_hash=content_sha,
+        dataset_kind=ReferenceDatasetKind.INSTRUMENT_MASTER,
+        scope_key=Market.XSHG.value,
+        provider_id="current-reference",
+        batch_id="7" * 64,
+        raw_snapshot_ids=[instrument.source_snapshot_id],
+        observation_files=[observation],
+        canonical_files=[canonical],
+        coverage=ReferenceCoverage(
+            record_count=1,
+            status=ReferenceCoverageStatus.COMPLETE,
+            created_at=NOW,
+        ),
+        pit_status=ReferencePitStatus.UNVERIFIED,
+        available_to_system_at=NOW,
+        created_at=NOW,
+    )
+    parent_artifact = CandidateInputArtifact(
+        artifact_id=f"market-reference:{parent.release_id}",
+        role=CandidateArtifactRole.INSTRUMENT_TRADABILITY,
+        artifact_type="DatasetReleaseManifest",
+        artifact_schema_version=parent.schema_version,
+        dataset_kind=ReferenceDatasetKind.INSTRUMENT_MASTER.value,
+        formal_status=CandidatePitStatus.NOT_PIT_SAFE.value,
+        source_family=parent.provider_id,
+        object_hash="8" * 64,
+        coverage_status=CandidateCoverageStatus.COMPLETE,
+        available_to_system_at=NOW,
+        pit_status=CandidatePitStatus.NOT_PIT_SAFE,
+        source_snapshot_ids=parent.raw_snapshot_ids,
+        created_at=NOW,
+    )
+
+    current = service._instrument_subset_proof(
+        seed,
+        instrument=instrument,
+        parent_manifest=parent,
+        parent_artifact=parent_artifact,
+        seed_report_artifact_id="ResearchSeedReport:test",
+        seed_report_object_hash="9" * 64,
+        as_of=NOW,
+        live=True,
+    )
+    assert current.pit_status is CandidatePitStatus.NOT_PIT_SAFE
+
+    with pytest.raises(_PromotionBlocked) as historical:
+        service._instrument_subset_proof(
+            seed,
+            instrument=instrument,
+            parent_manifest=parent,
+            parent_artifact=parent_artifact,
+            seed_report_artifact_id="ResearchSeedReport:test",
+            seed_report_object_hash="9" * 64,
+            as_of=NOW,
+            live=False,
+        )
+    assert historical.value.reason_codes == ["HISTORICAL_INSTRUMENT_MASTER_NOT_PIT_SAFE"]
 
 
 def test_plain_instrument_release_rejects_unproven_candidate_subset(

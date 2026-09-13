@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +28,7 @@ from astock.schemas.candidate_promotion import (
     SeedPromotionTask,
 )
 from astock.schemas.candidates import (
+    CandidateAnnouncementEvent,
     CandidateAnnouncementEventPack,
     CandidateArtifactRole,
     CandidateCompanyInput,
@@ -92,7 +92,7 @@ _EVENT_TITLE_TERMS: dict[str, tuple[str, ...]] = {
 
 
 class ResearchSeedPromotionService:
-    """Promote only evidence-complete seeds and return tasks for the rest."""
+    """Promote core-discovery-ready seeds and retain enrichment gaps as recovery tasks."""
 
     def __init__(
         self,
@@ -116,6 +116,31 @@ class ResearchSeedPromotionService:
         self.trading_classification = trading_classification
         self.cninfo = cninfo
         self.pit = PointInTimeService(PointInTimeRepository(state), state, objects)
+
+    @staticmethod
+    def _recovery_task(
+        seed: ResearchSeed,
+        blocked: _PromotionBlocked,
+        *,
+        created_at: datetime,
+    ) -> SeedPromotionTask:
+        return SeedPromotionTask(
+            task_id="seed-promotion-task:"
+            + content_hash(
+                {
+                    "seed": seed.seed_id,
+                    "code": blocked.task_code,
+                    "reasons": blocked.reason_codes,
+                    "sources": blocked.source_artifact_ids,
+                }
+            ),
+            company_id=seed.company_id,
+            task_code=blocked.task_code,
+            reason_codes=sorted(set(blocked.reason_codes)),
+            source_artifact_ids=sorted(set(blocked.source_artifact_ids)),
+            retryable=blocked.retryable,
+            created_at=created_at,
+        )
 
     def promote(self, request: SeedPromotionRequest) -> SeedPromotionReport:
         seed_record = self.state.artifact_record(request.seed_report_artifact_id)
@@ -150,7 +175,7 @@ class ResearchSeedPromotionService:
                 )
                 continue
             try:
-                company, artifacts, financial_run_id = self._promote_company(
+                company, artifacts, financial_run_id, enrichment_blocks = self._promote_company(
                     seed,
                     promotion_as_of=promotion_as_of,
                     seed_report_artifact_id=request.seed_report_artifact_id,
@@ -160,23 +185,7 @@ class ResearchSeedPromotionService:
                     calendar_cache=calendar_cache,
                 )
             except _PromotionBlocked as blocked:
-                task = SeedPromotionTask(
-                    task_id="seed-promotion-task:"
-                    + content_hash(
-                        {
-                            "seed": seed.seed_id,
-                            "code": blocked.task_code,
-                            "reasons": blocked.reason_codes,
-                            "sources": blocked.source_artifact_ids,
-                        }
-                    ),
-                    company_id=seed.company_id,
-                    task_code=blocked.task_code,
-                    reason_codes=sorted(set(blocked.reason_codes)),
-                    source_artifact_ids=sorted(set(blocked.source_artifact_ids)),
-                    retryable=blocked.retryable,
-                    created_at=promotion_as_of,
-                )
+                task = self._recovery_task(seed, blocked, created_at=promotion_as_of)
                 tasks.append(task)
                 source_artifacts.update(blocked.source_artifact_ids)
                 results.append(
@@ -192,13 +201,24 @@ class ResearchSeedPromotionService:
                 continue
             promoted.append((seed, company, artifacts))
             source_artifacts.update(item.artifact_id for item in artifacts)
+            enrichment_tasks = [
+                self._recovery_task(seed, blocked, created_at=promotion_as_of)
+                for blocked in enrichment_blocks
+            ]
+            tasks.extend(enrichment_tasks)
+            for blocked in enrichment_blocks:
+                source_artifacts.update(blocked.source_artifact_ids)
+            reason_codes = ["CORE_DISCOVERY_READY"]
+            reason_codes.extend(
+                f"ENRICHMENT_RECOVERY_PENDING:{task.task_code}" for task in enrichment_tasks
+            )
             results.append(
                 SeedPromotionCompanyResult(
                     company_id=seed.company_id,
                     seed_id=seed.seed_id,
                     status=SeedPromotionCompanyStatus.PROMOTED,
                     source_artifact_ids=sorted({item.artifact_id for item in artifacts}),
-                    reason_codes=["EVIDENCE_COMPLETE_FOR_CANDIDATE_SCAN"],
+                    reason_codes=sorted(set(reason_codes)),
                     financial_audit_run_id=financial_run_id,
                     created_at=promotion_as_of,
                 )
@@ -250,7 +270,7 @@ class ResearchSeedPromotionService:
         )
         status = (
             SeedPromotionStatus.SUCCEEDED
-            if blocked_count == 0 and (promoted_count or reused_count)
+            if blocked_count == 0 and not tasks and (promoted_count or reused_count)
             else SeedPromotionStatus.PARTIAL
             if promoted_count or reused_count
             else SeedPromotionStatus.NEEDS_INFO
@@ -352,14 +372,12 @@ class ResearchSeedPromotionService:
         request: SeedPromotionRequest,
         instrument_cache: dict[Market, tuple[DatasetReleaseManifest, CandidateInputArtifact]],
         calendar_cache: dict[Market, tuple[DatasetReleaseManifest, CandidateInputArtifact]],
-    ) -> tuple[CandidateCompanyInput, list[CandidateInputArtifact], str]:
-        if seed.market not in {Market.XSHG, Market.XSHE}:
-            raise _PromotionBlocked(
-                "OFFICIAL_COVERAGE_UNAVAILABLE",
-                ["PROMOTION_CURRENTLY_REQUIRES_CNINFO_SSE_OR_SZSE"],
-                [],
-                retryable=False,
-            )
+    ) -> tuple[
+        CandidateCompanyInput,
+        list[CandidateInputArtifact],
+        str | None,
+        list[_PromotionBlocked],
+    ]:
         effective_as_of = promotion_as_of
         instrument_manifest, instrument_artifact = instrument_cache.get(
             seed.market
@@ -376,6 +394,7 @@ class ResearchSeedPromotionService:
             seed_report_artifact_id=seed_report_artifact_id,
             seed_report_object_hash=seed_report_object_hash,
             as_of=effective_as_of,
+            live=request.live,
         )
 
         start_date = effective_as_of.date() - timedelta(days=request.reference_lookback_days)
@@ -409,21 +428,78 @@ class ResearchSeedPromotionService:
             )
         quality, quality_artifact = self._daily_quality(seed, daily_records, effective_as_of)
 
-        corporate_artifact = self._corporate_absence(seed, request.live)
-        if request.live:
-            effective_as_of = max(effective_as_of, corporate_artifact.available_to_system_at)
-        announcement_pack, announcement_artifact = self._announcement_pack(
-            seed,
-            as_of=effective_as_of,
-            lookback_days=request.announcement_lookback_days,
-            live=request.live,
-        )
-        if request.live:
-            effective_as_of = max(effective_as_of, announcement_artifact.available_to_system_at)
-        financial_pack, financial_artifact = self._financial_pack(
-            seed, effective_as_of, request.live
-        )
-        if request.live:
+        enrichment_blocks: list[_PromotionBlocked] = []
+        corporate_artifact: CandidateInputArtifact | None = None
+        announcement_pack: CandidateAnnouncementEventPack | None = None
+        announcement_artifact: CandidateInputArtifact | None = None
+        financial_pack: Any | None = None
+        financial_artifact: CandidateInputArtifact | None = None
+        financial_run_id: str | None = None
+
+        if seed.market in {Market.XSHG, Market.XSHE}:
+            try:
+                corporate_artifact = self._corporate_absence(seed, request.live)
+            except _PromotionBlocked as blocked:
+                enrichment_blocks.append(blocked)
+            except (AStockError, OSError, RuntimeError, ValueError) as exc:
+                enrichment_blocks.append(
+                    _PromotionBlocked(
+                        "OFFICIAL_CORPORATE_ACTION_RECOVERY_REQUIRED",
+                        [f"CURRENT_CORPORATE_ACTION_RECOVERY:{type(exc).__name__}"],
+                        [],
+                    )
+                )
+            if corporate_artifact is not None and request.live:
+                effective_as_of = max(
+                    effective_as_of, corporate_artifact.available_to_system_at
+                )
+            try:
+                announcement_pack, announcement_artifact = self._announcement_pack(
+                    seed,
+                    as_of=effective_as_of,
+                    lookback_days=request.announcement_lookback_days,
+                    live=request.live,
+                )
+            except _PromotionBlocked as blocked:
+                enrichment_blocks.append(blocked)
+            except (AStockError, OSError, RuntimeError, ValueError) as exc:
+                enrichment_blocks.append(
+                    _PromotionBlocked(
+                        "ANNOUNCEMENT_RECOVERY_REQUIRED",
+                        [f"CURRENT_ANNOUNCEMENT_RECOVERY:{type(exc).__name__}"],
+                        [],
+                    )
+                )
+            if announcement_artifact is not None and request.live:
+                effective_as_of = max(
+                    effective_as_of, announcement_artifact.available_to_system_at
+                )
+        else:
+            enrichment_blocks.append(
+                _PromotionBlocked(
+                    "AUTHORITATIVE_PUBLIC_DISCLOSURE_RECOVERY_REQUIRED",
+                    [f"MARKET_DISCLOSURE_ADAPTER_UNAVAILABLE:{seed.market.value}"],
+                    [],
+                )
+            )
+
+        try:
+            financial_pack, financial_artifact = self._financial_pack(
+                seed, effective_as_of, request.live
+            )
+            if financial_pack is not None:
+                financial_run_id = str(financial_pack.audit_run_id)
+        except _PromotionBlocked as blocked:
+            enrichment_blocks.append(blocked)
+        except (AStockError, OSError, RuntimeError, ValueError) as exc:
+            enrichment_blocks.append(
+                _PromotionBlocked(
+                    "FINANCIAL_INTEGRITY_REQUIRED",
+                    [f"CURRENT_FINANCIAL_RECOVERY:{type(exc).__name__}"],
+                    [],
+                )
+            )
+        if financial_artifact is not None and request.live:
             effective_as_of = max(effective_as_of, financial_artifact.available_to_system_at)
 
         daily_points = [
@@ -431,7 +507,11 @@ class ResearchSeedPromotionService:
                 session_date=item.session_date,
                 close=item.close,
                 volume=item.volume,
-                turnover_cny=item.amount or Decimal("0"),
+                turnover_cny=(
+                    item.amount
+                    if item.amount is not None
+                    else item.close * item.volume
+                ),
                 source_artifact_id=daily_artifact.artifact_id,
                 observed_at=item.session_close_at,
                 available_to_system_at=item.available_to_system_at,
@@ -440,7 +520,11 @@ class ResearchSeedPromotionService:
             )
             for item in sorted(daily_records, key=lambda record: record.session_date)
         ]
-        financial_flags = self._financial_flags(financial_pack, financial_artifact)
+        financial_flags = (
+            self._financial_flags(financial_pack, financial_artifact)
+            if financial_pack is not None and financial_artifact is not None
+            else []
+        )
         company = CandidateCompanyInput(
             company_id=seed.company_id,
             instrument_id=instrument.instrument_id,
@@ -456,29 +540,34 @@ class ResearchSeedPromotionService:
             instrument_artifact_id=instrument_artifact.artifact_id,
             calendar_artifact_id=calendar_artifact.artifact_id,
             daily_artifact_id=daily_artifact.artifact_id,
-            corporate_action_artifact_id=corporate_artifact.artifact_id,
+            corporate_action_artifact_id=(
+                corporate_artifact.artifact_id if corporate_artifact is not None else None
+            ),
             quality_artifact_id=quality_artifact.artifact_id,
-            announcement_artifact_id=announcement_artifact.artifact_id,
-            financial_artifact_id=financial_artifact.artifact_id,
+            announcement_artifact_id=(
+                announcement_artifact.artifact_id if announcement_artifact is not None else None
+            ),
+            financial_artifact_id=(
+                financial_artifact.artifact_id if financial_artifact is not None else None
+            ),
             quality_status=CandidateQualityStatus(quality.quality_status.value),
             daily_points=daily_points,
-            announcement_events=announcement_pack.events,
+            announcement_events=(announcement_pack.events if announcement_pack is not None else []),
             financial_flags=financial_flags,
             created_at=effective_as_of,
         )
-        return (
-            company,
-            [
-                instrument_artifact,
-                calendar_artifact,
-                daily_artifact,
-                corporate_artifact,
-                quality_artifact,
-                announcement_artifact,
-                financial_artifact,
-            ],
-            financial_pack.audit_run_id,
+        artifacts = [
+            instrument_artifact,
+            calendar_artifact,
+            daily_artifact,
+            quality_artifact,
+        ]
+        artifacts.extend(
+            item
+            for item in [corporate_artifact, announcement_artifact, financial_artifact]
+            if item is not None
         )
+        return company, artifacts, financial_run_id, enrichment_blocks
 
     def _reference_instruments(
         self, market: Market, as_of: datetime, live: bool
@@ -572,7 +661,7 @@ class ResearchSeedPromotionService:
                 "INSTRUMENT_IDENTITY_REQUIRED",
                 ["SEED_INSTRUMENT_ABSENT_FROM_VERIFIED_MASTER"],
                 [f"market-reference:{manifest.release_id}"],
-                retryable=False,
+                retryable=True,
             )
         return match
 
@@ -586,10 +675,17 @@ class ResearchSeedPromotionService:
         seed_report_artifact_id: str,
         seed_report_object_hash: str,
         as_of: datetime,
+        live: bool,
     ) -> CandidateInputArtifact:
+        if parent_artifact.coverage_status is not CandidateCoverageStatus.COMPLETE:
+            raise _PromotionBlocked(
+                "INSTRUMENT_IDENTITY_REQUIRED",
+                ["INSTRUMENT_MASTER_NOT_COMPLETE"],
+                [parent_artifact.artifact_id],
+            )
         if (
-            parent_artifact.coverage_status is not CandidateCoverageStatus.COMPLETE
-            or parent_artifact.pit_status
+            not live
+            and parent_artifact.pit_status
             not in {
                 CandidatePitStatus.CERTIFIED,
                 CandidatePitStatus.DOCUMENT_RECONSTRUCTED,
@@ -597,7 +693,7 @@ class ResearchSeedPromotionService:
         ):
             raise _PromotionBlocked(
                 "INSTRUMENT_IDENTITY_REQUIRED",
-                ["INSTRUMENT_MASTER_NOT_COMPLETE_OR_PIT_SAFE"],
+                ["HISTORICAL_INSTRUMENT_MASTER_NOT_PIT_SAFE"],
                 [parent_artifact.artifact_id],
             )
         identity = {
@@ -673,15 +769,17 @@ class ResearchSeedPromotionService:
         missing_amount = sum(item.amount is None for item in records)
         future = sum(item.available_to_system_at > as_of for item in records)
         status = (
-            QualityStatus.PASS
-            if not (duplicates or missing_amount or future)
-            else QualityStatus.FAIL
+            QualityStatus.FAIL
+            if duplicates or future
+            else QualityStatus.PARTIAL
+            if missing_amount
+            else QualityStatus.PASS
         )
         reasons = []
         if duplicates:
             reasons.append("duplicate daily sessions")
         if missing_amount:
-            reasons.append("daily amount missing")
+            reasons.append("daily amount missing; turnover proxy derived from close*volume")
         if future:
             reasons.append("future daily observations")
         source_snapshot_ids = sorted({item.source_snapshot_id for item in records})
@@ -738,6 +836,8 @@ class ResearchSeedPromotionService:
             coverage_status=(
                 CandidateCoverageStatus.COMPLETE
                 if status is QualityStatus.PASS
+                else CandidateCoverageStatus.PARTIAL
+                if status is QualityStatus.PARTIAL
                 else CandidateCoverageStatus.FAILED
             ),
             available_to_system_at=as_of,
@@ -769,19 +869,17 @@ class ResearchSeedPromotionService:
                 ["CORPORATE_ACTION_BASELINE_NOT_REGISTERED"],
                 [],
             )
-        if not baseline.absence_is_officially_certified:
-            raise _PromotionBlocked(
-                "OFFICIAL_CORPORATE_ACTION_REVIEW_REQUIRED",
-                ["OFFICIAL_CORPORATE_ACTION_CANDIDATES_FOUND"],
-                [artifact_id],
-            )
         return CandidateInputArtifact(
             artifact_id=artifact_id,
             role=CandidateArtifactRole.CORPORATE_ACTION,
             artifact_type="TradingClassificationCorporateActionBaseline",
             artifact_schema_version=baseline.schema_version,
             dataset_kind="CORPORATE_ACTION_BASELINE",
-            formal_status="CERTIFIED_ABSENCE",
+            formal_status=(
+                "CERTIFIED_ABSENCE"
+                if baseline.absence_is_officially_certified
+                else "OFFICIAL_ENUMERATION_COMPLETE"
+            ),
             source_family="cninfo-official-corporate-action-baseline",
             object_hash=str(row["object_hash"]),
             coverage_status=CandidateCoverageStatus.COMPLETE,
@@ -834,15 +932,17 @@ class ResearchSeedPromotionService:
             for announcement in batch.announcements:
                 for event_type, terms in _EVENT_TITLE_TERMS.items():
                     if any(term in announcement.title for term in terms):
-                        matched.append((event_type, announcement))
+                        matched.append((event_type, announcement, batch.raw_snapshot_id))
                         break
         snapshot_ids = sorted({item.raw_snapshot_id for item in batches})
+        snapshot_available_at: dict[str, datetime] = {}
         for snapshot_id in snapshot_ids:
             snapshot = self.state.get_snapshot(snapshot_id)
             if snapshot is None:
                 raise _PromotionBlocked(
                     "ANNOUNCEMENT_ENUMERATION_REQUIRED", ["CNINFO_SNAPSHOT_MISSING"], []
                 )
+            snapshot_available_at[snapshot_id] = snapshot.available_to_system_at
             self.pit.create(
                 source_id=f"candidate-announcement-enumeration:{seed.company_id}:{snapshot_id}",
                 source_snapshot_id=snapshot_id,
@@ -851,19 +951,39 @@ class ResearchSeedPromotionService:
                 point_in_time_status=PointInTimeStatus.CERTIFIED,
                 availability_basis=AvailabilityBasis.FETCH_OBSERVED,
             )
-        if matched:
-            raise _PromotionBlocked(
-                "ANNOUNCEMENT_EVENT_EVIDENCE_REQUIRED",
-                sorted({f"CANONICAL_EVENT_TITLE_MATCH:{item[0]}" for item in matched}),
-                snapshot_ids,
-            )
-        created_at = max(
-            self.state.get_snapshot(snapshot_id).available_to_system_at  # type: ignore[union-attr]
-            for snapshot_id in snapshot_ids
-        )
+        created_at = max(snapshot_available_at.values())
+        event_specs = [
+            {
+                "event_type": event_type,
+                "announcement_id": announcement.announcement_id,
+                "published_at": announcement.published_at,
+                "snapshot_id": snapshot_id,
+            }
+            for event_type, announcement, snapshot_id in matched
+        ]
         pack_id = content_hash(
-            {"company_id": seed.company_id, "as_of": as_of, "snapshots": snapshot_ids, "events": []}
+            {
+                "company_id": seed.company_id,
+                "as_of": as_of,
+                "snapshots": snapshot_ids,
+                "events": event_specs,
+            }
         )
+        artifact_id = f"candidate-announcement-events:{pack_id}"
+        events = [
+            CandidateAnnouncementEvent(
+                event_id=content_hash(spec),
+                event_type=str(spec["event_type"]),
+                severity=CandidateEvidenceSeverity.MEDIUM,
+                source_artifact_id=artifact_id,
+                observed_at=announcement.published_at,
+                available_to_system_at=snapshot_available_at[snapshot_id],
+                pit_status=CandidatePitStatus.CERTIFIED,
+                evidence_ids=[],
+                created_at=snapshot_available_at[snapshot_id],
+            )
+            for spec, (_, announcement, snapshot_id) in zip(event_specs, matched, strict=True)
+        ]
         pack = CandidateAnnouncementEventPack(
             pack_id=pack_id,
             company_id=seed.company_id,
@@ -871,7 +991,7 @@ class ResearchSeedPromotionService:
             coverage_status=CandidateCoverageStatus.COMPLETE,
             pit_status=CandidatePitStatus.CERTIFIED,
             source_snapshot_ids=snapshot_ids,
-            events=[],
+            events=events,
             created_at=created_at,
         )
         ref = self.objects.put_json(pack.model_dump(mode="json"))
@@ -948,18 +1068,23 @@ class ResearchSeedPromotionService:
         }[pack.coverage_status]
         pit_rows = [PointInTimeRepository(self.state).get(item) for item in pack.pit_ids]
         if not pit_rows or any(item is None for item in pit_rows):
-            raise _PromotionBlocked(
-                "FINANCIAL_INTEGRITY_REQUIRED", ["FINANCIAL_PIT_LINEAGE_MISSING"], [artifact_id]
+            if not live:
+                raise _PromotionBlocked(
+                    "FINANCIAL_INTEGRITY_REQUIRED",
+                    ["FINANCIAL_PIT_LINEAGE_MISSING"],
+                    [artifact_id],
+                )
+            pit = CandidatePitStatus.NOT_PIT_SAFE
+        else:
+            pit = (
+                CandidatePitStatus.CERTIFIED
+                if all(
+                    item.point_in_time_status is PointInTimeStatus.CERTIFIED
+                    for item in pit_rows
+                    if item
+                )
+                else CandidatePitStatus.DOCUMENT_RECONSTRUCTED
             )
-        pit = (
-            CandidatePitStatus.CERTIFIED
-            if all(
-                item.point_in_time_status is PointInTimeStatus.CERTIFIED
-                for item in pit_rows
-                if item
-            )
-            else CandidatePitStatus.DOCUMENT_RECONSTRUCTED
-        )
         evidence_ids: set[str] = set(pack.source_snapshot_ids)
         for item in [
             *pack.rule_findings,

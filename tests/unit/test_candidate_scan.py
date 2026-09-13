@@ -293,6 +293,7 @@ def _request(
     release: CandidateInputRelease,
     *,
     live: bool = False,
+    formal_historical: bool = False,
 ) -> CandidateScanRequest:
     object_hash = service.stage_input_release(release)
     return CandidateScanRequest(
@@ -301,8 +302,91 @@ def _request(
         input_release_id=release.input_release_id,
         input_release_object_hash=object_hash,
         as_of=release.as_of,
+        formal_historical=formal_historical,
         live=live,
     )
+
+
+def test_current_candidate_release_allows_missing_enrichment_artifacts(
+    candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
+) -> None:
+    service, state, objects = candidate_runtime
+    as_of = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    base = _release(
+        state,
+        objects,
+        "release:current-core-only",
+        as_of,
+        include_signals=False,
+        source_mode=CandidateSourceMode.LIVE,
+    )
+    core_roles = {
+        CandidateArtifactRole.INSTRUMENT_TRADABILITY,
+        CandidateArtifactRole.TRADING_CALENDAR,
+        CandidateArtifactRole.DAILY_LOCAL_VERSIONED,
+        CandidateArtifactRole.DATA_QUALITY,
+    }
+    payload = base.model_dump(mode="python")
+    payload["artifacts"] = [
+        artifact.model_dump(mode="python")
+        for artifact in base.artifacts
+        if artifact.role in core_roles
+    ]
+    company = dict(payload["companies"][0])
+    company.update(
+        {
+            "corporate_action_artifact_id": None,
+            "announcement_artifact_id": None,
+            "financial_artifact_id": None,
+            "announcement_events": [],
+            "financial_flags": [],
+            "watchlist_intents": [],
+            "holding_observations": [],
+        }
+    )
+    payload["companies"] = [company]
+    release = CandidateInputRelease.model_validate(payload)
+
+    report = service.scan(_request(service, release, live=True))
+
+    assert report.status is CandidateScanStatus.SUCCEEDED
+    assert report.needs_info_codes == []
+
+
+def test_historical_candidate_release_still_requires_enrichment_artifacts(
+    candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
+) -> None:
+    _service, state, objects = candidate_runtime
+    as_of = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    base = _release(state, objects, "release:historical-core-only", as_of)
+    payload = base.model_dump(mode="python")
+    payload["artifacts"] = [
+        artifact.model_dump(mode="python")
+        for artifact in base.artifacts
+        if artifact.role
+        in {
+            CandidateArtifactRole.INSTRUMENT_TRADABILITY,
+            CandidateArtifactRole.TRADING_CALENDAR,
+            CandidateArtifactRole.DAILY_LOCAL_VERSIONED,
+            CandidateArtifactRole.DATA_QUALITY,
+        }
+    ]
+    company = dict(payload["companies"][0])
+    company.update(
+        {
+            "corporate_action_artifact_id": None,
+            "announcement_artifact_id": None,
+            "financial_artifact_id": None,
+            "announcement_events": [],
+            "financial_flags": [],
+            "watchlist_intents": [],
+            "holding_observations": [],
+        }
+    )
+    payload["companies"] = [company]
+
+    with pytest.raises(ValueError, match="required artifact roles|required outside CURRENT"):
+        CandidateInputRelease.model_validate(payload)
 
 
 def test_candidate_scan_vertical_emits_all_signals_and_audits(
@@ -560,7 +644,7 @@ def test_registry_committed_recovery_fails_closed_on_corruption(
     assert row["report_object_hash"] is None
 
 
-def test_future_or_not_pit_safe_input_is_needs_info(
+def test_historical_not_pit_safe_input_is_needs_info(
     candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
 ) -> None:
     service, state, objects = candidate_runtime
@@ -572,13 +656,30 @@ def test_future_or_not_pit_safe_input_is_needs_info(
         as_of,
         pit=CandidatePitStatus.NOT_PIT_SAFE,
     )
-    report = service.scan(_request(service, release))
+    report = service.scan(_request(service, release, formal_historical=True))
     assert report.status is CandidateScanStatus.NEEDS_INFO
     assert any(code.startswith("NOT_PIT_SAFE:") for code in report.needs_info_codes)
     assert not service.status(scan_id=report.scan_id)["records"]
 
 
-def test_future_nested_evidence_is_excluded_and_forces_needs_info(
+def test_current_not_pit_safe_legacy_marker_does_not_block_research(
+    candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
+) -> None:
+    service, state, objects = candidate_runtime
+    as_of = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    release = _release(
+        state,
+        objects,
+        "release:current-not-pit",
+        as_of,
+        pit=CandidatePitStatus.NOT_PIT_SAFE,
+    )
+    report = service.scan(_request(service, release))
+    assert report.status is CandidateScanStatus.SUCCEEDED
+    assert not report.needs_info_codes
+
+
+def test_historical_future_nested_evidence_forces_needs_info(
     candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
 ) -> None:
     service, state, objects = candidate_runtime
@@ -587,9 +688,23 @@ def test_future_nested_evidence_is_excluded_and_forces_needs_info(
     release.companies[0].announcement_events[0].available_to_system_at = as_of + timedelta(
         minutes=1
     )
-    report = service.scan(_request(service, release))
+    report = service.scan(_request(service, release, formal_historical=True))
     assert report.status is CandidateScanStatus.NEEDS_INFO
     assert any(code.startswith("FUTURE_INPUT:") for code in report.needs_info_codes)
+
+
+def test_current_acquisition_after_request_start_does_not_block_research(
+    candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
+) -> None:
+    service, state, objects = candidate_runtime
+    as_of = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    release = _release(state, objects, "release:current-late-event", as_of)
+    release.companies[0].announcement_events[0].available_to_system_at = as_of + timedelta(
+        minutes=1
+    )
+    report = service.scan(_request(service, release))
+    assert report.status is CandidateScanStatus.SUCCEEDED
+    assert not any(code.startswith("FUTURE_INPUT:") for code in report.needs_info_codes)
 
 
 def test_duplicate_medium_events_from_one_source_are_not_independent(

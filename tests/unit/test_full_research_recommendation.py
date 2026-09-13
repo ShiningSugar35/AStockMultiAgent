@@ -369,7 +369,7 @@ def _news() -> tuple[NewsEvent, NewsEventCoverage]:
     )
     coverage = NewsEventCoverage(
         as_of=NOW,
-        covered_windows_days=(7, 30, 90, 180),
+        covered_windows_days=(7, 30, 90),
         covered_categories=(
             "earnings",
             "orders",
@@ -863,11 +863,11 @@ def test_company_history_and_news_window_contracts_are_hard_gates() -> None:
                 "analyzed_complete_years": 4,
             }
         )
-    with pytest.raises(ValidationError, match="7/30/90/180"):
+    with pytest.raises(ValidationError, match="7/30/90"):
         NewsEventCoverage(
             **{
                 **_news()[1].model_dump(),
-                "covered_windows_days": (7, 30, 90),
+                "covered_windows_days": (7, 30, 90, 180),
             }
         )
 

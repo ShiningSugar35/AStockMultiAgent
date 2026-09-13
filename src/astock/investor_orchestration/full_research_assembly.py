@@ -1252,7 +1252,7 @@ class FullResearchReceiptAssembler:
                 )
             )
             catalysts = tuple(item.summary for item in event_pack.events) or (
-                "四窗口事件研究未发现改变当前结论的重大催化或风险事件",
+                "三窗口事件研究未发现改变当前结论的重大催化或风险事件",
             )
             narratives.append(
                 CandidateDecisionNarrative(

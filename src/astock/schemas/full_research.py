@@ -544,8 +544,8 @@ class NewsEventCoverage(AStockModel):
 
     @model_validator(mode="after")
     def validate_news_coverage(self) -> NewsEventCoverage:
-        if set(self.covered_windows_days) != {7, 30, 90, 180}:
-            raise ValueError("news research must cover 7/30/90/180 day windows")
+        if set(self.covered_windows_days) != {7, 30, 90}:
+            raise ValueError("news research must cover 7/30/90 day windows")
         required_categories = {
             "earnings",
             "orders",
@@ -654,7 +654,7 @@ class NewsEventResearchPack(AStockModel):
     def recommendation_ready(
         self,
         *,
-        required_windows: tuple[int, ...] = (7, 30, 90, 180),
+        required_windows: tuple[int, ...] = (7, 30, 90),
         required_categories: tuple[str, ...] = (),
     ) -> bool:
         return (

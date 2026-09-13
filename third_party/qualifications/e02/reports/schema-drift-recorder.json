@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "fcfeb4fe38631f1d73fd1ca2c2a1bec05ab1be7e02b196a6eca6470b16e55ff2",
+  "report_id": "40fc564445ad1e1baed5e8a0edf04d67f698ea0b1e81bb5f748395d568227de0",
   "capability_id": "schema-drift-recorder",
   "candidate_version": "sha256:86c7da45b14b57202a08f9269869e18dda236539f134a7d14e8466bef5db7ba2",
   "requested_stage": "SHADOW",
@@ -27,7 +27,7 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "701aca8882324ffcba64d800d0c0b41d32bceff44bf767b40dd3199657ae1ef0"
+    "6913d7cd0e9bdd2b979024c11c6c203180801679ed5ca31a2ccde65a3a8e9a5a"
   ],
   "valid_from": "2026-09-09T04:05:13Z",
   "expires_at": "2026-12-08T04:05:13Z",

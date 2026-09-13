@@ -42,13 +42,13 @@
     {
       "assertion": "The project is proprietary; these Repo Skills are project-owned and introduce no third-party runtime license or service ToS.",
       "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "e9851f2e6212989f69c1cd0ba2471da46c34d65a28aa35731634db6abfac88b9",
+      "sha256": "38dfdf04e4b9123b757e6fb0172c1ac33b070f130305bbd384b8e9c6bc80c0fe",
       "source_ref": "repo:pyproject.toml"
     },
     {
       "assertion": "The Repo Skill integration adds no runtime package dependency; the existing locked dependency graph is unchanged.",
       "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "20e3b85a71849600cbe0a65bd29793c01eed33c39029c4a6264d0ff84c044ead",
+      "sha256": "7be1b927daf59176ce26fe34bd33de6b9ef0b8e098c80baa447c108a7ecd9ba7",
       "source_ref": "repo:uv.lock"
     },
     {

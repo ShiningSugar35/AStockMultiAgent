@@ -21,13 +21,13 @@ description: Independently challenge a frozen A-share research case as the inves
 
 ## Required output contract
 
-- Register a typed `InvestmentRedTeamReport` through `uv run astock research-team-role-output REQUEST.json`.
+- Register a typed `ChallengerAssessment` through `uv run astock research-team-role-output REQUEST.json`.
 - Complete `investment-red-team` through `uv run astock research-team-task-result REQUEST.json`.
 - Set `INDEPENDENT_REVIEW=true` only when both independent cases, the common evidence set, assumption ledger, disconfirming evidence, stress tests, unresolved defects and kill criteria are covered.
 
 ## Output
 
-Return the registered typed `InvestmentRedTeamReport` artifact ID, strongest surviving thesis, fatal/material defects, disconfirming evidence, market-implied-expectation and double-counting findings, confidence change, remediation and kill criteria.
+Return the registered typed `ChallengerAssessment` artifact ID, strongest surviving thesis, fatal/material defects, disconfirming evidence, market-implied-expectation and double-counting findings, confidence change, remediation and kill criteria.
 
 ## Gates and abstention
 

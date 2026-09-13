@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
 
 import pytest
 
@@ -22,8 +21,6 @@ from astock.investor_orchestration.output_validation import RegisteredOutputVeri
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.paper_trading.ledger import LedgerService
 from astock.schemas.institutional_research import InstitutionalDecisionContext
-from astock.schemas.knowledge import HoldingReviewPack
-from astock.schemas.portfolio import PortfolioAnalysisReport, PortfolioRiskMetrics
 from astock.schemas.research_runtime import ClassifiedTradeProtocol
 from astock.schemas.research_team import ResearchRoleOutput
 from tests.integration.test_committee import _service_and_request
@@ -134,7 +131,7 @@ def pipeline(tmp_path_factory: pytest.TempPathFactory):
         request.model_copy(
             update={
                 "question_time": datetime.now(UTC),
-                "normalized_intent": RequestIntent.BUY_DECISION,
+                "normalized_intent": RequestIntent.RESEARCH,
             }
         ),
         preflight,
@@ -167,66 +164,6 @@ def test_company_research_without_an_opposing_case_does_not_invent_one(pipeline)
         projector._research(replace(inputs, outputs={"COMPANY_RESEARCH": (altered,)}))
 
 
-def test_authoritative_positive_decision_remains_conditional_and_not_executed(pipeline) -> None:
-    projector, inputs, _, _, result = pipeline
-    rendered = projector._investment_decision(inputs)
-    assert "条件式买入候选" in rendered["conclusion"]
-    assert any(result.protocol.entry_rule in value for value in rendered["change_conditions"])
-    assert any(result.protocol.position_size_rule in value for value in rendered["actions"])
-    assert any("不代表已经下单或成交" in value for value in rendered["risks"])
-
-
-@pytest.mark.parametrize("outcome", ["WATCH", "REJECT"])
-def test_nonpositive_decisions_do_not_emit_entry_or_position_actions(
-    pipeline, outcome: str
-) -> None:
-    projector, inputs, _, _, _ = pipeline
-    protocol = inputs.outputs["COMMITTEE"][0]
-    assert isinstance(protocol, ClassifiedTradeProtocol)
-    values = protocol.model_dump()
-    values.update(final_outcome=outcome, paper_simulation_allowed=False)
-    guarded = ClassifiedTradeProtocol.model_validate(values)
-    output = projector._investment_decision(
-        replace(inputs, outputs={**inputs.outputs, "COMMITTEE": (guarded,)})
-    )
-    assert output["actions"] == ()
-    assert not any("入场条件" in value for value in output["change_conditions"])
-
-
-def test_insufficient_decision_never_gets_a_positive_rendering(pipeline) -> None:
-    projector, inputs, _, _, _ = pipeline
-    protocol = inputs.outputs["COMMITTEE"][0]
-    assert isinstance(protocol, ClassifiedTradeProtocol)
-    values = protocol.model_dump()
-    values.update(final_outcome="NEEDS_INFO", paper_simulation_allowed=False)
-    guarded = ClassifiedTradeProtocol.model_validate(values)
-    with pytest.raises(ValueError, match="not certified"):
-        projector._investment_decision(
-            replace(inputs, outputs={**inputs.outputs, "COMMITTEE": (guarded,)})
-        )
-
-
-def test_positive_decision_with_domain_hard_block_is_rejected(pipeline) -> None:
-    projector, inputs, _, _, _ = pipeline
-    protocol = inputs.outputs["COMMITTEE"][0]
-    assert isinstance(protocol, ClassifiedTradeProtocol)
-    blocked = protocol.model_copy(update={"blocking_codes": ["recorded-hard-block"]})
-    with pytest.raises(ValueError, match="authoritative admission"):
-        projector._investment_decision(
-            replace(inputs, outputs={**inputs.outputs, "COMMITTEE": (blocked,)})
-        )
-
-
-def test_positive_decision_cannot_borrow_another_company_narrative(pipeline) -> None:
-    projector, inputs, _, _, _ = pipeline
-    context = inputs.outputs["COMPANY_RESEARCH"][0]
-    wrong = context.model_copy(update={"company_id": "000999"})
-    with pytest.raises(ValueError, match="unique evidence-bound"):
-        projector._investment_decision(
-            replace(inputs, outputs={**inputs.outputs, "COMPANY_RESEARCH": (wrong,)})
-        )
-
-
 def test_domain_internal_text_cannot_cross_the_final_public_audit(pipeline) -> None:
     projector, inputs, _, _, _ = pipeline
     context = inputs.outputs["COMPANY_RESEARCH"][0]
@@ -252,75 +189,6 @@ def test_domain_internal_text_cannot_cross_the_final_public_audit(pipeline) -> N
                 outputs={"COMPANY_RESEARCH": (bad,)},
             )
         )
-
-
-def test_real_lifecycle_review_preserves_actions_and_reassessment_conditions(pipeline) -> None:
-    projector, inputs, artifacts, _, _ = pipeline
-    review = artifacts["HoldingReviewPack"]
-    assert isinstance(review, HoldingReviewPack)
-    output = projector._holding(replace(inputs, outputs={"HOLDING_REVIEW": (review,)}))
-    assert output["change_conditions"]
-    assert "核心投资假设暂未发生已确认变化" in output["reasons"]
-    assert "已确认风险暂未发生实质变化" in output["reasons"]
-    assert review.thesis_strength_change not in output["reasons"]
-    assert review.risk_change not in output["reasons"]
-    assert "实际账户和模拟账户" in output["risks"][0]
-
-
-def test_portfolio_drawdown_and_volatility_are_not_interchanged(pipeline) -> None:
-    projector, inputs, _, _, _ = pipeline
-    now = datetime.now(UTC)
-    metrics: dict[str, Any] = {
-        key: 0.0 for key, value in PortfolioRiskMetrics.model_fields.items() if value.is_required()
-    }
-    metrics.update(
-        annualized_volatility=0.125,
-        max_drawdown=0.235,
-        cash_weight=0.5,
-        invested_weight=0.5,
-        industry_exposures={},
-        effective_number_of_positions=1.0,
-    )
-    report = PortfolioAnalysisReport.model_validate(
-        {
-            "report_id": "render-only-risk",
-            "portfolio_id": "isolated-portfolio",
-            "as_of": now,
-            "created_at": now,
-            "data_cutoff_at": now,
-            "status": "READY",
-            "common_session_count": 30,
-            "assets": [
-                {
-                    "company_id": "600001",
-                    "market": "XSHG",
-                    "weight": 0.5,
-                    "latest_close_fen": 1000,
-                    "observation_count": 30,
-                    "annualized_volatility": 0.25,
-                    "beta_to_benchmark": 0.8,
-                    "risk_contribution_fraction": 1.0,
-                    "max_abs_pair_correlation": 0.0,
-                    "daily_release_id": "render-only-recorded-market-data",
-                    "daily_release_object_hash": "2" * 64,
-                }
-            ],
-            "metrics": metrics,
-            "warning_codes": [],
-            "hard_breach_codes": [],
-            "source_artifact_ids": [],
-            "source_object_hashes": [],
-        }
-    )
-    output = projector._portfolio(replace(inputs, outputs={"PORTFOLIO": (report,)}))
-    assert "12.5%" in output["reasons"][0]
-    assert "23.5%" in output["reasons"][1]
-    assert output["actions"] == ()
-    empty = report.model_copy(
-        update={"status": type(report.status)("EMPTY"), "metrics": None, "assets": []}
-    )
-    with pytest.raises(ValueError, match="empty portfolio"):
-        projector._portfolio(replace(inputs, outputs={"PORTFOLIO": (empty,)}))
 
 
 def test_monitor_keeps_registered_event_summary_without_claiming_execution(pipeline) -> None:

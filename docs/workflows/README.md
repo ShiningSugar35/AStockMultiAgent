@@ -6,16 +6,16 @@ Workflow 是跨 Skill 的**用户任务编排层**。它不替代 `.agents/skill
 
 | Workflow | 典型用户问题 | 主 Skill | 关键输出 |
 |---|---|---|---|
-| [Full-Market Research Team](workflow-full-market-research-team.md) | “有什么好买的股？推荐几只股票” | `$astock-research-orchestrator` | On-demand team DAG / RecommendationReadinessReport / formal ranking（仅 READY） |
+| [Full-Market Research Team](workflow-full-market-research-team.md) | “有什么好买的股？推荐几只股票” | `$astock-research-orchestrator` | On-demand team DAG / FullResearchInputReadinessReport / downstream RecommendationResearchReceipt + Publication Gate |
 | [Current Company Research](workflow-current-company-research.md) | “现在买中国海油合适吗？” | `$company-deep-research` | 当前研究判断 / 正式 DecisionPack（若链闭合） |
 | [Candidate Discovery](workflow-candidate-discovery.md) | “现在有哪些股票值得深入研究？” | `$candidate-scan` | ResearchSeed / Candidate shortlist |
 | [Evidence Recovery](workflow-evidence-recovery.md) | “这个关键事实为什么缺证据？” | `$evidence-investigation` | 冻结证据或一次性人工清单 |
 | [Financial Integrity](workflow-financial-integrity.md) | “财报靠谱吗？现金流质量如何？” | `$financial-integrity-audit` | FinancialIntegrity evidence/report |
-| [Macro & Policy Regime](workflow-macro-policy-regime.md) | “政策和宏观环境如何传导到这家公司？” | `$macro-policy-regime` | MacroRegimeProfile / PolicyRegimeProfile |
-| [Industry Value Chain](workflow-industry-value-chain.md) | “行业盈利池、竞争位置和可比公司如何？” | `$industry-value-chain` | IndustryValueChainProfile |
-| [Catalyst & Event Research](workflow-catalyst-event-research.md) | “未来有哪些催化和风险事件？” | `$catalyst-event-research` | CatalystRiskPack |
-| [Governance & Management Quality](workflow-governance-management-quality.md) | “治理、激励和资本配置靠谱吗？” | `$governance-management-quality` | GovernanceManagementQualityPack |
-| [Investment Red Team](workflow-investment-red-team.md) | “多空观点有哪些致命缺口或重复计入？” | `$investment-red-team` | InvestmentRedTeamReport |
+| [Macro & Policy Regime](workflow-macro-policy-regime.md) | “政策和宏观环境如何传导到这家公司？” | `$macro-policy-regime` | MacroResearchOutcome / PolicyRegimeProfile |
+| [Industry Value Chain](workflow-industry-value-chain.md) | “行业盈利池、竞争位置和可比公司如何？” | `$industry-value-chain` | IndustryResearchOutcome |
+| [Catalyst & Event Research](workflow-catalyst-event-research.md) | “未来有哪些催化和风险事件？” | `$catalyst-event-research` | NewsEventResearchPack |
+| [Governance & Management Quality](workflow-governance-management-quality.md) | “治理、激励和资本配置靠谱吗？” | `$governance-management-quality` | GovernanceAssessment |
+| [Investment Red Team](workflow-investment-red-team.md) | “多空观点有哪些致命缺口或重复计入？” | `$investment-red-team` | ChallengerAssessment |
 | [Model Risk & Backtest Validation](workflow-model-risk-backtest-validation.md) | “模型/回测是否有泄漏、过拟合或成本遗漏？” | `$model-risk-backtest-validation` | ModelRiskValidationReport |
 | [Committee & Trade Plan](workflow-committee-trade-plan.md) | “研究完成后能不能模拟买？什么条件进出？” | `$company-deep-research` | DecisionPack / ClassifiedTradeProtocol / TradePlanView |
 | [Portfolio Construction](workflow-portfolio-construction.md) | “把几只研究过的股票组成组合” | `$portfolio-manager` | Risk report / 4 allocation proposals |

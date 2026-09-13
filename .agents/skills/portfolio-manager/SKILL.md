@@ -24,7 +24,7 @@ description: Evaluate portfolio risk, complete a planned purchase with complemen
 11. 对 ETF 只允许使用已注册、具官方产品 lineage 的 `ETFProductProfile`，并先用 `portfolio-etf-metrics` 冻结同一 `as_of` 的成交额、波动、tracking error 与费率诊断，再运行 `portfolio-hedge-evaluate`。ETF 研究与组合评估可用；paper order/replay 只有在独立 `ETFInstrumentExecutionRule` 对目标证券和当前日期有效、`execution_enabled=true`、费用/lot/tick/limit/settlement 完整且经过既有确认/replay 链时才可模拟，仓库默认关闭。融券、期货、期权、杠杆/反向工具不在当前系统能力内。若缺正式 ETF profile 或成本/机制证据，只能称“互补配置/分散化候选”。
 12. 正式 `NATURAL_HEDGE` 必须由 `HedgeEffectivenessReport` 复算：至少比较正常期和压力期相关/敏感度、指定风险加入前后、风险改善阈值、独立的已验证成本上限和基差/模型风险；风险指标与费用不得跨量纲相减。调用方自行填写“降低 20% 风险”没有对冲权威。
 13. 组合提案只读：不得写 paper ledger、不得把 proposal 当订单、不得把订单当 fill。若用户选择模拟执行，另走现有确认/订单/replay 流程；真实券商执行始终不存在。
-14. 当 `$astock-research-orchestrator` 因荐股/组合/买入决策路由到本 Skill 时，本 Skill 是同一用户请求的必需终局阶段，不得只给“可进一步做组合优化”的建议。必须在所有正式入选标的深研完成后生成受约束的目标权重/风险预算、集中度与相关性诊断、入场/迁移区间及退出/失效条件，并把结果交回 Recommendation Gate；用户 NAV/现金未知时只给比例和条件，不得编造股数。
+14. 当 `$astock-research-orchestrator` 因 `FULL_RESEARCH_RECOMMENDATION` 路由到本 Skill 时，本 Skill 是同一用户请求的必需内部阶段，不得只给“可进一步做组合优化”的建议。必须在所有正式入选标的深研完成后生成受约束的目标权重/风险预算、集中度与相关性诊断、入场/迁移区间及退出/失效条件，并把结果交回 Mandatory Research DAG；只有最终 `RecommendationResearchReceipt + Publication Gate` 才拥有公共投资建议发布权。缺真实 NAV/现金时使用明确标注的模型组合假设并允许保留现金，不得伪造真实账户事实；只有资本、价格与交易单位具备有效证据时才生成具体股数。
 
 ## Workflows
 

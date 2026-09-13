@@ -1,29 +1,35 @@
 {
-  "admitted_stage": "SHADOW",
-  "candidate_version": "0.0.80",
+  "schema_version": "capability-qualification-report-v1",
+  "report_id": "99f45caa9e33f32559fa8225e02bc6007139ac2ca34e3538aea847164b0ec293",
   "capability_id": "playwright-mcp",
+  "candidate_version": "0.0.80",
+  "requested_stage": "SHADOW",
+  "admitted_stage": "SHADOW",
   "checks": {
-    "cache_behavior": "FAIL",
-    "cost": "PASS",
-    "credential_handling": "FAIL",
-    "data_rights": "FAIL",
-    "exit_uninstall": "PASS",
-    "failure_behavior": "FAIL",
-    "latency": "FAIL",
     "license": "PASS",
-    "maintenance": "PASS",
-    "offline_behavior": "FAIL",
+    "terms_of_service": "FAIL",
+    "data_rights": "FAIL",
     "pit": "FAIL",
     "provenance": "PASS",
+    "credential_handling": "FAIL",
     "sbom": "FAIL",
     "security_review": "FAIL",
-    "terms_of_service": "FAIL"
+    "maintenance": "PASS",
+    "cost": "PASS",
+    "latency": "FAIL",
+    "cache_behavior": "FAIL",
+    "offline_behavior": "FAIL",
+    "failure_behavior": "FAIL",
+    "exit_uninstall": "PASS"
   },
-  "completeness_ceiling": "NOT_APPLICABLE",
+  "recorded_validation": "FAIL",
   "controlled_live_validation": "FAIL",
+  "source_class_ceiling": "UNKNOWN",
+  "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
     "7a604030d5582ac201d42330f53a9315ebdb8644cace79365e09ce0d8eebfded"
   ],
+  "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",
   "reason_codes": [
     "BROWSER_CREDENTIAL_ISOLATION_NOT_VALIDATED",
@@ -32,11 +38,5 @@
     "MCP_RECORDED_FIXTURE_NOT_FROZEN",
     "PIT_CACHE_FAILURE_LATENCY_NOT_VALIDATED",
     "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
-  ],
-  "recorded_validation": "FAIL",
-  "report_id": "99f45caa9e33f32559fa8225e02bc6007139ac2ca34e3538aea847164b0ec293",
-  "requested_stage": "SHADOW",
-  "schema_version": "capability-qualification-report-v1",
-  "source_class_ceiling": "UNKNOWN",
-  "valid_from": "2026-09-02T06:16:28Z"
+  ]
 }

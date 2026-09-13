@@ -25,18 +25,15 @@ from astock.investor_orchestration.models import (
 from astock.investor_orchestration.output_validation import RegisteredOutputVerifier, output_model
 from astock.investor_orchestration.utils import content_hash
 from astock.research.presentation import audit_public_answer
-from astock.schemas.committee import DecisionPack, TradeProtocol
 from astock.schemas.external_accounts import ExternalAccountOperationReceipt
+from astock.schemas.full_research import RecommendationResearchReceipt
 from astock.schemas.institutional_research import InstitutionalDecisionContext
-from astock.schemas.knowledge import HoldingReviewPack
 from astock.schemas.paper import (
     PaperOperationReport,
     PaperPreparationReceipt,
     PortfolioNAV,
     ReplayExecutionReport,
 )
-from astock.schemas.portfolio import PortfolioAnalysisReport
-from astock.schemas.research_runtime import ClassifiedTradeProtocol
 from astock.schemas.research_team import ResearchRoleOutput
 
 PROJECTION_POLICY = "verified-investor-answer-projection-v1"
@@ -93,6 +90,266 @@ def _text(value: str) -> str:
 
 def _unique(values: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
+
+
+@dataclass(frozen=True)
+class _FullResearchPublicIndex:
+    valuations: dict[str, Any]
+    executions: dict[str, Any]
+    rankings: dict[str, Any]
+    narratives: dict[str, Any]
+    industries: dict[str, Any]
+    financials: dict[str, Any]
+    governance: dict[str, Any]
+    challengers: dict[str, Any]
+
+
+def _full_research_receipt(inputs: VerifiedInputs) -> RecommendationResearchReceipt:
+    receipts = inputs.outputs.get("FULL_RESEARCH_GATE", ())
+    if len(receipts) != 1 or not isinstance(receipts[0], RecommendationResearchReceipt):
+        raise ValueError("full research decision requires one sealed recommendation receipt")
+    receipt = receipts[0]
+    if not receipt.publication.formal_recommendation_allowed:
+        raise ValueError("full research receipt did not pass publication")
+    return receipt
+
+
+def _full_research_index(receipt: RecommendationResearchReceipt) -> _FullResearchPublicIndex:
+    return _FullResearchPublicIndex(
+        valuations={item.instrument_id: item for item in receipt.valuations},
+        executions={item.instrument_id: item for item in receipt.execution_plans},
+        rankings={item.instrument_id: item for item in receipt.candidate_rankings},
+        narratives={item.instrument_id: item for item in receipt.candidate_narratives},
+        industries={item.industry_id: item for item in receipt.industries},
+        financials={item.instrument_id: item for item in receipt.financial_quality},
+        governance={item.instrument_id: item for item in receipt.governance},
+        challengers={item.instrument_id: item for item in receipt.challengers},
+    )
+
+
+def _full_research_base_reasons(receipt: RecommendationResearchReceipt) -> list[str]:
+    assumptions = receipt.request_contract.portfolio_assumptions
+    return [
+        f"宏观环境：{_text(receipt.macro.macro_regime)}；流动性：{_text(receipt.macro.liquidity_regime)}；"
+        f"风险偏好：{_text(receipt.macro.risk_appetite)}。",
+        f"组合假设：本金{_decimal(assumptions.capital_rmb)}元，风险属性{assumptions.risk_profile}，"
+        f"期限{assumptions.horizon_min_months}-{assumptions.horizon_max_months}个月；允许保留现金。",
+    ]
+
+
+def _holding_review_fields(
+    receipt: RecommendationResearchReceipt,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    reasons: list[str] = []
+    risks: list[str] = []
+    actions: list[str] = []
+    conditions: list[str] = []
+    labels = {
+        "HOLD": "继续持有",
+        "ADD": "按条件加仓",
+        "TRIM": "按条件减仓",
+        "EXIT": "按条件退出",
+        "REVIEW": "先复核，暂不机械调整",
+    }
+    for review in receipt.holding_reviews:
+        code = _code(review.instrument_id)
+        quantity = (
+            f"，当前数量{_decimal(review.current_quantity)}股"
+            if review.current_quantity is not None
+            else ""
+        )
+        confidence = _decimal(review.action_confidence * 100)
+        reasons.append(
+            f"{code}持仓复核：投资逻辑{_text(review.thesis_strength_change)}，"
+            f"风险变化{_text(review.risk_change)}，置信度{confidence}%{quantity}。"
+        )
+        action = labels[review.recommended_action]
+        detail = ""
+        if review.target_weight_lower is not None and review.target_weight_upper is not None:
+            detail += (
+                f"，目标权重{_decimal(review.target_weight_lower * 100)}%-"
+                f"{_decimal(review.target_weight_upper * 100)}%"
+            )
+        if review.target_quantity_min is not None and review.target_quantity_max is not None:
+            detail += f"，目标数量{review.target_quantity_min}-{review.target_quantity_max}股"
+        actions.append(f"{code}：{action}{detail}。")
+        if review.risk_change not in {"UNCHANGED", "LOWER"}:
+            risks.append(f"{code}持仓风险状态：{_text(review.risk_change)}。")
+        conditions.extend(f"{code}执行前提：{_text(value)}" for value in review.preconditions)
+        conditions.extend(f"{code}反转条件：{_text(value)}" for value in review.reversal_conditions)
+        conditions.extend(
+            f"{code}下次复核：{_text(value)}" for value in review.next_review_conditions
+        )
+    return reasons, risks, actions, conditions
+
+
+def _full_research_no_buy(
+    receipt: RecommendationResearchReceipt,
+    reasons: list[str],
+) -> dict[str, Any]:
+    rejected = "、".join(_code(instrument) for instrument in sorted(receipt.rejected_candidates))
+    if rejected:
+        reasons.append(f"被淘汰候选：{rejected}；至少一项估值、质量、治理、证据或组合约束未达标。")
+    holding_reasons, holding_risks, holding_actions, holding_conditions = _holding_review_fields(
+        receipt
+    )
+    reasons.extend(holding_reasons)
+    risks = list(holding_risks)
+    risks.append("保留现金同样是组合决策；后续估值、基本面或市场状态变化后需要重新评估。")
+    conditions = list(holding_conditions)
+    conditions.append("出现新的合格候选，或现有候选安全边际与证据置信度显著改善时重新构建组合。")
+    conclusion = (
+        "完整研究后当前没有新增买入标的；现有持仓处置已按持仓复核结果纳入本次决策。"
+        if receipt.holding_reviews
+        else "完整研究与组合约束审计后，当前没有足够有吸引力的股票需要强行买入。"
+    )
+    return {
+        "conclusion": conclusion,
+        "reasons": _unique(reasons),
+        "risks": _unique(risks),
+        "actions": _unique(holding_actions),
+        "change_conditions": _unique(conditions),
+    }
+
+
+def _position_reasons(index: _FullResearchPublicIndex, position: Any) -> list[str]:
+    instrument = position.instrument_id
+    valuation = index.valuations[instrument]
+    ranking = index.rankings[instrument]
+    narrative = index.narratives[instrument]
+    industry = index.industries[ranking.industry_id]
+    scenarios = {item.scenario: item for item in valuation.scenarios}
+    values = [
+        f"{_code(instrument)}投资逻辑：{_text(narrative.investment_thesis)}",
+        f"{_code(instrument)}为什么是现在：{_text(narrative.why_now)}；行业处于{_text(industry.cycle_phase)}阶段。",
+        f"{_code(instrument)}：参考价格{_decimal(valuation.current_price)}元；"
+        f"悲观/基础/乐观合理价值分别为{_decimal(scenarios['BEAR'].per_share_value)}/"
+        f"{_decimal(scenarios['BASE'].per_share_value)}/{_decimal(scenarios['BULL'].per_share_value)}元；"
+        f"期望收益{_decimal(valuation.expected_return_mean * 100)}%，"
+        f"安全边际{_decimal(valuation.margin_of_safety * 100)}%，"
+        f"证据置信度{_decimal(ranking.evidence_confidence * 100)}%。",
+    ]
+    values.extend(f"{_code(instrument)}催化剂：{_text(value)}" for value in narrative.catalysts)
+    return values
+
+
+def _position_risks(index: _FullResearchPublicIndex, position: Any) -> list[str]:
+    instrument = position.instrument_id
+    narrative = index.narratives[instrument]
+    challenger = index.challengers.get(instrument)
+    if challenger is None:
+        raise ValueError("BUY candidate lacks its independent challenger")
+    values = [f"{_code(instrument)}主要风险：{_text(value)}" for value in narrative.primary_risks]
+    values.append(
+        f"{_code(instrument)}反方：{_text(challenger.market_may_be_right_because)}；"
+        f"最大合理下行{_decimal(challenger.maximum_reasonable_downside * 100)}%。"
+    )
+    if index.financials[instrument].red_flags:
+        values.append(f"{_code(instrument)}存在非否决性的财务质量风险点，需要持续复核。")
+    if index.governance[instrument].red_flags:
+        values.append(f"{_code(instrument)}存在非否决性的治理风险点，需要持续复核。")
+    return values
+
+
+def _position_actions(
+    receipt: RecommendationResearchReceipt,
+    index: _FullResearchPublicIndex,
+    position: Any,
+    *,
+    existing_holding: bool = False,
+) -> tuple[list[str], list[str]]:
+    instrument = position.instrument_id
+    narrative = index.narratives[instrument]
+    execution = index.executions.get(instrument)
+    if execution is None:
+        raise ValueError("portfolio candidate lacks execution planning")
+    conditions = [
+        f"{_code(instrument)}逻辑失效：{_text(value)}"
+        for value in narrative.thesis_invalidation_conditions
+    ]
+    actions: list[str] = []
+    if execution.buy_range_low is not None and execution.buy_range_high is not None:
+        actions.append(
+            f"{_code(instrument)}条件买入区间{_decimal(execution.buy_range_low)}-"
+            f"{_decimal(execution.buy_range_high)}元，最大可接受价格"
+            f"{_decimal(execution.maximum_acceptable_price or execution.buy_range_high)}"
+            f"元；目标权重{_decimal(position.target_weight * 100)}%。"
+        )
+    actions.extend(
+        f"{_code(instrument)}加仓条件：{_text(value)}" for value in execution.add_conditions
+    )
+    actions.extend(
+        f"{_code(instrument)}减仓/退出条件：{_text(value)}"
+        for value in execution.reduce_exit_conditions
+    )
+    actions.append(f"{_code(instrument)}时间退出：{_text(execution.time_stop_condition)}")
+    actions.append(f"{_code(instrument)}估值退出：{_text(execution.valuation_exit_condition)}")
+    actions.extend(
+        f"{_code(instrument)}重大事件退出：{_text(value)}"
+        for value in execution.event_exit_conditions
+    )
+    if receipt.publication.instant_trade_parameters_allowed:
+        if execution.initial_shares is None or execution.target_shares is None:
+            raise ValueError("instant publication lacks executable share quantities")
+        if existing_holding:
+            actions.append(
+                f"{_code(instrument)}基于现有持仓调整至目标{execution.target_shares}股。"
+            )
+        else:
+            actions.append(
+                f"{_code(instrument)}首仓{execution.initial_shares}股，"
+                f"目标{execution.target_shares}股。"
+            )
+    return actions, conditions
+
+
+def _portfolio_summary(
+    receipt: RecommendationResearchReceipt,
+    reasons: list[str],
+    risks: list[str],
+    actions: list[str],
+) -> None:
+    labels = {
+        "VALUE": "价值",
+        "QUALITY": "质量",
+        "GROWTH": "成长",
+        "MOMENTUM": "动量",
+        "LOW_VOLATILITY": "低波动",
+        "LIQUIDITY": "流动性",
+        "SIZE": "规模",
+        "EARNINGS_REVISION": "盈利预测修正",
+        "PROFITABILITY": "盈利能力",
+        "CROWDING": "拥挤度",
+    }
+    top_factors = sorted(
+        receipt.portfolio.factor_exposures.items(), key=lambda item: (-abs(item[1]), item[0])
+    )[:3]
+    reasons.append(
+        f"组合保留现金{_decimal(receipt.portfolio.cash)}元，"
+        f"现金权重{_decimal(receipt.portfolio.cash_weight * 100)}%。"
+    )
+    if top_factors:
+        reasons.append(
+            "组合主要因子暴露："
+            + "、".join(f"{labels.get(name, name)}{_decimal(value)}" for name, value in top_factors)
+            + "。"
+        )
+    reasons.append(
+        f"组合风险：Beta {_decimal(receipt.risk_audit.portfolio_beta)}，"
+        f"预期波动{_decimal(receipt.risk_audit.expected_volatility * 100)}%，"
+        f"预期短缺{_decimal(receipt.risk_audit.expected_shortfall * 100)}%，"
+        f"最大回撤代理{_decimal(receipt.risk_audit.max_drawdown_proxy * 100)}%。"
+    )
+    if not receipt.publication.instant_trade_parameters_allowed:
+        risks.append(
+            "当前研究结论可发布，但即时行情未满足新鲜度硬门；股数仅在重新取得有效报价后生成。"
+        )
+    if receipt.rejected_candidates:
+        reasons.append(
+            "其余候选因估值、质量、治理、财务、证据或组合约束未达标而被保留在淘汰记录中，未为凑数放行。"
+        )
+    if receipt.portfolio.cash_weight > Decimal("0"):
+        actions.append("组合替代方案是保留未使用现金，而不是用低质量或低流动性标的强行填仓。")
 
 
 class VerifiedAnswerProjector:
@@ -201,15 +458,8 @@ class VerifiedAnswerProjector:
             fields = self._paper_confirmation(inputs)
         elif request.normalized_intent is RequestIntent.ACCOUNT_FACT_WRITE:
             fields = self._account_operation(inputs)
-        elif request.normalized_intent in {
-            RequestIntent.BUY_DECISION,
-            RequestIntent.RECOMMENDATION,
-        }:
-            fields = self._investment_decision(inputs)
-        elif request.normalized_intent is RequestIntent.HOLDING_DECISION:
-            fields = self._holding(inputs)
-        elif request.normalized_intent is RequestIntent.PORTFOLIO_DECISION:
-            fields = self._portfolio(inputs)
+        elif request.normalized_intent is RequestIntent.FULL_RESEARCH_RECOMMENDATION:
+            fields = self._full_research_decision(inputs)
         elif request.normalized_intent is RequestIntent.RESEARCH:
             fields = self._research(inputs)
         elif request.normalized_intent is RequestIntent.MONITOR:
@@ -477,171 +727,44 @@ class VerifiedAnswerProjector:
             "change_conditions": _unique(conditions),
         }
 
-    def _investment_decision(self, inputs: VerifiedInputs) -> dict[str, Any]:
-        classified = inputs.outputs.get("COMMITTEE", ())
-        if not classified or not all(
-            isinstance(item, ClassifiedTradeProtocol) for item in classified
-        ):
-            raise ValueError("investment decision requires canonical classified protocols")
-        reasons: list[str] = []
-        risks: list[str] = []
-        actions: list[str] = []
-        conditions: list[str] = []
-        conclusions: list[str] = []
-        for protocol in classified:
-            assert isinstance(protocol, ClassifiedTradeProtocol)
-            committee = self.verifier.load(protocol.committee_protocol_artifact_id, TradeProtocol)
-            decision = self.verifier.load(protocol.decision_pack_artifact_id, DecisionPack)
-            assert isinstance(committee, TradeProtocol) and isinstance(decision, DecisionPack)
-            if (
-                committee.company_id != protocol.company_id
-                or decision.company_id != protocol.company_id
-                or committee.decision_id != decision.decision_id
-                or committee.decision_sha256 != decision.decision_sha256
-            ):
-                raise ValueError("investment conclusion has inconsistent frozen decision lineage")
-            self.verifier._check_time(
-                committee.model_dump(mode="json"), inputs.request.evidence_cutoff
+    @staticmethod
+    def _full_research_decision(inputs: VerifiedInputs) -> dict[str, Any]:
+        receipt = _full_research_receipt(inputs)
+        reasons = _full_research_base_reasons(receipt)
+        if not receipt.portfolio.positions:
+            return _full_research_no_buy(receipt, reasons)
+        index = _full_research_index(receipt)
+        holding_reasons, holding_risks, holding_actions, holding_conditions = (
+            _holding_review_fields(receipt)
+        )
+        reasons.extend(holding_reasons)
+        risks: list[str] = list(holding_risks)
+        actions: list[str] = list(holding_actions)
+        conditions: list[str] = list(holding_conditions)
+        holding_ids = {item.instrument_id for item in receipt.holding_reviews}
+        names: list[str] = []
+        for position in receipt.portfolio.positions:
+            names.append(_code(position.instrument_id))
+            reasons.extend(_position_reasons(index, position))
+            risks.extend(_position_risks(index, position))
+            position_actions, position_conditions = _position_actions(
+                receipt,
+                index,
+                position,
+                existing_holding=position.instrument_id in holding_ids,
             )
-            self.verifier._check_time(
-                decision.model_dump(mode="json"), inputs.request.evidence_cutoff
-            )
-            company = _code(protocol.company_id)
-            outcome = protocol.final_outcome.value
-            if outcome == "NEEDS_INFO":
-                raise ValueError("investment decision is not certified by the domain gate")
-            if outcome == "REJECT":
-                conclusions.append(f"{company}暂不纳入买入候选。")
-            elif outcome == "WATCH":
-                conclusions.append(f"{company}目前以观察为主，不确认当前买入。")
-            elif outcome == "APPROVE_SIMULATION":
-                if (
-                    committee.protocol_status.value != "ACTIVE"
-                    or not committee.paper_simulation_allowed
-                    or committee.verdict.value != "PAPER_ELIGIBLE"
-                    or decision.verdict != committee.verdict
-                    or protocol.blocking_codes
-                    or committee.blocking_codes
-                    or decision.hard_blocks
-                    or decision.needs_info_task_ids
-                ):
-                    raise ValueError(
-                        "positive decision conflicts with its authoritative admission gates"
-                    )
-                conclusions.append(f"{company}可作为条件式买入候选，仍须逐项满足入场条件。")
-                conditions.append(f"{company}入场条件：{_text(committee.entry_rule)}")
-                actions.append(f"{company}：{_text(committee.position_size_rule)}")
-            else:
-                raise ValueError("unsupported authoritative investment outcome")
-            contexts = [
-                value
-                for value in inputs.outputs.get("COMPANY_RESEARCH", ())
-                if isinstance(value, InstitutionalDecisionContext)
-                and self.verifier._same_identity(value.company_id, protocol.company_id)
-            ]
-            if len(contexts) != 1 or not isinstance(contexts[0], InstitutionalDecisionContext):
-                raise ValueError(
-                    "investment decision has no unique evidence-bound company narrative"
-                )
-            context = contexts[0]
-            reasons.append(f"{company}：{_text(context.draft.investment_thesis.statement)}")
-            if not context.draft.competing_hypotheses:
-                raise ValueError("investment decision has no evidence-bound opposing case")
-            risks.extend(
-                f"{company}：{_text(hypothesis.statement)}"
-                for hypothesis in context.draft.competing_hypotheses
-            )
-            conditions.append(f"{company}失效条件：{_text(committee.thesis_invalidation_rule)}")
-            conditions.append(f"{company}应在{decision.review_at.date().isoformat()}前复核。")
-        risks.append("情景判断和研究条件不是收益保证，也不代表已经下单或成交。")
+            actions.extend(position_actions)
+            conditions.extend(position_conditions)
+        _portfolio_summary(receipt, reasons, risks, actions)
         return {
-            "conclusion": "".join(conclusions),
+            "conclusion": (
+                f"完整研究闭环通过后，模型组合当前保留{len(receipt.portfolio.positions)}只候选："
+                f"{'、'.join(names)}。"
+                + ("现有持仓处置已纳入同一份完整研究结论。" if receipt.holding_reviews else "")
+            ),
             "reasons": _unique(reasons),
             "risks": _unique(risks),
             "actions": _unique(actions),
-            "change_conditions": _unique(conditions),
-        }
-
-    @staticmethod
-    def _portfolio(inputs: VerifiedInputs) -> dict[str, Any]:
-        reports = inputs.outputs.get("PORTFOLIO", ())
-        if len(reports) != 1 or not isinstance(reports[0], PortfolioAnalysisReport):
-            raise ValueError("portfolio answer requires one coherent registered risk report")
-        report = reports[0]
-        if report.status.value == "EMPTY":
-            raise ValueError("empty portfolio does not certify personalized allocation")
-        if report.metrics is None:
-            raise ValueError("portfolio metrics are unavailable")
-        metrics = report.metrics
-        reasons = [
-            "按冻结组合和历史样本计算的年化波动为"
-            f"{_decimal(metrics.annualized_volatility * 100)}%。",
-            f"同一样本期最大回撤为{_decimal(abs(metrics.max_drawdown) * 100)}%，"
-            "不代表未来损失上限。",
-        ]
-        ordered = sorted(
-            report.assets, key=lambda asset: (-asset.risk_contribution_fraction, asset.company_id)
-        )
-        if ordered:
-            reasons.append(
-                f"{_code(ordered[0].company_id)}的风险贡献相对较大，需要结合公司研究一起复核。"
-            )
-        return {
-            "conclusion": "当前组合的风险特征如下；风险统计本身不足以确定买卖标的或精确调整仓位。",
-            "reasons": tuple(reasons),
-            "risks": ("历史相关性和波动会变化，压力期的分散效果可能减弱。",),
-            "actions": (),
-            "change_conditions": ("持仓、价格数据或关键公司事实变化后，重新计算并评估调整成本。",),
-        }
-
-    @staticmethod
-    def _holding(inputs: VerifiedInputs) -> dict[str, Any]:
-        reviews = inputs.outputs.get("HOLDING_REVIEW", ())
-        if not reviews or not all(isinstance(item, HoldingReviewPack) for item in reviews):
-            raise ValueError("holding answer requires completed canonical holding reviews")
-        labels = {
-            "HOLD": "继续持有并跟踪",
-            "ADD": "复核加仓条件",
-            "TRIM": "复核减仓条件",
-            "EXIT": "复核退出条件",
-            "REVIEW": "先复核持仓依据",
-        }
-        thesis_labels = {
-            "UNCHANGED": "核心投资假设暂未发生已确认变化",
-            "STRENGTHENED": "新增证据强化了核心投资假设",
-            "WEAKENED": "新增证据削弱了核心投资假设",
-            "UNRESOLVED": "核心投资假设仍需补充证据后复核",
-        }
-        risk_labels = {
-            "UNCHANGED": "已确认风险暂未发生实质变化",
-            "HIGHER": "已确认风险较上次复核有所上升",
-            "UNKNOWN": "当前证据不足以确认风险方向",
-        }
-        conclusions: list[str] = []
-        reasons: list[str] = []
-        conditions: list[str] = []
-        for review in reviews:
-            assert isinstance(review, HoldingReviewPack)
-            action = labels.get(review.recommended_action.value)
-            if action is None:
-                raise ValueError("holding review does not contain a recognized action decision")
-            conclusions.append(action)
-            thesis_change = thesis_labels.get(review.thesis_strength_change)
-            risk_change = risk_labels.get(review.risk_change)
-            if thesis_change is None or risk_change is None:
-                raise ValueError("holding review contains an unsupported public state label")
-            reasons.append(thesis_change)
-            reasons.append(risk_change)
-            conditions.extend(_text(value) for value in review.next_review_conditions)
-            conditions.extend(_text(value) for value in review.preconditions)
-            conditions.extend(_text(value) for value in review.reversal_conditions)
-        if not conditions:
-            raise ValueError("holding review has no explicit change conditions")
-        return {
-            "conclusion": "；".join(conclusions) + "。",
-            "reasons": _unique(reasons),
-            "risks": ("持仓成本不能替代公司估值；实际账户和模拟账户应分别处理。",),
-            "actions": _unique(conclusions),
             "change_conditions": _unique(conditions),
         }
 

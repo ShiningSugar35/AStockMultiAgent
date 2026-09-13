@@ -1,11 +1,11 @@
 schema_version: business-scenario-manifest-v1
-policy_version: investor-capability-policy-v1
+policy_version: full-research-recommendation-v1
 source_matrix: docs/acceptance/business-question-capability-matrix-v1.md
 scenario_count: 68
 scenarios:
 - id: 1
   title: 标的现在适合买入、什么位置合适
-  intent: BUY_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMMITTEE
   - COMPANY_RESEARCH
@@ -14,6 +14,8 @@ scenarios:
   - EVENT_RESEARCH
   - FINANCIAL_INTEGRITY
   - FORECAST_VALUATION
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - INDUSTRY
   - MARKET_REGIME
@@ -35,7 +37,7 @@ scenarios:
   source_chain: U → MQ + MA + IN + CR + FI + GV + EV → FV → RR → CO → PO(有组合时) → SR
 - id: 2
   title: 当前价格低估/合理/高估、持有多久、何处卖
-  intent: BUY_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMMITTEE
   - COMPANY_RESEARCH
@@ -44,6 +46,8 @@ scenarios:
   - EVENT_RESEARCH
   - FINANCIAL_INTEGRITY
   - FORECAST_VALUATION
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - INDUSTRY
   - MARKET_REGIME
@@ -65,7 +69,7 @@ scenarios:
   source_chain: U → MQ + MA + IN + CR + FI + GV + EV → FV → RR → CO → PO(有组合时) → SR
 - id: 3
   title: 涨很多能否追、跌很多能否抄底
-  intent: BUY_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMMITTEE
   - COMPANY_RESEARCH
@@ -74,6 +78,8 @@ scenarios:
   - EVENT_RESEARCH
   - FINANCIAL_INTEGRITY
   - FORECAST_VALUATION
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - INDUSTRY
   - MARKET_REGIME
@@ -92,11 +98,10 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 涨跌幅只作输入；必须判断估值、盈利变化、事件、拥挤、流动性和市场状态；禁止机械追涨/均值回归
-  source_chain: U → MQ(price path/liquidity) + MA + CR + IN + FI + GV + EV → FV →
-    RR → CO → PO → SR
+  source_chain: U → MQ(price path/liquidity) + MA + CR + IN + FI + GV + EV → FV → RR → CO → PO → SR
 - id: 11
   title: 持有标的、跌破成本 20%
-  intent: HOLDING_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMPANY_RESEARCH
   - CURRENT_MARKET
@@ -104,6 +109,8 @@ scenarios:
   - EVENT_RESEARCH
   - FINANCIAL_INTEGRITY
   - FORECAST_VALUATION
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - HOLDING_REVIEW
   - INDUSTRY
@@ -123,11 +130,10 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 自动计算实际损益和风险贡献；成本价不替代估值；输出 HOLD/ADD/TRIM/EXIT、目标带和改变判断条件
-  source_chain: U → EA/PT projection → MQ + MA + IN + CR + FI + GV + EV → FV → RR
-    → PO → HR → SR
+  source_chain: U → EA/PT projection → MQ + MA + IN + CR + FI + GV + EV → FV → RR → PO → HR → SR
 - id: 12
   title: 500 股、成本 25 元，未明确当前盈亏
-  intent: HOLDING_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMPANY_RESEARCH
   - CURRENT_MARKET
@@ -136,6 +142,8 @@ scenarios:
   - EXTERNAL_ACCOUNT
   - FINANCIAL_INTEGRITY
   - FORECAST_VALUATION
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - HOLDING_REVIEW
   - INDUSTRY
@@ -155,15 +163,16 @@ scenarios:
   - META
   side_effect_description: READ+META；若无记录则条件式 EA_PROVISIONAL
   acceptance: 自行查当前价并计算；不重复询问可恢复字段；缺购买时点/账户时不得伪造 exact trade
-  source_chain: U → projection/position assertion → MQ → MA + IN + CR + FI + GV +
-    EV → FV → RR → PO → HR → SR
+  source_chain: U → projection/position assertion → MQ → MA + IN + CR + FI + GV + EV → FV → RR → PO → HR → SR
 - id: 13
   title: 2026 年 5 月 30 元买 1000 股，如何处理
-  intent: HOLDING_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - CURRENT_MARKET
   - ENTITY_IDENTITY
   - EXTERNAL_ACCOUNT
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - HOLDING_REVIEW
   - PORTFOLIO
   - REQUEST_TIME
@@ -175,20 +184,20 @@ scenarios:
   - PAPER
   allowed_side_effects:
   - EA_PROVISIONAL
-  - EA_WRITE
-  side_effect_description: exact fields 足够时 EA_WRITE，否则 EA_PROVISIONAL
+  side_effect_description: 不完整持仓声明仅冻结为 EA_PROVISIONAL；真实账户事实写入必须先独立走 ACCOUNT_FACT_WRITE
   acceptance: “2026 年 5 月”不是精确成交时点；给定 30 元可作声明成本，缺失成本时 K 线只能生成估算区间，不能写成真实成交价
-  source_chain: U → duplicate lookup → EA assertion → MQ + full holding research →
-    PO → HR → SR
+  source_chain: U → duplicate lookup → EA assertion → MQ + full holding research → PO → HR → SR
 - id: 14
   title: 之前买过这些标的/组合，现在怎么办
-  intent: HOLDING_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMPANY_RESEARCH
   - ENTITY_IDENTITY
   - EVENT_RESEARCH
   - FINANCIAL_INTEGRITY
   - FORECAST_VALUATION
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - HOLDING_REVIEW
   - MARKET_REGIME
@@ -206,8 +215,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 默认读取本地记录；按重大性排序，不逐只重复全报告；实际与模拟分列，给组合级和个股级动作
-  source_chain: U → local/external/paper projections → SR material deltas → per-position
-    CR/FI/GV/EV/FV → MA → PO → HR
+  source_chain: U → local/external/paper projections → SR material deltas → per-position CR/FI/GV/EV/FV → MA → PO → HR
 - id: 22
   title: 昨天买入 300 股，12.35 元
   intent: ACCOUNT_FACT_WRITE
@@ -226,8 +234,7 @@ scenarios:
   - NONE
   side_effect_description: EA_WRITE 或字段不足时 NONE
   acceptance: 相对日期解析为绝对日期；若只有日期无时刻，必须由 date-precision 合同保存，不能编造具体成交时刻；幂等
-  source_chain: U → entity/account/date precision → duplicate/economic conflict →
-    EA append → projection/audit → SR
+  source_chain: U → entity/account/date precision → duplicate/economic conflict → EA append → projection/audit → SR
 - id: 23
   title: 今天卖出 200 股，15.82 元
   intent: ACCOUNT_FACT_WRITE
@@ -246,8 +253,7 @@ scenarios:
   - NONE
   side_effect_description: EA_WRITE 或 NONE
   acceptance: 校验可售数量与账户；相对日期绝对化；不得改 paper ledger；写后数量/成本/P&L 投影正确
-  source_chain: U → account/position availability → duplicate → EA append → projection/audit
-    → SR
+  source_chain: U → account/position availability → duplicate → EA append → projection/audit → SR
 - id: 24
   title: 上次买入数量写错，改为 600 股
   intent: ACCOUNT_FACT_WRITE
@@ -265,8 +271,7 @@ scenarios:
   - EA_WRITE
   side_effect_description: EA_WRITE
   acceptance: 不 UPDATE/DELETE；目标唯一、同账户、经济影响可复算；重复纠正幂等
-  source_chain: U → locate exact prior event → correction preview → reversal/replacement
-    → projection/audit
+  source_chain: U → locate exact prior event → correction preview → reversal/replacement → projection/audit
 - id: 25
   title: A、B 两证券账户分别记录
   intent: ACCOUNT_FACT_WRITE
@@ -358,14 +363,15 @@ scenarios:
   - NONE
   side_effect_description: 通常 NONE，确认为新事实才 EA_WRITE
   acceptance: exact duplicate 0 新事件；相似但非同笔不得误删；给可理解的去重结果
-  source_chain: U → idempotency key + source hash + economic fingerprint + actual/paper
-    conflict → return existing/append
+  source_chain: U → idempotency key + source hash + economic fingerprint + actual/paper conflict → return existing/append
 - id: 31
   title: 评估整个股票组合风险
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - CURRENT_MARKET
   - ENTITY_IDENTITY
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - HOLDING_REVIEW
   - MARKET_REGIME
   - PORTFOLIO
@@ -382,13 +388,14 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 总风险、边际贡献、尾部、流动性和数据质量；unknown cash 不算 0；重大动作按优先级
-  source_chain: U → lane-separated positions → MQ/PIT total-return series → MA → PO(stress/CVaR/CDaR/beta/liquidity)
-    → HR
+  source_chain: U → lane-separated positions → MQ/PIT total-return series → MA → PO(stress/CVaR/CDaR/beta/liquidity) → HR
 - id: 32
   title: 是否过度集中某行业
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - HOLDING_REVIEW
   - INDUSTRY
   - MARKET_REGIME
@@ -406,17 +413,18 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 行业分类必须有正式 release；不能用调用方随手标签冒充；给当前与目标区间
-  source_chain: U → certified industry taxonomy → PO concentration/stress → MA/IN
-    → HR
+  source_chain: U → certified industry taxonomy → PO concentration/stress → MA/IN → HR
 - id: 33
   title: 哪些股票风险大、如何调整
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMPANY_RESEARCH
   - ENTITY_IDENTITY
   - EVENT_RESEARCH
   - FINANCIAL_INTEGRITY
   - FORECAST_VALUATION
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - HOLDING_REVIEW
   - MARKET_REGIME
@@ -437,9 +445,11 @@ scenarios:
   source_chain: U → per-position CR/FI/GV/EV/FV + PO marginal risk → MA → HR
 - id: 34
   title: 哪些相关性高、没有分散作用
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - PORTFOLIO
   - REQUEST_TIME
   - RESPONSE_GATEWAY
@@ -454,13 +464,14 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 不只报普通相关系数；检查压力期与共同因子；给调整后风险变化和成本
-  source_chain: U → PIT returns/total-return quality → correlation/clustering/tail
-    correlation → PO transition
+  source_chain: U → PIT returns/total-return quality → correlation/clustering/tail correlation → PO transition
 - id: 35
   title: 再买某标的，风险变好还是变差
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -476,14 +487,14 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 比较前后集中度、波动、CVaR、流动性和因子暴露；未正式准入不能直接给权重
-  source_chain: U → full target research/readiness → current PO → counterfactual add
-    → MA → transition
+  source_chain: U → full target research/readiness → current PO → counterfactual add → MA → transition
 - id: 36
   title: 加投 10 万元，买哪些、各配多少
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -499,13 +510,14 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 10 万作为新增资本，不假定其他现金；给金额/股数/目标带/分批/剩余现金和推荐本金适用区间
-  source_chain: U → current PO/risk gaps → MA budget → FM/approved candidates → full
-    research → construction/transition/cost
+  source_chain: U → current PO/risk gaps → MA budget → FM/approved candidates → full research → construction/transition/cost
 - id: 37
   title: 5 只股票的目标仓位区间
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -521,13 +533,14 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 给区间而非点权重；约束单股/行业/流动性；当前落在 no-trade band 时保持
-  source_chain: U → per-stock readiness → PO allocator comparison → MA overlay → target
-    bands/cost
+  source_chain: U → per-stock readiness → PO allocator comparison → MA overlay → target bands/cost
 - id: 38
   title: 降低组合波动/风险
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -543,15 +556,15 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 区分 diversification/natural hedge/unproven；给风险改善、成本、税费/换手和缺点
-  source_chain: U → PO risk-gap/stress → approved stock/ETF complements → transition/hedge
-    evaluation → MA
+  source_chain: U → PO risk-gap/stress → approved stock/ETF complements → transition/hedge evaluation → MA
 - id: 41
   title: 当前 A 股哪些股票值得买
-  intent: RECOMMENDATION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMMITTEE
   - ENTITY_IDENTITY
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -567,15 +580,15 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 默认“现在可买”的完整研究；初筛不准发布；数量由合格标的与 regime cap 共同决定，可少于预期或为 0
-  source_chain: U → FM official Universe → MA recommendation budget → candidate funnel
-    → full research each → CO → PO → SR
+  source_chain: U → FM official Universe → MA recommendation budget → candidate funnel → full research each → CO → PO → SR
 - id: 42
   title: 全市场筛 10 只值得购买
-  intent: RECOMMENDATION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMMITTEE
   - ENTITY_IDENTITY
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -591,14 +604,14 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 最终最多 10 只且每只正式准入；给权重、适用本金区间、买入/卖出条件、组合风险和候选不足说明
-  source_chain: U → FM → MA → 10+ deep-research funnel → CO → PO construction/transition
-    → SR
+  source_chain: U → FM → MA → 10+ deep-research funnel → CO → PO construction/transition → SR
 - id: 43
   title: 构建 5 只稳健型组合
-  intent: RECOMMENDATION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -614,15 +627,15 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 5 只是用户目标数量，不是用不合格标的凑数的授权；合格标的不足时必须返回较少标的、现金与缺口，强调现金流、财务质量、流动性和尾部风险
-  source_chain: U → risk intent → FM/full research → PO robust allocators/stress →
-    MA → SR
+  source_chain: U → risk intent → FM/full research → PO robust allocators/stress → MA → SR
 - id: 44
   title: 偏成长、控制单股风险
-  intent: RECOMMENDATION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - FORECAST_VALUATION
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -638,15 +651,15 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 成长必须有盈利/现金流/估值支撑；单股/行业 caps；高波动牛市不放大集中度
-  source_chain: U → growth intent → FM/full research/FV → PO caps/diversification
-    → MA → SR
+  source_chain: U → growth intent → FM/full research/FV → PO caps/diversification → MA → SR
 - id: 45
   title: 尽量低波动组合
-  intent: RECOMMENDATION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - ETF
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -662,11 +675,10 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 不能用历史低波动直接保证未来；报告相关性、容量、收益牺牲与 regime 变化敏感性
-  source_chain: U → FM/approved candidates + optional ET → PO shrinkage/inverse-vol/HRP
-    + stress/cost → MA
+  source_chain: U → FM/approved candidates + optional ET → PO shrinkage/inverse-vol/HRP + stress/cost → MA
 - id: 46
   title: 持有 3 年以上的长期公司
-  intent: RECOMMENDATION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMMITTEE
   - COMPANY_RESEARCH
@@ -674,6 +686,7 @@ scenarios:
   - FINANCIAL_INTEGRITY
   - FORECAST_VALUATION
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - INDUSTRY
   - PORTFOLIO
@@ -691,14 +704,14 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 强调长期竞争力、再投资、资本配置和估值；短期催化不主导；给长期监控 KPI
-  source_chain: U → FM → long-horizon CR/IN/FI/GV/capital allocation/FV → RR → CO
-    → PO → SR
+  source_chain: U → FM → long-horizon CR/IN/FI/GV/capital allocation/FV → RR → CO → PO → SR
 - id: 47
   title: 排除银行和地产
-  intent: RECOMMENDATION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -714,14 +727,14 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 排除是硬约束并写入 coverage receipt；上下游/类金融边界透明；不能筛后手工删出破坏组合
-  source_chain: U → FM with certified taxonomy exclusion → full research → PO → MA
-    → SR
+  source_chain: U → FM with certified taxonomy exclusion → full research → PO → MA → SR
 - id: 48
   title: 已确定买入这些标的，补 2–4 只改善结构
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -737,8 +750,8 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 尊重 anchor 但展示其风险；补充标的必须改善具名结构，给前后指标、权重和成本；不把相关性低等同对冲
-  source_chain: U → anchors full readiness → current+planned PO risk gap → FM complements
-    → deep research → transition/hedge → MA → SR
+  source_chain: U → anchors full readiness → current+planned PO risk gap → FM complements → deep research → transition/hedge
+    → MA → SR
 - id: 51
   title: 行业处于什么阶段、是否适合投资
   intent: RESEARCH
@@ -763,8 +776,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 区分宏观周期与行业自身周期；给阶段证据、领先/滞后指标、估值与可投资条件
-  source_chain: U → MA → IN cycle/supply-demand/profit pool → representative CR/FI/FV
-    → RR → SR
+  source_chain: U → MA → IN cycle/supply-demand/profit pool → representative CR/FI/FV → RR → SR
 - id: 52
   title: 拆上中下游并找买点
   intent: RESEARCH
@@ -788,8 +800,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 产业链完整、利润传导明确；“买点”只对正式研究公司给出，行业热度不能直接荐股
-  source_chain: U → MA → IN full chain/value capture/bottlenecks → candidate research
-    → FV/CO → PO → SR
+  source_chain: U → MA → IN full chain/value capture/bottlenecks → candidate research → FV/CO → PO → SR
 - id: 53
   title: 真正赚钱最多的环节
   intent: RESEARCH
@@ -811,8 +822,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 区分收入规模、利润额、利润率、ROIC 和周期位置；给数据口径/时点
-  source_chain: U → IN profit pool/ROIC/cash conversion/cyclicality → FI representative
-    firms → MA
+  source_chain: U → IN profit pool/ROIC/cash conversion/cyclicality → FI representative firms → MA
 - id: 54
   title: 行业关键跟踪指标
   intent: RESEARCH
@@ -833,8 +843,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 指标具备来源、频率、领先/滞后、阈值和传导；避免列一堆无动作指标
-  source_chain: U → IN driver tree → MA/policy → company KPI mapping → SR monitor
-    rules
+  source_chain: U → IN driver tree → MA/policy → company KPI mapping → SR monitor rules
 - id: 55
   title: 龙头核心竞争优势
   intent: RESEARCH
@@ -907,8 +916,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 明确传导时滞、合同、套保、需求弹性与二阶效应；20% 是情景不是事实
-  source_chain: U → IN quantity/price transmission → company driver trees → deterministic
-    sensitivity/FI → FV → RR
+  source_chain: U → IN quantity/price transmission → company driver trees → deterministic sensitivity/FI → FV → RR
 - id: 61
   title: 当前宏观对 A 股偏利好/利空
   intent: RESEARCH
@@ -929,8 +937,8 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 给多维而非一句利好/利空；列当前时点、状态概率、主要驱动、反证和数据缺口
-  source_chain: U → official current macro releases/vintages → MA economic + market
-    regime → earnings/valuation/liquidity transmission → RR
+  source_chain: U → official current macro releases/vintages → MA economic + market regime → earnings/valuation/liquidity
+    transmission → RR
 - id: 62
   title: 进一步降息哪些行业真正受益
   intent: RESEARCH
@@ -954,8 +962,8 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 区分估值、融资成本、需求、息差和汇率渠道；名义受益不等于利润受益
-  source_chain: U → policy scenario → MA rates/credit/FX transmission → IN balance-sheet/demand
-    sensitivity → representative CR/FV → RR
+  source_chain: U → policy scenario → MA rates/credit/FX transmission → IN balance-sheet/demand sensitivity → representative
+    CR/FV → RR
 - id: 63
   title: 政策变化如何影响行业
   intent: RESEARCH
@@ -976,8 +984,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 逐环节、时间窗、受益/受损、执行不确定性；媒体解读不能替代政策原文
-  source_chain: U → official policy text/effective date → MA transmission chain →
-    IN supply/demand/cost/capacity → KPI/monitor
+  source_chain: U → official policy text/effective date → MA transmission chain → IN supply/demand/cost/capacity → KPI/monitor
 - id: 64
   title: 政策对公司是否实质利好
   intent: RESEARCH
@@ -1002,8 +1009,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 量化收入/成本/资本开支/竞争格局可能影响；区分一次性情绪与可持续现金流
-  source_chain: U → official policy → MA + IN → CR exposure/eligibility/economics
-    → FI/FV → RR
+  source_chain: U → official policy → MA + IN → CR exposure/eligibility/economics → FI/FV → RR
 - id: 65
   title: 某变量继续走弱的传导
   intent: RESEARCH
@@ -1031,10 +1037,12 @@ scenarios:
   source_chain: U → define observable variable/scenario → MA → IN → CR/FI/FV → RR
 - id: 66
   title: 当前宏观政策对持仓影响
-  intent: HOLDING_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMPANY_RESEARCH
   - ENTITY_IDENTITY
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - HOLDING_REVIEW
   - INDUSTRY
   - MARKET_REGIME
@@ -1052,8 +1060,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 覆盖全部实际/模拟持仓但分 lane；按影响重大性给动作，不只列宏观观点
-  source_chain: U → holdings exposure → MA → per-position IN/CR sensitivity → PO stress
-    → HR
+  source_chain: U → holdings exposure → MA → per-position IN/CR sensitivity → PO stress → HR
 - id: 67
   title: 行业处于产业周期哪阶段、建议
   intent: RESEARCH
@@ -1077,8 +1084,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 周期阶段证据、可能持续时间、领先指标、适合的公司类型/风险；不机械套“复苏—繁荣”
-  source_chain: U → MA → IN capacity/inventory/capex/profit cycle → representative
-    FI/FV → PO/SR
+  source_chain: U → MA → IN capacity/inventory/capex/profit cycle → representative FI/FV → PO/SR
 - id: 71
   title: 利润增长但现金流质量
   intent: RESEARCH
@@ -1103,8 +1109,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 解释差异来源、持续性和红旗；利润增长不能单独判可靠
-  source_chain: U → official reports → FI earnings-to-cash/reconciliation/accruals
-    → CR/IN → GV/FV → RR
+  source_chain: U → official reports → FI earnings-to-cash/reconciliation/accruals → CR/IN → GV/FV → RR
 - id: 72
   title: 应收快于收入、存货大增
   intent: RESEARCH
@@ -1129,8 +1134,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 与业务模式和行业比较；量化营运资金与减值敏感性；给正常/异常判据
-  source_chain: U → FI trend/common-size/turnover/aging/impairment → IN seasonality/channel
-    → CR/GV/FV → RR
+  source_chain: U → FI trend/common-size/turnover/aging/impairment → IN seasonality/channel → CR/GV/FV → RR
 - id: 73
   title: 财务异常或会计红旗
   intent: RESEARCH
@@ -1154,8 +1158,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 不用单指标定罪；列证据、严重性、替代解释、对估值/准入影响；缺证据时弃权
-  source_chain: U → FI full integrity audit → official notes/auditor → GV/CR/FV →
-    RR
+  source_chain: U → FI full integrity audit → official notes/auditor → GV/CR/FV → RR
 - id: 74
   title: 更换审计机构是否警惕
   intent: RESEARCH
@@ -1179,16 +1182,17 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 核对变更时间、原因、前后审计意见、监管/内控信号；非自动利空
-  source_chain: U → official appointment/resignation/reason → FI audit history/opinion/fees
-    → GV → CR/FV → RR
+  source_chain: U → official appointment/resignation/reason → FI audit history/opinion/fees → GV → CR/FV → RR
 - id: 75
   title: 大股东质押比例高
-  intent: HOLDING_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - CURRENT_MARKET
   - ENTITY_IDENTITY
   - EVENT_RESEARCH
   - FINANCIAL_INTEGRITY
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - HOLDING_REVIEW
   - PORTFOLIO
@@ -1205,17 +1209,18 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 比例、质押价格/补仓线可得性、流动性、控制权和强平传导；不可得字段保持未知
-  source_chain: U → official pledge data/current ownership → GV control/margin-call/refinance
-    → MQ/EV/FI → PO/HR
+  source_chain: U → official pledge data/current ownership → GV control/margin-call/refinance → MQ/EV/FI → PO/HR
 - id: 76
   title: 管理层频繁减持
-  intent: HOLDING_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - COMPANY_RESEARCH
   - CURRENT_MARKET
   - ENTITY_IDENTITY
   - EVENT_RESEARCH
   - FORECAST_VALUATION
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - GOVERNANCE
   - HOLDING_REVIEW
   - REQUEST_TIME
@@ -1231,8 +1236,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 区分预披露、执行、到期、被动/主动；按持股占比和基本面变化判断，不只看次数
-  source_chain: U → official sell-down timeline/amount/reason → GV incentives/ownership
-    → MQ/EV/CR/FV → HR
+  source_chain: U → official sell-down timeline/amount/reason → GV incentives/ownership → MQ/EV/CR/FV → HR
 - id: 77
   title: 过去资本配置质量
   intent: RESEARCH
@@ -1256,8 +1260,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 资金去向、回报、减值、机会成本、股东回报和未来约束；给跨周期证据
-  source_chain: U → FI cash flow/capex/M&A/dividend/buyback/debt → GV incentives →
-    CR ROIC/value creation → FV/RR
+  source_chain: U → FI cash flow/capex/M&A/dividend/buyback/debt → GV incentives → CR ROIC/value creation → FV/RR
 - id: 81
   title: 今天最新公告及持仓影响
   intent: MONITOR
@@ -1283,8 +1286,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: “最新/今天”按绝对日期和交易所原文；影响 thesis、估值、仓位与行动；无持仓时静默跳过持仓段
-  source_chain: U → official disclosure search/sync → EV materiality → CR/FI/GV/FV
-    delta → PO/HR → SR
+  source_chain: U → official disclosure search/sync → EV materiality → CR/FI/GV/FV delta → PO/HR → SR
 - id: 82
   title: 业绩预告超预期/低预期
   intent: MONITOR
@@ -1309,8 +1311,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 必须说明相对谁的预期、口径和一次性项目；无合法预期基准时不能宣称超预期
-  source_chain: U → official preview → explicit expectation baseline → FI quality
-    → CR/FV delta → MQ/EV → HR
+  source_chain: U → official preview → explicit expectation baseline → FI quality → CR/FV delta → MQ/EV → HR
 - id: 83
   title: 新建产能是真利好还是过度资本开支
   intent: MONITOR
@@ -1335,8 +1336,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 产能、投产时点、利用率、价格、资金来源、回报率和供给冲击；给情景而非公告情绪
-  source_chain: U → official project terms → IN supply/demand/cycle → FI funding/leverage/capex
-    → CR driver tree/FV → RR/HR
+  source_chain: U → official project terms → IN supply/demand/cycle → FI funding/leverage/capex → CR driver tree/FV → RR/HR
 - id: 84
   title: 重大订单对利润影响
   intent: MONITOR
@@ -1361,8 +1361,8 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 订单额不直接等于收入/利润；检查履约、毛利、周期、客户集中和重复公告
-  source_chain: U → official contract/order → EV enforceability/timing → CR margin/revenue
-    recognition → FI/FV sensitivity → RR/HR
+  source_chain: U → official contract/order → EV enforceability/timing → CR margin/revenue recognition → FI/FV sensitivity
+    → RR/HR
 - id: 85
   title: 媒体报道重大事故
   intent: MONITOR
@@ -1388,8 +1388,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 先确认权威来源和时间；未经确认只能线索；给停产/赔偿/声誉/供应链情景和动作
-  source_chain: U → authoritative source confirmation → EV severity/operations/legal/ESG
-    → CR/IN/FI/FV → PO/HR → SR
+  source_chain: U → authoritative source confirmation → EV severity/operations/legal/ESG → CR/IN/FI/FV → PO/HR → SR
 - id: 86
   title: 减持计划是否提前调整
   intent: MONITOR
@@ -1413,8 +1412,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 计划不等于执行；检查占流通股、原因、窗口、历史行为、基本面和组合风险
-  source_chain: U → official plan → GV/EV size/window/holder → MQ/liquidity/valuation
-    → PO/HR
+  source_chain: U → official plan → GV/EV size/window/holder → MQ/liquidity/valuation → PO/HR
 - id: 87
   title: 下月大规模解禁
   intent: MONITOR
@@ -1438,8 +1436,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 解禁不等于减持；量化潜在供给、持有人动机、成交容量和已定价程度
-  source_chain: U → official unlock schedule/share type/holder/cost → MQ liquidity/valuation
-    → GV/EV → PO/HR
+  source_chain: U → official unlock schedule/share type/holder/cost → MQ liquidity/valuation → GV/EV → PO/HR
 - id: 88
   title: 原催化剂已落地，是否符合预期
   intent: MONITOR
@@ -1464,8 +1461,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 必须对照当初冻结预期而非事后改口；给达成/部分/失败、估值和动作变化
-  source_chain: U → SR original thesis/catalyst snapshot → official result → EV delta
-    → CR/FI/FV → RR/HR
+  source_chain: U → SR original thesis/catalyst snapshot → official result → EV delta → CR/FI/FV → RR/HR
 - id: 89
   title: 所有持仓最近重要新事件
   intent: MONITOR
@@ -1486,8 +1482,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 只报重大事件，按组合影响排序；每项必须给继续持有/复核/减仓等动作和条件
-  source_chain: U → all actual/paper holdings → SR events/tasks → authority verification
-    → per-position delta → PO/HR
+  source_chain: U → all actual/paper holdings → SR events/tasks → authority verification → per-position delta → PO/HR
 - id: 90
   title: 已研究未买入股票的重大变化
   intent: MONITOR
@@ -1507,14 +1502,16 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 依赖完整跨会话 registry；不能只查当前 monitor 子集；给升级/维持/降级/移除和原因
-  source_chain: U → SR RESEARCHED minus HELD registry → recent events → authority
-    verification → research/FV delta → recommendation status
+  source_chain: U → SR RESEARCHED minus HELD registry → recent events → authority verification → research/FV delta → recommendation
+    status
 - id: 91
   title: 用 ETF 降低组合波动
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - ETF
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -1530,14 +1527,15 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: ETF 需正式 profile；检查重叠、tracking error、流动性、费率和压力期效果；正确标记 diversification/hedge
-  source_chain: U → PO risk gap → ET official profiles/constituents/metrics → hedge
-    evaluation/cost → MA → transition
+  source_chain: U → PO risk gap → ET official profiles/constituents/metrics → hedge evaluation/cost → MA → transition
 - id: 92
   title: 某 ETF 是否值得买
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - ETF
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - RED_TEAM
@@ -1554,14 +1552,15 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 覆盖用户指定五项；缺 NAV/iNAV 不算伪溢折价；ETF 与指数/基金事实不混淆
-  source_chain: U → ET index methodology/constituents/fee/AUM/liquidity/tracking error/premium
-    → MA → PO → RR
+  source_chain: U → ET index methodology/constituents/fee/AUM/liquidity/tracking error/premium → MA → PO → RR
 - id: 93
   title: ETF A/B 跟踪类似方向选哪个
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - ETF
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -1577,14 +1576,16 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 同一时点同口径比较；给不同本金/持有期/成交额下的选择条件，不只看管理费
-  source_chain: U → parallel ET profiles/metrics/constituent overlap → cost/liquidity/tracking
-    comparison → PO counterfactual → MA
+  source_chain: U → parallel ET profiles/metrics/constituent overlap → cost/liquidity/tracking comparison → PO counterfactual
+    → MA
 - id: 94
   title: 加入 ETF 是否形成更好对冲
-  intent: PORTFOLIO_DECISION
+  intent: FULL_RESEARCH_RECOMMENDATION
   required:
   - ENTITY_IDENTITY
   - ETF
+  - FULL_MARKET
+  - FULL_RESEARCH_GATE
   - MARKET_REGIME
   - PORTFOLIO
   - REQUEST_TIME
@@ -1600,8 +1601,7 @@ scenarios:
   - META
   side_effect_description: READ+META
   acceptance: 计算加入前后具名风险；低相关不自动叫 hedge；basis/model risk 和费用单列
-  source_chain: U → current PO → ET returns/constituents → hedge effectiveness normal+stress+cost
-    → MA
+  source_chain: U → current PO → ET returns/constituents → hedge effectiveness normal+stress+cost → MA
 - id: 95
   title: 模拟买入 1000 股
   intent: PAPER_PREPARE
@@ -1620,8 +1620,8 @@ scenarios:
   - PT_CONFIRM
   side_effect_description: PT_PREPARE，独立确认后 PT_CONFIRM
   acceptance: 用户命令可覆盖研究意见但不覆盖现金、lot/tick、价格限制、T+1和确认；未给价格/订单类型时不伪造；订单不等于持仓
-  source_chain: U → entity/instrument rule → explicit user command → optional current
-    research opinion → PT prepare → confirmation → order status/SR
+  source_chain: U → entity/instrument rule → explicit user command → optional current research opinion → PT prepare → confirmation
+    → order status/SR
 - id: 96
   title: 查看之前的模拟限价单
   intent: PAPER_STATUS
@@ -1639,7 +1639,5 @@ scenarios:
   - PT_REPLAY
   - READ
   side_effect_description: 仅查看为 READ；既存已确认订单到期需回放时为 PT_REPLAY
-  acceptance: 返回订单/触发/成交/失效状态；不得新建或改价；重复查询不重复成交；只有 fill 更新 position；60m 近似与 5m fallback
-    语义正确
-  source_chain: U → PT open-order/status/audit → current trading calendar/data → deterministic
-    replay if due → projection/monitor
+  acceptance: 返回订单/触发/成交/失效状态；不得新建或改价；重复查询不重复成交；只有 fill 更新 position；60m 近似与 5m fallback 语义正确
+  source_chain: U → PT open-order/status/audit → current trading calendar/data → deterministic replay if due → projection/monitor

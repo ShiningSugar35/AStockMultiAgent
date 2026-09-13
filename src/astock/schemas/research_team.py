@@ -46,6 +46,7 @@ class ResearchTaskRole(StrEnum):
     GOVERNANCE = "GOVERNANCE"
     VALUATION = "VALUATION"
     MODEL_RISK = "MODEL_RISK"
+    QUANT_FACTOR = "QUANT_FACTOR"
     BULL = "BULL"
     BEAR = "BEAR"
     REVIEWER = "REVIEWER"
@@ -60,7 +61,7 @@ class ResearchTeamTaskState(StrEnum):
     BLOCKED = "BLOCKED"
 
 
-class RecommendationReadinessStatus(StrEnum):
+class FullResearchInputReadinessStatus(StrEnum):
     READY = "READY"
     OBSERVATION_ONLY = "OBSERVATION_ONLY"
 
@@ -113,7 +114,6 @@ class ResearchTeamPlan(AStockModel):
     on_demand_acquisition: Literal[True] = True
     background_service_required: Literal[False] = False
     no_manual_candidate_fallback: Literal[True] = True
-    formal_recommendation_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_dag(self) -> ResearchTeamPlan:
@@ -178,21 +178,21 @@ class ResearchRoleResult(AStockModel):
         return self
 
 
-class RecommendationReadinessRequest(AStockModel):
-    schema_version: str = "recommendation-readiness-request-v1"
+class FullResearchInputReadinessRequest(AStockModel):
+    schema_version: str = "full-research-input-readiness-request-v1"
     plan_id: str = Field(min_length=1)
     checks: dict[str, bool] = Field(default_factory=dict)
 
 
-class RecommendationReadinessReport(AStockModel):
-    schema_version: str = "recommendation-readiness-report-v1"
+class FullResearchInputReadinessReport(AStockModel):
+    schema_version: str = "full-research-input-readiness-report-v1"
     report_id: str = Field(min_length=1)
     plan_id: str = Field(min_length=1)
-    status: RecommendationReadinessStatus
+    status: FullResearchInputReadinessStatus
     required_checks: list[str]
     passed_checks: list[str]
     missing_or_failed_checks: list[str]
-    formal_recommendation_allowed: bool
+    full_research_input_ready: bool
     manual_candidate_fallback_allowed: Literal[False] = False
     broker_execution_allowed: Literal[False] = False
 
@@ -204,10 +204,10 @@ class RecommendationReadinessReport(AStockModel):
         return value
 
     @model_validator(mode="after")
-    def validate_authority(self) -> RecommendationReadinessReport:
-        ready = self.status is RecommendationReadinessStatus.READY
-        if self.formal_recommendation_allowed != ready:
-            raise ValueError("formal recommendation authority must match READY status")
+    def validate_authority(self) -> FullResearchInputReadinessReport:
+        ready = self.status is FullResearchInputReadinessStatus.READY
+        if self.full_research_input_ready != ready:
+            raise ValueError("full-research input readiness must match READY status")
         if ready and self.missing_or_failed_checks:
             raise ValueError("READY report cannot have missing checks")
         if not ready and not self.missing_or_failed_checks:
@@ -320,9 +320,9 @@ class IndustryResearchMatch(AStockModel):
 
 __all__ = [
     "HardwareBudget",
-    "RecommendationReadinessReport",
-    "RecommendationReadinessRequest",
-    "RecommendationReadinessStatus",
+    "FullResearchInputReadinessReport",
+    "FullResearchInputReadinessRequest",
+    "FullResearchInputReadinessStatus",
     "ResearchCoverageReport",
     "ResearchCoverageRequest",
     "ResearchCoverageScore",

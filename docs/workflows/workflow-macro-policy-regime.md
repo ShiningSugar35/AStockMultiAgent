@@ -2,7 +2,7 @@
 
 ## When to use
 
-Use when a ready Research Team task requires `MacroRegimeProfile` or `PolicyRegimeProfile`, or when a current/historical company thesis materially depends on monetary, fiscal, regulatory, liquidity, industrial-policy, demand or cost conditions.
+Use when a ready Research Team task requires `MacroResearchOutcome` or `PolicyRegimeProfile`, or when a current/historical company thesis materially depends on monetary, fiscal, regulatory, liquidity, industrial-policy, demand or cost conditions.
 
 Primary skill: `$macro-policy-regime`. It feeds `$industry-value-chain`, `$catalyst-event-research`, `$company-deep-research` and the existing Research Team; it never creates recommendation authority by itself.
 
@@ -12,7 +12,7 @@ Primary skill: `$macro-policy-regime`. It feeds `$industry-value-chain`, `$catal
 2. Reuse frozen releases first. For new material, capture primary official publications with announcement/effective/observation/availability timestamps; historical work rejects later revisions unavailable at `as_of`.
 3. Separate observed state from forecast. Build base/upside/downside regime states and an explicit transmission graph into the relevant industry/company drivers.
 4. Cross-check material conflicts against another authoritative series or source. Missing official text, unclear vintage or unsupported transmission leaves the relevant readiness check false.
-5. Register the frozen `MacroRegimeProfile` / `PolicyRegimeProfile` through `research-team-role-output`, then register an independently identified `ResearchRoleResult` through `research-team-task-result`.
+5. Register the frozen `MacroResearchOutcome` / `PolicyRegimeProfile` through `research-team-role-output`, then register an independently identified `ResearchRoleResult` through `research-team-task-result`.
 6. Downstream Agents receive only the profile, assumptions, falsifiers and evidence lineage—not a repeated scrape of the same macro corpus.
 
 ## Stop conditions

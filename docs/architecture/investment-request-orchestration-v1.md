@@ -1,9 +1,9 @@
 # Investment Request Orchestration v1
 
 > 状态：CURRENT
-> 是否已实现：是；机器合同、统一 preflight、Capability Planner/Executor、注册输出认证、Investor Answer Gateway、material investment request 同轮终局门与 actual/paper 分 lane 均已完成。荐股/组合/买卖判断/完整公司研究在 canonical REQUIRED capability 未闭合时必须继续自动执行，Seed/Candidate/Acquisition/Team/Committee/Portfolio 中间态不得成为最终投资结论。
+> 实现状态：IMPLEMENTED_ENABLED（`full-research-recommendation-v1`，package v0.4.0 release candidate）。所有可直接形成证券选择、买卖判断、价格、数量或仓位的请求统一进入 `FULL_RESEARCH_RECOMMENDATION`；正式投资建议只允许由不可变 `RecommendationResearchReceipt + Publication Gate` 发布。`FullResearchInputReadinessReport` 仅证明上游输入完整，不具有正式荐股权。
 > 当前恢复合同：账户读取只消费 canonical external-account 事件与 paper ledger；0068 revision 与同一只读事务冻结状态，禁止按表名推测事实。快照跨账户拒绝、变更失效、历史不可得阻断、并发复用及原子回滚继续由机器测试约束。生产启用状态不由“实现完成”自动改变。
-> 更新日期：2026-09-10
+> 更新日期：2026-09-11
 > 关联 ADR：`docs/adr/0001-documentation-as-code-with-machine-contracts.md`、`docs/adr/0002-market-regime-as-risk-overlay.md`
 > 关联验收：`docs/acceptance/business-question-capability-matrix-v1.md`
 
@@ -32,17 +32,20 @@
 - `ResponseGateway` 与投资者输出审计；
 - Repo Skills 与跨 Skill Workflow。
 
-### 2.2 经审查确认的缺口
+### 2.2 已关闭的历史缺口
 
-- 总控 Skill 虽写明恢复用户态，但运行时没有“无 preflight receipt 就禁止渲染投资答复”的硬门；
-- 多账户真实持仓、本地兼容投影和模拟盘还没有统一、去重且可缓存的请求级视图；
-- `paper-status` 在本轮单次观察中耗时 66.838 秒，不能每个问题机械全账本重算；源码显示 CLI 与 `portfolio_nav()` 重复调用 `status()`，且每次都会执行全库 `PRAGMA integrity_check`；
-- 没有机器可读的“问题类型 → 必调/条件/禁止能力”合同和覆盖回执；
-- 没有“所有历史提及、已研究、已推荐、已持有标的”的统一跨会话登记；
-- 公共回复网关已存在，但尚未证明所有投资入口都只能从该网关退出；
-- 市场状态尚未成为所有投资问题的统一共享输入。
+本节不再列未来 TODO。以下能力均已成为当前机器合同：
 
-## 3. 目标架构
+- `InvestorSessionPreflightReceipt` 是投资请求进入公共回答前的强制恢复工件；
+- 多账户 actual、paper 与兼容投影按 lane 冻结并可复用，不以表名猜事实；
+- 常规 preflight 不执行全库 SQLite integrity check，完整体检只在显式诊断/发布门执行；
+- `CapabilityExecutionPlan + CapabilityCoverageReceipt` 提供机器可读的 REQUIRED/CONDITIONAL/PROHIBITED 合同与覆盖回执；
+- `ResearchSubjectRegistry` 统一登记历史研究、推荐、监控与持仓相关主体；
+- 投资者公共输出必须经过 `ResponseGateway` 与输出审计；
+- 市场状态作为共享输入进入相关投资研究；
+- material investment decision 进一步强制进入 `FULL_RESEARCH_RECOMMENDATION`，上游 capability coverage 不能替代最终 Full Research Publication Gate。
+
+## 3. 当前目标架构
 
 ```text
 User message
@@ -50,29 +53,38 @@ User message
   → InvestorSessionPreflightService
        ├─ external accounts / projections
        ├─ paper ledger incremental snapshot
-       ├─ legacy projection reconciliation
+       ├─ compatibility projection reconciliation
        ├─ monitor material deltas
-       └─ latest valid market/regime snapshot identity（可缺失；preflight 内不联网构建）
+       └─ latest valid market/regime snapshot identity
   → Intent & Entity Resolution
-  → CapabilityPolicyPlanner
-       ├─ REQUIRED capabilities
-       ├─ CONDITIONAL capabilities + activation reasons
-       ├─ PROHIBITED capabilities
-       └─ dependency DAG / budget / freshness
-  → CapabilityExecutor
-       ├─ deterministic services
-       ├─ specialist Agents
-       ├─ evidence recovery
-       └─ checkpoints / reuse / degradation
-  → CapabilityCoverageReceipt
-  → InvestorDecisionAssembler
-  → ResponseGateway + output guardrail
-  → investor answer
+       └─ material investment decision → FULL_RESEARCH_RECOMMENDATION
+  → CapabilityPolicyPlanner / CapabilityExecutor
+       ├─ REQUIRED / CONDITIONAL / PROHIBITED
+       ├─ deterministic services + specialist Agents
+       ├─ evidence recovery / checkpoints / reuse
+       └─ CapabilityCoverageReceipt
+  → FullResearchInputReadiness (upstream only)
+  → FullResearchReceiptAssembler
+       ├─ Request Contract + MODEL_PORTFOLIO assumptions when needed
+       ├─ one Point-in-Time source/evidence graph
+       ├─ Financial/Governance CriticalVeto
+       ├─ multi-model valuation + factor/ranking
+       ├─ portfolio/risk/execution + quote freshness
+       └─ independent challenger + candidate narratives
+  → Mandatory Research DAG
+  → immutable RecommendationResearchReceipt
+  → Publication Gate
+       ├─ PUBLISH / CONDITIONAL_ONLY / BLOCKED
+       └─ broker_execution_allowed=false
+  → ResponseGateway + public output audit
+  → recommendation tracking / append-only reevaluation
 ```
+
+非 material 的事实查询、监控、账户事实写入与 paper operation 继续使用各自独立 side-effect lane；它们不能借 Full Research 获得额外写入权限。`EA_PROVISIONAL` 仅可冻结不完整持仓声明，真实 `EA_WRITE` 必须独立走 `ACCOUNT_FACT_WRITE`。已有持仓的处置请求仍统一进入 `FULL_RESEARCH_RECOMMENDATION`，但会标记 `EXISTING_HOLDING`：`HOLDING_REVIEW` 成为最终 gate 的必需依赖，其 `HoldingReviewPack` 被投影为绑定 monitoring plan、preflight portfolio revision、artifact/hash 与 Evidence lineage 的不可变 holding decision snapshot；即使没有新增 BUY，最终 receipt 与公共投影也必须保留 HOLD/ADD/TRIM/EXIT/REVIEW 动作，不能退化成空动作的“保留现金”。其中 `ADD` 仍属于新增买入，只能在同标的 candidate admission 仍为 eligible 且 CriticalVeto 未触发时保留；TRIM/EXIT/HOLD/REVIEW 不因该买入准入门被静默删除。路由不得用裸 `持有` 或裸 `多少股` 触发 Full Research，而应识别“现有持仓 + 处置动作”或“买入/配置 + 多少股”等决策语义，避免把股东持股数量等事实查询误路由为投资决策。
 
 只有 Developer Mode 可以显示内部计划、状态码、工件和覆盖回执；Investor Mode 只显示投资判断、证据时间、关键理由、风险、动作和改变判断的条件。
 
-## 4. 拟议机器合同
+## 4. 当前机器合同
 
 ### 4.1 `InvestorRequestEnvelope`
 
@@ -174,15 +186,15 @@ Agent 文字中说“综合宏观、行业、财务”不算覆盖证据；必�
 
 发布分为执行与展示两步。`VerifiedAnswerProjector`（`answer_projection.py`）只读取已认证请求、preflight、coverage 与真实领域工件，从这些输入确定性生成正文，不接收任意自由草稿。`publish_verified` 生成并冻结答复，绑定全部来源对象及 preflight/coverage 哈希；`publish_registered` 读取原冻结答复时重新生成同一份正文并逐字段比较。工件登记只能证明字节与来源，不能使草稿中虚构的余额、动作或风险成为事实。整个发布过程不重跑经济处理器。公开层统一审计结论、理由、风险、动作、改变条件及持仓段落；错误来源、损坏对象、未知时间、任意字段改写均拒绝或整体降级，不保留未经核验的精确价格和交易指令。
 
-模拟账户余额还必须与同一 preflight 的现金及净值恒等式对账。账户选择来自显式请求；未给账户时仅在恰好存在一个账户时自动解析，多个账户必须明确指定，不能把调用者传入的某个净值工件或未认证的 metadata 默认值当作用户选择。空持仓章节继续静默。其他已接入的只读呈现分支包括公司研究、条件式投资结论、组合风险、持仓复核和事件研究；渲染合同测试不等于它们的全部业务准入已完成。
+模拟账户余额还必须与同一 preflight 的现金及净值恒等式对账。账户选择来自显式请求；未给账户时仅在恰好存在一个账户时自动解析，多个账户必须明确指定，不能把调用者传入的某个净值工件或未认证的 metadata 默认值当作用户选择。空持仓章节继续静默。非 material 的公司研究与事件研究继续走各自只读呈现；所有 material 投资判断、组合风险动作和持仓处置统一从 `RecommendationResearchReceipt` 确定性投影，旧的独立投资结论/组合/持仓公共分支已删除。
 
 CLI 新增 `investor publish <coverage_receipt_id>` 与 `investor execute-registered <input.json>`，仅消费已注册、类型与来源通过验证的只读结果。`--current` 显式执行既有采集后冻结；缺状态库不自动创建空库，经济权限和安全边界覆盖被拒绝；普通输出只给投资者答复，诊断身份仅在显式 `--diagnostics` 下输出。`ScenarioContractRunner` 未提供草稿时走确定性发布，并把降级答案记为 `ANSWER_NOT_CERTIFIED`、未认证覆盖记为 `COVERAGE_NOT_CERTIFIED`，不能再以 coverage=1 而正文全部降级计作成功。研究标的回执按本次 event 主键核验，要求完整覆盖本次已解析实体，不扫描全部历史。
 
-领域输出已绑定现有模型：行业使用 `IndustryProfile`，财务使用 `FinancialIntegrityEvidencePack`，公司研究使用 `InstitutionalDecisionContext`，组合使用 `PortfolioAnalysisReport`，持仓复核使用 `HoldingReviewPack`，全市场准入使用 `RecommendationReadinessReport`，ETF研究使用 `ETFResearchMetrics`。`domain_contracts.py` 对完成状态、缺口、证据及角色语义另行检查；治理、催化剂和独立复核即使都通过 `ResearchRoleOutput` 传输，也必须绑定对应的真实 Research Team 计划、角色、完成 checkpoint、成员与依赖哈希，不能互相替代。依赖在单次校验内复用，结束时复核 checkpoint，避免旧结果与新依赖混合。来源数组按注册关系核验，不按两个独立排序数组的位置配对；嵌套可得时间必须通过有界递归检查，预测年份不视为输入可得时间。
+领域输出已绑定现有模型：行业使用 `IndustryProfile`，财务使用 `FinancialIntegrityEvidencePack`，公司研究使用 `InstitutionalDecisionContext`，组合使用 `PortfolioAnalysisReport`，持仓复核使用 `HoldingReviewPack`，全市场上游准入使用 `FullResearchInputReadinessReport`，最终 material 投资发布使用 `RecommendationResearchReceipt`，ETF研究使用 `ETFResearchMetrics`。`domain_contracts.py` 对完成状态、缺口、证据及角色语义另行检查；治理、催化剂和独立复核即使都通过 `ResearchRoleOutput` 传输，也必须绑定对应的真实 Research Team 计划、角色、完成 checkpoint、成员与依赖哈希，不能互相替代。依赖在单次校验内复用，结束时复核 checkpoint，避免旧结果与新依赖混合。来源数组按注册关系核验，不按两个独立排序数组的位置配对；嵌套可得时间必须通过有界递归检查，预测年份不视为输入可得时间。
 
 当前研究采用唯一的 `DecisionFreezeService`：保留原始 `question_time` 与民用日期解释，在采集完成后冻结独立 `decision_time`，子请求通过 `evidence_cutoff` 读取该截止时间；历史请求不能推进截止时间。`freeze_current_request`、`execute_registered_inputs` 及其薄入口 `execute_registered`／`execute_current_registered` 消费现有注册工件，不自行采集数据，也不调用经济写入处理器。完整请求内容绑定原 request ID；同 ID 换文本或语义被拒绝。子请求工件必须属于已认证冻结清单，禁止能力在发出覆盖回执前即拒绝；稳定重试复用原回执并重新校验输入，不创建第二个调度或事实账本。
 
-正反回归位于 `tests/unit/test_investor_orchestration_guards.py`、`test_investor_domain_contracts.py`、`test_investor_decision_inputs.py` 和 `test_investor_registered_execution.py`，包含真实隔离账本净值、机构研究服务确定性计算、Research Team 登记、错误角色／来源／时间拒绝，以及重启重试零经济表变化。记录式上游输入与这些服务接缝验证**不等于**全类型研究答案生成器或68场景业务E2E已经完成：自动采集与专业研究到这些已校验工件的完整编排、正式准入到最终答复的完整装配、所有旧 public 入口强制接入，以及原矩阵逐场景独立业务期望，仍须按原工作包验证。不得用单一成功桩、全部降级或守卫通过数替代这些验收门。
+正反回归位于 `tests/unit/test_investor_orchestration_guards.py`、`test_investor_domain_contracts.py`、`test_investor_decision_inputs.py`、`test_investor_registered_execution.py` 与 Full Research 专项测试；它们覆盖真实隔离账本净值、机构研究确定性计算、Research Team 登记、错误角色／来源／时间拒绝、最终 receipt seal/replay/tamper、Publication Gate 与重启重试零经济表变化。业务矩阵另由 recorded 68 场景 E2E（含扩展边界用例）验证，不能用单一成功桩、全部降级或守卫通过数替代完整验收。
 
 ## 5. 统一请求前置流程
 

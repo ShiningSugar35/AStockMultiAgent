@@ -24,7 +24,9 @@ from astock.investor_orchestration.models import (
 NOW = datetime(2026, 9, 10, 5, 30, tzinfo=UTC)
 
 
-def _request(intent: RequestIntent = RequestIntent.RECOMMENDATION) -> InvestorRequestEnvelope:
+def _request(
+    intent: RequestIntent = RequestIntent.FULL_RESEARCH_RECOMMENDATION,
+) -> InvestorRequestEnvelope:
     return InvestorRequestEnvelope(
         request_id="request-closure-1",
         question_time=NOW,
@@ -58,7 +60,7 @@ def _plan(request: InvestorRequestEnvelope) -> CapabilityExecutionPlan:
     return CapabilityExecutionPlan(
         plan_id="plan-closure-1",
         request_id=request.request_id,
-        policy_version="investor-capability-policy-v1",
+        policy_version="full-research-recommendation-v1",
         nodes=nodes,
         planned_at=NOW,
         plan_hash="plan-hash",
@@ -81,9 +83,7 @@ def _coverage(
                 else CapabilityRunStatus.COMPLETED
             ),
             artifact_ids=(
-                ()
-                if node.capability_id in missing
-                else (f"artifact:{node.capability_id}",)
+                () if node.capability_id in missing else (f"artifact:{node.capability_id}",)
             ),
         )
         for node in plan.nodes
@@ -106,8 +106,8 @@ def _coverage(
     )
 
 
-def test_recommendation_canonical_plan_contains_full_closed_loop_families() -> None:
-    required = _INTENT_REQUIREMENTS[RequestIntent.RECOMMENDATION]
+def test_full_research_canonical_plan_contains_full_closed_loop_families() -> None:
+    required = _INTENT_REQUIREMENTS[RequestIntent.FULL_RESEARCH_RECOMMENDATION]
 
     assert {
         "CURRENT_MARKET",
@@ -122,6 +122,7 @@ def test_recommendation_canonical_plan_contains_full_closed_loop_families() -> N
         "RED_TEAM",
         "COMMITTEE",
         "PORTFOLIO",
+        "FULL_RESEARCH_GATE",
     } <= required
 
 
@@ -155,7 +156,7 @@ def test_material_recommendation_is_terminal_only_after_verified_full_plan() -> 
 
 
 def test_user_input_can_only_be_requested_after_public_automatic_resolution_is_exhausted() -> None:
-    request = _request(RequestIntent.BUY_DECISION)
+    request = _request(RequestIntent.FULL_RESEARCH_RECOMMENDATION)
     plan = _plan(request)
     coverage = _coverage(request, plan, missing={"FINANCIAL_INTEGRITY"})
 

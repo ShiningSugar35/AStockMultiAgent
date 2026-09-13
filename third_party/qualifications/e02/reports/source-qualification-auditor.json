@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "aa34624c0497fae9eb37f40afd79f1ab5b3d6daaecf68da826d02d2bfa3d866e",
+  "report_id": "bf8dbf3bce9cc91aa801367d97c1689a4ac0cf65f34b74c0e3830e6649cbd6f6",
   "capability_id": "source-qualification-auditor",
   "candidate_version": "sha256:b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
   "requested_stage": "PRODUCTION_BACKUP",
@@ -27,7 +27,7 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "8e793fa372e073e03af1c3ab0fbd12a236e2d6e566c74d3ee84b70591f9e2ed6"
+    "2fadd9b8ab3596fd60b67d6055c10de8d3355a036735d11e1a101ecacb09b3b2"
   ],
   "valid_from": "2026-09-09T04:05:13Z",
   "expires_at": "2026-12-08T04:05:13Z",

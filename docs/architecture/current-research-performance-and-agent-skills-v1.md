@@ -28,7 +28,7 @@ The benchmark exceeds the development target of at least 30% fewer external call
 5. Every source snapshot exists, was available before the new acquisition start and has an ObjectStore hash that still verifies.
 6. All declared schedule dependencies were themselves reusable.
 
-A tampered or missing snapshot therefore produces a cache miss and fresh acquisition, not a false success. Reuse does not bypass current quote freshness, official financial lineage, PIT, conflict resolution or Recommendation Gate checks.
+A tampered or missing snapshot therefore produces a cache miss and fresh acquisition, not a false success. Reuse does not bypass current quote freshness, official financial lineage, PIT, conflict resolution, Mandatory Research DAG or final Publication Gate checks.
 
 ## Same-request continuation
 
@@ -56,11 +56,11 @@ The six new canonical Skills bind directly to existing Research Team tasks, outp
 
 | Skill | Existing task/role | Typed output | Formal check |
 |---|---|---|---|
-| `$macro-policy-regime` | `macro-regime` / `policy-regime` | `MacroRegimeProfile` / `PolicyRegimeProfile` | `MACRO_REGIME` / `POLICY_REGIME` |
-| `$industry-value-chain` | `industry-value-chain` | `IndustryValueChainProfile` | `INDUSTRY_PROFILE` |
-| `$catalyst-event-research` | `company-catalyst` | `CatalystRiskPack` | `CATALYST_RISK` |
-| `$governance-management-quality` | `governance-management-quality` | `GovernanceManagementQualityPack` | `GOVERNANCE_QUALITY` |
-| `$investment-red-team` | `investment-red-team` reviewer | `InvestmentRedTeamReport` | `INDEPENDENT_REVIEW` |
+| `$macro-policy-regime` | `macro-regime` / `policy-regime` | `MacroResearchOutcome` / `PolicyRegimeProfile` | `MACRO_REGIME` / `POLICY_REGIME` |
+| `$industry-value-chain` | `industry-value-chain` | `IndustryResearchOutcome` | `INDUSTRY_PROFILE` |
+| `$catalyst-event-research` | `company-catalyst` | `NewsEventResearchPack` | `CATALYST_RISK` |
+| `$governance-management-quality` | `governance-management-quality` | `GovernanceAssessment` | `GOVERNANCE_QUALITY` |
+| `$investment-red-team` | `investment-red-team` reviewer | `ChallengerAssessment` | `INDEPENDENT_REVIEW` |
 | `$model-risk-backtest-validation` | `model-risk-validation` | `ModelRiskValidationReport` | `MODEL_RISK_VALIDATION` |
 
 Each Skill specifies primary-source priority, PIT boundaries, method steps, exact CLI registration, abstention conditions and prohibitions. They are method contracts, not personality prompts. Bull and Bear remain independent contexts; the red team starts only after both are frozen. The model-risk validator cannot promote a model from a single backtest or mutate paper/production weights.

@@ -29,7 +29,7 @@ from astock.investor_orchestration.store import InvestorOrchestrationStore
         ("COMMITTEE", "ClassifiedTradeProtocol"),
         ("PORTFOLIO", "PortfolioAnalysisReport"),
         ("HOLDING_REVIEW", "HoldingReviewPack"),
-        ("FULL_MARKET", "RecommendationReadinessReport"),
+        ("FULL_MARKET", "FullResearchInputReadinessReport"),
         ("EXTERNAL_ACCOUNT", "ExternalAccountEvent"),
         ("ETF", "ETFResearchMetrics"),
     ],
@@ -218,7 +218,7 @@ def test_real_role_registration_is_accepted_only_for_its_planned_domain(computed
         ResearchRoleResult,
         ResearchTeamTaskState,
     )
-    from tests.unit.test_research_team import _register_acquisition_report
+    from tests.unit.test_research_team import _register_acquisition_report, _typed_role_member_ids
 
     store, state, objects, bundle, evidence = computed_pipeline
     team = ResearchTeamService(
@@ -229,11 +229,20 @@ def test_real_role_registration_is_accepted_only_for_its_planned_domain(computed
     governance_id = None
     for task_id in ("company-intent", "governance-management-quality"):
         task = next(item for item in plan.tasks if item.task_id == task_id)
+        typed_members = _typed_role_member_ids(
+            team,
+            state,
+            objects,
+            plan_id=plan.plan_id,
+            task_id=task_id,
+            formal=True,
+        )
+        member_artifact_ids = typed_members or [bundle.company_economics_artifact_id]
         output = ResearchRoleOutput(
             plan_id=plan.plan_id,
             task_id=task_id,
             output_contract=task.output_contract,
-            member_artifact_ids=[bundle.company_economics_artifact_id],
+            member_artifact_ids=member_artifact_ids,
             evidence_ids=[evidence],
             readiness_check_results={key: True for key in task.readiness_checks},
             summary="记录式研究输入：依据已冻结公司经济模型复核治理字段。",
@@ -264,22 +273,22 @@ def test_real_role_registration_is_accepted_only_for_its_planned_domain(computed
 
 def test_empty_ready_boolean_is_not_a_full_market_admission(computed_pipeline) -> None:
     from astock.schemas.research_team import (
-        RecommendationReadinessReport,
-        RecommendationReadinessStatus,
+        FullResearchInputReadinessReport,
+        FullResearchInputReadinessStatus,
     )
 
     store, state, objects, _, _ = computed_pipeline
-    output = RecommendationReadinessReport(
+    output = FullResearchInputReadinessReport(
         report_id="unearned-readiness",
         plan_id="not-a-real-full-market-plan",
-        status=RecommendationReadinessStatus.READY,
+        status=FullResearchInputReadinessStatus.READY,
         required_checks=[],
         passed_checks=[],
         missing_or_failed_checks=[],
-        formal_recommendation_allowed=True,
+        full_research_input_ready=True,
     )
     ref = objects.put_json(output.model_dump(mode="json"))
-    artifact = "RecommendationReadinessReport:unearned-readiness"
+    artifact = "FullResearchInputReadinessReport:unearned-readiness"
     state.register_artifact(
         artifact_id=artifact,
         artifact_type=type(output).__name__,

@@ -8,7 +8,7 @@ description: Build a point-in-time governance and management-quality assessment 
 ## Inputs and authority
 
 - Consume only the ready `governance-management-quality` task from the existing `ResearchTeamPlan`; do not create a parallel plan or a free-form personality score.
-- Preserve company identity, `as_of`, acquisition lineage and the typed `GovernanceManagementQualityPack` contract.
+- Preserve company identity, `as_of`, acquisition lineage and the typed `GovernanceAssessment` contract.
 - Primary authority is exchange/CNINFO/issuer charters, annual/governance reports, resolutions, ownership/pledge filings, audit reports, regulator/court/enforcement records and formal transaction documents. Interviews and media are secondary context.
 
 ## Procedure
@@ -21,13 +21,13 @@ description: Build a point-in-time governance and management-quality assessment 
 
 ## Required output contract
 
-- Register a typed `GovernanceManagementQualityPack` through `uv run astock research-team-role-output REQUEST.json`.
+- Register a typed `GovernanceAssessment` through `uv run astock research-team-role-output REQUEST.json`.
 - Complete `governance-management-quality` through `uv run astock research-team-task-result REQUEST.json`.
 - Set `GOVERNANCE_QUALITY=true` only when material ownership/control, related-party, audit/opinion, capital-allocation, disclosure and falsifier evidence is current and frozen.
 
 ## Output
 
-Return the registered typed `GovernanceManagementQualityPack` artifact ID, control and incentive facts, capital-allocation record, audit/disclosure quality, execution evidence, quantified thesis impacts, unresolved conflicts and falsifiers. Exclude personality judgments.
+Return the registered typed `GovernanceAssessment` artifact ID, control and incentive facts, capital-allocation record, audit/disclosure quality, execution evidence, quantified thesis impacts, unresolved conflicts and falsifiers. Exclude personality judgments.
 
 ## Gates and abstention
 

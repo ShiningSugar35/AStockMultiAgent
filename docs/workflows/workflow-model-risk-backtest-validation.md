@@ -4,7 +4,7 @@
 
 Use when the ready Research Team `model-risk-validation` task requires a `ModelRiskValidationReport`, or when a formal research conclusion relies on a forecast, valuation model, factor, anomaly detector, optimizer, backtest or externally supplied score.
 
-Primary skill: `$model-risk-backtest-validation`; it is independent of model development and feeds Reviewer, Committee and Recommendation Gate.
+Primary skill: `$model-risk-backtest-validation`; it is independent of model development and feeds Reviewer/Committee, then the downstream Mandatory Research DAG and final Publication Gate.
 
 ## Flow
 

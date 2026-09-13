@@ -82,7 +82,20 @@ from astock.schemas.external_accounts import (
     ExternalAccountEventDraft,
     ExternalAccountEventType,
 )
+from astock.schemas.full_research import (
+    ChallengerAssessment,
+    CompanyFundamentalSnapshot,
+    FactorSnapshot,
+    FinancialQualityAssessment,
+    GovernanceAssessment,
+    IndustryResearchOutcome,
+    MacroResearchOutcome,
+    NewsEventCoverage,
+    NewsEventResearchPack,
+    QuantFactorResearchPack,
+)
 from astock.schemas.institutional_research import (
+    IndustryProfile,
     InstitutionalDecisionContextBuildRequest,
     InstitutionalDecisionContextDraft,
     MarketPriceAnchor,
@@ -98,7 +111,7 @@ from astock.schemas.research_runtime import (
     TradingSpecialRegime,
 )
 from astock.schemas.research_team import (
-    RecommendationReadinessRequest,
+    FullResearchInputReadinessRequest,
     ResearchRoleOutput,
     ResearchRoleResult,
     ResearchTaskRole,
@@ -240,6 +253,321 @@ def _financial_pack(state: StateStore, objects: ObjectStore) -> str:
     return f"FinancialIntegrityEvidencePack:{execution.pack.audit_run_id}"
 
 
+def _artifact_hash(state: StateStore, artifact_id: str) -> str:
+    record = state.artifact_record(artifact_id)
+    assert record is not None
+    return str(record["object_hash"])
+
+
+def _typed_team_members(
+    team: ResearchTeamService,
+    *,
+    plan_id: str,
+    task_id: str,
+    evidence_id: str,
+    company_id: str,
+    financial_id: str,
+    fundamental_id: str,
+    industry_id: str,
+    decision_context_id: str,
+) -> list[str] | None:
+    plan = team.get_plan(plan_id)
+    assert plan is not None
+    task = next(item for item in plan.tasks if item.task_id == task_id)
+    if task.role not in {
+        ResearchTaskRole.MACRO,
+        ResearchTaskRole.INDUSTRY,
+        ResearchTaskRole.FUNDAMENTAL,
+        ResearchTaskRole.FINANCIAL_INTEGRITY,
+        ResearchTaskRole.GOVERNANCE,
+        ResearchTaskRole.CATALYST,
+        ResearchTaskRole.QUANT_FACTOR,
+        ResearchTaskRole.REVIEWER,
+    }:
+        return None
+
+    suffix = f"{plan_id}:{task_id}"
+    if task.role is ResearchTaskRole.MACRO:
+        component = MacroResearchOutcome(
+            macro_regime="NORMAL",
+            liquidity_regime="NORMAL",
+            risk_appetite="NORMAL",
+            policy_bias="NEUTRAL",
+            dimensions={
+                key: "RECORDED_E2E"
+                for key in (
+                    "domestic_growth",
+                    "inflation",
+                    "credit",
+                    "liquidity",
+                    "interest_rates",
+                    "foreign_exchange",
+                    "fiscal_policy",
+                    "industrial_policy",
+                    "real_estate",
+                    "exports",
+                    "global_risk_assets",
+                )
+            },
+            macro_sector_implications=("recorded neutral implication",),
+            macro_risk_events=("recorded regime change risk",),
+            evidence_ids=(evidence_id,),
+            created_at=TEAM_NOW,
+        )
+        return [
+            _register_model(
+                team.state, team.objects, component, artifact_id=f"MacroResearchOutcome:{suffix}"
+            )
+        ]
+
+    if task.role is ResearchTaskRole.INDUSTRY:
+        profile_record = team.state.artifact_record(industry_id)
+        assert profile_record is not None
+        profile = IndustryProfile.model_validate_json(
+            team.objects.get_bytes(str(profile_record["object_hash"]))
+        )
+        component = IndustryResearchOutcome(
+            industry_id=profile.draft.industry_id,
+            industry_score=Decimal("80"),
+            cycle_phase="MID_CYCLE",
+            competitive_intensity="NORMAL",
+            dimensions={
+                "demand": "RECORDED_E2E",
+                "supply_capacity": "RECORDED_E2E",
+                "inventory": "RECORDED_E2E",
+                "pricing": "RECORDED_E2E",
+                "capital_expenditure": "RECORDED_E2E",
+                "competition": "RECORDED_E2E",
+                "policy": "RECORDED_E2E",
+                "technology": "RECORDED_E2E",
+                "cycle_position": "RECORDED_E2E",
+                "value_chain_bargaining_power": "RECORDED_E2E",
+                "valuation_percentile": Decimal("0.5"),
+            },
+            industry_catalysts=("recorded industry catalyst",),
+            industry_risks=("recorded industry risk",),
+            peer_set=tuple(f"peer-{index}" for index in range(5)),
+            evidence_ids=(evidence_id,),
+            created_at=TEAM_NOW,
+        )
+        return [
+            _register_model(
+                team.state, team.objects, component, artifact_id=f"IndustryResearchOutcome:{suffix}"
+            )
+        ]
+
+    if task.role is ResearchTaskRole.FUNDAMENTAL:
+        metrics: dict[str, Decimal | None] = {
+            key: Decimal("1")
+            for key in (
+                "revenue",
+                "parent_net_profit",
+                "adjusted_net_profit",
+                "gross_margin",
+                "operating_margin",
+                "roe",
+                "roic",
+                "operating_cash_flow",
+                "free_cash_flow",
+                "capital_expenditure",
+                "receivables",
+                "inventory",
+                "contract_liabilities",
+                "net_debt",
+                "financing_cost",
+                "shares_outstanding",
+                "dividends",
+                "buybacks",
+                "earnings_revision",
+            )
+        }
+        growth: dict[str, Decimal | None] = {
+            key: Decimal("0.1")
+            for key in (
+                "price",
+                "volume",
+                "consolidation",
+                "foreign_exchange",
+                "non_recurring",
+                "subsidy",
+                "asset_disposal",
+                "fair_value_change",
+                "core_business",
+            )
+        }
+        component = CompanyFundamentalSnapshot(
+            instrument_id=company_id,
+            available_complete_years=5,
+            analyzed_complete_years=5,
+            available_quarters=12,
+            analyzed_quarters=12,
+            ttm_reconstructed=True,
+            metrics=metrics,
+            growth_decomposition=growth,
+            source_artifact_ids=(fundamental_id,),
+            source_object_hashes=(_artifact_hash(team.state, fundamental_id),),
+            created_at=TEAM_NOW,
+        )
+        return [
+            _register_model(
+                team.state,
+                team.objects,
+                component,
+                artifact_id=f"CompanyFundamentalSnapshot:{suffix}",
+            )
+        ]
+
+    if task.role is ResearchTaskRole.FINANCIAL_INTEGRITY:
+        checks: dict[str, bool | str | Decimal] = {
+            key: "PASS"
+            for key in (
+                "audit_opinion",
+                "non_standard_opinion",
+                "revenue_cashflow_divergence",
+                "receivables_anomaly",
+                "inventory_anomaly",
+                "gross_margin_anomaly",
+                "capitalized_r_and_d",
+                "goodwill_impairment",
+                "asset_disposal",
+                "government_subsidy",
+                "related_party_transactions",
+                "controlling_shareholder_fund_occupation",
+                "share_pledge",
+                "guarantees",
+                "short_debt_long_investment",
+                "cash_and_interest_bearing_debt",
+                "non_recurring_items",
+                "minority_interest",
+                "cash_conversion_quality",
+            )
+        }
+        component = FinancialQualityAssessment(
+            instrument_id=company_id,
+            accounting_quality_score=Decimal("90"),
+            checks=checks,
+            audit_opinion="UNQUALIFIED",
+            cash_conversion_quality="PASS",
+            evidence_ids=(evidence_id,),
+            created_at=TEAM_NOW,
+        )
+        quality_id = _register_model(
+            team.state,
+            team.objects,
+            component,
+            artifact_id=f"FinancialQualityAssessment:{suffix}",
+        )
+        return sorted([financial_id, quality_id])
+
+    if task.role is ResearchTaskRole.GOVERNANCE:
+        checks: dict[str, bool | str | Decimal] = {
+            key: "PASS"
+            for key in (
+                "controlling_shareholder",
+                "actual_controller",
+                "management_stability",
+                "regulatory_penalties",
+                "formal_investigations",
+                "director_executive_changes",
+                "insider_reductions",
+                "share_pledges",
+                "related_party_transactions",
+                "fund_occupation",
+                "illegal_guarantees",
+                "auditor_changes",
+                "material_litigation",
+            )
+        }
+        component = GovernanceAssessment(
+            instrument_id=company_id,
+            governance_score=Decimal("85"),
+            checks=checks,
+            controller="recorded-controller",
+            management_stability="STABLE",
+            evidence_ids=(evidence_id,),
+            created_at=TEAM_NOW,
+        )
+        return [
+            _register_model(
+                team.state, team.objects, component, artifact_id=f"GovernanceAssessment:{suffix}"
+            )
+        ]
+
+    if task.role is ResearchTaskRole.CATALYST:
+        component = NewsEventResearchPack(
+            instrument_id=company_id,
+            as_of=TEAM_NOW,
+            events=(),
+            coverage=NewsEventCoverage(
+                as_of=TEAM_NOW,
+                covered_windows_days=team.full_research_news_windows,
+                covered_categories=team.full_research_news_categories,
+                source_classes_seen=(),
+                event_ids=(),
+                conflicts_resolved=True,
+                created_at=TEAM_NOW,
+            ),
+            evidence_ids=(evidence_id,),
+            created_at=TEAM_NOW,
+        )
+        return [
+            _register_model(
+                team.state, team.objects, component, artifact_id=f"NewsEventResearchPack:{suffix}"
+            )
+        ]
+
+    if task.role is ResearchTaskRole.QUANT_FACTOR:
+        value = Decimal("0.1")
+        component = QuantFactorResearchPack(
+            as_of=TEAM_NOW,
+            factors=(
+                FactorSnapshot(
+                    instrument_id=company_id,
+                    value=value,
+                    quality=value,
+                    growth=value,
+                    momentum=value,
+                    low_volatility=value,
+                    liquidity=value,
+                    size=value,
+                    earnings_revision=value,
+                    profitability=value,
+                    crowding=value,
+                    created_at=TEAM_NOW,
+                ),
+            ),
+            evidence_ids=(evidence_id,),
+            created_at=TEAM_NOW,
+        )
+        return [
+            _register_model(
+                team.state, team.objects, component, artifact_id=f"QuantFactorResearchPack:{suffix}"
+            )
+        ]
+
+    if task.role is ResearchTaskRole.REVIEWER:
+        component = ChallengerAssessment(
+            instrument_id=company_id,
+            independent_context_id=f"challenger:{suffix}",
+            raw_fact_artifact_ids=(decision_context_id,),
+            primary_final_label_visible=False,
+            market_may_be_right_because="recorded market expectations may be fair",
+            overlooked_bad_news=("recorded downside risk",),
+            valuation_fully_priced_risk="recorded growth may already be priced",
+            thesis_invalidation_conditions=("recorded thesis invalidation",),
+            maximum_reasonable_downside=Decimal("0.2"),
+            material_conflict_with_primary=False,
+            confidence_adjustment=Decimal("0"),
+            created_at=TEAM_NOW,
+        )
+        return [
+            _register_model(
+                team.state, team.objects, component, artifact_id=f"ChallengerAssessment:{suffix}"
+            )
+        ]
+    raise AssertionError(task.role)
+
+
 def _complete_company_team(
     team: ResearchTeamService,
     *,
@@ -276,12 +604,23 @@ def _complete_company_team(
     for task in plan.tasks:
         if task.role is ResearchTaskRole.RECOMMENDATION_GATE:
             continue
-        member_id = preferred_member.get(task.task_id, decision_context_id)
+        typed_members = _typed_team_members(
+            team,
+            plan_id=plan.plan_id,
+            task_id=task.task_id,
+            evidence_id=evidence_id,
+            company_id=company_id,
+            financial_id=financial_id,
+            fundamental_id=fundamental_id,
+            industry_id=industry_id,
+            decision_context_id=decision_context_id,
+        )
+        member_ids = typed_members or [preferred_member.get(task.task_id, decision_context_id)]
         output = ResearchRoleOutput(
             plan_id=plan.plan_id,
             task_id=task.task_id,
             output_contract=task.output_contract,
-            member_artifact_ids=[member_id],
+            member_artifact_ids=member_ids,
             evidence_ids=[evidence_id],
             readiness_check_results={check: True for check in task.readiness_checks},
             summary="已完成该研究角色的已记录证据复核。",
@@ -440,6 +779,7 @@ def _full_market_readiness(
         "company-catalyst": event_research_id,
         "company-market-context": current_market_id,
         "valuation": valuation_id,
+        "quant-factor": company_research_id,
         "bull-case": company_research_id,
         "bear-case": company_research_id,
         "independent-review": red_team_id,
@@ -449,11 +789,23 @@ def _full_market_readiness(
     for task in plan.tasks:
         if task.role is ResearchTaskRole.RECOMMENDATION_GATE:
             continue
+        typed_members = _typed_team_members(
+            team,
+            plan_id=plan.plan_id,
+            task_id=task.task_id,
+            evidence_id=evidence_id,
+            company_id=COMPANY,
+            financial_id=financial_id,
+            fundamental_id=fundamental_id,
+            industry_id=industry_id,
+            decision_context_id=company_research_id,
+        )
+        member_ids = typed_members or [members[task.task_id]]
         output = ResearchRoleOutput(
             plan_id=plan.plan_id,
             task_id=task.task_id,
             output_contract=task.output_contract,
-            member_artifact_ids=[members[task.task_id]],
+            member_artifact_ids=member_ids,
             evidence_ids=[evidence_id],
             readiness_check_results={check: True for check in task.readiness_checks},
             summary=f"Recorded full-market E2E evidence for {task.task_id}.",
@@ -479,15 +831,15 @@ def _full_market_readiness(
             )
         )
     report = team.evaluate_readiness(
-        RecommendationReadinessRequest(
+        FullResearchInputReadinessRequest(
             plan_id=plan.plan_id,
             checks={check: True for check in team.policy.required_checks},
             created_at=TEAM_NOW,
         )
     )
-    assert report.formal_recommendation_allowed
+    assert report.full_research_input_ready
     assert not report.missing_or_failed_checks
-    return f"RecommendationReadinessReport:{report.report_id}"
+    return f"FullResearchInputReadinessReport:{report.report_id}"
 
 
 def _lifecycle_artifacts(

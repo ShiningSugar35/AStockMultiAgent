@@ -26,7 +26,31 @@ from astock.investor_orchestration.output_validation import RegisteredOutputVeri
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
 
-CapabilityHandler = Callable[[InvestorRequestEnvelope, InvestorSessionPreflightReceipt], Any]
+
+@dataclass(frozen=True)
+class CapabilityDependencyContext:
+    capability_id: str
+    plan_id: str
+    dependency_artifacts: Mapping[str, tuple[str, ...]]
+    completed_artifacts: Mapping[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class DependencyAwareCapabilityHandler:
+    callback: Callable[
+        [
+            InvestorRequestEnvelope,
+            InvestorSessionPreflightReceipt,
+            CapabilityDependencyContext,
+        ],
+        Any,
+    ]
+
+
+CapabilityHandler = (
+    Callable[[InvestorRequestEnvelope, InvestorSessionPreflightReceipt], Any]
+    | DependencyAwareCapabilityHandler
+)
 
 
 @dataclass(frozen=True)
@@ -159,8 +183,31 @@ _BASE_NODES: dict[str, CapabilityNode] = {
         requirement=CapabilityRequirement.CONDITIONAL,
         dependencies=("MARKET_REGIME",),
         conditional_reason="full-market discovery or recommendation is requested",
-        output_schema="RecommendationReadinessReport",
+        output_schema="FullResearchInputReadinessReport",
         parallel_group="discovery",
+    ),
+    "FULL_RESEARCH_GATE": CapabilityNode(
+        capability_id="FULL_RESEARCH_GATE",
+        requirement=CapabilityRequirement.CONDITIONAL,
+        dependencies=(
+            "CURRENT_MARKET",
+            "MARKET_REGIME",
+            "FULL_MARKET",
+            "INDUSTRY",
+            "COMPANY_RESEARCH",
+            "FINANCIAL_INTEGRITY",
+            "GOVERNANCE",
+            "EVENT_RESEARCH",
+            "FORECAST_VALUATION",
+            "RED_TEAM",
+            "COMMITTEE",
+            "PORTFOLIO",
+        ),
+        conditional_reason=(
+            "a direct investment recommendation requires a sealed full-research receipt"
+        ),
+        output_schema="RecommendationResearchReceipt",
+        parallel_group="finalize",
     ),
     "SUBJECT_REGISTRY": CapabilityNode(
         capability_id="SUBJECT_REGISTRY",
@@ -218,38 +265,7 @@ _INTENT_REQUIREMENTS: dict[RequestIntent, set[str]] = {
         "FORECAST_VALUATION",
         "RED_TEAM",
     },
-    RequestIntent.BUY_DECISION: {
-        "CURRENT_MARKET",
-        "MARKET_REGIME",
-        "INDUSTRY",
-        "COMPANY_RESEARCH",
-        "FINANCIAL_INTEGRITY",
-        "GOVERNANCE",
-        "EVENT_RESEARCH",
-        "FORECAST_VALUATION",
-        "RED_TEAM",
-        "COMMITTEE",
-        "PORTFOLIO",
-    },
-    RequestIntent.HOLDING_DECISION: {
-        "CURRENT_MARKET",
-        "MARKET_REGIME",
-        "INDUSTRY",
-        "COMPANY_RESEARCH",
-        "FINANCIAL_INTEGRITY",
-        "GOVERNANCE",
-        "EVENT_RESEARCH",
-        "FORECAST_VALUATION",
-        "RED_TEAM",
-        "PORTFOLIO",
-        "HOLDING_REVIEW",
-    },
-    RequestIntent.PORTFOLIO_DECISION: {
-        "CURRENT_MARKET",
-        "MARKET_REGIME",
-        "PORTFOLIO",
-    },
-    RequestIntent.RECOMMENDATION: {
+    RequestIntent.FULL_RESEARCH_RECOMMENDATION: {
         "CURRENT_MARKET",
         "MARKET_REGIME",
         "FULL_MARKET",
@@ -262,6 +278,7 @@ _INTENT_REQUIREMENTS: dict[RequestIntent, set[str]] = {
         "RED_TEAM",
         "COMMITTEE",
         "PORTFOLIO",
+        "FULL_RESEARCH_GATE",
     },
     RequestIntent.ACCOUNT_FACT_WRITE: {"EXTERNAL_ACCOUNT"},
     RequestIntent.PAPER_PREPARE: {"PAPER", "CURRENT_MARKET"},
@@ -280,16 +297,15 @@ def validate_request_permissions(request: InvestorRequestEnvelope) -> None:
     }:
         raise ValueError("current decision freezes are read-only and cannot replay economic writes")
     allowed = {
-        RequestIntent.ACCOUNT_FACT_WRITE: {
-            SideEffectClass.EA_WRITE,
-            SideEffectClass.EA_PROVISIONAL,
-        },
-        RequestIntent.HOLDING_DECISION: {
+        RequestIntent.FULL_RESEARCH_RECOMMENDATION: {
             SideEffectClass.READ,
             SideEffectClass.META,
             SideEffectClass.NONE,
             SideEffectClass.EA_PROVISIONAL,
+        },
+        RequestIntent.ACCOUNT_FACT_WRITE: {
             SideEffectClass.EA_WRITE,
+            SideEffectClass.EA_PROVISIONAL,
         },
         RequestIntent.PAPER_PREPARE: {SideEffectClass.PT_PREPARE},
         RequestIntent.PAPER_CONFIRM: {SideEffectClass.PT_CONFIRM},
@@ -306,7 +322,7 @@ class CapabilityPlanner:
     def __init__(
         self,
         *,
-        policy_version: str = "investor-capability-policy-v1",
+        policy_version: str = "full-research-recommendation-v1",
         store: InvestorOrchestrationStore | None = None,
     ) -> None:
         self.policy_version = policy_version
@@ -347,18 +363,31 @@ class CapabilityPlanner:
                 requirement = CapabilityRequirement.OPTIONAL
             nodes[capability_id] = template.model_copy(update={"requirement": requirement})
 
-        holding_actual_required = (
-            request.normalized_intent is RequestIntent.HOLDING_DECISION
+        holding_context_required = bool(request.metadata.get("full_research_holding_context"))
+        if holding_context_required:
+            nodes["HOLDING_REVIEW"] = nodes["HOLDING_REVIEW"].model_copy(
+                update={"requirement": CapabilityRequirement.REQUIRED}
+            )
+        if nodes["HOLDING_REVIEW"].requirement is CapabilityRequirement.REQUIRED:
+            nodes["FULL_RESEARCH_GATE"] = nodes["FULL_RESEARCH_GATE"].model_copy(
+                update={
+                    "dependencies": tuple(
+                        dict.fromkeys((*nodes["FULL_RESEARCH_GATE"].dependencies, "HOLDING_REVIEW"))
+                    )
+                }
+            )
+        full_research_account_required = (
+            request.normalized_intent is RequestIntent.FULL_RESEARCH_RECOMMENDATION
             and nodes["EXTERNAL_ACCOUNT"].requirement is CapabilityRequirement.REQUIRED
         )
-        if holding_actual_required:
+        if full_research_account_required:
             account_side_effect = (
-                request.side_effect
-                if request.side_effect in {SideEffectClass.EA_PROVISIONAL, SideEffectClass.EA_WRITE}
+                SideEffectClass.EA_PROVISIONAL
+                if request.side_effect is SideEffectClass.EA_PROVISIONAL
                 else SideEffectClass.READ
             )
             account_update: dict[str, object] = {"side_effect": account_side_effect}
-            if account_side_effect in {SideEffectClass.EA_PROVISIONAL, SideEffectClass.EA_WRITE}:
+            if account_side_effect is SideEffectClass.EA_PROVISIONAL:
                 account_update["output_schema"] = "ExternalAccountOperationReceipt"
             nodes["EXTERNAL_ACCOUNT"] = nodes["EXTERNAL_ACCOUNT"].model_copy(update=account_update)
         if request.side_effect in {
@@ -367,7 +396,7 @@ class CapabilityPlanner:
             SideEffectClass.NONE,
         }:
             for capability_id in ("EXTERNAL_ACCOUNT", "PAPER"):
-                if capability_id == "EXTERNAL_ACCOUNT" and holding_actual_required:
+                if capability_id == "EXTERNAL_ACCOUNT" and full_research_account_required:
                     continue
                 if capability_id not in required:
                     nodes[capability_id] = nodes[capability_id].model_copy(
@@ -596,23 +625,19 @@ class CapabilityExecutor:
             if (
                 expected is not None
                 and node.capability_id == "EXTERNAL_ACCOUNT"
-                and request.normalized_intent is RequestIntent.HOLDING_DECISION
+                and request.normalized_intent is RequestIntent.FULL_RESEARCH_RECOMMENDATION
                 and node.requirement is CapabilityRequirement.REQUIRED
             ):
                 account_side_effect = (
-                    request.side_effect
-                    if request.side_effect
-                    in {SideEffectClass.EA_PROVISIONAL, SideEffectClass.EA_WRITE}
+                    SideEffectClass.EA_PROVISIONAL
+                    if request.side_effect is SideEffectClass.EA_PROVISIONAL
                     else SideEffectClass.READ
                 )
                 account_update: dict[str, object] = {
                     "requirement": CapabilityRequirement.REQUIRED,
                     "side_effect": account_side_effect,
                 }
-                if account_side_effect in {
-                    SideEffectClass.EA_PROVISIONAL,
-                    SideEffectClass.EA_WRITE,
-                }:
+                if account_side_effect is SideEffectClass.EA_PROVISIONAL:
                     account_update["output_schema"] = "ExternalAccountOperationReceipt"
                 expected = expected.model_copy(update=account_update)
             if expected is None or node.output_schema != expected.output_schema:
@@ -628,6 +653,7 @@ class CapabilityExecutor:
                 raise ValueError("execution plan changed a capability side-effect lane")
         records: list[CapabilityRunRecord] = []
         status_by_id: dict[str, CapabilityRunStatus] = {}
+        artifacts_by_id: dict[str, tuple[str, ...]] = {}
         requirement_by_id = {node.capability_id: node.requirement for node in plan.nodes}
         for node in plan.nodes:
             if node.requirement is CapabilityRequirement.PROHIBITED:
@@ -700,7 +726,19 @@ class CapabilityExecutor:
                     raise ValueError("capability requires an unauthorized economic side effect")
                 if any(dependency not in status_by_id for dependency in node.dependencies):
                     raise ValueError("capability dependency was not executed")
-                raw_result = handler(request, preflight)
+                if isinstance(handler, DependencyAwareCapabilityHandler):
+                    dependency_context = CapabilityDependencyContext(
+                        capability_id=node.capability_id,
+                        plan_id=plan.plan_id,
+                        dependency_artifacts={
+                            dependency: artifacts_by_id.get(dependency, ())
+                            for dependency in node.dependencies
+                        },
+                        completed_artifacts=dict(artifacts_by_id),
+                    )
+                    raw_result = handler.callback(request, preflight, dependency_context)
+                else:
+                    raw_result = handler(request, preflight)
                 if not isinstance(raw_result, CapabilityExecutionResult):
                     raise ValueError("handler must return its typed execution result")
                 result = raw_result
@@ -739,6 +777,8 @@ class CapabilityExecutor:
                     )
                 )
                 status_by_id[node.capability_id] = status
+                if status in {CapabilityRunStatus.COMPLETED, CapabilityRunStatus.REUSED}:
+                    artifacts_by_id[node.capability_id] = result.artifact_ids
             except Exception as exc:  # noqa: BLE001 - converted to typed failure receipt
                 records.append(
                     CapabilityRunRecord(

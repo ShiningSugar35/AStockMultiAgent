@@ -63,12 +63,13 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
    - Portfolio construction may use only committee-approved names.
    - Concentration/sector/risk constraints are evaluated here; no candidate/expert seed bypasses this stage.
 
-10. **Stage 10 — deterministic recommendation gate**
-    - Build `RecommendationReadinessRequest` only after required work is complete.
-    - Run `research-recommendation-readiness`.
+10. **Stage 10 — deterministic Full Research input gate**
+    - Build `FullResearchInputReadinessRequest` only after required work is complete.
+    - Run `research-full-research-readiness`.
     - `TEAM_DAG_COMPLETE` is derived by Python and cannot be asserted by the Agent.
-    - Only `formal_recommendation_allowed=true` may be rendered as a formal buy ranking.
-    - Any failed/missing check means `OBSERVATION_ONLY`.
+    - `READY` means only `full_research_input_ready=true`; this gate never authorizes a formal recommendation.
+    - Any failed/missing check means `OBSERVATION_ONLY` and blocks the downstream Full Research recommendation gate.
+    - Formal buy ranking, price and position sizing require the separate final `RecommendationResearchReceipt + Publication Gate`.
 
 ## Role-output contract
 

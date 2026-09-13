@@ -140,9 +140,7 @@ _SECRET_PATTERNS = (
     r"(?i)cookie\s*[:=]\s*\S+",
     r"(?i)(?:password|passwd|pwd|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*\S+",
 )
-_PRIVATE_PATH_PATTERN = re.compile(
-    r"(?i)(?:[A-Z]:\\Users\\[^\\\s]+|/home/[^/\s]+|/Users/[^/\s]+)"
-)
+_PRIVATE_PATH_PATTERN = re.compile(r"(?i)(?:[A-Z]:\\Users\\[^\\\s]+|/home/[^/\s]+|/Users/[^/\s]+)")
 _URL_PATTERN = re.compile(r"https?://[^\s)）]+", flags=re.IGNORECASE)
 _DIRECTION_TERMS = (
     "买入",
@@ -230,9 +228,7 @@ class ResponseGateway:
             policy=self.policy,
         )
         diagnostic = mode is ResponseMode.DEVELOPER
-        resolved_task_type = (
-            ResponseTaskType.DEVELOPER_DIAGNOSTIC if diagnostic else task_type
-        )
+        resolved_task_type = ResponseTaskType.DEVELOPER_DIAGNOSTIC if diagnostic else task_type
         if mode is ResponseMode.REPORT:
             resolved_task_type = ResponseTaskType.FORMAL_REPORT
         return ResponseContext(
@@ -258,15 +254,16 @@ class ResponseGateway:
             return self._render_developer(context, diagnostics)
         if narrative is None:
             raise ValueError("Investor/Report presentation requires a narrative bundle")
-        # A completed deep/portfolio narrative must not be silently squeezed through
-        # the legacy COMPANY_QUICK_VIEW budget merely because a caller omitted the
-        # redundant task_type argument. The narrative is already a frozen canonical
-        # research artifact, so it may safely upgrade only this presentation budget.
+        # A completed decision-grade narrative uses its own audited presentation budget.
+        # COMPANY_QUICK_VIEW is only for genuinely non-decision quick research.
         if (
             context.mode is ResponseMode.INVESTOR
             and context.task_type is ResponseTaskType.COMPANY_QUICK_VIEW
             and narrative.task_type
-            in {ResponseTaskType.DEEP_RESEARCH, ResponseTaskType.PORTFOLIO_DECISION}
+            in {
+                ResponseTaskType.DEEP_RESEARCH,
+                ResponseTaskType.FULL_RESEARCH_RECOMMENDATION,
+            }
         ):
             context = context.model_copy(update={"task_type": narrative.task_type})
 
@@ -376,9 +373,7 @@ def classify_response_mode(
             prefix = normalized[max(0, start - 12) : start]
             negated = _NEGATION_PREFIX_PATTERN.search(prefix) is not None
             self_action = candidate in _SELF_ACTION_DIAGNOSTIC_TERMS
-            action_requested = (
-                _DIAGNOSTIC_ACTION_PREFIX_PATTERN.search(prefix) is not None
-            )
+            action_requested = _DIAGNOSTIC_ACTION_PREFIX_PATTERN.search(prefix) is not None
             if not negated and (self_action or action_requested):
                 return ResponseMode.DEVELOPER
             start = normalized.find(candidate, start + len(candidate))
@@ -425,10 +420,7 @@ def investor_view_from_run(
     messages: list[str] = []
     categories = report.investor_gap_categories or [InvestorGapCategory.GENERAL]
     for category in categories:
-        if (
-            category is InvestorGapCategory.EXECUTION_READINESS
-            and not include_execution_readiness
-        ):
+        if category is InvestorGapCategory.EXECUTION_READINESS and not include_execution_readiness:
             continue
         message = _GAP_MESSAGES[category]
         if message not in messages:
@@ -439,8 +431,7 @@ def investor_view_from_run(
         company_id=report.company_id,
         state=InvestorResearchState.DECISION_NOT_CERTIFIED,
         headline=(
-            "目前还缺少少量会影响买入时点判断的关键信息，"
-            "我会先继续补齐可自动获取的公开资料。"
+            "目前还缺少少量会影响买入时点判断的关键信息，我会先继续补齐可自动获取的公开资料。"
         ),
         plain_language_gaps=messages,
         next_step=(
@@ -495,9 +486,7 @@ def audit_public_answer(
     allowed_private_paths: Iterable[str] = (),
 ) -> PresentationAudit:
     selected = policy or load_presentation_policy()
-    resolved_context = context or ResponseContext(
-        task_type=ResponseTaskType.DEEP_RESEARCH
-    )
+    resolved_context = context or ResponseContext(task_type=ResponseTaskType.DEEP_RESEARCH)
     budget = selected.budget(resolved_context.task_type)
     findings: set[str] = set()
     stripped = text.strip()
@@ -507,8 +496,7 @@ def audit_public_answer(
     if budget_exceeded:
         findings.add("PUBLIC_ANSWER_TOO_LONG")
     bullet_count = sum(
-        line.lstrip().startswith(("- ", "* ", "• "))
-        for line in stripped.splitlines()
+        line.lstrip().startswith(("- ", "* ", "• ")) for line in stripped.splitlines()
     )
     if bullet_count > selected.max_bullets:
         findings.add("PUBLIC_ANSWER_TOO_MANY_BULLETS")
@@ -521,10 +509,7 @@ def audit_public_answer(
         findings.add("PUBLIC_ANSWER_HEADING_TOO_DEEP")
     if _has_semantic_repetition(stripped, selected.semantic_duplicate_threshold):
         findings.add("PUBLIC_ANSWER_REPETITIVE")
-    if any(
-        item.casefold() in stripped.casefold()
-        for item in selected.forbidden_expressions
-    ):
+    if any(item.casefold() in stripped.casefold() for item in selected.forbidden_expressions):
         findings.add("CHINESE_STYLE_FORBIDDEN_EXPRESSION")
     if _english_density(stripped, selected) > selected.english_density_threshold:
         findings.add("CHINESE_STYLE_EXCESSIVE_ENGLISH")
@@ -546,10 +531,7 @@ def audit_public_answer(
 
     scan_text = _URL_PATTERN.sub(" ", stripped)
     for code, patterns in _ANSWER_POLICY_PATTERNS:
-        if any(
-            re.search(pattern, scan_text, flags=re.IGNORECASE)
-            for pattern in patterns
-        ):
+        if any(re.search(pattern, scan_text, flags=re.IGNORECASE) for pattern in patterns):
             findings.add(code)
     lowered = scan_text.casefold()
     if any(term.casefold() in lowered for term in internal_vocabulary_terms()):
@@ -602,11 +584,7 @@ def audit_public_answer(
         finding_codes=ordered,
         character_count=len(stripped),
         character_budget=budget.max_chars,
-        budget_status=(
-            BudgetStatus.EXCEEDED
-            if budget_exceeded
-            else BudgetStatus.WITHIN_BUDGET
-        ),
+        budget_status=(BudgetStatus.EXCEEDED if budget_exceeded else BudgetStatus.WITHIN_BUDGET),
         fact_equivalence_status=equivalence,
         fact_drift_detected=fact_drift,
         required_content_preserved=required_preserved,
@@ -650,11 +628,7 @@ def audit_developer_answer(
         finding_codes=ordered,
         character_count=len(stripped),
         character_budget=budget.max_chars,
-        budget_status=(
-            BudgetStatus.EXCEEDED
-            if budget_exceeded
-            else BudgetStatus.WITHIN_BUDGET
-        ),
+        budget_status=(BudgetStatus.EXCEEDED if budget_exceeded else BudgetStatus.WITHIN_BUDGET),
         fact_equivalence_status=FactEquivalenceStatus.NOT_CHECKED,
         fact_drift_detected=False,
         required_content_preserved=True,
@@ -748,12 +722,8 @@ def extract_fact_fingerprint(
         and re.search(rf"结论强度[:：]\s*{re.escape(label)}(?:\s|$|[。；，])", text)
     ]
     return FactFingerprint(
-        entities=_ordered_unique(
-            entity for entity in known_entities if entity and entity in text
-        ),
-        security_codes=_ordered_unique(
-            re.findall(r"(?<!\d)\d{6}(?!\d)", text)
-        ),
+        entities=_ordered_unique(entity for entity in known_entities if entity and entity in text),
+        security_codes=_ordered_unique(re.findall(r"(?<!\d)\d{6}(?!\d)", text)),
         numbers=_ordered_unique(
             re.findall(
                 r"(?<![A-Za-z])[-+]?\d+(?:\.\d+)?(?:%|％|倍|元|万元|亿元|股)?",
@@ -767,12 +737,8 @@ def extract_fact_fingerprint(
                 text,
             )
         ),
-        times=_ordered_unique(
-            re.findall(r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)", text)
-        ),
-        direction_terms=_ordered_unique(
-            term for term in _DIRECTION_TERMS if term in text
-        ),
+        times=_ordered_unique(re.findall(r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)", text)),
+        direction_terms=_ordered_unique(term for term in _DIRECTION_TERMS if term in text),
         conclusion_strength_terms=_ordered_unique(strength_terms),
         citations=_ordered_unique(
             re.findall(
@@ -804,9 +770,7 @@ def _developer_payload(
         correlation_id=redact_sensitive_text(diagnostics.correlation_id),
         stage=(redact_sensitive_text(diagnostics.stage) if diagnostics.stage else None),
         next_action=(
-            redact_sensitive_text(diagnostics.next_action)
-            if diagnostics.next_action
-            else None
+            redact_sensitive_text(diagnostics.next_action) if diagnostics.next_action else None
         ),
     )
 
@@ -871,9 +835,7 @@ def _investor_payload(
 def _render_investor_text(payload: InvestorPresentationModel) -> str:
     lines = [f"主体：{payload.subject}", f"结论：{payload.headline}"]
     if payload.conclusion_strength is not ConclusionStrength.UNSPECIFIED:
-        lines.append(
-            f"结论强度：{_STRENGTH_LABELS[payload.conclusion_strength]}"
-        )
+        lines.append(f"结论强度：{_STRENGTH_LABELS[payload.conclusion_strength]}")
     if payload.valuation_or_odds:
         lines.append("估值与赔率：" + "；".join(payload.valuation_or_odds))
     if payload.reasons:
@@ -886,9 +848,7 @@ def _render_investor_text(payload: InvestorPresentationModel) -> str:
     if payload.data_as_of:
         lines.append(f"数据截至：{payload.data_as_of}")
     if payload.report_reference:
-        lines.append(
-            f"{payload.report_reference.label}：{payload.report_reference.file_name}"
-        )
+        lines.append(f"{payload.report_reference.label}：{payload.report_reference.file_name}")
     if payload.citations:
         lines.append("来源：" + "；".join(payload.citations))
     return "\n".join(lines)
@@ -940,9 +900,7 @@ def _narrative_source_text(narrative: ResearchNarrativeBundle) -> str:
     if narrative.data_as_of is not None:
         values.append(_format_as_of(narrative.data_as_of) or "")
     if narrative.report_path:
-        values.extend(
-            [narrative.report_path, _safe_report_file_name(narrative.report_path)]
-        )
+        values.extend([narrative.report_path, _safe_report_file_name(narrative.report_path)])
     return "\n".join(value for value in values if value)
 
 
@@ -1038,8 +996,7 @@ def _drop_duplicate_lines(text: str, threshold: float) -> str:
             continue
         if any(
             signature == previous
-            or SequenceMatcher(a=signature, b=previous, autojunk=False).ratio()
-            >= threshold
+            or SequenceMatcher(a=signature, b=previous, autojunk=False).ratio() >= threshold
             for previous in seen[-16:]
         ):
             continue
@@ -1055,9 +1012,7 @@ def _sentence_units(text: str) -> list[str]:
         if not stripped:
             continue
         result.extend(
-            part.strip()
-            for part in re.split(r"[。！？!?；;]+", stripped)
-            if part.strip()
+            part.strip() for part in re.split(r"[。！？!?；;]+", stripped) if part.strip()
         )
     return result
 
@@ -1086,10 +1041,7 @@ def _fingerprint_contains(
     fields: list[str] = list(_FINGERPRINT_FIELDS)
     if include_locked_phrases:
         fields.append("locked_phrases")
-    return all(
-        set(getattr(child, field)).issubset(set(getattr(parent, field)))
-        for field in fields
-    )
+    return all(set(getattr(child, field)).issubset(set(getattr(parent, field))) for field in fields)
 
 
 def _merge_fingerprints(
@@ -1098,15 +1050,11 @@ def _merge_fingerprints(
 ) -> FactFingerprint:
     return FactFingerprint(
         entities=_ordered_unique([*left.entities, *right.entities]),
-        security_codes=_ordered_unique(
-            [*left.security_codes, *right.security_codes]
-        ),
+        security_codes=_ordered_unique([*left.security_codes, *right.security_codes]),
         numbers=_ordered_unique([*left.numbers, *right.numbers]),
         dates=_ordered_unique([*left.dates, *right.dates]),
         times=_ordered_unique([*left.times, *right.times]),
-        direction_terms=_ordered_unique(
-            [*left.direction_terms, *right.direction_terms]
-        ),
+        direction_terms=_ordered_unique([*left.direction_terms, *right.direction_terms]),
         conclusion_strength_terms=_ordered_unique(
             [
                 *left.conclusion_strength_terms,
@@ -1114,9 +1062,7 @@ def _merge_fingerprints(
             ]
         ),
         citations=_ordered_unique([*left.citations, *right.citations]),
-        locked_phrases=_ordered_unique(
-            [*left.locked_phrases, *right.locked_phrases]
-        ),
+        locked_phrases=_ordered_unique([*left.locked_phrases, *right.locked_phrases]),
     )
 
 
@@ -1152,8 +1098,7 @@ def _dedupe_semantic_items(
         signature = _semantic_normalize(text)
         if any(
             signature == previous
-            or SequenceMatcher(a=signature, b=previous, autojunk=False).ratio()
-            >= threshold
+            or SequenceMatcher(a=signature, b=previous, autojunk=False).ratio() >= threshold
             for previous in signatures
         ):
             continue

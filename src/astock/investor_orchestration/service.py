@@ -4,16 +4,19 @@ from collections.abc import Mapping
 from typing import Any, NamedTuple
 
 from astock.investor_orchestration.capabilities import (
+    CapabilityDependencyContext,
     CapabilityExecutionResult,
     CapabilityExecutor,
     CapabilityHandler,
     CapabilityPlanner,
+    DependencyAwareCapabilityHandler,
 )
 from astock.investor_orchestration.closure import (
     InvestmentClosureDecision,
     InvestmentRequestClosurePolicy,
     InvestmentRequestNotTerminalError,
 )
+from astock.investor_orchestration.full_research_assembly import FullResearchReceiptAssembler
 from astock.investor_orchestration.gateway import InvestorAnswerGateway
 from astock.investor_orchestration.models import (
     CapabilityCoverageReceipt,
@@ -367,6 +370,9 @@ class InvestorOrchestrationService:
             ),
             "MARKET_REGIME": self._market_regime_handler,
             "SUBJECT_REGISTRY": self._subject_registry_handler,
+            "FULL_RESEARCH_GATE": DependencyAwareCapabilityHandler(
+                self._full_research_gate_handler
+            ),
             "RESPONSE_GATEWAY": lambda *_: CapabilityExecutionResult(
                 artifact_ids=("gateway:required",)
             ),
@@ -384,6 +390,18 @@ class InvestorOrchestrationService:
         return CapabilityExecutionResult(
             artifact_ids=(preflight.regime.snapshot_id,),
             source_revision=preflight.context.aggregate_revision,
+        )
+
+    def _full_research_gate_handler(
+        self,
+        request: InvestorRequestEnvelope,
+        preflight: InvestorSessionPreflightReceipt,
+        context: CapabilityDependencyContext,
+    ) -> CapabilityExecutionResult:
+        receipt = FullResearchReceiptAssembler(self.store).assemble(request, preflight, context)
+        return CapabilityExecutionResult(
+            artifact_ids=(receipt.receipt_id,),
+            source_revision=receipt.receipt_hash,
         )
 
     def _subject_registry_handler(

@@ -8,31 +8,31 @@ SKILL_ROOT = REPO_ROOT / ".agents" / "skills"
 SKILLS = {
     "macro-policy-regime": {
         "tasks": ("macro-regime", "policy-regime"),
-        "outputs": ("MacroRegimeProfile", "PolicyRegimeProfile"),
+        "outputs": ("MacroResearchOutcome", "PolicyRegimeProfile"),
         "checks": ("MACRO_REGIME", "POLICY_REGIME"),
         "terms": ("macro", "policy", "point-in-time", "typed"),
     },
     "industry-value-chain": {
         "tasks": ("industry-value-chain",),
-        "outputs": ("IndustryValueChainProfile",),
+        "outputs": ("IndustryResearchOutcome",),
         "checks": ("INDUSTRY_PROFILE",),
         "terms": ("industry", "value chain", "point-in-time", "typed"),
     },
     "catalyst-event-research": {
         "tasks": ("company-catalyst",),
-        "outputs": ("CatalystRiskPack",),
+        "outputs": ("NewsEventResearchPack",),
         "checks": ("CATALYST_RISK",),
         "terms": ("catalyst", "event", "official", "typed"),
     },
     "governance-management-quality": {
         "tasks": ("governance-management-quality",),
-        "outputs": ("GovernanceManagementQualityPack",),
+        "outputs": ("GovernanceAssessment",),
         "checks": ("GOVERNANCE_QUALITY",),
         "terms": ("governance", "related-party", "point-in-time", "typed"),
     },
     "investment-red-team": {
         "tasks": ("investment-red-team",),
-        "outputs": ("InvestmentRedTeamReport",),
+        "outputs": ("ChallengerAssessment",),
         "checks": ("INDEPENDENT_REVIEW",),
         "terms": ("red team", "disconfirming", "kill criteria", "typed"),
     },

@@ -1,0 +1,146 @@
+schema_version: full-research-recommendation-policy-v1
+policy_id: full-research-recommendation-v1
+status: ENABLED
+
+model_portfolio_defaults:
+  capital_rmb: 100000
+  risk_profile: MEDIUM
+  horizon_min_months: 3
+  horizon_max_months: 12
+  long_only: true
+  margin_allowed: false
+  short_allowed: false
+  cash_allowed: true
+  target_position_min: 5
+  target_position_max: 8
+
+mandatory_dag:
+  allowed_statuses: [PASS, FAIL, BLOCKED, DEGRADED]
+  degraded_allowed: []
+  nodes:
+    - REQUEST_CONTRACT
+    - POINT_IN_TIME_SNAPSHOT
+    - MACRO
+    - MARKET_REGIME
+    - INDUSTRY
+    - UNIVERSE_SCREENING
+    - COMPANY_FUNDAMENTAL
+    - FINANCIAL_QUALITY_AUDIT
+    - VALUATION
+    - NEWS_EVENT
+    - GOVERNANCE
+    - QUANT_FACTOR
+    - BEAR_CASE_CHALLENGER
+    - CANDIDATE_RANKING
+    - PORTFOLIO_CONSTRUCTION
+    - EXECUTION_PLANNING
+    - RISK_AUDIT
+    - EVIDENCE_AUDIT
+    - PUBLICATION_GATE
+    - TRACKING_REEVALUATION
+
+critical_source_families:
+  - MARKET_PRICE
+  - FINANCIAL_REPORT
+  - OFFICIAL_FILING
+  - MACRO_RELEASE
+  - NEWS_EVENT
+
+point_in_time:
+  require_object_hash: true
+  require_provider: true
+  require_source_identity: true
+  require_ingestion_version: true
+  require_parser_version: true
+  conflict_policy: BLOCK
+
+news_windows_days: [7, 30, 90, 180]
+news_categories:
+  - earnings
+  - orders
+  - m_and_a
+  - restructuring
+  - buyback
+  - insider_reduction
+  - financing
+  - major_contract
+  - product
+  - policy
+  - litigation
+  - investigation
+  - safety_incident
+  - management
+  - industry_pricing
+  - supply_chain
+  - overseas_sanctions_trade
+  - domestic_upstream_downstream_news
+  - global_upstream_downstream_news
+  - domestic_upstream_downstream_policy
+minimum_peer_count: 5
+
+valuation:
+  default_scenario_probabilities:
+    BEAR: 0.25
+    BASE: 0.50
+    BULL: 0.25
+
+factor_dimensions:
+  - VALUE
+  - QUALITY
+  - GROWTH
+  - MOMENTUM
+  - LOW_VOLATILITY
+  - LIQUIDITY
+  - SIZE
+  - EARNINGS_REVISION
+  - PROFITABILITY
+  - CROWDING
+
+portfolio:
+  max_single_weight: 0.25
+  max_industry_weight: 0.40
+  max_factor_abs_exposure: 0.65
+  max_pairwise_correlation: 0.90
+  target_position_min: 5
+  target_position_max: 8
+  allow_fewer_positions: true
+  allow_cash: true
+  lot_size_shares: 100
+  min_position_weight: 0.02
+  max_order_adv_fraction: 0.05
+  cvar_confidence: 0.95
+  transaction_cost_bps: 12
+  default_slippage_bps: 8
+
+execution:
+  current_quote_freshness_sla_seconds: 120
+  quote_freshness_sla_is_hard_gate: true
+  fixed_percent_stop_loss_allowed: false
+  require_thesis_invalidation: true
+  require_risk_budget: true
+  require_event_window_check: true
+  minimum_base_case_margin_of_safety: 0.15
+
+publication:
+  mandatory_coverage_required: 1.0
+  critical_source_lineage_required: 1.0
+  point_in_time_leakage_allowed: 0
+  publication_gate_bypass_allowed: 0
+  critical_veto_leak_allowed: 0
+  source_failure_buy_allowed: 0
+  stale_quote_instant_execution_allowed: 0
+  broker_execution_allowed: false
+
+tracking:
+  triggers:
+    - FINANCIAL_REPORT
+    - EARNINGS_GUIDANCE
+    - MATERIAL_FILING
+    - REGULATORY_EVENT
+    - EARNINGS_REVISION
+    - PRICE_TRIGGER
+    - VALUATION_TRIGGER
+    - MACRO_REGIME_CHANGE
+    - INDUSTRY_REGIME_CHANGE
+    - THESIS_INVALIDATION
+  immutable_historical_receipts: true

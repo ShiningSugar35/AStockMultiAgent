@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -9,13 +10,28 @@ from astock.candidates.seeds import _universe_coverage_proof
 from astock.cli import app
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.documents.page_repository import DocumentPageRepository
+from astock.documents.repository import DocumentRepository
+from astock.evidence.repository import EvidenceRepository
 from astock.research.industry_archetypes import IndustryResearchRegistry
 from astock.research.team import (
     ResearchTeamService,
     detect_hardware_budget,
     load_research_team_policy,
 )
-from astock.schemas.evidence import SourceSnapshot
+from astock.schemas.documents import (
+    DocumentPage,
+    DocumentType,
+    PageExtractionMethod,
+    SourceDocument,
+)
+from astock.schemas.evidence import (
+    Evidence,
+    EvidenceGrade,
+    EvidenceLocator,
+    FactStatus,
+    SourceSnapshot,
+)
 from astock.schemas.financial import (
     FinancialCoverageStatus,
     FinancialEvidenceGap,
@@ -24,6 +40,18 @@ from astock.schemas.financial import (
     FinancialIndustryProfile,
     FinancialIntegrityEvidencePack,
     FinancialRiskLevel,
+)
+from astock.schemas.full_research import (
+    ChallengerAssessment,
+    CompanyFundamentalSnapshot,
+    FactorSnapshot,
+    FinancialQualityAssessment,
+    GovernanceAssessment,
+    IndustryResearchOutcome,
+    MacroResearchOutcome,
+    NewsEventCoverage,
+    NewsEventResearchPack,
+    QuantFactorResearchPack,
 )
 from astock.schemas.market import Market
 from astock.schemas.research_acquisition import (
@@ -39,8 +67,8 @@ from astock.schemas.research_seeds import (
     ResearchUniverseCoverageStatus,
 )
 from astock.schemas.research_team import (
-    RecommendationReadinessRequest,
-    RecommendationReadinessStatus,
+    FullResearchInputReadinessRequest,
+    FullResearchInputReadinessStatus,
     ResearchCoverageRequest,
     ResearchExecutionBackend,
     ResearchRoleOutput,
@@ -288,6 +316,440 @@ def _register_acquisition_report(
     return report_id, ref.sha256
 
 
+def _typed_role_evidence(
+    state: StateStore,
+    objects: ObjectStore,
+    *,
+    suffix: str,
+) -> str:
+    payload = f"typed role evidence {suffix}".encode()
+    raw_ref = objects.put_json({"suffix": suffix})
+    snapshot = SourceSnapshot(
+        snapshot_id=f"snapshot:{suffix}",
+        source_id=f"official:{suffix}",
+        object_sha256=raw_ref.sha256,
+        fetched_at=NOW,
+        available_to_system_at=NOW,
+        mime="application/json",
+        byte_size=raw_ref.byte_size,
+        created_at=NOW,
+    )
+    state.register_snapshot(snapshot)
+    document = SourceDocument(
+        document_id=f"document:{suffix}",
+        title=f"Typed role evidence {suffix}",
+        publisher="TEST_EXCHANGE",
+        document_type=DocumentType.ANNOUNCEMENT,
+        company_ids=["600000"],
+        published_at=NOW,
+        effective_at=NOW,
+        disclosure_id=f"disclosure:{suffix}",
+        source_url="https://example.invalid/typed-role",
+        rights_status="TEST_FIXTURE",
+        created_at=NOW,
+    )
+    DocumentRepository(state).register(document, snapshot)
+    page_ref = objects.put_bytes(payload)
+    page = DocumentPage(
+        page_id=f"page:{suffix}",
+        document_id=document.document_id,
+        snapshot_id=snapshot.snapshot_id,
+        page_number=1,
+        width_points=100,
+        height_points=100,
+        native_text_char_count=len(payload),
+        text_char_count=len(payload),
+        text_sha256=page_ref.sha256,
+        text_object_sha256=page_ref.sha256,
+        extraction_method=PageExtractionMethod.NATIVE_TEXT,
+        ocr_applied=False,
+        parser_name="typed-role-test",
+        parser_version="v1",
+        created_at=NOW,
+    )
+    DocumentPageRepository(state).register_page(page)
+    evidence_id = f"evidence:{suffix}"
+    EvidenceRepository(state).register_evidence(
+        Evidence(
+            evidence_id=evidence_id,
+            document_id=document.document_id,
+            snapshot_id=snapshot.snapshot_id,
+            page_id=page.page_id,
+            locator=EvidenceLocator(
+                page_number=1,
+                char_start=0,
+                char_end=len(payload),
+                parser_version="typed-role-test-v1",
+            ),
+            excerpt_sha256=page_ref.sha256,
+            excerpt_object_sha256=page_ref.sha256,
+            evidence_grade=EvidenceGrade.PRIMARY_OFFICIAL,
+            fact_status=FactStatus.DIRECT,
+            entity_ids=["company:600000"],
+            valid_from=NOW,
+            available_to_system_at=NOW,
+            rights_status="TEST_FIXTURE",
+            created_at=NOW,
+        )
+    )
+    return evidence_id
+
+
+def _register_typed_component(
+    state: StateStore,
+    objects: ObjectStore,
+    *,
+    artifact_id: str,
+    component: object,
+) -> str:
+    payload = component.model_dump(mode="json")  # type: ignore[attr-defined]
+    ref = objects.put_json(payload)
+    state.register_artifact(
+        artifact_id=artifact_id,
+        artifact_type=type(component).__name__,
+        schema_version=str(component.schema_version),  # type: ignore[attr-defined]
+        object_hash=ref.sha256,
+        input_hashes=[],
+    )
+    return artifact_id
+
+
+def _typed_role_member_ids(
+    service: ResearchTeamService,
+    state: StateStore,
+    objects: ObjectStore,
+    *,
+    plan_id: str,
+    task_id: str,
+    formal: bool,
+) -> list[str] | None:
+    plan = service.get_plan(plan_id)
+    assert plan is not None
+    task = next(item for item in plan.tasks if item.task_id == task_id)
+    if task.role not in {
+        ResearchTaskRole.MACRO,
+        ResearchTaskRole.INDUSTRY,
+        ResearchTaskRole.FUNDAMENTAL,
+        ResearchTaskRole.FINANCIAL_INTEGRITY,
+        ResearchTaskRole.GOVERNANCE,
+        ResearchTaskRole.CATALYST,
+        ResearchTaskRole.QUANT_FACTOR,
+        ResearchTaskRole.REVIEWER,
+    }:
+        return None
+
+    suffix = f"{plan_id}:{task_id}"
+    evidence_id = _typed_role_evidence(state, objects, suffix=suffix)
+    source_id = f"test-source:{suffix}"
+    _register_output(state, objects, source_id)
+    source_record = state.artifact_record(source_id)
+    assert source_record is not None
+    source_hash = str(source_record["object_hash"])
+    instrument = plan.company_id or "600000"
+
+    if task.role is ResearchTaskRole.MACRO:
+        value = "OK" if formal else "NOT_SEPARATELY_EXPOSED_BY_FIXTURE"
+        component = MacroResearchOutcome(
+            macro_regime="NORMAL",
+            liquidity_regime="NORMAL",
+            risk_appetite="NORMAL",
+            policy_bias="NEUTRAL",
+            dimensions={
+                key: value
+                for key in (
+                    "domestic_growth",
+                    "inflation",
+                    "credit",
+                    "liquidity",
+                    "interest_rates",
+                    "foreign_exchange",
+                    "fiscal_policy",
+                    "industrial_policy",
+                    "real_estate",
+                    "exports",
+                    "global_risk_assets",
+                )
+            },
+            macro_sector_implications=("neutral",),
+            macro_risk_events=("review",),
+            evidence_ids=(evidence_id,),
+            created_at=NOW,
+        )
+        return [
+            _register_typed_component(
+                state,
+                objects,
+                artifact_id=f"MacroResearchOutcome:{suffix}",
+                component=component,
+            )
+        ]
+
+    if task.role is ResearchTaskRole.INDUSTRY:
+        dimensions: dict[str, str | Decimal] = {
+            "demand": "OK",
+            "supply_capacity": "OK",
+            "inventory": "OK",
+            "pricing": "OK",
+            "capital_expenditure": "OK",
+            "competition": "OK",
+            "policy": "OK",
+            "technology": "OK",
+            "cycle_position": "OK",
+            "value_chain_bargaining_power": "OK",
+            "valuation_percentile": Decimal("0.5"),
+        }
+        peers = tuple(f"peer-{index}" for index in range(5)) if formal else ()
+        exception = None if formal else "upstream fixture lacks peers"
+        component = IndustryResearchOutcome(
+            industry_id="IND-TEST",
+            industry_score=Decimal("80"),
+            cycle_phase="MID",
+            competitive_intensity="NORMAL",
+            dimensions=dimensions,
+            industry_catalysts=("catalyst",),
+            industry_risks=("risk",),
+            peer_set=peers,
+            peer_set_exception_reason=exception,
+            evidence_ids=(evidence_id,),
+            created_at=NOW,
+        )
+        return [
+            _register_typed_component(
+                state,
+                objects,
+                artifact_id=f"IndustryResearchOutcome:{suffix}",
+                component=component,
+            )
+        ]
+
+    if task.role is ResearchTaskRole.FUNDAMENTAL:
+        metrics: dict[str, Decimal | None] = {
+            key: Decimal("1")
+            for key in (
+                "revenue",
+                "parent_net_profit",
+                "adjusted_net_profit",
+                "gross_margin",
+                "operating_margin",
+                "roe",
+                "roic",
+                "operating_cash_flow",
+                "free_cash_flow",
+                "capital_expenditure",
+                "receivables",
+                "inventory",
+                "contract_liabilities",
+                "net_debt",
+                "financing_cost",
+                "shares_outstanding",
+                "dividends",
+                "buybacks",
+                "earnings_revision",
+            )
+        }
+        growth: dict[str, Decimal | None] = {
+            key: Decimal("0.1")
+            for key in (
+                "price",
+                "volume",
+                "consolidation",
+                "foreign_exchange",
+                "non_recurring",
+                "subsidy",
+                "asset_disposal",
+                "fair_value_change",
+                "core_business",
+            )
+        }
+        if not formal:
+            metrics["roic"] = None
+        component = CompanyFundamentalSnapshot(
+            instrument_id=instrument,
+            available_complete_years=5,
+            analyzed_complete_years=5,
+            available_quarters=12,
+            analyzed_quarters=12,
+            ttm_reconstructed=True,
+            metrics=metrics,
+            growth_decomposition=growth,
+            source_artifact_ids=(source_id,),
+            source_object_hashes=(source_hash,),
+            created_at=NOW,
+        )
+        return [
+            _register_typed_component(
+                state,
+                objects,
+                artifact_id=f"CompanyFundamentalSnapshot:{suffix}",
+                component=component,
+            )
+        ]
+
+    if task.role is ResearchTaskRole.FINANCIAL_INTEGRITY:
+        quality_checks: dict[str, bool | str | Decimal] = {
+            key: ("PASS" if formal else "NOT_SEPARATELY_EXPOSED")
+            for key in (
+                "audit_opinion",
+                "non_standard_opinion",
+                "revenue_cashflow_divergence",
+                "receivables_anomaly",
+                "inventory_anomaly",
+                "gross_margin_anomaly",
+                "capitalized_r_and_d",
+                "goodwill_impairment",
+                "asset_disposal",
+                "government_subsidy",
+                "related_party_transactions",
+                "controlling_shareholder_fund_occupation",
+                "share_pledge",
+                "guarantees",
+                "short_debt_long_investment",
+                "cash_and_interest_bearing_debt",
+                "non_recurring_items",
+                "minority_interest",
+                "cash_conversion_quality",
+            )
+        }
+        quality = FinancialQualityAssessment(
+            instrument_id=instrument,
+            accounting_quality_score=Decimal("90"),
+            checks=quality_checks,
+            audit_opinion="UNQUALIFIED" if formal else "NOT_SEPARATELY_EXPOSED",
+            cash_conversion_quality="PASS",
+            evidence_ids=(evidence_id,),
+            created_at=NOW,
+        )
+        quality_id = _register_typed_component(
+            state,
+            objects,
+            artifact_id=f"FinancialQualityAssessment:{suffix}",
+            component=quality,
+        )
+        pack_id = f"FinancialIntegrityEvidencePack:test-member:{plan_id}:{task_id}"
+        _register_financial_pack(state, objects, artifact_id=pack_id, complete=formal)
+        return sorted([pack_id, quality_id])
+
+    if task.role is ResearchTaskRole.GOVERNANCE:
+        checks: dict[str, bool | str | Decimal] = {
+            key: ("PASS" if formal else "NOT_SEPARATELY_EXPOSED")
+            for key in (
+                "controlling_shareholder",
+                "actual_controller",
+                "management_stability",
+                "regulatory_penalties",
+                "formal_investigations",
+                "director_executive_changes",
+                "insider_reductions",
+                "share_pledges",
+                "related_party_transactions",
+                "fund_occupation",
+                "illegal_guarantees",
+                "auditor_changes",
+                "material_litigation",
+            )
+        }
+        component = GovernanceAssessment(
+            instrument_id=instrument,
+            governance_score=Decimal("85"),
+            checks=checks,
+            controller="controller" if formal else None,
+            management_stability="STABLE",
+            evidence_ids=(evidence_id,),
+            created_at=NOW,
+        )
+        return [
+            _register_typed_component(
+                state,
+                objects,
+                artifact_id=f"GovernanceAssessment:{suffix}",
+                component=component,
+            )
+        ]
+
+    if task.role is ResearchTaskRole.CATALYST:
+        categories = service.full_research_news_categories
+        component = NewsEventResearchPack(
+            instrument_id=instrument,
+            as_of=NOW,
+            events=(),
+            coverage=NewsEventCoverage(
+                as_of=NOW,
+                covered_windows_days=service.full_research_news_windows,
+                covered_categories=categories,
+                source_classes_seen=(),
+                event_ids=(),
+                conflicts_resolved=formal,
+                created_at=NOW,
+            ),
+            evidence_ids=(evidence_id,),
+            created_at=NOW,
+        )
+        return [
+            _register_typed_component(
+                state,
+                objects,
+                artifact_id=f"NewsEventResearchPack:{suffix}",
+                component=component,
+            )
+        ]
+
+    if task.role is ResearchTaskRole.QUANT_FACTOR:
+        value = Decimal("0.1")
+        factor = FactorSnapshot(
+            instrument_id=instrument,
+            value=value,
+            quality=value,
+            growth=value,
+            momentum=value,
+            low_volatility=value,
+            liquidity=value,
+            size=value,
+            earnings_revision=value if formal else None,
+            profitability=value,
+            crowding=value,
+            created_at=NOW,
+        )
+        component = QuantFactorResearchPack(
+            as_of=NOW,
+            factors=(factor,),
+            evidence_ids=(evidence_id,),
+            created_at=NOW,
+        )
+        return [
+            _register_typed_component(
+                state,
+                objects,
+                artifact_id=f"QuantFactorResearchPack:{suffix}",
+                component=component,
+            )
+        ]
+
+    if task.role is ResearchTaskRole.REVIEWER:
+        component = ChallengerAssessment(
+            instrument_id=instrument,
+            independent_context_id=f"challenger:{suffix}",
+            raw_fact_artifact_ids=(source_id,),
+            primary_final_label_visible=False,
+            market_may_be_right_because="market expectations may already be fair",
+            overlooked_bad_news=("risk",),
+            valuation_fully_priced_risk="valuation can already price growth",
+            thesis_invalidation_conditions=("thesis invalidation",),
+            maximum_reasonable_downside=Decimal("0.2"),
+            material_conflict_with_primary=not formal,
+            confidence_adjustment=Decimal("-0.2") if not formal else Decimal("0"),
+            created_at=NOW,
+        )
+        return [
+            _register_typed_component(
+                state,
+                objects,
+                artifact_id=f"ChallengerAssessment:{suffix}",
+                component=component,
+            )
+        ]
+    raise AssertionError(task.role)
+
+
 def _register_role_output(
     service: ResearchTeamService,
     state: StateStore,
@@ -300,41 +762,43 @@ def _register_role_output(
     plan = service.get_plan(plan_id)
     assert plan is not None
     task = next(item for item in plan.tasks if item.task_id == task_id)
+    formal = (
+        all(readiness_check_results.get(check, True) for check in task.readiness_checks)
+        if readiness_check_results is not None
+        else True
+    )
+    typed_member_ids = _typed_role_member_ids(
+        service,
+        state,
+        objects,
+        plan_id=plan_id,
+        task_id=task_id,
+        formal=formal,
+    )
     if task.role is ResearchTaskRole.UNIVERSE:
         universe_full = (
             readiness_check_results.get("UNIVERSE_COVERAGE", True)
             if readiness_check_results is not None
             else True
         )
-        member_artifact_id = f"ResearchSeedReport:test-member:{plan_id}:{task_id}"
+        member_artifact_ids = [f"ResearchSeedReport:test-member:{plan_id}:{task_id}"]
         _register_seed_report(
             state,
             objects,
-            artifact_id=member_artifact_id,
+            artifact_id=member_artifact_ids[0],
             full=universe_full,
         )
-    elif task.role is ResearchTaskRole.FINANCIAL_INTEGRITY:
-        financial_complete = (
-            readiness_check_results.get("FINANCIAL_INTEGRITY", True)
-            if readiness_check_results is not None
-            else True
-        )
-        member_artifact_id = f"FinancialIntegrityEvidencePack:test-member:{plan_id}:{task_id}"
-        _register_financial_pack(
-            state,
-            objects,
-            artifact_id=member_artifact_id,
-            complete=financial_complete,
-        )
+    elif typed_member_ids is not None:
+        member_artifact_ids = typed_member_ids
     else:
-        member_artifact_id = f"test-member:{plan_id}:{task_id}"
-        _register_output(state, objects, member_artifact_id)
+        member_artifact_ids = [f"test-member:{plan_id}:{task_id}"]
+        _register_output(state, objects, member_artifact_ids[0])
     output_result = service.register_role_output(
         ResearchRoleOutput(
             plan_id=plan_id,
             task_id=task_id,
             output_contract=task.output_contract,
-            member_artifact_ids=[member_artifact_id],
+            member_artifact_ids=member_artifact_ids,
             evidence_ids=[],
             readiness_check_results=(
                 readiness_check_results
@@ -392,7 +856,7 @@ def test_research_team_cli_is_discoverable() -> None:
         "research-team-status",
         "research-team-role-output",
         "research-team-task-result",
-        "research-recommendation-readiness",
+        "research-full-research-readiness",
     } <= command_names
 
 
@@ -431,13 +895,12 @@ def test_full_market_plan_has_team_roles_and_hard_order(tmp_path: Path) -> None:
     assert plan.backend is ResearchExecutionBackend.CHAT_ORCHESTRATED
     assert plan.on_demand_acquisition
     assert plan.no_manual_candidate_fallback
-    assert not plan.formal_recommendation_allowed
     assert by_id["macro-regime"].stage == by_id["policy-regime"].stage
     assert by_id["bull-case"].stage == by_id["bear-case"].stage
     assert by_id["bull-case"].independent_context_required
     assert by_id["bear-case"].independent_context_required
     assert set(by_id["independent-review"].dependencies) == {"bear-case", "bull-case"}
-    assert by_id["committee"].dependencies == ["independent-review"]
+    assert by_id["committee"].dependencies == ["independent-review", "quant-factor"]
     assert by_id["portfolio-construction"].dependencies == ["committee"]
     assert by_id["recommendation-gate"].role is ResearchTaskRole.RECOMMENDATION_GATE
     assert not by_id["recommendation-gate"].required_for_recommendation
@@ -472,6 +935,7 @@ def test_company_plan_requires_resolved_acquisition_and_binds_lineage(tmp_path: 
     assert set(by_id["committee"].dependencies) == {
         "investment-red-team",
         "model-risk-validation",
+        "quant-factor",
     }
     mapped_checks = {check for task in plan.tasks for check in task.readiness_checks}
     assert mapped_checks == set(service.policy.company_required_checks) - {"TEAM_DAG_COMPLETE"}
@@ -547,11 +1011,11 @@ def test_readiness_fails_closed_even_when_checks_claim_pass_without_team(tmp_pat
     claimed = {check: True for check in service.policy.required_checks}
 
     report = service.evaluate_readiness(
-        RecommendationReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
+        FullResearchInputReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
     )
 
-    assert report.status is RecommendationReadinessStatus.OBSERVATION_ONLY
-    assert not report.formal_recommendation_allowed
+    assert report.status is FullResearchInputReadinessStatus.OBSERVATION_ONLY
+    assert not report.full_research_input_ready
     assert "TEAM_DAG_COMPLETE" in report.missing_or_failed_checks
 
 
@@ -571,6 +1035,38 @@ def test_universe_role_cannot_self_attest_with_arbitrary_member_artifact(tmp_pat
                 member_artifact_ids=[artifact_id],
                 readiness_check_results={"UNIVERSE_COVERAGE": True},
                 summary="self-attested universe",
+                created_at=NOW,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("task_id", "check"),
+    [
+        ("macro-regime", "MACRO_REGIME"),
+        ("quant-factor", "QUANT_FACTOR"),
+    ],
+)
+def test_typed_full_research_roles_cannot_self_attest_with_arbitrary_member_artifact(
+    tmp_path: Path,
+    task_id: str,
+    check: str,
+) -> None:
+    service, state, objects = _service(tmp_path)
+    plan = service.create_full_market_plan(as_of=NOW)
+    task = next(item for item in plan.tasks if item.task_id == task_id)
+    artifact_id = f"test-member:{plan.plan_id}:{task_id}"
+    _register_output(state, objects, artifact_id)
+
+    with pytest.raises(ValueError, match=f"{check} must be derived"):
+        service.register_role_output(
+            ResearchRoleOutput(
+                plan_id=plan.plan_id,
+                task_id=task.task_id,
+                output_contract=task.output_contract,
+                member_artifact_ids=[artifact_id],
+                readiness_check_results={check: True},
+                summary="self-attested typed Full Research role",
                 created_at=NOW,
             )
         )
@@ -683,11 +1179,11 @@ def test_partial_universe_cannot_gain_formal_recommendation_authority(tmp_path: 
 
     claimed = {check: True for check in service.policy.required_checks}
     report = service.evaluate_readiness(
-        RecommendationReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
+        FullResearchInputReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
     )
 
-    assert report.status is RecommendationReadinessStatus.OBSERVATION_ONLY
-    assert not report.formal_recommendation_allowed
+    assert report.status is FullResearchInputReadinessStatus.OBSERVATION_ONLY
+    assert not report.full_research_input_ready
     assert "UNIVERSE_COVERAGE" in report.missing_or_failed_checks
     assert "TEAM_DAG_COMPLETE" in report.passed_checks
 
@@ -777,11 +1273,11 @@ def test_partial_financial_pack_cannot_open_precise_valuation_or_recommendation(
 
     claimed = {check: True for check in service.policy.required_checks}
     report = service.evaluate_readiness(
-        RecommendationReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
+        FullResearchInputReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
     )
 
-    assert report.status is RecommendationReadinessStatus.OBSERVATION_ONLY
-    assert not report.formal_recommendation_allowed
+    assert report.status is FullResearchInputReadinessStatus.OBSERVATION_ONLY
+    assert not report.full_research_input_ready
     assert report.missing_or_failed_checks == ["FINANCIAL_INTEGRITY", "VALUATION"]
     assert "TEAM_DAG_COMPLETE" in report.passed_checks
 
@@ -843,11 +1339,11 @@ def test_bull_bear_independence_and_complete_gate(tmp_path: Path) -> None:
 
     checks = {check: True for check in service.policy.required_checks}
     report = service.evaluate_readiness(
-        RecommendationReadinessRequest(plan_id=plan.plan_id, checks=checks, created_at=NOW)
+        FullResearchInputReadinessRequest(plan_id=plan.plan_id, checks=checks, created_at=NOW)
     )
 
-    assert report.status is RecommendationReadinessStatus.READY
-    assert report.formal_recommendation_allowed
+    assert report.status is FullResearchInputReadinessStatus.READY
+    assert report.full_research_input_ready
     assert not report.missing_or_failed_checks
     assert service.status(plan.plan_id)["status"] == "COMPLETE"
 
@@ -877,11 +1373,11 @@ def test_request_true_cannot_uplift_a_failed_role_readiness_check(tmp_path: Path
 
     claimed = {check: True for check in service.policy.required_checks}
     report = service.evaluate_readiness(
-        RecommendationReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
+        FullResearchInputReadinessRequest(plan_id=plan.plan_id, checks=claimed, created_at=NOW)
     )
 
-    assert report.status is RecommendationReadinessStatus.OBSERVATION_ONLY
-    assert not report.formal_recommendation_allowed
+    assert report.status is FullResearchInputReadinessStatus.OBSERVATION_ONLY
+    assert not report.full_research_input_ready
     assert "VALUATION" in report.missing_or_failed_checks
     assert "TEAM_DAG_COMPLETE" in report.passed_checks
 

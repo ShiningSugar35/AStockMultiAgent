@@ -18,16 +18,26 @@ from astock.core.state import StateStore
 from astock.evidence.repository import EvidenceRepository
 from astock.research.policy import load_default_current_research_policy
 from astock.schemas.financial import FinancialCoverageStatus, FinancialIntegrityEvidencePack
+from astock.schemas.full_research import (
+    ChallengerAssessment,
+    CompanyFundamentalSnapshot,
+    FinancialQualityAssessment,
+    GovernanceAssessment,
+    IndustryResearchOutcome,
+    MacroResearchOutcome,
+    NewsEventResearchPack,
+    QuantFactorResearchPack,
+)
 from astock.schemas.research_acquisition import (
     CurrentResearchAcquisitionReport,
     CurrentResearchAcquisitionStatus,
 )
 from astock.schemas.research_seeds import ResearchSeedReport
 from astock.schemas.research_team import (
+    FullResearchInputReadinessReport,
+    FullResearchInputReadinessRequest,
+    FullResearchInputReadinessStatus,
     HardwareBudget,
-    RecommendationReadinessReport,
-    RecommendationReadinessRequest,
-    RecommendationReadinessStatus,
     ResearchCoverageReport,
     ResearchCoverageRequest,
     ResearchCoverageScore,
@@ -123,9 +133,7 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
             "research-team policy must not duplicate "
             "the current-research automatic resolution budget"
         )
-    current_research_policy = load_default_current_research_policy(
-        path.parent.parent
-    )
+    current_research_policy = load_default_current_research_policy(path.parent.parent)
     canonical_budget = current_research_policy.automatic_resolution_budget_seconds
     policy = ResearchTeamPolicy(
         policy_version=str(raw.get("policy_version") or ""),
@@ -261,6 +269,19 @@ class ResearchTeamService:
         self.objects = objects
         self.policy = policy or load_research_team_policy(
             project_root / "configs" / "research_team.yaml"
+        )
+        full_research_policy = yaml.safe_load(
+            (project_root / "configs" / "full_research_recommendation.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        if not isinstance(full_research_policy, dict):
+            raise ValueError("full research recommendation policy must be a mapping")
+        self.full_research_news_windows = tuple(
+            int(value) for value in full_research_policy["news_windows_days"]
+        )
+        self.full_research_news_categories = tuple(
+            str(value) for value in full_research_policy["news_categories"]
         )
 
     def runtime_profile(self) -> dict[str, object]:
@@ -438,8 +459,16 @@ class ResearchTeamService:
             financial_is_formal = self._financial_output_has_formal_coverage(output)
             if output.readiness_check_results.get("FINANCIAL_INTEGRITY") is not financial_is_formal:
                 raise ValueError(
-                    "FINANCIAL_INTEGRITY must be derived from COMPLETE SUCCEEDED financial packs"
+                    "FINANCIAL_INTEGRITY must be derived from COMPLETE SUCCEEDED financial packs "
+                    "plus typed accounting-quality evidence"
                 )
+        typed_checks = self._typed_full_research_role_checks(task, output)
+        if typed_checks is not None:
+            for check, expected in typed_checks.items():
+                if output.readiness_check_results.get(check) is not expected:
+                    raise ValueError(
+                        f"{check} must be derived from typed Full Research member artifacts"
+                    )
         if (
             task.role is ResearchTaskRole.VALUATION
             and output.readiness_check_results.get("VALUATION") is True
@@ -675,12 +704,12 @@ class ResearchTeamService:
             "blocked_tasks": sorted(blocked),
             "pending_tasks": sorted(pending),
             "ready_tasks": sorted(ready),
-            "formal_recommendation_allowed": False,
+            "full_research_input_ready": False,
         }
 
     def evaluate_readiness(
-        self, request: RecommendationReadinessRequest
-    ) -> RecommendationReadinessReport:
+        self, request: FullResearchInputReadinessRequest
+    ) -> FullResearchInputReadinessReport:
         plan = self.get_plan(request.plan_id)
         required = sorted(self._required_checks(plan))
         unknown_checks = set(request.checks) - set(required)
@@ -706,34 +735,34 @@ class ResearchTeamService:
             "missing": missing,
             "created_at": timestamp.isoformat(),
         }
-        report = RecommendationReadinessReport(
-            report_id="recommendation-readiness:" + content_hash(identity),
+        report = FullResearchInputReadinessReport(
+            report_id="full-research-input-readiness:" + content_hash(identity),
             plan_id=request.plan_id,
             status=(
-                RecommendationReadinessStatus.READY
+                FullResearchInputReadinessStatus.READY
                 if ready
-                else RecommendationReadinessStatus.OBSERVATION_ONLY
+                else FullResearchInputReadinessStatus.OBSERVATION_ONLY
             ),
             required_checks=required,
             passed_checks=sorted(passed),
             missing_or_failed_checks=missing,
-            formal_recommendation_allowed=ready,
+            full_research_input_ready=ready,
             created_at=timestamp,
         )
         ref = self.objects.put_json(report.model_dump(mode="json"))
         self.state.register_artifact(
-            artifact_id=f"RecommendationReadinessReport:{report.report_id}",
-            artifact_type="RecommendationReadinessReport",
+            artifact_id=f"FullResearchInputReadinessReport:{report.report_id}",
+            artifact_type="FullResearchInputReadinessReport",
             schema_version=report.schema_version,
             object_hash=ref.sha256,
             input_hashes=self._readiness_input_hashes(plan),
         )
         self.state.set_checkpoint(
-            scope_type="recommendation-readiness",
+            scope_type="full-research-input-readiness",
             scope_key=request.plan_id,
             cursor={
                 "report_id": report.report_id,
-                "formal_recommendation_allowed": ready,
+                "full_research_input_ready": ready,
             },
             status=report.status.value,
             object_hash=ref.sha256,
@@ -743,7 +772,7 @@ class ResearchTeamService:
                 scope_type="research-team-task",
                 scope_key=f"{plan.plan_id}:recommendation-gate",
                 cursor={
-                    "artifact_id": f"RecommendationReadinessReport:{report.report_id}",
+                    "artifact_id": f"FullResearchInputReadinessReport:{report.report_id}",
                     "role": ResearchTaskRole.RECOMMENDATION_GATE.value,
                     "independent_context_id": "deterministic-recommendation-gate",
                 },
@@ -862,6 +891,11 @@ class ResearchTeamService:
                     self._financial_output_has_formal_coverage(output) for output in outputs
                 )
                 continue
+            typed = [self._typed_full_research_role_checks(task, output) for output in outputs]
+            if typed and all(item is not None for item in typed):
+                for check in task.readiness_checks:
+                    derived[check] = all(bool(item and item.get(check)) for item in typed)
+                continue
             for check in task.readiness_checks:
                 derived[check] = all(
                     output.readiness_check_results.get(check) is True for output in outputs
@@ -885,9 +919,7 @@ class ResearchTeamService:
                 )
             except ValueError:
                 return False
-        return len(reports) == 1 and self._universe_report_has_verified_formal_coverage(
-            reports[0]
-        )
+        return len(reports) == 1 and self._universe_report_has_verified_formal_coverage(reports[0])
 
     def _universe_report_has_verified_formal_coverage(
         self,
@@ -933,34 +965,198 @@ class ResearchTeamService:
             if (
                 denominator_snapshot is None
                 or denominator_snapshot.source_id != reconciliation.denominator_source_id
-                or denominator_snapshot.object_sha256
-                != reconciliation.denominator_object_hash
+                or denominator_snapshot.object_sha256 != reconciliation.denominator_object_hash
             ):
                 return False
         return True
 
     def _financial_output_has_formal_coverage(self, output: ResearchRoleOutput) -> bool:
         packs: list[FinancialIntegrityEvidencePack] = []
+        quality: list[FinancialQualityAssessment] = []
         for artifact_id in output.member_artifact_ids:
             record = self.state.artifact_record(artifact_id)
-            if record is None or str(record["type"]) != "FinancialIntegrityEvidencePack":
+            if record is None:
                 return False
             object_hash = str(record["object_hash"])
             if not self.objects.verify(object_hash):
                 return False
             try:
-                packs.append(
-                    FinancialIntegrityEvidencePack.model_validate_json(
-                        self.objects.get_bytes(object_hash)
+                if str(record["type"]) == "FinancialIntegrityEvidencePack":
+                    packs.append(
+                        FinancialIntegrityEvidencePack.model_validate_json(
+                            self.objects.get_bytes(object_hash)
+                        )
                     )
-                )
+                elif str(record["type"]) == "FinancialQualityAssessment":
+                    quality.append(
+                        FinancialQualityAssessment.model_validate_json(
+                            self.objects.get_bytes(object_hash)
+                        )
+                    )
+                else:
+                    return False
             except ValueError:
                 return False
-        return bool(packs) and all(
+        formal_packs = bool(packs) and all(
             pack.status is RunStatus.SUCCEEDED
             and pack.coverage_status is FinancialCoverageStatus.COMPLETE
             for pack in packs
         )
+        formal_quality = bool(quality) and all(
+            self._financial_quality_is_formal(item) for item in quality
+        )
+        return formal_packs and formal_quality
+
+    def _component_lineage_is_registered(self, item: object) -> bool:
+        evidence_repository = EvidenceRepository(self.state)
+        for evidence_id in tuple(getattr(item, "evidence_ids", ())):
+            evidence = evidence_repository.get_evidence(evidence_id)
+            if evidence is None or not self.objects.verify(evidence.excerpt_object_sha256):
+                return False
+        source_ids = tuple(getattr(item, "source_artifact_ids", ()))
+        source_hashes = tuple(getattr(item, "source_object_hashes", ()))
+        if len(source_ids) != len(source_hashes):
+            return False
+        for artifact_id, expected_hash in zip(source_ids, source_hashes, strict=True):
+            record = self.state.artifact_record(artifact_id)
+            if (
+                record is None
+                or str(record["object_hash"]) != expected_hash
+                or not self.objects.verify(expected_hash)
+            ):
+                return False
+        for artifact_id in tuple(getattr(item, "raw_fact_artifact_ids", ())):
+            record = self.state.artifact_record(artifact_id)
+            if record is None or not self.objects.verify(str(record["object_hash"])):
+                return False
+        return True
+
+    def _financial_quality_is_formal(self, item: FinancialQualityAssessment) -> bool:
+        placeholders = {"NOT_SEPARATELY_EXPOSED", "COVERED_BY_CANONICAL_FINANCIAL_INTEGRITY"}
+        return (
+            self._component_lineage_is_registered(item)
+            and bool(item.evidence_ids)
+            and item.audit_opinion not in placeholders
+            and all(value not in placeholders for value in item.checks.values())
+        )
+
+    def _governance_is_formal(self, item: GovernanceAssessment) -> bool:
+        placeholders = {"NOT_SEPARATELY_EXPOSED", "COVERED_BY_CANONICAL_GOVERNANCE_RESEARCH"}
+        return (
+            self._component_lineage_is_registered(item)
+            and bool(item.evidence_ids)
+            and item.controller is not None
+            and all(value not in placeholders for value in item.checks.values())
+        )
+
+    def _macro_is_formal(self, item: MacroResearchOutcome) -> bool:
+        return (
+            self._component_lineage_is_registered(item)
+            and bool(item.evidence_ids)
+            and all(
+                not (isinstance(value, str) and value.startswith("NOT_SEPARATELY_EXPOSED"))
+                for value in item.dimensions.values()
+            )
+        )
+
+    def _industry_is_formal(self, item: IndustryResearchOutcome) -> bool:
+        return (
+            self._component_lineage_is_registered(item)
+            and bool(item.evidence_ids)
+            and item.recommendation_peer_coverage_complete()
+            and all(
+                not (isinstance(value, str) and value.startswith("NOT_SEPARATELY_EXPOSED"))
+                for value in item.dimensions.values()
+            )
+        )
+
+    def _load_typed_member_artifacts(
+        self,
+        output: ResearchRoleOutput,
+        model: type[object],
+    ) -> list[object] | None:
+        values: list[object] = []
+        for artifact_id in output.member_artifact_ids:
+            record = self.state.artifact_record(artifact_id)
+            if record is None or str(record["type"]) != model.__name__:
+                return None
+            object_hash = str(record["object_hash"])
+            if not self.objects.verify(object_hash):
+                return None
+            try:
+                value = model.model_validate_json(self.objects.get_bytes(object_hash))  # type: ignore[attr-defined]
+            except ValueError:
+                return None
+            if not self._component_lineage_is_registered(value):
+                return None
+            values.append(value)
+        return values or None
+
+    def _typed_full_research_role_checks(
+        self,
+        task: ResearchTeamTask,
+        output: ResearchRoleOutput,
+    ) -> dict[str, bool] | None:
+        if task.role is ResearchTaskRole.MACRO:
+            values = self._load_typed_member_artifacts(output, MacroResearchOutcome)
+            formal = bool(values) and all(
+                self._macro_is_formal(item)
+                for item in values
+                if isinstance(item, MacroResearchOutcome)
+            )
+            return {check: formal for check in task.readiness_checks}
+        if task.role is ResearchTaskRole.INDUSTRY:
+            values = self._load_typed_member_artifacts(output, IndustryResearchOutcome)
+            formal = bool(values) and all(
+                self._industry_is_formal(item)
+                for item in values
+                if isinstance(item, IndustryResearchOutcome)
+            )
+            return {check: formal for check in task.readiness_checks}
+        if task.role is ResearchTaskRole.FUNDAMENTAL:
+            values = self._load_typed_member_artifacts(output, CompanyFundamentalSnapshot)
+            formal = bool(values) and all(
+                item.recommendation_ready()
+                for item in values
+                if isinstance(item, CompanyFundamentalSnapshot)
+            )
+            return {check: formal for check in task.readiness_checks}
+        if task.role is ResearchTaskRole.GOVERNANCE:
+            values = self._load_typed_member_artifacts(output, GovernanceAssessment)
+            formal = bool(values) and all(
+                self._governance_is_formal(item)
+                for item in values
+                if isinstance(item, GovernanceAssessment)
+            )
+            return {check: formal for check in task.readiness_checks}
+        if task.role is ResearchTaskRole.CATALYST:
+            values = self._load_typed_member_artifacts(output, NewsEventResearchPack)
+            formal = bool(values) and all(
+                item.recommendation_ready(
+                    required_windows=self.full_research_news_windows,
+                    required_categories=self.full_research_news_categories,
+                )
+                for item in values
+                if isinstance(item, NewsEventResearchPack)
+            )
+            return {check: formal for check in task.readiness_checks}
+        if task.role is ResearchTaskRole.QUANT_FACTOR:
+            values = self._load_typed_member_artifacts(output, QuantFactorResearchPack)
+            formal = bool(values) and all(
+                item.recommendation_ready()
+                for item in values
+                if isinstance(item, QuantFactorResearchPack)
+            )
+            return {check: formal for check in task.readiness_checks}
+        if task.role is ResearchTaskRole.REVIEWER:
+            values = self._load_typed_member_artifacts(output, ChallengerAssessment)
+            formal = bool(values) and all(
+                not item.primary_final_label_visible and not item.material_conflict_with_primary
+                for item in values
+                if isinstance(item, ChallengerAssessment)
+            )
+            return {check: formal for check in task.readiness_checks}
+        return None
 
     def _validate_independence(
         self,
@@ -1004,7 +1200,7 @@ class ResearchTeamService:
                 1,
                 ["company-intent"],
                 None,
-                "MacroRegimeProfile",
+                "MacroResearchOutcome",
             ),
             (
                 "policy-regime",
@@ -1020,7 +1216,7 @@ class ResearchTeamService:
                 1,
                 ["company-intent"],
                 None,
-                "IndustryValueChainProfile",
+                "IndustryResearchOutcome",
             ),
             (
                 "governance-management-quality",
@@ -1028,7 +1224,7 @@ class ResearchTeamService:
                 1,
                 ["company-intent"],
                 None,
-                "GovernanceManagementQualityPack",
+                "GovernanceAssessment",
             ),
             (
                 "company-financial-integrity",
@@ -1044,7 +1240,7 @@ class ResearchTeamService:
                 3,
                 ["company-financial-integrity", "industry-value-chain"],
                 None,
-                "FundamentalModelBundle",
+                "CompanyFundamentalSnapshot",
             ),
             (
                 "company-catalyst",
@@ -1057,7 +1253,7 @@ class ResearchTeamService:
                     "policy-regime",
                 ],
                 None,
-                "CatalystRiskPack",
+                "NewsEventResearchPack",
             ),
             (
                 "company-market-context",
@@ -1074,6 +1270,14 @@ class ResearchTeamService:
                 ["company-financial-integrity", "company-fundamental", "company-market-context"],
                 None,
                 "ValuationPack",
+            ),
+            (
+                "quant-factor",
+                ResearchTaskRole.QUANT_FACTOR,
+                5,
+                ["company-fundamental", "company-market-context", "valuation"],
+                None,
+                "QuantFactorResearchPack",
             ),
             (
                 "bull-case",
@@ -1097,7 +1301,7 @@ class ResearchTeamService:
                 6,
                 ["bear-case", "bull-case"],
                 None,
-                "InvestmentRedTeamReport",
+                "ChallengerAssessment",
             ),
             (
                 "model-risk-validation",
@@ -1111,7 +1315,7 @@ class ResearchTeamService:
                 "committee",
                 ResearchTaskRole.COMMITTEE,
                 7,
-                ["investment-red-team", "model-risk-validation"],
+                ["investment-red-team", "model-risk-validation", "quant-factor"],
                 None,
                 "DecisionPack",
             ),
@@ -1121,7 +1325,7 @@ class ResearchTeamService:
                 8,
                 ["committee"],
                 None,
-                "RecommendationReadinessReport",
+                "FullResearchInputReadinessReport",
             ),
         ]
         readiness_by_task: dict[str, list[str]] = {
@@ -1138,6 +1342,7 @@ class ResearchTeamService:
             "company-catalyst": ["CATALYST_RISK"],
             "company-market-context": ["MARKET_PRICE_ANCHOR"],
             "valuation": ["VALUATION"],
+            "quant-factor": ["QUANT_FACTOR"],
             "bull-case": ["BULL_CASE"],
             "bear-case": ["BEAR_CASE"],
             "investment-red-team": ["INDEPENDENT_REVIEW"],
@@ -1163,7 +1368,14 @@ class ResearchTeamService:
     def _full_market_tasks(created_at: datetime) -> list[ResearchTeamTask]:
         raw = [
             ("cio-intent", ResearchTaskRole.CIO, 0, [], None, "ResearchIntent"),
-            ("macro-regime", ResearchTaskRole.MACRO, 1, ["cio-intent"], None, "MacroRegimeProfile"),
+            (
+                "macro-regime",
+                ResearchTaskRole.MACRO,
+                1,
+                ["cio-intent"],
+                None,
+                "MacroResearchOutcome",
+            ),
             (
                 "policy-regime",
                 ResearchTaskRole.POLICY,
@@ -1202,7 +1414,7 @@ class ResearchTeamService:
                 3,
                 ["blind-candidate-scan", "liquidity-risk", "macro-regime", "policy-regime"],
                 None,
-                "SectorOpportunityMap",
+                "IndustryResearchOutcomeSet",
             ),
             (
                 "company-fundamental",
@@ -1210,7 +1422,7 @@ class ResearchTeamService:
                 4,
                 ["sector-comparison"],
                 "candidate_shortlist",
-                "FundamentalModelBundleSet",
+                "CompanyFundamentalSnapshotSet",
             ),
             (
                 "company-financial-integrity",
@@ -1226,7 +1438,7 @@ class ResearchTeamService:
                 4,
                 ["sector-comparison"],
                 "candidate_shortlist",
-                "CatalystRiskPackSet",
+                "NewsEventResearchPackSet",
             ),
             (
                 "company-market-context",
@@ -1243,6 +1455,14 @@ class ResearchTeamService:
                 ["company-financial-integrity", "company-fundamental", "company-market-context"],
                 "candidate_shortlist",
                 "ValuationPackSet",
+            ),
+            (
+                "quant-factor",
+                ResearchTaskRole.QUANT_FACTOR,
+                6,
+                ["company-fundamental", "company-market-context", "valuation"],
+                "candidate_shortlist",
+                "QuantFactorResearchPack",
             ),
             (
                 "bull-case",
@@ -1266,13 +1486,13 @@ class ResearchTeamService:
                 7,
                 ["bear-case", "bull-case"],
                 "candidate_shortlist",
-                "IndependentReviewSet",
+                "ChallengerAssessmentSet",
             ),
             (
                 "committee",
                 ResearchTaskRole.COMMITTEE,
                 8,
-                ["independent-review"],
+                ["independent-review", "quant-factor"],
                 "candidate_shortlist",
                 "DecisionPackSet",
             ),
@@ -1290,7 +1510,7 @@ class ResearchTeamService:
                 10,
                 ["portfolio-construction"],
                 None,
-                "RecommendationReadinessReport",
+                "FullResearchInputReadinessReport",
             ),
         ]
         readiness_by_task: dict[str, list[str]] = {
@@ -1308,6 +1528,7 @@ class ResearchTeamService:
             "company-catalyst": ["CATALYST_RISK"],
             "company-market-context": ["MARKET_PRICE_ANCHOR"],
             "valuation": ["VALUATION"],
+            "quant-factor": ["QUANT_FACTOR"],
             "bull-case": ["BULL_CASE"],
             "bear-case": ["BEAR_CASE"],
             "independent-review": ["INDEPENDENT_REVIEW"],

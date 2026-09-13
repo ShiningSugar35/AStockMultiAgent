@@ -45,10 +45,7 @@ class InvestmentClosureDecision(StrictModel):
 _MATERIAL_INVESTMENT_INTENTS = frozenset(
     {
         RequestIntent.RESEARCH,
-        RequestIntent.BUY_DECISION,
-        RequestIntent.HOLDING_DECISION,
-        RequestIntent.PORTFOLIO_DECISION,
-        RequestIntent.RECOMMENDATION,
+        RequestIntent.FULL_RESEARCH_RECOMMENDATION,
     }
 )
 _SUCCESS = {CapabilityRunStatus.COMPLETED, CapabilityRunStatus.REUSED}

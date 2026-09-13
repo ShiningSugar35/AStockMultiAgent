@@ -118,7 +118,7 @@ class CurrentResearchContinuation(AStockModel):
     automatic_budget_exhausted: bool = False
     private_material_required: bool = False
     investor_view_allowed: bool = False
-    formal_recommendation_allowed: bool = False
+    full_research_input_ready: bool = False
     same_request_continuation_required: Literal[True] = True
     manual_escalation_after_automatic_exhaustion: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
@@ -160,7 +160,7 @@ class CurrentResearchContinuation(AStockModel):
                 or self.readiness_report_artifact_id is None
                 or self.manual_actions
                 or not self.investor_view_allowed
-                or not self.formal_recommendation_allowed
+                or not self.full_research_input_ready
             ):
                 raise ValueError("READY_FOR_INVESTOR_VIEW requires a complete readiness lineage")
         elif self.status is CurrentResearchContinuationStatus.OBSERVATION_ONLY_FOR_INVESTOR_VIEW:
@@ -170,13 +170,13 @@ class CurrentResearchContinuation(AStockModel):
                 or self.readiness_report_artifact_id is None
                 or self.manual_actions
                 or not self.investor_view_allowed
-                or self.formal_recommendation_allowed
+                or self.full_research_input_ready
             ):
                 raise ValueError(
                     "OBSERVATION_ONLY_FOR_INVESTOR_VIEW requires complete non-formal lineage"
                 )
-        elif self.investor_view_allowed or self.formal_recommendation_allowed:
-            raise ValueError("only investor-view terminal states may allow an investor answer")
+        elif self.investor_view_allowed or self.full_research_input_ready:
+            raise ValueError("only investor-view terminal states may expose completed research")
         if self.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT:
             if not self.manual_actions or not (
                 self.automatic_budget_exhausted or self.private_material_required

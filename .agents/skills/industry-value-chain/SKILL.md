@@ -8,7 +8,7 @@ description: Build an evidence-linked industry value chain and defensible compar
 ## Inputs and authority
 
 - Consume only the ready `industry-value-chain` task from the existing `ResearchTeamPlan`; do not create a parallel plan or second taxonomy service.
-- Preserve company identity, `as_of`, acquisition lineage, upstream `company-intent`, the point-in-time availability boundary, and the typed `IndustryValueChainProfile` output contract.
+- Preserve company identity, `as_of`, acquisition lineage, upstream `company-intent`, the point-in-time availability boundary, and the typed `IndustryResearchOutcome` output contract.
 - Primary authority is issuer/exchange/regulator/official ministry and statistics first, then established industry associations and independently sourced peer filings. Community rankings and broker labels are discovery only.
 
 ## Procedure
@@ -21,13 +21,13 @@ description: Build an evidence-linked industry value chain and defensible compar
 
 ## Required output contract
 
-- Register a typed `IndustryValueChainProfile` through `uv run astock research-team-role-output REQUEST.json`.
+- Register a typed `IndustryResearchOutcome` through `uv run astock research-team-role-output REQUEST.json`.
 - Complete `industry-value-chain` through `uv run astock research-team-task-result REQUEST.json`.
 - Set `INDUSTRY_PROFILE=true` only when value-chain evidence, profit-pool position, normalized peer methodology and falsifiers are frozen.
 
 ## Output
 
-Return the registered typed `IndustryValueChainProfile` artifact ID, the value chain and profit-pool position, a defensible peer set or an explicit no-peer result, normalized comparison, cycle/base-rate context and falsifiers.
+Return the registered typed `IndustryResearchOutcome` artifact ID, the value chain and profit-pool position, a defensible peer set or an explicit no-peer result, normalized comparison, cycle/base-rate context and falsifiers.
 
 ## Gates and abstention
 

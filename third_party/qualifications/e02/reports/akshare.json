@@ -1,29 +1,35 @@
 {
-  "admitted_stage": "SHADOW",
-  "candidate_version": "1.18.94",
+  "schema_version": "capability-qualification-report-v1",
+  "report_id": "49e0ee413732641973e87044a592a13612074c8bf35215024a49a95a4d377e2a",
   "capability_id": "akshare",
+  "candidate_version": "1.18.94",
+  "requested_stage": "SHADOW",
+  "admitted_stage": "SHADOW",
   "checks": {
-    "cache_behavior": "FAIL",
-    "cost": "PASS",
-    "credential_handling": "PASS",
-    "data_rights": "FAIL",
-    "exit_uninstall": "PASS",
-    "failure_behavior": "FAIL",
-    "latency": "FAIL",
     "license": "PASS",
-    "maintenance": "PASS",
-    "offline_behavior": "FAIL",
+    "terms_of_service": "FAIL",
+    "data_rights": "FAIL",
     "pit": "FAIL",
     "provenance": "FAIL",
+    "credential_handling": "PASS",
     "sbom": "FAIL",
     "security_review": "FAIL",
-    "terms_of_service": "FAIL"
+    "maintenance": "PASS",
+    "cost": "PASS",
+    "latency": "FAIL",
+    "cache_behavior": "FAIL",
+    "offline_behavior": "FAIL",
+    "failure_behavior": "FAIL",
+    "exit_uninstall": "PASS"
   },
-  "completeness_ceiling": "EXACT_ITEM",
+  "recorded_validation": "FAIL",
   "controlled_live_validation": "FAIL",
+  "source_class_ceiling": "SECONDARY_STRUCTURED",
+  "completeness_ceiling": "EXACT_ITEM",
   "evidence_object_hashes": [
     "4a570a71aafdf8834631ec5c32d0666e9ce0783998fe312530d7d795d9c0da5a"
   ],
+  "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",
   "reason_codes": [
     "AKSHARE_ACADEMIC_RESEARCH_STATEMENT",
@@ -32,11 +38,5 @@
     "NO_ENDPOINT_SPECIFIC_UPSTREAM_RIGHTS_REVIEW",
     "RECORDED_ENDPOINT_FIXTURE_NOT_FROZEN",
     "SBOM_SECURITY_NOT_FROZEN"
-  ],
-  "recorded_validation": "FAIL",
-  "report_id": "49e0ee413732641973e87044a592a13612074c8bf35215024a49a95a4d377e2a",
-  "requested_stage": "SHADOW",
-  "schema_version": "capability-qualification-report-v1",
-  "source_class_ceiling": "SECONDARY_STRUCTURED",
-  "valid_from": "2026-09-02T06:16:28Z"
+  ]
 }

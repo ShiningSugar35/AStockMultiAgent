@@ -1,40 +1,40 @@
 {
-  "admitted_stage": "SHADOW",
-  "candidate_version": "2.44.6",
+  "schema_version": "capability-qualification-report-v1",
+  "report_id": "dff1877b535cab078e2a0174006a43677e395640b7578195ee6a44f94884e950",
   "capability_id": "arelle",
+  "candidate_version": "2.44.6",
+  "requested_stage": "SHADOW",
+  "admitted_stage": "SHADOW",
   "checks": {
-    "cache_behavior": "FAIL",
-    "cost": "PASS",
-    "credential_handling": "PASS",
-    "data_rights": "PASS",
-    "exit_uninstall": "PASS",
-    "failure_behavior": "FAIL",
-    "latency": "FAIL",
     "license": "PASS",
-    "maintenance": "PASS",
-    "offline_behavior": "FAIL",
+    "terms_of_service": "PASS",
+    "data_rights": "PASS",
     "pit": "PASS",
     "provenance": "PASS",
+    "credential_handling": "PASS",
     "sbom": "FAIL",
     "security_review": "FAIL",
-    "terms_of_service": "PASS"
+    "maintenance": "PASS",
+    "cost": "PASS",
+    "latency": "FAIL",
+    "cache_behavior": "FAIL",
+    "offline_behavior": "FAIL",
+    "failure_behavior": "FAIL",
+    "exit_uninstall": "PASS"
   },
-  "completeness_ceiling": "NOT_APPLICABLE",
+  "recorded_validation": "FAIL",
   "controlled_live_validation": "FAIL",
+  "source_class_ceiling": "UNKNOWN",
+  "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
     "b9228a4a11eebd138419ebae13fba495fa5bf2cccccf1d76ca02375ad025358c"
   ],
+  "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",
   "reason_codes": [
     "CONTROLLED_LIVE_XBRL_NOT_RUN",
     "PERFORMANCE_CACHE_FAILURE_NOT_VALIDATED",
     "RECORDED_XBRL_CROSSCHECK_NOT_RUN",
     "SBOM_SECURITY_NOT_FROZEN"
-  ],
-  "recorded_validation": "FAIL",
-  "report_id": "dff1877b535cab078e2a0174006a43677e395640b7578195ee6a44f94884e950",
-  "requested_stage": "SHADOW",
-  "schema_version": "capability-qualification-report-v1",
-  "source_class_ceiling": "UNKNOWN",
-  "valid_from": "2026-09-02T06:16:28Z"
+  ]
 }

@@ -21,7 +21,7 @@ description: Build point-in-time macro and policy regime profiles and trace thei
 
 ## Required output contract
 
-- Register a typed `MacroRegimeProfile` and/or `PolicyRegimeProfile` through `uv run astock research-team-role-output REQUEST.json`.
+- Register a typed `MacroResearchOutcome` and/or `PolicyRegimeProfile` through `uv run astock research-team-role-output REQUEST.json`.
 - Complete the matching task through `uv run astock research-team-task-result REQUEST.json` with independently identified artifact lineage.
 - Set `MACRO_REGIME=true` or `POLICY_REGIME=true` only when authoritative vintage, regime facts, company/industry transmission, scenarios and falsifiers are frozen.
 

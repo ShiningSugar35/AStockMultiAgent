@@ -1,29 +1,35 @@
 {
-  "admitted_stage": "SHADOW",
-  "candidate_version": "0.55.8",
+  "schema_version": "capability-qualification-report-v1",
+  "report_id": "2da2442fb7444010e2a67ae6ff05f612591406907c5fb7a87d7e011470901e87",
   "capability_id": "changedetection-io",
+  "candidate_version": "0.55.8",
+  "requested_stage": "SHADOW",
+  "admitted_stage": "SHADOW",
   "checks": {
-    "cache_behavior": "FAIL",
-    "cost": "FAIL",
-    "credential_handling": "FAIL",
-    "data_rights": "FAIL",
-    "exit_uninstall": "PASS",
-    "failure_behavior": "FAIL",
-    "latency": "FAIL",
     "license": "PASS",
-    "maintenance": "PASS",
-    "offline_behavior": "FAIL",
+    "terms_of_service": "FAIL",
+    "data_rights": "FAIL",
     "pit": "FAIL",
     "provenance": "PASS",
+    "credential_handling": "FAIL",
     "sbom": "FAIL",
     "security_review": "FAIL",
-    "terms_of_service": "FAIL"
+    "maintenance": "PASS",
+    "cost": "FAIL",
+    "latency": "FAIL",
+    "cache_behavior": "FAIL",
+    "offline_behavior": "FAIL",
+    "failure_behavior": "FAIL",
+    "exit_uninstall": "PASS"
   },
-  "completeness_ceiling": "DISCOVERY_ONLY",
+  "recorded_validation": "FAIL",
   "controlled_live_validation": "FAIL",
+  "source_class_ceiling": "UNKNOWN",
+  "completeness_ceiling": "DISCOVERY_ONLY",
   "evidence_object_hashes": [
     "d0d970b64f4b9005a493443b5881a285edd8671437d65bcdc8096089f2979503"
   ],
+  "valid_from": "2026-09-02T06:28:47Z",
   "expires_at": "2026-10-02T06:28:47Z",
   "reason_codes": [
     "COMMERCIAL_TERMS_NOT_FORMALLY_CLEARED",
@@ -32,11 +38,5 @@
     "RECORDED_MONITOR_FIXTURE_NOT_FROZEN",
     "SBOM_SECURITY_COST_PERFORMANCE_NOT_VALIDATED",
     "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
-  ],
-  "recorded_validation": "FAIL",
-  "report_id": "2da2442fb7444010e2a67ae6ff05f612591406907c5fb7a87d7e011470901e87",
-  "requested_stage": "SHADOW",
-  "schema_version": "capability-qualification-report-v1",
-  "source_class_ceiling": "UNKNOWN",
-  "valid_from": "2026-09-02T06:28:47Z"
+  ]
 }

@@ -81,7 +81,7 @@
 
 - 不得标 FULL；
 - 不得声称完成全市场扫描；
-- 不得通过 full-market Recommendation Gate；
+- 不得通过 FullResearchInputReadiness，更不得进入最终 Mandatory Research DAG / Publication Gate；
 - `0 candidates` 与 `universe unavailable/partial` 必须区分。
 
 因此 fail-soft 只作用于研究发现，formal recommendation 仍 fail closed。

@@ -74,7 +74,7 @@ Universe Completeness Gate
     ↓
 Blind Candidate Scan
     ↓
-Research Team DAG / Recommendation Gate
+Research Team DAG / FullResearchInputReadiness / Mandatory Research DAG / Publication Gate
 ```
 
 ## 5. Transport Lane 设计
@@ -140,7 +140,7 @@ Candidate Seed 不再直接 new EastMoney adapter。必须使用 ProviderFactory
 
 - 不发布 COMPLETE Instrument Master；
 - 继续下一个 capability-compatible、health-eligible provider 或经验证的本地 COMPLETE release；
-- 所有路径均不足时返回 PARTIAL/NEEDS_INFO 并关闭 full-market Recommendation Gate，禁止把 Provider failure 解释成 0 candidates。
+- 所有路径均不足时返回 PARTIAL/NEEDS_INFO，并阻断 FullResearchInputReadiness 与最终 Publication Gate，禁止把 Provider failure 解释成 0 candidates。
 
 Seed snapshot 同样先做 market/prefix/code/name 边界与明显截断 floor，再继承正式 Universe coverage 状态；Web/Search 不能补足该完整性证明。
 

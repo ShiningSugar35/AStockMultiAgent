@@ -21,7 +21,6 @@ from astock.investor_orchestration.activation import (
 )
 from astock.investor_orchestration.capabilities import (
     CapabilityExecutionResult,
-    CapabilityExecutor,
     CapabilityPlanner,
 )
 from astock.investor_orchestration.gateway import InvestorAnswerGateway
@@ -81,19 +80,22 @@ def _now() -> datetime:
 def _request(
     *,
     request_id: str,
-    intent: RequestIntent = RequestIntent.RESEARCH,
+    intent: RequestIntent | str = RequestIntent.RESEARCH,
     side_effect: SideEffectClass = SideEffectClass.READ,
     instruments: tuple[str, ...] = ("600519.XSHG",),
+    raw_text: str = "test investor request",
 ) -> InvestorRequestEnvelope:
-    return InvestorRequestEnvelope(
-        request_id=request_id,
-        question_time=_now(),
-        user_timezone="Asia/Shanghai",
-        raw_text="test investor request",
-        normalized_intent=intent,
-        side_effect=side_effect,
-        entity_ids=instruments,
-        idempotency_key=f"idempotency:{request_id}",
+    return InvestorRequestEnvelope.model_validate(
+        {
+            "request_id": request_id,
+            "question_time": _now(),
+            "user_timezone": "Asia/Shanghai",
+            "raw_text": raw_text,
+            "normalized_intent": intent,
+            "side_effect": side_effect,
+            "entity_ids": instruments,
+            "idempotency_key": f"idempotency:{request_id}",
+        }
     )
 
 
@@ -369,42 +371,59 @@ def test_account_fact_write_does_not_require_market_regime(
     assert nodes["PAPER"].requirement.value == "PROHIBITED"
 
 
-@pytest.mark.parametrize(
-    "side_effect",
-    (SideEffectClass.READ, SideEffectClass.EA_PROVISIONAL, SideEffectClass.EA_WRITE),
-)
-def test_holding_decision_can_use_required_actual_account_lane_without_paper_escalation(
+def test_legacy_holding_decision_is_only_an_input_alias_for_full_research(
     store: InvestorOrchestrationStore,
-    side_effect: SideEffectClass,
 ) -> None:
     request = _request(
-        request_id=f"holding-account-{side_effect.value.lower()}",
-        intent=RequestIntent.HOLDING_DECISION,
-        side_effect=side_effect,
+        request_id="holding-read-migrates",
+        intent="HOLDING_DECISION",
+        side_effect=SideEffectClass.READ,
     )
+    assert request.normalized_intent is RequestIntent.FULL_RESEARCH_RECOMMENDATION
+    assert request.metadata["full_research_routed_from"] == "HOLDING_DECISION"
+    assert request.metadata["full_research_holding_context"] is True
+
+    preflight = InvestorSessionPreflightService(store).build(request)
+    plan = CapabilityPlanner().plan(request, preflight)
+    nodes = {node.capability_id: node for node in plan.nodes}
+    assert nodes["HOLDING_REVIEW"].requirement is CapabilityRequirement.REQUIRED
+    assert "HOLDING_REVIEW" in nodes["FULL_RESEARCH_GATE"].dependencies
+    assert nodes["FULL_RESEARCH_GATE"].requirement is CapabilityRequirement.REQUIRED
+
+
+def test_full_research_may_freeze_provisional_holding_input_without_actual_write(
+    store: InvestorOrchestrationStore,
+) -> None:
+    request = _request(
+        request_id="holding-provisional-input",
+        intent="HOLDING_DECISION",
+        side_effect=SideEffectClass.EA_PROVISIONAL,
+    )
+    assert request.normalized_intent is RequestIntent.FULL_RESEARCH_RECOMMENDATION
     preflight = InvestorSessionPreflightService(store).build(request)
     plan = CapabilityPlanner().plan(
         request,
         preflight,
-        scenario_requirements={
-            "EXTERNAL_ACCOUNT": CapabilityRequirement.REQUIRED,
-            "PAPER": CapabilityRequirement.PROHIBITED,
-        },
+        scenario_requirements={"EXTERNAL_ACCOUNT": CapabilityRequirement.REQUIRED},
     )
     nodes = {node.capability_id: node for node in plan.nodes}
+    assert nodes["EXTERNAL_ACCOUNT"].side_effect is SideEffectClass.EA_PROVISIONAL
+    assert nodes["EXTERNAL_ACCOUNT"].output_schema == "ExternalAccountOperationReceipt"
+    assert "PAPER" not in nodes or nodes["PAPER"].requirement is CapabilityRequirement.PROHIBITED
 
-    assert nodes["EXTERNAL_ACCOUNT"].requirement is CapabilityRequirement.REQUIRED
-    assert nodes["EXTERNAL_ACCOUNT"].side_effect is (
-        SideEffectClass.READ if side_effect is SideEffectClass.READ else side_effect
+
+def test_actual_account_write_and_investment_decision_must_be_split(
+    store: InvestorOrchestrationStore,
+) -> None:
+    request = _request(
+        request_id="holding-account-write",
+        intent="HOLDING_DECISION",
+        side_effect=SideEffectClass.EA_WRITE,
     )
-    assert nodes["PAPER"].requirement is CapabilityRequirement.PROHIBITED
-
-    # Executor must accept the planner's explicit holding-account escalation;
-    # missing handlers may fail coverage, but policy validation must not reject it.
-    coverage = CapabilityExecutor({}).execute(plan, request, preflight)
-    external = next(item for item in coverage.records if item.capability_id == "EXTERNAL_ACCOUNT")
-    assert external.status is CapabilityRunStatus.FAILED
-    assert external.reason is not None
+    assert request.normalized_intent is RequestIntent.FULL_RESEARCH_RECOMMENDATION
+    preflight = InvestorSessionPreflightService(store).build(request)
+    with pytest.raises(ValueError, match="side-effect permission"):
+        CapabilityPlanner().plan(request, preflight)
 
 
 def test_non_holding_research_cannot_upgrade_to_actual_account_write() -> None:
@@ -420,18 +439,20 @@ def test_non_holding_research_cannot_upgrade_to_actual_account_write() -> None:
         )
 
 
-def test_buy_decision_requires_regime_and_formal_research(
+def test_full_research_decision_requires_complete_research_and_publication_gate(
     store: InvestorOrchestrationStore,
 ) -> None:
     request = _request(
         request_id="buy-decision",
-        intent=RequestIntent.BUY_DECISION,
+        intent="BUY_DECISION",
     )
+    assert request.normalized_intent is RequestIntent.FULL_RESEARCH_RECOMMENDATION
     preflight = InvestorSessionPreflightService(store).build(request)
     plan = CapabilityPlanner().plan(request, preflight)
     required = {node.capability_id for node in plan.nodes if node.requirement.value == "REQUIRED"}
     assert {
         "MARKET_REGIME",
+        "FULL_MARKET",
         "COMPANY_RESEARCH",
         "FINANCIAL_INTEGRITY",
         "GOVERNANCE",
@@ -439,6 +460,7 @@ def test_buy_decision_requires_regime_and_formal_research(
         "RED_TEAM",
         "COMMITTEE",
         "PORTFOLIO",
+        "FULL_RESEARCH_GATE",
         "RESPONSE_GATEWAY",
     }.issubset(required)
     assert plan.nodes[-1].capability_id == "RESPONSE_GATEWAY"
@@ -1169,7 +1191,7 @@ def test_gateway_replaces_formal_decision_when_required_coverage_is_incomplete(
 ) -> None:
     request = _request(
         request_id="gateway-formal-block",
-        intent=RequestIntent.BUY_DECISION,
+        intent="BUY_DECISION",
     )
     preflight = InvestorSessionPreflightService(store).build(request)
     coverage = CapabilityCoverageReceipt(

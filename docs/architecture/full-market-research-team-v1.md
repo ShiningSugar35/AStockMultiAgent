@@ -14,7 +14,7 @@
 
 1. 全市场 Research Seed 获取失败后，顶层会话仍自行挑选三只股票继续分析，属于 **fail-open 候选补位**；
 2. 三只股票只完成了当前资料采集和 Web 补证，没有跑完项目已经具备的机构级基本面链，却仍被渲染为正式买入排序；
-3. Repo 中存在多个专业 Skill 和确定性研究模块，但没有一条不可绕过的“宏观 → 行业 → 盲筛 → 公司深研 → Bull/Bear → Review → Committee → Portfolio → Recommendation Gate”全市场编排合同。
+3. Repo 中存在多个专业 Skill 和确定性研究模块，但当时没有一条不可绕过的“宏观 → 行业 → 盲筛 → 公司深研 → Bull/Bear → Review → Committee → Portfolio → FullResearchInputReadiness → Mandatory Research DAG → RecommendationResearchReceipt → Publication Gate”全市场编排合同。
 
 因此，本轮目标不是用“运行至少 30/60 分钟”伪装深度，而是把**必须完成的研究工作量、独立性和证据门槛写成机器可校验合同**。任务可并行，所以耗时不是质量标准；完成度、独立视角、证据质量、估值闭环和 fail-closed 才是。
 
@@ -132,11 +132,11 @@ NIST AI RMF / GenAI Profile 强调将可信度与风险管理纳入设计、开�
 
 路由顺序因此分为两层：**denominator：SSE/SZSE/BSE official → complete secondary master；numerator：EastMoney/Sina full snapshot → official-master-driven Tencent batch quote**。每个 provider/market 都受既有 cache、circuit breaker、retry budget 和 ObjectStore lineage 约束；任何 partial、重复代码、跨市场代码、无法核实 denominator、未来时间或对象 hash 失败均 fail closed，不通过降低 99.5% 阈值求绿。
 
-## 4. P0：正式荐股必须 fail closed
+## 4. P0：Full Research 上游输入必须 fail closed
 
-### 4.1 Recommendation Readiness Gate
+### 4.1 Full Research Input Readiness Gate
 
-以下检查全部 PASS 才允许 `formal_recommendation_allowed=true`：
+以下检查全部 PASS 才允许 `full_research_input_ready=true`；该上游报告不暴露正式荐股授权字段，也不拥有 Publication 权威：
 
 1. `UNIVERSE_COVERAGE`
 2. `MACRO_REGIME`
@@ -157,7 +157,7 @@ NIST AI RMF / GenAI Profile 强调将可信度与风险管理纳入设计、开�
 17. `PORTFOLIO_CONSTRUCTION`
 18. `TEAM_DAG_COMPLETE`
 
-缺任何一个：只能输出 `OBSERVATION_ONLY`，禁止出现正式 BUY/加仓排序。Role 文本或自报布尔值不能独立证明 readiness：Universe 必须绑定一个 ObjectStore 可验证的 typed `ResearchSeedReport`，且其 `UniverseCoverageProof` 对 XSHG / XSHE / BJSE 均达到 `OFFICIAL_DENOMINATOR_RECONCILED`；每个市场的分母来源、分子、差异、版本、可得时间、Snapshot/Object 哈希必须与该 Seed Report 的冻结输入精确一致。二级源自报 100% 或只有 `ENGINEERING_HIGH_COVERAGE` 时只允许继续 observation/research discovery，不能打开正式推荐门。Financial 必须绑定 ObjectStore 可验证且 `status=SUCCEEDED / coverage_status=COMPLETE` 的 typed `FinancialIntegrityEvidencePack`。当 `FINANCIAL_INTEGRITY=false` 时，精确 `VALUATION=true` 也必须被确定性拒绝。
+缺任何一个：只能输出 `OBSERVATION_ONLY`，并阻断进入 Full Research 后续推荐构建。Role 文本或自报布尔值不能独立证明 readiness：Universe 必须绑定一个 ObjectStore 可验证的 typed `ResearchSeedReport`，且其 `UniverseCoverageProof` 对 XSHG / XSHE / BJSE 均达到 `OFFICIAL_DENOMINATOR_RECONCILED`；每个市场的分母来源、分子、差异、版本、可得时间、Snapshot/Object 哈希必须与该 Seed Report 的冻结输入精确一致。二级源自报 100% 或只有 `ENGINEERING_HIGH_COVERAGE` 时只允许继续 observation/research discovery。Financial 必须绑定 ObjectStore 可验证且 `status=SUCCEEDED / coverage_status=COMPLETE` 的 typed `FinancialIntegrityEvidencePack`。当 `FINANCIAL_INTEGRITY=false` 时，精确 `VALUATION=true` 也必须被确定性拒绝。正式证券、价格与仓位的发布权只属于最终 `RecommendationResearchReceipt + Publication Gate`。
 
 ### 4.2 Candidate fail-open 禁止
 
@@ -168,9 +168,9 @@ NIST AI RMF / GenAI Profile 强调将可信度与风险管理纳入设计、开�
 
 ### 4.3 Same-request 投资终局门
 
-用户提出荐股、投资组合推荐、买入/卖出判断、持仓处置或 material company research 时，Seed/Candidate/Acquisition/Team/Committee/Portfolio 都只是同一请求里的内部阶段。`InvestmentRequestClosurePolicy` 直接读取 canonical `CapabilityExecutionPlan + CapabilityCoverageReceipt`，不维护第二套必需能力清单；只要任一 REQUIRED capability 未 `COMPLETED/REUSED`、coverage 不完整、输出未验证、存在冲突或 prohibited call，就返回 `CONTINUE_AUTOMATICALLY` 并保持 `investment_conclusion_blocked=true`。
+用户提出荐股、投资组合推荐、买入/卖出判断或持仓处置时，顶层请求统一规范化为 `FULL_RESEARCH_RECOMMENDATION`；Seed/Candidate/Acquisition/Team/Committee/Portfolio 都只是同一请求里的内部阶段。`InvestmentRequestClosurePolicy` 读取 canonical `CapabilityExecutionPlan + CapabilityCoverageReceipt`，而最终 `FULL_RESEARCH_GATE` 必须消费已经闭合的 Mandatory Research DAG 和不可变 `RecommendationResearchReceipt`。任一 REQUIRED capability 或 Mandatory Research 节点未通过，都保持 `investment_conclusion_blocked=true`。
 
-因此公共层不再允许“先给半份分析，再告诉用户下一步可以跑财报/行业/估值/多空/仓位”。正式停止只有两个：① 全部必需能力和 Recommendation Gate/Portfolio 等 intent-specific 硬门完成，允许一次性完整 investor view；② 公共自动恢复与权威 Web 真正耗尽、剩余材料只能由用户私人输入补齐，此时只能请求最少必要资料且不得形成 BUY/组合结论。`broker_execution_allowed=false` 在所有状态保持不变。
+公共层不允许“先给半份分析，再告诉用户下一步可以跑财报/行业/估值/多空/仓位”。正式停止只有两个：① Full Research 全链和 Publication Gate 完成，允许一次性完整 investor view；② 公共自动恢复与权威 Web 真正耗尽、剩余材料只能由用户私人输入补齐，此时只能请求最少必要资料且不得形成 BUY/组合结论。`broker_execution_allowed=false` 在所有状态保持不变。
 
 ## 5. P1：投研团队 DAG
 
@@ -229,7 +229,7 @@ Bull Analyst              Bear Analyst   Stage 6 (independent)
 
 - 只有未来用户显式配置 API/本地模型执行器后才启用；
 - 可接 OpenAI Agents SDK / 其他兼容 runner；
-- 必须复用相同任务图和 Recommendation Gate；
+- 必须复用相同任务图、FullResearchInputReadiness、Mandatory Research DAG、RecommendationResearchReceipt 与 Publication Gate；
 - 不得形成第二套事实源或账本。
 
 ## 6. P2：行业公平、Skill Edge 与专业覆盖
@@ -330,15 +330,16 @@ A 股公告优先入口包括上海证券交易所最新公告和巨潮资讯。
 
 ## 9. 验收标准
 
-### P0 — 正式荐股安全门
+### P0 — Full Research 上游安全门
 
-- [x] 缺任一 required readiness check，`formal_recommendation_allowed` 必须为 false；
-- [x] 0 market seed / Universe 未证明时禁止人工手挑候选形成正式荐股；
+- [x] 缺任一 required readiness check，`full_research_input_ready` 必须为 false；
+- [x] Full-market readiness 不暴露正式荐股授权字段，且不拥有 Publication 权威；
+- [x] 0 market seed / Universe 未证明时禁止人工手挑候选进入正式 Full Research；
 - [x] Seed/Candidate/Research Plan 本身 recommendation authority 永远为 false；
 - [x] 完整 required checks（当前 18 项，含 `TEAM_DAG_COMPLETE`）全部 PASS 才能得到 `READY`；
 - [x] recommendation-required Role 必须绑定已注册且 ObjectStore 可验证的 member artifact；
 - [x] Role 声明的 `evidence_id` 必须真实存在、excerpt object 可验证，Result Evidence 必须与 Role Outputs 并集一致；
-- [x] final answer workflow 明确要求读取 READY 结果后才可输出正式买入排序。
+- [x] 正式买入排序只能由最终 `RecommendationResearchReceipt + Publication Gate` 发布。
 
 ### P1 — 团队编排
 
@@ -349,7 +350,7 @@ A 股公告优先入口包括上海证券交易所最新公告和巨潮资讯。
 - [x] Reviewer 在 Bull/Bear 后；Committee 在 Reviewer 后；Portfolio 在 Committee 后；
 - [x] task result 依赖不满足时拒绝登记 COMPLETE；
 - [x] Chat-only 环境无需 API key 即可建立/恢复任务图；
-- [x] `AGENT_RUNTIME` 仅作为可选执行后端，仍复用同一 DAG / Recommendation Gate，当前默认不启用。
+- [x] `AGENT_RUNTIME` 仅作为可选执行后端，仍复用同一 Research Team DAG、FullResearchInputReadiness、Mandatory Research DAG 与 Publication Gate，当前默认不启用。
 
 ### P2 — 行业与 Skill 偏置治理
 

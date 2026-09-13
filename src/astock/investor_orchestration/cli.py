@@ -12,6 +12,10 @@ import typer
 import yaml
 
 from astock.investor_orchestration.capabilities import CapabilityPlanner
+from astock.investor_orchestration.full_research import (
+    FullResearchPolicy,
+    FullResearchRecommendationService,
+)
 from astock.investor_orchestration.macro import OfficialMacroCaptureService
 from astock.investor_orchestration.models import (
     DatePrecision,
@@ -42,6 +46,7 @@ from astock.investor_orchestration.source_audit_cli import register_source_audit
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
 from astock.investor_orchestration.utils import content_hash, utc_now
+from astock.schemas.full_research import FullResearchComponentType, RecommendationResearchReceipt
 
 app = typer.Typer(
     name="investor",
@@ -137,6 +142,60 @@ def audit(
     _dump(result)
     if result["status"] != "PASS":
         raise typer.Exit(code=1)
+
+
+@app.command("full-research-component-register")
+def full_research_component_register(
+    component_type: FullResearchComponentType = typer.Argument(...),
+    payload: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    database: Path | None = typer.Option(None, help="SQLite state database path."),
+) -> None:
+    raw = json.loads(payload.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise typer.BadParameter("component payload must be a JSON object")
+    service = FullResearchRecommendationService(_store(database))
+    _dump(service.register_component(component_type, raw))
+
+
+@app.command("full-research-policy-status")
+def full_research_policy_status() -> None:
+    policy = FullResearchPolicy.load()
+    _dump(
+        {
+            "policy_id": policy.policy_id,
+            "status": policy.raw["status"],
+            "mandatory_nodes": [node.value for node in policy.mandatory_nodes],
+            "degraded_allowed": [node.value for node in policy.degraded_allowed],
+            "quote_freshness_sla_seconds": policy.quote_freshness_sla_seconds,
+            "broker_execution_allowed": False,
+        }
+    )
+
+
+@app.command("full-research-receipt-schema")
+def full_research_receipt_schema() -> None:
+    _dump(RecommendationResearchReceipt.model_json_schema())
+
+
+@app.command("full-research-receipt-seal")
+def full_research_receipt_seal(
+    payload: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    database: Path | None = typer.Option(None, help="SQLite state database path."),
+) -> None:
+    raw = json.loads(payload.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise typer.BadParameter("receipt payload must be a JSON object")
+    service = FullResearchRecommendationService(_store(database))
+    _dump(service.seal_receipt(raw))
+
+
+@app.command("full-research-receipt-replay")
+def full_research_receipt_replay(
+    receipt_id: str = typer.Argument(..., help="RecommendationResearchReceipt artifact id."),
+    database: Path | None = typer.Option(None, help="SQLite state database path."),
+) -> None:
+    _, replay = FullResearchRecommendationService(_store(database)).load_and_replay(receipt_id)
+    _dump(replay)
 
 
 @app.command("preflight")

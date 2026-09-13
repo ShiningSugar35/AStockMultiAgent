@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -31,10 +32,7 @@ class DatePrecision(StrEnum):
 
 class RequestIntent(StrEnum):
     RESEARCH = "RESEARCH"
-    BUY_DECISION = "BUY_DECISION"
-    HOLDING_DECISION = "HOLDING_DECISION"
-    PORTFOLIO_DECISION = "PORTFOLIO_DECISION"
-    RECOMMENDATION = "RECOMMENDATION"
+    FULL_RESEARCH_RECOMMENDATION = "FULL_RESEARCH_RECOMMENDATION"
     ACCOUNT_FACT_WRITE = "ACCOUNT_FACT_WRITE"
     PAPER_PREPARE = "PAPER_PREPARE"
     PAPER_CONFIRM = "PAPER_CONFIRM"
@@ -51,6 +49,81 @@ class SideEffectClass(StrEnum):
     PT_CONFIRM = "PT_CONFIRM"
     PT_REPLAY = "PT_REPLAY"
     NONE = "NONE"
+
+
+_FULL_RESEARCH_DECISION_PATTERNS = (
+    re.compile(
+        r"推荐|买什么|买哪些|怎么买|怎么配置|值得买|能不能买|能买吗|可以买吗|"
+        r"买入价|卖出价|买入区间|仓位|投资组合|止损|加仓|减仓|清仓|目标价"
+    ),
+    re.compile(r"(?:选|挑).{0,12}(?:\d+|[一二三四五六七八九十]+).{0,6}(?:只|支|个)?股票"),
+    re.compile(
+        r"(?:持仓|持有|已经买|已买|买过|成本|浮亏|浮盈).{0,24}"
+        r"(?:怎么办|怎么处理|要不要|是否继续|继续持有|卖出|加仓|减仓|清仓|止损|持有多久)"
+    ),
+    re.compile(
+        r"(?:要不要|是否|继续|卖出|减仓|加仓|清仓|止损).{0,24}"
+        r"(?:持仓|我.{0,8}持有|已买|买过|成本|浮亏|浮盈)"
+    ),
+    re.compile(r"股票代码.{0,24}(?:买入|价格|仓位)|(?:买入|价格|仓位).{0,24}股票代码"),
+    re.compile(r"(?:买|买入|配置|下单).{0,12}多少股|多少股.{0,12}(?:买|买入|配置|下单)"),
+    re.compile(r"排序.{0,24}(?:选择|买|股票)|(?:选择|买).{0,24}排序"),
+    re.compile(
+        r"\b(?:recommend|what to buy|stock picks?|portfolio allocation|buy price|sell price|"
+        r"position sizing|stop loss|add to (?:the )?position)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+_LEGACY_FULL_RESEARCH_INPUT_ALIASES = frozenset(
+    {"BUY_DECISION", "HOLDING_DECISION", "RECOMMENDATION", "PORTFOLIO_DECISION"}
+)
+
+_HOLDING_CONTEXT_PATTERNS = (
+    re.compile(r"持仓|持有|我有.{0,8}(?:股|股票)|已经买|已买|买过|成本价|浮亏|浮盈|减仓|加仓|清仓"),
+    re.compile(
+        r"\b(?:my (?:holding|position)|existing (?:holding|position)|already (?:own|bought)|"
+        r"trim (?:my )?position|add to (?:my )?position|exit (?:my )?position)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _intent_value(intent: RequestIntent | str) -> str:
+    return intent.value if isinstance(intent, RequestIntent) else str(intent)
+
+
+def requires_full_research_recommendation(
+    raw_text: str,
+    intent: RequestIntent | str,
+    side_effect: SideEffectClass | str,
+) -> bool:
+    """Return whether a request may directly drive an investment decision.
+
+    Historical decision names are accepted only as input-migration aliases. They are
+    normalized before validation and do not own a planner, executor or publication path.
+    """
+
+    intent_value = _intent_value(intent)
+    if intent_value in _LEGACY_FULL_RESEARCH_INPUT_ALIASES:
+        return True
+    normalized_intent = RequestIntent(intent_value)
+    SideEffectClass(side_effect)
+    if normalized_intent is RequestIntent.FULL_RESEARCH_RECOMMENDATION:
+        return True
+    if normalized_intent is not RequestIntent.RESEARCH:
+        return False
+    text = raw_text.strip()
+    return any(pattern.search(text) is not None for pattern in _FULL_RESEARCH_DECISION_PATTERNS)
+
+
+def requires_existing_holding_context(raw_text: str, intent: RequestIntent | str) -> bool:
+    intent_value = _intent_value(intent)
+    if intent_value == "HOLDING_DECISION":
+        return True
+    text = raw_text.strip()
+    return any(pattern.search(text) is not None for pattern in _HOLDING_CONTEXT_PATTERNS)
 
 
 class CapabilityRequirement(StrEnum):
@@ -173,6 +246,30 @@ class InvestorRequestEnvelope(StrictModel):
     idempotency_key: str
     conversation_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def route_material_decision_to_full_research(cls, raw: Any) -> Any:
+        """Make the high-risk route part of request construction, not answer prompting."""
+
+        if not isinstance(raw, dict):
+            return raw
+        intent = raw.get("normalized_intent", RequestIntent.RESEARCH)
+        side_effect = raw.get("side_effect", SideEffectClass.READ)
+        text = str(raw.get("raw_text", ""))
+        if not requires_full_research_recommendation(text, intent, side_effect):
+            return raw
+        intent_value = _intent_value(intent)
+        routed = dict(raw)
+        routed["normalized_intent"] = RequestIntent.FULL_RESEARCH_RECOMMENDATION
+        metadata = dict(routed.get("metadata") or {})
+        if intent_value != RequestIntent.FULL_RESEARCH_RECOMMENDATION.value:
+            metadata.setdefault("full_research_routed_from", intent_value)
+        metadata["full_research_router_policy"] = "full-research-recommendation-v1"
+        if requires_existing_holding_context(text, intent):
+            metadata["full_research_holding_context"] = True
+        routed["metadata"] = metadata
+        return routed
 
     @field_validator("question_time")
     @classmethod

@@ -67,27 +67,27 @@ def test_method_skills_bind_existing_team_contracts_and_abstention() -> None:
     contracts = {
         "macro-policy-regime": (
             "macro-regime",
-            "MacroRegimeProfile",
+            "MacroResearchOutcome",
             "MACRO_REGIME",
         ),
         "industry-value-chain": (
             "industry-value-chain",
-            "IndustryValueChainProfile",
+            "IndustryResearchOutcome",
             "INDUSTRY_PROFILE",
         ),
         "catalyst-event-research": (
             "company-catalyst",
-            "CatalystRiskPack",
+            "NewsEventResearchPack",
             "CATALYST_RISK",
         ),
         "governance-management-quality": (
             "governance-management-quality",
-            "GovernanceManagementQualityPack",
+            "GovernanceAssessment",
             "GOVERNANCE_QUALITY",
         ),
         "investment-red-team": (
             "investment-red-team",
-            "InvestmentRedTeamReport",
+            "ChallengerAssessment",
             "INDEPENDENT_REVIEW",
         ),
         "model-risk-backtest-validation": (

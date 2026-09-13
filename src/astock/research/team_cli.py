@@ -12,7 +12,7 @@ import typer
 from astock.research.industry_archetypes import IndustryResearchRegistry
 from astock.research.team import ResearchTeamService
 from astock.schemas.research_team import (
-    RecommendationReadinessRequest,
+    FullResearchInputReadinessRequest,
     ResearchCoverageRequest,
     ResearchExecutionBackend,
     ResearchRoleOutput,
@@ -53,7 +53,7 @@ def register_research_team_commands(
                 "role_output": ResearchRoleOutput.model_json_schema(),
                 "role_result": ResearchRoleResult.model_json_schema(),
                 "recommendation_readiness_request": (
-                    RecommendationReadinessRequest.model_json_schema()
+                    FullResearchInputReadinessRequest.model_json_schema()
                 ),
                 "research_coverage_request": ResearchCoverageRequest.model_json_schema(),
             }
@@ -131,19 +131,19 @@ def register_research_team_commands(
         request = ResearchRoleResult.model_validate_json(request_file.read_text(encoding="utf-8"))
         emit(team().register_role_result(request))
 
-    @app.command("research-recommendation-readiness")
-    def research_recommendation_readiness(
+    @app.command("research-full-research-readiness")
+    def research_full_research_readiness(
         request_file: Annotated[
             Path,
             typer.Argument(exists=True, file_okay=True, dir_okay=False, readable=True),
         ],
     ) -> None:
-        request = RecommendationReadinessRequest.model_validate_json(
+        request = FullResearchInputReadinessRequest.model_validate_json(
             request_file.read_text(encoding="utf-8")
         )
         report = team().evaluate_readiness(request)
         emit(report)
-        if not report.formal_recommendation_allowed:
+        if not report.full_research_input_ready:
             raise typer.Exit(code=3)
 
 

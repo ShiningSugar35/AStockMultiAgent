@@ -55,6 +55,7 @@ recommendation_gate:
     - DRIVER_TREE
     - FORECAST_BULL_BASE_BEAR
     - VALUATION
+    - QUANT_FACTOR
     - MARKET_PRICE_ANCHOR
     - CATALYST_RISK
     - BULL_CASE
@@ -73,6 +74,7 @@ recommendation_gate:
     - FORECAST_BULL_BASE_BEAR
     - GOVERNANCE_QUALITY
     - VALUATION
+    - QUANT_FACTOR
     - MARKET_PRICE_ANCHOR
     - CATALYST_RISK
     - BULL_CASE

@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "ef628c9a4b3e9b4b87b6f4500d0400af44f1a317ab5f3a5afe80cd3ca523cd94",
+  "report_id": "6baf1228eed2fd81652046143da3a9a07ae28b35b7ee09c2940e9178e686d1b1",
   "capability_id": "report-visual-qa",
   "candidate_version": "sha256:191aa0f2d527ccca5dc574d26daee51b6e49d83cbad7d5ccae9774a0930d8202",
   "requested_stage": "SHADOW",
@@ -27,7 +27,7 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "e3741a45071a3806f2f1ae0344d0a06aa50de84dd2f7134839e9bbe1c38b6faf"
+    "2093fe3fdfacd17beb7b03d661970eab533e810108849db439b5071e38bb07ca"
   ],
   "valid_from": "2026-09-09T04:05:13Z",
   "expires_at": "2026-12-08T04:05:13Z",

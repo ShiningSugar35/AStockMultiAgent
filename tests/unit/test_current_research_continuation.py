@@ -41,11 +41,11 @@ from astock.schemas.research_continuation import (
 from astock.schemas.research_team import (
     ResearchRoleOutput,
     ResearchRoleResult,
-    ResearchTaskRole,
     ResearchTeamTaskState,
 )
 from astock.schemas.runs import RunStatus
 from astock.settings import ProjectPaths
+from tests.unit.test_research_team import _typed_role_member_ids as _typed_team_member_ids
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 8, 29, 2, 0, tzinfo=UTC)
@@ -321,17 +321,26 @@ def _complete_company_team(
     for task in plan.tasks:
         if task.task_id == "recommendation-gate":
             continue
-        member_artifact_id = f"test-member:{plan_id}:{task.task_id}"
-        if task.role is ResearchTaskRole.FINANCIAL_INTEGRITY:
-            _register_financial_pack(state, objects, member_artifact_id)
-        else:
+        typed_member_ids = _typed_team_member_ids(
+            service.team,
+            state,
+            objects,
+            plan_id=plan_id,
+            task_id=task.task_id,
+            formal=True,
+        )
+        if typed_member_ids is None:
+            member_artifact_id = f"test-member:{plan_id}:{task.task_id}"
             _register_generic_artifact(state, objects, member_artifact_id)
+            member_artifact_ids = [member_artifact_id]
+        else:
+            member_artifact_ids = typed_member_ids
         role_output = service.team.register_role_output(
             ResearchRoleOutput(
                 plan_id=plan_id,
                 task_id=task.task_id,
                 output_contract=task.output_contract,
-                member_artifact_ids=[member_artifact_id],
+                member_artifact_ids=member_artifact_ids,
                 evidence_ids=[],
                 readiness_check_results={check: True for check in task.readiness_checks},
                 summary=f"completed {task.task_id}",
@@ -550,7 +559,7 @@ def test_run_to_terminal_drives_evidence_team_and_gate_in_one_call(
     assert team_calls
     assert final.status is CurrentResearchContinuationStatus.READY_FOR_INVESTOR_VIEW
     assert final.investor_view_allowed
-    assert final.formal_recommendation_allowed
+    assert final.full_research_input_ready
     assert len(final.automatic_resolution_artifact_ids) == 1
     resolution_artifact = state.artifact_record(final.automatic_resolution_artifact_ids[0])
     assert resolution_artifact is not None
@@ -600,7 +609,7 @@ def test_run_to_terminal_consumes_bound_evidence_after_restart_without_recalling
     assert acquisition.calls == 2
     assert final.status is CurrentResearchContinuationStatus.READY_FOR_INVESTOR_VIEW
     assert final.investor_view_allowed
-    assert final.formal_recommendation_allowed
+    assert final.full_research_input_ready
 
 
 def test_run_to_terminal_uses_the_configured_final_automatic_round_before_escalating(

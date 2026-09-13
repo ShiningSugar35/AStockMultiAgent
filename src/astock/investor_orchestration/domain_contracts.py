@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from astock.evidence.repository import EvidenceRepository
 from astock.investor_orchestration.models import CapabilityNode, InvestorRequestEnvelope
 from astock.schemas.financial import FinancialIntegrityEvidencePack
+from astock.schemas.full_research import RecommendationResearchReceipt
 from astock.schemas.institutional_research import (
     FundamentalModelBundle,
     IndustryProfile,
@@ -27,7 +28,7 @@ from astock.schemas.paper import ReplayExecutionReport
 from astock.schemas.portfolio import PortfolioAnalysisReport
 from astock.schemas.portfolio_decision import ETFResearchMetrics
 from astock.schemas.research_team import (
-    RecommendationReadinessReport,
+    FullResearchInputReadinessReport,
     ResearchRoleOutput,
     ResearchRoleResult,
     ResearchTeamPlan,
@@ -106,8 +107,28 @@ class DomainContractAudit:
             self._evidence(output.evidence_ids, request.evidence_cutoff)
         elif isinstance(output, ResearchRoleOutput):
             self._role(node, artifact_id, output, request)
-        elif isinstance(output, RecommendationReadinessReport):
+        elif isinstance(output, FullResearchInputReadinessReport):
             self._readiness(output, request)
+        elif isinstance(output, RecommendationResearchReceipt):
+            from astock.investor_orchestration.full_research import (
+                FullResearchRecommendationService,
+            )
+
+            if artifact_id != output.receipt_id:
+                raise ValueError("full-research capability must expose the sealed receipt identity")
+            if output.request_id != request.request_id or output.as_of != request.evidence_cutoff:
+                raise ValueError("recommendation receipt belongs to another request or as-of")
+            replay = FullResearchRecommendationService(
+                self.verifier.store, objects=self.verifier.objects
+            ).verify_receipt(output)
+            if replay["status"] != "PASS" or not output.publication.formal_recommendation_allowed:
+                raise ValueError("full-research recommendation has not passed its publication gate")
+            for source in output.source_manifest:
+                if source.artifact_id is None:
+                    continue
+                self.verifier._verify_reference(source.artifact_id, source.object_hash)
+            for source_id, digest in output.input_artifact_hashes.items():
+                self.verifier._verify_reference(source_id, digest)
         elif isinstance(output, PortfolioAnalysisReport):
             if output.status.value not in {"READY", "EMPTY"}:
                 raise ValueError("portfolio analysis has missing inputs")
@@ -294,7 +315,7 @@ class DomainContractAudit:
 
     def _readiness(
         self,
-        output: RecommendationReadinessReport,
+        output: FullResearchInputReadinessReport,
         request: InvestorRequestEnvelope,
     ) -> None:
         from astock.research.team import ResearchTeamService
@@ -310,12 +331,12 @@ class DomainContractAudit:
         required = set(service._required_checks(plan))
         if (
             output.status.value != "READY"
-            or not output.formal_recommendation_allowed
+            or not output.full_research_input_ready
             or set(output.required_checks) != required
             or set(output.passed_checks) != required
             or output.missing_or_failed_checks
         ):
-            raise ValueError("full-market recommendation has not passed every required gate")
+            raise ValueError("full-market research has not passed every upstream readiness gate")
         derived = service._derived_readiness_checks(plan)
         if not service._team_dag_complete(plan) or not all(
             derived.get(key) is True for key in required - {"TEAM_DAG_COMPLETE"}

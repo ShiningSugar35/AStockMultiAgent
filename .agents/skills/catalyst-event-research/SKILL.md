@@ -22,13 +22,13 @@ description: Build an evidence-linked catalyst and risk event timeline for an A-
 
 ## Required output contract
 
-- Register a typed `CatalystRiskPack` through `uv run astock research-team-role-output REQUEST.json`.
+- Register a typed `NewsEventResearchPack` through `uv run astock research-team-role-output REQUEST.json`.
 - Complete `company-catalyst` through `uv run astock research-team-task-result REQUEST.json`.
 - Set `CATALYST_RISK=true` only when material events have official lineage, bounded timing, explicit preconditions, impact ranges, downside coverage and falsifiers.
 
 ## Output
 
-Return the registered typed `CatalystRiskPack` artifact ID, ranked event timeline, probability/impact ranges, dependencies, adverse paths, next evidence checkpoints and thesis-changing falsifiers. Avoid a raw news dump.
+Return the registered typed `NewsEventResearchPack` artifact ID, ranked event timeline, probability/impact ranges, dependencies, adverse paths, next evidence checkpoints and thesis-changing falsifiers. Avoid a raw news dump.
 
 ## Gates and abstention
 

@@ -1,29 +1,35 @@
 {
-  "admitted_stage": "SHADOW",
-  "candidate_version": "0.9.3",
+  "schema_version": "capability-qualification-report-v1",
+  "report_id": "4c014e51b3302d1bb3da752dce04af73a88e3be69e2f0da12c8a13e353f6fdbf",
   "capability_id": "crawl4ai",
+  "candidate_version": "0.9.3",
+  "requested_stage": "SHADOW",
+  "admitted_stage": "SHADOW",
   "checks": {
-    "cache_behavior": "FAIL",
-    "cost": "PASS",
-    "credential_handling": "FAIL",
-    "data_rights": "FAIL",
-    "exit_uninstall": "PASS",
-    "failure_behavior": "FAIL",
-    "latency": "FAIL",
     "license": "PASS",
-    "maintenance": "PASS",
-    "offline_behavior": "FAIL",
+    "terms_of_service": "FAIL",
+    "data_rights": "FAIL",
     "pit": "FAIL",
     "provenance": "PASS",
+    "credential_handling": "FAIL",
     "sbom": "FAIL",
     "security_review": "FAIL",
-    "terms_of_service": "FAIL"
+    "maintenance": "PASS",
+    "cost": "PASS",
+    "latency": "FAIL",
+    "cache_behavior": "FAIL",
+    "offline_behavior": "FAIL",
+    "failure_behavior": "FAIL",
+    "exit_uninstall": "PASS"
   },
-  "completeness_ceiling": "EXACT_ITEM",
+  "recorded_validation": "FAIL",
   "controlled_live_validation": "FAIL",
+  "source_class_ceiling": "UNKNOWN",
+  "completeness_ceiling": "EXACT_ITEM",
   "evidence_object_hashes": [
     "6f0b8094ccbe95b24338105ad3facb358094b9f163980d934f0621b49d0842a7"
   ],
+  "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",
   "reason_codes": [
     "BROWSER_CREDENTIAL_ISOLATION_NOT_VALIDATED",
@@ -32,11 +38,5 @@
     "RECORDED_CRAWL_FIXTURE_NOT_FROZEN",
     "SBOM_SECURITY_REVIEW_INCOMPLETE",
     "TARGET_SITE_TOS_AND_DATA_RIGHTS_NOT_SCOPED"
-  ],
-  "recorded_validation": "FAIL",
-  "report_id": "4c014e51b3302d1bb3da752dce04af73a88e3be69e2f0da12c8a13e353f6fdbf",
-  "requested_stage": "SHADOW",
-  "schema_version": "capability-qualification-report-v1",
-  "source_class_ceiling": "UNKNOWN",
-  "valid_from": "2026-09-02T06:16:28Z"
+  ]
 }

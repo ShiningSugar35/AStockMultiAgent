@@ -1,7 +1,7 @@
 schema_version: project-work-package-manifest-v1
 plan_id: investor-orchestration-and-regime-plan-v1
 status: CURRENT
-updated_on: 2026-09-10
+updated_on: 2026-09-11
 
 authority:
   machine_index: planning/work_packages_v1.yaml
@@ -16,4 +16,11 @@ rules:
   dependency_ids_must_exist: true
   markdown_consistency_check_required: true
 
-work_packages: []
+work_packages:
+  - id: WP-20
+    order: 20
+    title: E2E / Shadow / Release
+    status: IN_PROGRESS
+    priority: P0
+    owner_lane: main/full-research-recommendation-p0
+    depends_on: []

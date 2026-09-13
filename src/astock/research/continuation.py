@@ -30,8 +30,7 @@ from astock.schemas.research_continuation import (
     ExternalResearchTaskStatus,
 )
 from astock.schemas.research_team import (
-    RecommendationReadinessRequest,
-    RecommendationReadinessStatus,
+    FullResearchInputReadinessRequest,
     ResearchTeamPlan,
     ResearchTeamTask,
 )
@@ -499,14 +498,14 @@ class CurrentResearchContinuationService:
             return record
 
         readiness = self.team.evaluate_readiness(
-            RecommendationReadinessRequest(
+            FullResearchInputReadinessRequest(
                 plan_id=plan.plan_id,
                 checks={},
                 created_at=self.clock(),
             )
         )
-        readiness_artifact_id = f"RecommendationReadinessReport:{readiness.report_id}"
-        ready = readiness.status is RecommendationReadinessStatus.READY
+        readiness_artifact_id = f"FullResearchInputReadinessReport:{readiness.report_id}"
+        ready = readiness.full_research_input_ready
         updated = record.model_copy(
             update={
                 "status": (
@@ -516,7 +515,7 @@ class CurrentResearchContinuationService:
                 ),
                 "readiness_report_artifact_id": readiness_artifact_id,
                 "investor_view_allowed": True,
-                "formal_recommendation_allowed": ready,
+                "full_research_input_ready": ready,
             }
         )
         return self._persist(updated)
@@ -550,7 +549,7 @@ class CurrentResearchContinuationService:
             "user_assistance_request_allowed": record.status
             is CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
             "investor_view_allowed": record.investor_view_allowed,
-            "formal_recommendation_allowed": record.formal_recommendation_allowed,
+            "full_research_input_ready": record.full_research_input_ready,
             "broker_execution_allowed": False,
         }
 
@@ -562,9 +561,7 @@ class CurrentResearchContinuationService:
             record.automatic_resolution_budget_seconds
             != self.policy.automatic_resolution_budget_seconds
         ):
-            raise ValueError(
-                "stored current research continuation uses a non-canonical budget"
-            )
+            raise ValueError("stored current research continuation uses a non-canonical budget")
         return record
 
     @staticmethod
@@ -816,9 +813,7 @@ class CurrentResearchContinuationService:
                 "company_id": record.company_id,
                 "market": record.market.value,
                 "status": record.status.value,
-                "automatic_resolution_budget_seconds": (
-                    record.automatic_resolution_budget_seconds
-                ),
+                "automatic_resolution_budget_seconds": (record.automatic_resolution_budget_seconds),
                 "automatic_rounds_completed": record.automatic_rounds_completed,
                 "pending_external_task_count": sum(
                     item.status is ExternalResearchTaskStatus.PENDING
@@ -826,9 +821,7 @@ class CurrentResearchContinuationService:
                 ),
                 "automatic_budget_exhausted": record.automatic_budget_exhausted,
                 "investor_view_allowed": record.investor_view_allowed,
-                "formal_recommendation_allowed": (
-                    record.formal_recommendation_allowed
-                ),
+                "full_research_input_ready": record.full_research_input_ready,
             },
         )
         return record

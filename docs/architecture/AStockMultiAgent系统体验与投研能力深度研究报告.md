@@ -623,7 +623,7 @@ flowchart TB
         OS[ObjectStore / Snapshot]
         EV[Evidence / PIT]
         RT[Research Team / Skills]
-        CM[Committee / Recommendation Gate]
+        CM[Committee / Full Research Publication Gate]
         PF[Portfolio / Holding / Paper Ledger]
     end
 

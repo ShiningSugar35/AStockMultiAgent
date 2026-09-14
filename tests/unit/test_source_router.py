@@ -4,15 +4,20 @@ from astock.core.source_router import SourceAccessRouter
 from astock.schemas import (
     AccessTransport,
     SourceAccessRequest,
+    SourceClass,
     TransportCapability,
 )
 
 
-def capability(transport: AccessTransport, available: bool) -> TransportCapability:
+def capability(
+    transport: AccessTransport,
+    available: bool,
+    requested_capability: str = "filing-search",
+) -> TransportCapability:
     return TransportCapability(
         source_id="cninfo",
         transport=transport,
-        requested_capabilities=["filing-search"],
+        requested_capabilities=[requested_capability],
         available=available,
         reason=f"{transport.value} {'ready' if available else 'disabled'}",
     )
@@ -60,3 +65,50 @@ def test_router_selects_mcp_before_browser_and_persists_one_decision(state) -> N
         ).fetchone()
     assert stored["selected_transport"] == "MCP"
     assert stored["fallback_chain_json"] == '["API", "MCP"]'
+
+
+def test_enterprise_intelligence_prefers_mcp_before_api() -> None:
+    requested = "enterprise.personnel"
+    decision = SourceAccessRouter().decide(
+        SourceAccessRequest(requested_capability=requested),
+        [
+            capability(AccessTransport.API, True, requested),
+            capability(AccessTransport.MCP, True, requested),
+            capability(AccessTransport.BROWSER, True, requested),
+        ],
+    )
+
+    assert decision.selected_transport is AccessTransport.MCP
+    assert decision.fallback_chain == [AccessTransport.MCP]
+
+
+def test_enterprise_official_source_outranks_commercial_mcp() -> None:
+    requested = "enterprise.personnel"
+    official = TransportCapability(
+        source_id="government-official-web",
+        transport=AccessTransport.BROWSER,
+        requested_capabilities=[requested],
+        available=True,
+        reason="official government appointment notice",
+        officiality="PRIMARY_OFFICIAL",
+        source_class=SourceClass.PRIMARY_OFFICIAL_WEB,
+        formal_eligible=True,
+    )
+    commercial = TransportCapability(
+        source_id="qcc-enterprise-intelligence-mcp",
+        transport=AccessTransport.MCP,
+        requested_capabilities=[requested],
+        available=True,
+        reason="qualified commercial enterprise intelligence",
+        officiality="SECONDARY_STRUCTURED",
+        source_class=SourceClass.SECONDARY_STRUCTURED,
+        formal_eligible=True,
+    )
+
+    decision = SourceAccessRouter().decide(
+        SourceAccessRequest(requested_capability=requested, formal_use=True),
+        [commercial, official],
+    )
+
+    assert decision.selected_source_id == "government-official-web"
+    assert decision.selected_transport is AccessTransport.BROWSER

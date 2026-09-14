@@ -9,7 +9,7 @@ description: Build a point-in-time governance and management-quality assessment 
 
 - Consume only the ready `governance-management-quality` task from the existing `ResearchTeamPlan`; do not create a parallel plan or a free-form personality score.
 - Preserve company identity, `as_of`, acquisition lineage and the typed `GovernanceAssessment` contract.
-- Primary authority is exchange/CNINFO/issuer charters, annual/governance reports, resolutions, ownership/pledge filings, audit reports, regulator/court/enforcement records and formal transaction documents. Interviews and media are secondary context.
+- Primary authority is exchange/CNINFO/issuer charters, annual/governance reports, resolutions, ownership/pledge filings, audit reports, regulator/court/enforcement records, government appointment notices, official enterprise-registration/credit records and formal transaction documents. Track legal-representative/controller changes, external public-office appointments of key people, equity pledge/freeze, administrative penalties and business-registration/enforcement changes when they can alter incentives, control, financing or related-party risk. Qualified commercial enterprise-intelligence MCP/API sources are secondary cross-checks only; unresolved cross-source conflicts must remain explicit and trigger evidence investigation rather than last-write-wins. Interviews and media are secondary context.
 
 ## Procedure
 

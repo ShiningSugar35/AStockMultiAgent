@@ -15,7 +15,7 @@ description: Evaluate portfolio risk, complete a planned purchase with complemen
 6. **风险缺口驱动候选**：根据 concentration / market beta / industry / factor / cycle / liquidity / scenario 等 gap 定义候选特征。股票候选只能从可证明 Universe → ResearchSeed/Candidate → `$company-deep-research`/Research Team 进入，最终成员仍必须是 current Committee/Classification 允许的正式组合候选。Web/新闻可以解释风险机制或核验事实，不能临时手选股票替代 Universe lineage。
 7. 候选数量保持 bounded：风险预筛通常 6–12 个，只有最有希望改善指定 gap 的 2–5 个进入完整公司深研。复用同一会话行情、因子、行业和协方差输入，不为每个 allocator 重复抓取。
 8. 使用既有四个 allocator 比较稳健目标：`EQUAL_WEIGHT_CONSTRAINED`（生产基准）、inverse volatility（`INVERSE_VOLATILITY`）、hierarchical risk（`HIERARCHICAL_RISK`）、Ledoit-Wolf shrinkage minimum variance（`SHRINKAGE_MIN_VARIANCE`）。没有 prospective 证据前不得把复杂模型升级为默认，也不得用 LLM 直接给精确 expected return 做无约束 Max-Sharpe。
-9. 使用 `portfolio-transition` 把“目标组合”转换成“从当前组合应该怎么走”：报告目标权重带、现金、换手、风险变化、交易成本、流动性、交易单位和 binding constraints。目标是区间，不是必须即时回到一个点；处于 no-trade band 的小偏离保持 HOLD。
+9. 使用 `portfolio-transition` 把“目标组合”转换成“从当前组合应该怎么走”：报告目标权重带、现金、换手、风险变化、交易成本、流动性、交易单位和 binding constraints。若 Full Research 提供 typed `EntryQuality`/price-location 上下文，只能用来分期/缩放已经正式 eligible 的初始仓位：`FALLING_KNIFE_RISK`、`EXTENDED`、历史不足时提高现金/降低首笔权重，稳定低位/筑底或趋势确认可少降权；不得让技术状态把 REJECT/WATCH 变成 BUY，也不得把“离高点远”当低估值。目标是区间，不是必须即时回到一个点；处于 no-trade band 的小偏离保持 HOLD。
 10. **严格区分分散化与对冲**：
    - `DIVERSIFICATION`：降低非系统性/组合风险，不声称抵消指定风险；
    - `NATURAL_HEDGE`：经济机制 + PIT 历史 + 压力期 + 已验证成本共同证明指定风险净下降；

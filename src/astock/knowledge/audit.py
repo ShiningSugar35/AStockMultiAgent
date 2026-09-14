@@ -400,7 +400,12 @@ class KnowledgeCoverageAuditService:
                 findings.append("OPEN_COLLECTION_GAPS")
             if (
                 self._gap_events_exist(source.source_id)
-                and not gap_cutoff_history_available(self.state, data_cutoff_at)
+                and not gap_cutoff_history_available(
+                    self.state,
+                    data_cutoff_at,
+                    author_source_id=source.source_id,
+                    excluded_scope_prefix="comments:%",
+                )
             ):
                 findings.append("GAP_CUTOFF_HISTORY_UNAVAILABLE")
             if self.repository.rejected_import_temporal_count(
@@ -427,7 +432,12 @@ class KnowledgeCoverageAuditService:
             )
 
         identity_registered = self._identity_registered(source.source_id, data_cutoff_at)
-        gap_history_available = gap_cutoff_history_available(self.state, data_cutoff_at)
+        gap_history_available = gap_cutoff_history_available(
+            self.state,
+            data_cutoff_at,
+            author_source_id=source.source_id,
+            excluded_scope_prefix="comments:%",
+        )
         scope_reports = [
             self._audit_online_scope(
                 source,
@@ -594,7 +604,12 @@ class KnowledgeCoverageAuditService:
                 detail_verified_ids.add(content_id)
             else:
                 detail_stale_ids.add(content_id)
-        gap_history_available = gap_cutoff_history_available(self.state, data_cutoff_at)
+        gap_history_available = gap_cutoff_history_available(
+            self.state,
+            data_cutoff_at,
+            author_source_id=source.source_id,
+            content_type=content_type.value,
+        )
         open_gaps = self._scope_open_gap_count(
             source.source_id,
             content_type,

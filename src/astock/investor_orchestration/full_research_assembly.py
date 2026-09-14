@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 
 from pydantic import BaseModel
 
 from astock.core.object_store import ObjectStore
+from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 from astock.evidence.repository import EvidenceRepository
 from astock.investor_orchestration.capabilities import CapabilityDependencyContext
@@ -22,6 +24,7 @@ from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash
 from astock.research.lifecycle_repository import LifecycleRepository
 from astock.schemas.committee import TradeProtocolOutcome
+from astock.schemas.entry_quality import EntryQualitySnapshot, EntryQualityState
 from astock.schemas.evidence import EvidenceGrade
 from astock.schemas.financial import (
     FinancialDerivationType,
@@ -74,29 +77,6 @@ from astock.schemas.research_team import (
     ResearchRoleResult,
 )
 
-_NEWS_CATEGORIES = (
-    "earnings",
-    "orders",
-    "m_and_a",
-    "restructuring",
-    "buyback",
-    "insider_reduction",
-    "financing",
-    "major_contract",
-    "product",
-    "policy",
-    "litigation",
-    "investigation",
-    "safety_incident",
-    "management",
-    "industry_pricing",
-    "supply_chain",
-    "overseas_sanctions_trade",
-    "domestic_upstream_downstream_news",
-    "global_upstream_downstream_news",
-    "domestic_upstream_downstream_policy",
-)
-
 _FINANCIAL_CHECKS = (
     "audit_opinion",
     "non_standard_opinion",
@@ -141,6 +121,7 @@ class FullResearchReceiptAssembler:
 
     def __init__(self, store: InvestorOrchestrationStore) -> None:
         self.store = store
+        self.project_root = resolve_project_root(module_file=Path(__file__))
         self.state = StateStore(store.path)
         self.objects = ObjectStore(store.path.parent / "objects" / "sha256")
         self.verifier = RegisteredOutputVerifier(store, self.objects)
@@ -1080,9 +1061,120 @@ class FullResearchReceiptAssembler:
             source_object_hashes=self._registered_hashes(source_ids),
         )
 
+    def _current_daily_release(self, company_id: str, as_of: datetime) -> Any | None:
+        from astock.schemas.reference_data import ReferenceDatasetKind
+
+        releases: list[Any] = []
+        for market in ("XSHG", "XSHE", "BJSE"):
+            release = self.state.get_market_reference_release(
+                ReferenceDatasetKind.DAILY_UNADJUSTED.value,
+                f"{market}:{company_id}",
+                as_of=as_of,
+            )
+            if release is not None:
+                releases.append(release)
+        return releases[0] if len(releases) == 1 else None
+
+    def _entry_quality_context(
+        self,
+        pack: ValuationPack,
+    ) -> tuple[EntryQualitySnapshot, str, str] | None:
+        from astock.investor_orchestration.regime_reference_views import (
+            CanonicalRegimeReferenceViews,
+        )
+        from astock.research.entry_quality import (
+            EntryQualityService,
+            load_entry_quality_policy,
+            persist_entry_quality_snapshot,
+        )
+        anchor = pack.market_price_anchor
+        if anchor is None:
+            return None
+        if anchor.entry_quality_artifact_id is not None:
+            record = self.state.artifact_record(anchor.entry_quality_artifact_id)
+            if (
+                record is None
+                or str(record["type"]) != "EntryQualitySnapshot"
+                or str(record["object_hash"]) != anchor.entry_quality_object_hash
+                or anchor.entry_quality_object_hash is None
+                or not self.objects.verify(anchor.entry_quality_object_hash)
+            ):
+                return None
+            snapshot = EntryQualitySnapshot.model_validate_json(
+                self.objects.get_bytes(anchor.entry_quality_object_hash)
+            )
+            return snapshot, anchor.entry_quality_artifact_id, anchor.entry_quality_object_hash
+
+        release = self._current_daily_release(pack.company_id, pack.as_of)
+        if release is None:
+            return None
+        try:
+            row, _, observations = CanonicalRegimeReferenceViews(
+                self.state,
+                self.objects,
+            )._daily_rows(str(release["release_id"]))
+            snapshot = EntryQualityService(
+                load_entry_quality_policy(self.project_root / "configs" / "entry_quality.yaml")
+            ).build(
+                list(observations.values()),
+                source_artifact_id=str(row["manifest_artifact_id"]),
+                source_object_hash=str(row["manifest_object_hash"]),
+                as_of=pack.as_of,
+                current_price_override=anchor.price,
+                price_source_artifact_id=anchor.source_artifact_id,
+                price_source_object_hash=anchor.source_object_hash,
+            )
+            artifact_id = persist_entry_quality_snapshot(self.state, self.objects, snapshot)
+            record = self.state.artifact_record(artifact_id)
+            if record is None:
+                return None
+            return snapshot, artifact_id, str(record["object_hash"])
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    def _source_binding_map(
+        self,
+        source_artifact_ids: tuple[str, ...],
+        source_object_hashes: tuple[str, ...],
+        *,
+        fallback_artifact_id: str,
+        fallback_object_hash: str,
+    ) -> dict[str, str]:
+        if source_artifact_ids:
+            if len(source_artifact_ids) != len(source_object_hashes):
+                raise ValueError("source artifact/hash lineage must be one-to-one")
+            if len(set(source_artifact_ids)) != len(source_artifact_ids):
+                raise ValueError("source artifact ids must be unique")
+            bindings: dict[str, str] = {}
+            for artifact_id in source_artifact_ids:
+                record = self.state.artifact_record(artifact_id)
+                if record is None:
+                    raise ValueError("source artifact is unavailable")
+                object_hash = str(record["object_hash"])
+                if not self.objects.verify(object_hash):
+                    raise ValueError("source artifact object is unavailable or drifted")
+                bindings[artifact_id] = object_hash
+            # Legacy ValuationPack v1 stored artifact ids and object hashes as
+            # independently sorted collections. Rebuild the authoritative
+            # pairing from the canonical registry and treat incoming hashes as
+            # an unordered lineage set for backward compatibility.
+            if sorted(bindings.values()) != sorted(source_object_hashes):
+                raise ValueError("source artifact/hash lineage differs from canonical registry")
+            return bindings
+
+        record = self.state.artifact_record(fallback_artifact_id)
+        if (
+            record is None
+            or str(record["object_hash"]) != fallback_object_hash
+            or not self.objects.verify(fallback_object_hash)
+        ):
+            raise ValueError("fallback source artifact/hash lineage is unavailable or drifted")
+        return {fallback_artifact_id: fallback_object_hash}
+
     def _valuation(self, pack: ValuationPack) -> RecommendationValuationSnapshot:
         if pack.status is not InstitutionalArtifactStatus.READY or pack.market_price_anchor is None:
             raise ValueError("formal Full Research valuation requires a READY priced ValuationPack")
+        entry_context = self._entry_quality_context(pack)
         probabilities = self.research.policy.raw["valuation"]["default_scenario_probabilities"]
         by_scenario = {item.scenario.value: item for item in pack.results}
         scenarios: list[ValuationScenario] = []
@@ -1112,8 +1204,23 @@ class FullResearchReceiptAssembler:
         if len(methods) < 2:
             methods.add("SCENARIO_DISTRIBUTION")
         base_value = by_scenario["BASE"].per_share_value
-        source_ids = tuple(pack.source_artifact_ids) or (pack.forecast_pack_artifact_id,)
-        source_hashes = tuple(pack.source_object_hashes) or (pack.forecast_pack_object_hash,)
+        source_bindings = self._source_binding_map(
+            tuple(pack.source_artifact_ids),
+            tuple(pack.source_object_hashes),
+            fallback_artifact_id=pack.forecast_pack_artifact_id,
+            fallback_object_hash=pack.forecast_pack_object_hash,
+        )
+        entry_snapshot = None
+        if entry_context is not None:
+            entry_snapshot, entry_artifact_id, entry_object_hash = entry_context
+            existing_hash = source_bindings.get(entry_artifact_id)
+            if existing_hash is not None and existing_hash != entry_object_hash:
+                raise ValueError(
+                    "entry-quality source artifact/hash binding conflicts with valuation"
+                )
+            source_bindings[entry_artifact_id] = entry_object_hash
+        source_ids = tuple(sorted(source_bindings))
+        source_hashes = tuple(source_bindings[artifact_id] for artifact_id in source_ids)
         return RecommendationValuationSnapshot(
             instrument_id=pack.company_id,
             method_family=pack.archetype.value,
@@ -1125,6 +1232,19 @@ class FullResearchReceiptAssembler:
             margin_of_safety=(base_value - pack.market_price_anchor.price) / base_value,
             historical_percentile=None,
             peer_relative_percentile=None,
+            entry_quality_state=(
+                entry_snapshot.state
+                if entry_snapshot is not None
+                else EntryQualityState.INSUFFICIENT_HISTORY
+            ),
+            entry_quality_score=(
+                Decimal(str(entry_snapshot.score)) if entry_snapshot is not None else None
+            ),
+            entry_quality_reason_codes=(
+                tuple(entry_snapshot.reason_codes)
+                if entry_snapshot is not None
+                else ("ENTRY_QUALITY_UNAVAILABLE",)
+            ),
             source_artifact_ids=source_ids,
             source_object_hashes=source_hashes,
         )
@@ -1401,7 +1521,15 @@ class FullResearchReceiptAssembler:
                 if industry.status is InstitutionalArtifactStatus.READY
                 else Decimal("0")
             ),
-            momentum=Decimal("0"),
+            entry_quality_state=valuation.entry_quality_state,
+            entry_quality_score=valuation.entry_quality_score,
+            entry_timing_risk=valuation.entry_quality_state
+            in {
+                EntryQualityState.FALLING_KNIFE_RISK,
+                EntryQualityState.EXTENDED,
+                EntryQualityState.INSUFFICIENT_HISTORY,
+            },
+            momentum=factor.momentum,
             liquidity=(
                 Decimal(str(seed.market_liquidity_score))
                 if seed is not None and seed.market_liquidity_score is not None

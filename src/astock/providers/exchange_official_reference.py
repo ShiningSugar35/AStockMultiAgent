@@ -360,11 +360,15 @@ def _normalize_sse(row: dict[str, object]) -> dict[str, object]:
             int(raw_listing[:4]), int(raw_listing[4:6]), int(raw_listing[6:8])
         ).isoformat()
     delisted = str(row.get("DELIST_DATE") or "").strip()
+    industry_code = str(row.get("CSRC_CODE") or "").strip() or None
+    industry = str(row.get("CSRC_CODE_DESC") or "").strip() or None
     return {
         "code": code,
         "name": name,
         "listing_date": listing_date,
         "tradable": delisted in {"", "-"},
+        "industry_code": industry_code,
+        "industry": industry,
     }
 
 
@@ -421,12 +425,21 @@ def _szse_xlsx(content: bytes) -> list[dict[str, object]]:
             listing_date = date.fromisoformat(listing_text).isoformat() if listing_text else None
         except ValueError as exc:
             raise ExchangeOfficialReferenceError("SZSE listing date is invalid") from exc
+        raw_industry = values.get(f"R{row_no}", "").strip()
+        industry_code = raw_industry.split(maxsplit=1)[0] if raw_industry else None
+        industry = (
+            raw_industry.split(maxsplit=1)[1]
+            if " " in raw_industry
+            else raw_industry or None
+        )
         rows.append(
             {
                 "code": code,
                 "name": name,
                 "listing_date": listing_date,
                 "tradable": True,
+                "industry_code": industry_code,
+                "industry": industry,
             }
         )
     codes = [str(item["code"]) for item in rows]

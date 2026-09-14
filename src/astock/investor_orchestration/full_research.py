@@ -19,6 +19,7 @@ from astock.core.state import StateStore
 from astock.investor_orchestration.models import InvestorRequestEnvelope
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
+from astock.schemas.entry_quality import EntryQualityState
 from astock.schemas.full_research import (
     CandidateRankingEntry,
     ChallengerAssessment,
@@ -86,6 +87,15 @@ class FullResearchPolicy:
         allowed = set(self.raw["mandatory_dag"]["allowed_statuses"])
         if allowed != {item.value for item in FullResearchNodeStatus}:
             raise ValueError("configured research node statuses differ from the canonical contract")
+        multipliers = self.raw.get("portfolio", {}).get("entry_quality_weight_multipliers", {})
+        if not isinstance(multipliers, dict):
+            raise ValueError("entry-quality portfolio multipliers must be a mapping")
+        if multipliers and set(multipliers) != {state.value for state in EntryQualityState}:
+            raise ValueError("entry-quality portfolio multipliers must cover every canonical state")
+        for state, value in multipliers.items():
+            multiplier = Decimal(str(value))
+            if not str(state) or not Decimal("0") <= multiplier <= Decimal("1"):
+                raise ValueError("entry-quality portfolio multiplier is outside 0..1")
 
     @classmethod
     def load(cls, project_root: Path | None = None) -> FullResearchPolicy:
@@ -368,6 +378,8 @@ class FullResearchRecommendationService:
                     -item.expected_return,
                     -item.quality,
                     -item.valuation,
+                    item.entry_timing_risk,
+                    -(item.entry_quality_score or Decimal("0")),
                     -item.evidence_confidence,
                     item.instrument_id,
                 ),
@@ -391,6 +403,10 @@ class FullResearchRecommendationService:
         lot = int(config["lot_size_shares"])
         transaction_cost_rate = Decimal(str(config["transaction_cost_bps"])) / Decimal("10000")
         slippage_rate = Decimal(str(config["default_slippage_bps"])) / Decimal("10000")
+        entry_quality_multipliers = {
+            str(state): Decimal(str(value))
+            for state, value in config.get("entry_quality_weight_multipliers", {}).items()
+        }
         target_max = min(
             contract.portfolio_assumptions.target_position_max,
             int(config["target_position_max"]),
@@ -405,6 +421,7 @@ class FullResearchRecommendationService:
             lot=lot,
             transaction_cost_rate=transaction_cost_rate,
             slippage_rate=slippage_rate,
+            entry_quality_multipliers=entry_quality_multipliers,
         )
         factor_exposures = self._portfolio_factor_exposures(positions, eligible)
         violations = self._portfolio_constraint_violations(
@@ -444,6 +461,7 @@ class FullResearchRecommendationService:
         lot: int,
         transaction_cost_rate: Decimal,
         slippage_rate: Decimal,
+        entry_quality_multipliers: Mapping[str, Decimal],
     ) -> tuple[tuple[PortfolioPositionPlan, ...], dict[str, Decimal], Decimal]:
         positions: list[PortfolioPositionPlan] = []
         industry_weights: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
@@ -456,7 +474,13 @@ class FullResearchRecommendationService:
             industry_room = max(
                 Decimal("0"), max_industry - industry_weights[candidate.industry_id]
             )
-            planned_weight = min(raw_equal, max_single, industry_room)
+            timing_multiplier = entry_quality_multipliers.get(
+                candidate.entry_quality_state.value
+                if candidate.entry_quality_state is not None
+                else "",
+                Decimal("1"),
+            )
+            planned_weight = min(raw_equal, max_single, industry_room) * timing_multiplier
             if planned_weight <= 0:
                 continue
             planned_amount = min(capital * planned_weight, remaining_capital)

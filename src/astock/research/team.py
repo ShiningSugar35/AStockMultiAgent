@@ -69,6 +69,9 @@ class ResearchTeamPolicy:
     broker_execution_allowed: bool
     skill_share_gate_enabled: bool
     reserve_blind_market_tranche: bool
+    max_breadth_challenger_seeds: int
+    breadth_min_market_score_ratio: float
+    breadth_max_boards_per_domain: int
     expert_overlay_max_priority_bonus: float
     universal_coverage_minimum: float
     industry_coverage_minimum: float
@@ -148,6 +151,11 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
         broker_execution_allowed=bool(safety.get("broker_execution_allowed")),
         skill_share_gate_enabled=bool(discovery.get("skill_share_gate_enabled")),
         reserve_blind_market_tranche=bool(discovery.get("reserve_blind_market_tranche")),
+        max_breadth_challenger_seeds=int(discovery.get("max_breadth_challenger_seeds", 0)),
+        breadth_min_market_score_ratio=float(
+            discovery.get("breadth_min_market_score_ratio", 0.0)
+        ),
+        breadth_max_boards_per_domain=int(discovery.get("breadth_max_boards_per_domain", 1)),
         expert_overlay_max_priority_bonus=float(
             discovery.get("expert_overlay_max_priority_bonus", 0.0)
         ),
@@ -171,6 +179,12 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
         raise ValueError("author-relative Skill share gate has been retired")
     if not policy.reserve_blind_market_tranche:
         raise ValueError("blind market tranche reservation must remain enabled")
+    if not 0 <= policy.max_breadth_challenger_seeds <= 20:
+        raise ValueError("breadth challenger seed budget is outside governance bounds")
+    if not 0 <= policy.breadth_min_market_score_ratio <= 1:
+        raise ValueError("breadth challenger market-score ratio is outside 0..1")
+    if not 1 <= policy.breadth_max_boards_per_domain <= 8:
+        raise ValueError("breadth challenger board bound is outside governance bounds")
     if not 0 <= policy.expert_overlay_max_priority_bonus <= 0.25:
         raise ValueError("expert overlay bonus is outside the governance bound")
     if coverage.get("private_skill_gates_recommendation") is not False:

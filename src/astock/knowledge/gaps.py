@@ -31,7 +31,12 @@ def count_open_gap_boundaries(
         raise ValueError("comment_scope_prefix requires content_type")
     with state.connect() as connection:
         if data_cutoff_at is None or not gap_cutoff_history_available(
-            state, data_cutoff_at
+            state,
+            data_cutoff_at,
+            author_source_id=author_source_id,
+            content_type=content_type,
+            comment_scope_prefix=comment_scope_prefix,
+            excluded_scope_prefix=excluded_scope_prefix,
         ):
             rows = connection.execute(
                 "SELECT g.scope_id,g.cursor_json,s.content_type FROM collection_gap g "
@@ -77,30 +82,60 @@ def count_open_gap_boundaries(
     return len(boundaries)
 
 
-def gap_cutoff_history_available(state: StateStore, data_cutoff_at: datetime) -> bool:
-    """Return whether gap state can be reconstructed at the requested cutoff.
+def gap_cutoff_history_available(
+    state: StateStore,
+    data_cutoff_at: datetime,
+    *,
+    author_source_id: str | None = None,
+    content_type: str | None = None,
+    comment_scope_prefix: str | None = None,
+    excluded_scope_prefix: str | None = None,
+) -> bool:
+    """Return whether selected gap state can be reconstructed at the cutoff.
 
-    SQLite records trigger timestamps at millisecond precision.  If an event shares
-    the cutoff millisecond, its order relative to a sub-millisecond cutoff is
-    unknowable.  Treat that boundary as unavailable so callers use current state and
-    surface ``GAP_CUTOFF_HISTORY_UNAVAILABLE`` instead of silently assuming no gap.
+    SQLite records trigger timestamps at millisecond precision. If a relevant event
+    shares the cutoff millisecond, its order relative to a sub-millisecond cutoff is
+    unknowable. Events outside the selected author/scope must not poison an otherwise
+    reconstructable boundary.
     """
 
+    if content_type is None and comment_scope_prefix is not None:
+        raise ValueError("comment_scope_prefix requires content_type")
     exclusive_cutoff = _exclusive_millisecond_cutoff(data_cutoff_at)
     boundary_text = exclusive_cutoff.strftime("%Y-%m-%dT%H:%M:%S.%f")[:23] + "+00:00"
+    boundary_query = (
+        "SELECT 1 FROM collection_gap_state_event e "
+        "JOIN collection_scope s ON s.scope_id=e.scope_id "
+        "WHERE strftime('%Y-%m-%dT%H:%M:%f+00:00',e.occurred_at)=?"
+    )
+    boundary_parameters: list[object] = [boundary_text]
+    if author_source_id is not None:
+        boundary_query += " AND s.author_id=?"
+        boundary_parameters.append(author_source_id)
+    if excluded_scope_prefix is not None:
+        excluded_prefix = excluded_scope_prefix[:-1]
+        boundary_query += " AND substr(s.content_type,1,?)<>?"
+        boundary_parameters.extend((len(excluded_prefix), excluded_prefix))
+    if content_type is not None:
+        if comment_scope_prefix is None:
+            boundary_query += " AND s.content_type=?"
+            boundary_parameters.append(content_type)
+        else:
+            comment_prefix = comment_scope_prefix[:-1]
+            boundary_query += " AND (s.content_type=? OR substr(s.content_type,1,?)=?)"
+            boundary_parameters.extend((content_type, len(comment_prefix), comment_prefix))
+    boundary_query += " LIMIT 1"
     with state.connect() as connection:
         row = connection.execute(
             "SELECT reliable_from FROM collection_gap_temporal_meta WHERE singleton=1"
         ).fetchone()
-        boundary_event = connection.execute(
-            "SELECT 1 FROM collection_gap_state_event "
-            "WHERE strftime('%Y-%m-%dT%H:%M:%f+00:00',occurred_at)=? LIMIT 1",
-            (boundary_text,),
-        ).fetchone()
+        relevant_boundary_event = (
+            connection.execute(boundary_query, boundary_parameters).fetchone() is not None
+        )
     return (
         row is not None
         and _parse_utc_text(str(row["reliable_from"])) < exclusive_cutoff
-        and boundary_event is None
+        and not relevant_boundary_event
     )
 
 

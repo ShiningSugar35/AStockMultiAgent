@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
+from astock.schemas.entry_quality import EntryQualityState
 from astock.schemas.evidence import ClaimType, EvidenceGrade, FactStatus
 from astock.schemas.pit import PointInTimeStatus
 
@@ -738,11 +739,28 @@ class MarketPriceAnchor(AStockModel):
     available_to_system_at: AwareDatetime
     source_artifact_id: str = Field(min_length=1)
     source_object_hash: str = Field(pattern=_SHA256)
+    entry_quality_artifact_id: str | None = None
+    entry_quality_object_hash: str | None = Field(default=None, pattern=_SHA256)
+    entry_quality_state: EntryQualityState | None = None
+    entry_quality_score: Decimal | None = Field(default=None, ge=0, le=1)
+    entry_quality_reason_codes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_anchor(self) -> MarketPriceAnchor:
         if self.available_to_system_at < self.observed_at:
             raise ValueError("market price anchor cannot be available before observation")
+        entry_fields = (
+            self.entry_quality_artifact_id,
+            self.entry_quality_object_hash,
+            self.entry_quality_state,
+            self.entry_quality_score,
+        )
+        if any(value is not None for value in entry_fields) and not all(
+            value is not None for value in entry_fields
+        ):
+            raise ValueError("entry-quality anchor context must be complete or absent")
+        if self.entry_quality_reason_codes != sorted(set(self.entry_quality_reason_codes)):
+            raise ValueError("entry-quality reason codes must be sorted and unique")
         return self
 
 
@@ -806,11 +824,13 @@ class ValuationPack(AStockModel):
             self.assumption_evidence_ids,
             self.invalidation_conditions,
             self.blocking_codes,
-            self.source_artifact_ids,
-            self.source_object_hashes,
         ):
             if values != sorted(set(values)):
-                raise ValueError("valuation pack lists must be sorted and unique")
+                raise ValueError("valuation pack semantic lists must be sorted and unique")
+        if self.source_artifact_ids != sorted(set(self.source_artifact_ids)):
+            raise ValueError("valuation source artifact ids must be sorted and unique")
+        if len(self.source_artifact_ids) != len(self.source_object_hashes):
+            raise ValueError("valuation source artifact/hash lineage must be one-to-one")
         if self.status is InstitutionalArtifactStatus.READY and self.blocking_codes:
             raise ValueError("READY valuation cannot carry blocking codes")
         return self

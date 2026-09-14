@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -211,6 +211,7 @@ def test_market_seed_score_is_not_directional() -> None:
             amount_cny=100_000_000,
             turnover_rate=2,
             float_market_cap_cny=10_000_000_000,
+            industry_label=None,
             snapshot_id="snap:a",
         ),
         _RawMarketRow(
@@ -221,6 +222,7 @@ def test_market_seed_score_is_not_directional() -> None:
             amount_cny=100_000_000,
             turnover_rate=2,
             float_market_cap_cny=10_000_000_000,
+            industry_label=None,
             snapshot_id="snap:b",
         ),
     ]
@@ -456,3 +458,152 @@ def test_expert_overlay_priority_bonus_is_request_policy_driven(tmp_path: Path) 
     low = next(item for item in without_overlay.seeds if item.company_id == "600001")
     high = next(item for item in with_overlay.seeds if item.company_id == "600001")
     assert high.research_priority_score > low.research_priority_score
+
+
+def test_breadth_challenger_adds_only_near_cutoff_unrepresented_domain(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+    report = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=5,
+            max_market_seeds=1,
+            max_breadth_challenger_seeds=2,
+            breadth_min_market_score_ratio=0.40,
+            breadth_max_boards_per_domain=2,
+            max_expert_seeds_per_author=0,
+            minimum_amount_cny=20_000_000,
+            minimum_float_market_cap_cny=2_000_000_000,
+            created_at=NOW,
+        )
+    )
+
+    blind = [item for item in report.seeds if ResearchSeedOrigin.MARKET in item.origins]
+    breadth = [
+        item
+        for item in report.seeds
+        if ResearchSeedOrigin.BREADTH_CHALLENGER in item.origins
+    ]
+
+    assert [item.company_id for item in blind] == ["000001"]
+    assert [item.company_id for item in breadth] == ["600002"]
+    assert breadth[0].breadth_domain_ids == ["FINANCIALS"]
+    assert "HARD_TECH" in report.blind_breadth_domain_counts
+    assert report.breadth_seed_count == 1
+    assert report.selected_breadth_domain_counts["FINANCIALS"] == 1
+    assert all(item.company_id != "300001" for item in breadth)
+    assert "SECTOR_NEUTRAL_BREADTH_RESEARCH_SEED" in breadth[0].reason_codes
+
+
+def test_live_industry_taxonomy_and_constituents_fall_back_to_verified_cache(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service, state, objects = _service(tmp_path)
+    provider = cast(Any, service.provider)
+    router = ResearchSeedProviderRouter(
+        providers=[provider],
+        minimum_rows_by_market={Market.XSHG: 1, Market.XSHE: 1, Market.BJSE: 1},
+        state=state,
+        objects=objects,
+    )
+    # Fixture snapshots use a stable historical clock. Production only writes
+    # this cache after a live fetch, so widen freshness in this test only.
+    monkeypatch.setattr(
+        "astock.candidates.seeds._INDUSTRY_CACHE_FRESHNESS",
+        timedelta(days=365),
+    )
+
+    boards, board_snapshot = router.fetch_industry_boards(live=True)
+    constituents, constituent_snapshot = router.fetch_industry_constituents(
+        "BK0475",
+        live=True,
+    )
+
+    attempted: list[str] = []
+
+    def unavailable(*args, **kwargs):
+        attempted.append("live")
+        del args, kwargs
+        raise ValueError("industry endpoint unavailable")
+
+    monkeypatch.setattr(provider, "fetch_industry_boards", unavailable)
+    monkeypatch.setattr(provider, "fetch_industry_constituents", unavailable)
+
+    cached_boards, cached_board_snapshot = router.fetch_industry_boards(live=True)
+    cached_constituents, cached_constituent_snapshot = router.fetch_industry_constituents(
+        "BK0475",
+        live=True,
+    )
+
+    assert attempted == ["live", "live"]
+    assert cached_boards == boards
+    assert cached_constituents == constituents
+    assert cached_board_snapshot.snapshot_id == board_snapshot.snapshot_id
+    assert cached_constituent_snapshot.snapshot_id == constituent_snapshot.snapshot_id
+
+
+def test_official_industry_description_precedes_coarse_top_level_code(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+
+    assert (
+        service._breadth_domain_from_industry_label("C39 计算机、通信和其他电子设备制造业")
+        == "HARD_TECH"
+    )
+    assert service._breadth_domain_from_industry_label("C36 汽车制造业") == "AUTOMOTIVE"
+    assert service._breadth_domain_from_industry_label("C27 医药制造业") == "HEALTHCARE"
+    assert service._breadth_domain_from_industry_label("C 制造业") == "INDUSTRIALS"
+    assert service._breadth_domain_from_industry_label("B 采矿业") == "RESOURCES"
+    assert service._breadth_domain_from_industry_label("F 批发和零售业") == "COMMERCE_DISTRIBUTION"
+    assert service._breadth_domain_from_industry_label("F 批发零售") == "COMMERCE_DISTRIBUTION"
+    assert service._breadth_domain_from_industry_label("煤炭开采和洗选业") == "ENERGY_UTILITIES"
+
+
+def test_official_master_industry_mapping_keeps_breadth_alive_without_board_taxonomy(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(tmp_path)
+    provider = cast(Any, service.provider)
+    provider.market_payloads[Market.XSHG]["official_industry_by_symbol"] = {
+        "600001": "C 制造业",
+        "600002": "J 金融业",
+    }
+    provider.market_payloads[Market.XSHE]["official_industry_by_symbol"] = {
+        "000001": "I 信息技术",
+        "300001": "F 批发零售",
+    }
+    provider.market_payloads[Market.BJSE]["official_industry_by_symbol"] = {
+        "920001": "专用设备制造业",
+    }
+
+    def unavailable(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("industry board endpoint unavailable")
+
+    provider.fetch_industry_boards = unavailable
+    report = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=5,
+            max_market_seeds=1,
+            max_breadth_challenger_seeds=2,
+            breadth_min_market_score_ratio=0.40,
+            breadth_max_boards_per_domain=2,
+            max_expert_seeds_per_author=0,
+            minimum_amount_cny=20_000_000,
+            minimum_float_market_cap_cny=2_000_000_000,
+            created_at=NOW,
+        )
+    )
+
+    breadth = [
+        item
+        for item in report.seeds
+        if ResearchSeedOrigin.BREADTH_CHALLENGER in item.origins
+    ]
+    assert report.blind_breadth_domain_counts == {"HARD_TECH": 1}
+    assert breadth
+    bank = next(item for item in breadth if item.company_id == "600002")
+    assert bank.breadth_domain_ids == ["FINANCIALS"]
+    assert {item.company_id for item in breadth} == {"600001", "600002"}
+    assert "BREADTH_DOMAIN_MAPPING_UNAVAILABLE" not in report.warning_codes
+    assert "BREADTH_DOMAIN_MARKET_TAXONOMY_UNAVAILABLE" not in report.warning_codes

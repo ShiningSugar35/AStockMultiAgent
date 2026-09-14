@@ -86,6 +86,18 @@ _EVENT_TITLE_TERMS: dict[str, tuple[str, ...]] = {
     "MAJOR_CONTRACT": ("重大合同", "中标", "订单", "框架协议"),
     "REGULATORY_PENALTY": ("行政处罚", "监管措施", "立案", "纪律处分"),
     "CONTROLLER_CHANGE": ("实际控制人变更", "控制权变更", "控股股东变更"),
+    "MANAGEMENT_CHANGE": (
+        "董事长辞职",
+        "董事辞职",
+        "高级管理人员变动",
+        "聘任总经理",
+        "董事会换届",
+        "监事会换届",
+    ),
+    "LEGAL_REPRESENTATIVE_CHANGE": ("法定代表人变更", "工商变更", "注册资本变更"),
+    "EQUITY_PLEDGE_FREEZE": ("股份质押", "股权质押", "股份冻结", "股权冻结", "司法冻结"),
+    "LITIGATION_ENFORCEMENT": ("重大诉讼", "重大仲裁", "被执行人", "失信被执行"),
+    "CREDIT_RISK": ("信用评级", "债务逾期", "票据逾期", "债券违约"),
     "DIVIDEND": ("利润分配", "权益分派", "分红"),
     "SUSPENSION_RESUMPTION": ("停牌", "复牌"),
 }

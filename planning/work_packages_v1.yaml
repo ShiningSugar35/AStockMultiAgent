@@ -1,7 +1,7 @@
 schema_version: project-work-package-manifest-v1
 plan_id: investor-orchestration-and-regime-plan-v1
 status: CURRENT
-updated_on: 2026-09-13
+updated_on: 2026-09-14
 
 authority:
   machine_index: planning/work_packages_v1.yaml

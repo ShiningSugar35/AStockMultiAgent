@@ -29,6 +29,7 @@ class ResearchUniverseCoverageStatus(StrEnum):
 class ResearchSeedOrigin(StrEnum):
     EXISTING_CANDIDATE = "EXISTING_CANDIDATE"
     MARKET = "MARKET"
+    BREADTH_CHALLENGER = "BREADTH_CHALLENGER"
     EXPERT_SKILL = "EXPERT_SKILL"
 
 
@@ -88,6 +89,7 @@ class ResearchSeed(AStockModel):
     expert_author_source_ids: list[str] = Field(default_factory=list)
     expert_domain_names: list[str] = Field(default_factory=list)
     expert_domain_support_skill_ids: list[str] = Field(default_factory=list)
+    breadth_domain_ids: list[str] = Field(default_factory=list)
     reason_codes: list[str] = Field(min_length=1)
     source_snapshot_ids: list[str] = Field(default_factory=list)
     requires_candidate_evidence: Literal[True] = True
@@ -101,6 +103,7 @@ class ResearchSeed(AStockModel):
         "expert_author_source_ids",
         "expert_domain_names",
         "expert_domain_support_skill_ids",
+        "breadth_domain_ids",
         "reason_codes",
         "source_snapshot_ids",
     )
@@ -116,6 +119,9 @@ class ResearchSeedRequest(AStockModel):
     as_of: AwareDatetime
     max_total_seeds: int = Field(default=40, ge=5, le=100)
     max_market_seeds: int = Field(default=20, ge=0, le=60)
+    max_breadth_challenger_seeds: int = Field(default=6, ge=0, le=20)
+    breadth_min_market_score_ratio: float = Field(default=0.82, ge=0, le=1)
+    breadth_max_boards_per_domain: int = Field(default=3, ge=1, le=8)
     max_expert_seeds_per_author: int = Field(default=10, ge=0, le=30)
     market_fetch_workers: int = Field(default=2, ge=1, le=3)
     max_domains_per_author: int = Field(default=5, ge=1, le=10)
@@ -148,6 +154,9 @@ class ResearchSeedReport(AStockModel):
     )
     formal_full_market_coverage_allowed: bool = False
     market_seed_count: int = Field(ge=0)
+    breadth_seed_count: int = Field(default=0, ge=0)
+    blind_breadth_domain_counts: dict[str, int] = Field(default_factory=dict)
+    selected_breadth_domain_counts: dict[str, int] = Field(default_factory=dict)
     expert_seed_count: int = Field(ge=0)
     existing_candidate_seed_count: int = Field(ge=0)
     recommendation_allowed: Literal[False] = False
@@ -213,14 +222,37 @@ class ResearchSeedReport(AStockModel):
     @model_validator(mode="after")
     def validate_counts(self) -> ResearchSeedReport:
         market = sum(ResearchSeedOrigin.MARKET in item.origins for item in self.seeds)
+        breadth = sum(
+            ResearchSeedOrigin.BREADTH_CHALLENGER in item.origins for item in self.seeds
+        )
         expert = sum(ResearchSeedOrigin.EXPERT_SKILL in item.origins for item in self.seeds)
         existing = sum(ResearchSeedOrigin.EXISTING_CANDIDATE in item.origins for item in self.seeds)
-        if (market, expert, existing) != (
+        if (market, breadth, expert, existing) != (
             self.market_seed_count,
+            self.breadth_seed_count,
             self.expert_seed_count,
             self.existing_candidate_seed_count,
         ):
             raise ValueError("research-seed origin counts do not reconcile")
+        for counts in (self.blind_breadth_domain_counts, self.selected_breadth_domain_counts):
+            if any(not key or value < 0 for key, value in counts.items()):
+                raise ValueError("research-seed breadth domain counts are invalid")
+        derived_blind: dict[str, int] = {}
+        derived_selected: dict[str, int] = {}
+        for seed in self.seeds:
+            for domain_id in seed.breadth_domain_ids:
+                derived_selected[domain_id] = derived_selected.get(domain_id, 0) + 1
+                if ResearchSeedOrigin.MARKET in seed.origins:
+                    derived_blind[domain_id] = derived_blind.get(domain_id, 0) + 1
+            if ResearchSeedOrigin.BREADTH_CHALLENGER in seed.origins:
+                if not seed.breadth_domain_ids:
+                    raise ValueError("breadth challenger requires a derived breadth domain")
+                if "SECTOR_NEUTRAL_BREADTH_RESEARCH_SEED" not in seed.reason_codes:
+                    raise ValueError("breadth challenger requires its research-budget reason")
+        if dict(sorted(derived_blind.items())) != self.blind_breadth_domain_counts:
+            raise ValueError("blind breadth-domain counts do not reconcile")
+        if dict(sorted(derived_selected.items())) != self.selected_breadth_domain_counts:
+            raise ValueError("selected breadth-domain counts do not reconcile")
         if self.status is ResearchSeedStatus.READY and not self.seeds:
             raise ValueError("READY research-seed report requires at least one seed")
         if self.status is ResearchSeedStatus.EMPTY and self.seeds:

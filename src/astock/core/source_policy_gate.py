@@ -213,12 +213,16 @@ class SourcePolicyGate:
         )
 
     def _authority_for(self, domain: str) -> AuthoritySource | None:
+        matches: list[tuple[int, str, AuthoritySource]] = []
         for source in self.registry.sources:
-            if any(
-                domain == allowed or domain.endswith(f".{allowed}") for allowed in source.domains
-            ):
-                return source
-        return None
+            for allowed in source.domains:
+                if domain == allowed or domain.endswith(f".{allowed}"):
+                    matches.append((len(allowed), allowed, source))
+        if not matches:
+            return None
+        # A broad suffix such as gov.cn must never shadow a more specific
+        # registered authority such as gsxt.gov.cn or zxgk.court.gov.cn.
+        return max(matches, key=lambda item: (item[0], item[1], item[2].source_id))[2]
 
     @staticmethod
     def _reject(

@@ -20,6 +20,7 @@ from astock.research.fundamental_analytics import (
     implied_terminal_growth,
     topological_order,
 )
+from astock.schemas.entry_quality import EntryQualitySnapshot
 from astock.schemas.evidence import (
     ClaimEvidenceBundle,
     ClaimType,
@@ -594,6 +595,8 @@ class InstitutionalResearchService:
         market_price = None
         market_price_source_id: str | None = None
         market_price_source_hash: str | None = None
+        entry_quality_source_id: str | None = None
+        entry_quality_source_hash: str | None = None
         if request.market_price_anchor is not None:
             anchor = request.market_price_anchor
             source = self.state.artifact_record(anchor.source_artifact_id)
@@ -606,6 +609,29 @@ class InstitutionalResearchService:
             market_price = anchor.price
             market_price_source_id = anchor.source_artifact_id
             market_price_source_hash = anchor.source_object_hash
+            if anchor.entry_quality_artifact_id is not None:
+                entry_source = self.state.artifact_record(anchor.entry_quality_artifact_id)
+                if (
+                    entry_source is None
+                    or str(entry_source["type"]) != "EntryQualitySnapshot"
+                    or str(entry_source["object_hash"]) != anchor.entry_quality_object_hash
+                    or anchor.entry_quality_object_hash is None
+                    or not self.objects.verify(anchor.entry_quality_object_hash)
+                ):
+                    raise ValueError("entry-quality artifact is unavailable or drifted")
+                entry_quality = EntryQualitySnapshot.model_validate_json(
+                    self.objects.get_bytes(anchor.entry_quality_object_hash)
+                )
+                if (
+                    not entry_quality.instrument_id.endswith(f":{request.company_id}")
+                    or entry_quality.current_price != anchor.price
+                    or entry_quality.as_of > request.as_of
+                    or entry_quality.state is not anchor.entry_quality_state
+                    or Decimal(str(entry_quality.score)) != anchor.entry_quality_score
+                ):
+                    raise ValueError("entry-quality context does not match the valuation anchor")
+                entry_quality_source_id = anchor.entry_quality_artifact_id
+                entry_quality_source_hash = anchor.entry_quality_object_hash
         results: list[ValuationScenarioResult] = []
         claim_ids: set[str] = set()
         evidence_ids: set[str] = set()
@@ -679,15 +705,26 @@ class InstitutionalResearchService:
                 "sensitivity": [item.model_dump(mode="json") for item in sensitivity],
             }
         )
-        valuation_source_ids = {
-            request.forecast_pack_artifact_id,
-            request.evidence_sufficiency_artifact_id,
-            request.company_economics_artifact_id,
+        valuation_source_bindings = {
+            request.forecast_pack_artifact_id: forecast_hash,
+            request.evidence_sufficiency_artifact_id: sufficiency_hash,
+            request.company_economics_artifact_id: company_hash,
         }
-        valuation_source_hashes = {forecast_hash, sufficiency_hash, company_hash}
-        if market_price_source_id is not None and market_price_source_hash is not None:
-            valuation_source_ids.add(market_price_source_id)
-            valuation_source_hashes.add(market_price_source_hash)
+        optional_bindings = (
+            (market_price_source_id, market_price_source_hash),
+            (entry_quality_source_id, entry_quality_source_hash),
+        )
+        for artifact_id, object_hash in optional_bindings:
+            if artifact_id is None or object_hash is None:
+                continue
+            existing_hash = valuation_source_bindings.get(artifact_id)
+            if existing_hash is not None and existing_hash != object_hash:
+                raise ValueError("valuation source artifact/hash binding conflict")
+            valuation_source_bindings[artifact_id] = object_hash
+        valuation_source_ids = sorted(valuation_source_bindings)
+        valuation_source_hashes = [
+            valuation_source_bindings[artifact_id] for artifact_id in valuation_source_ids
+        ]
         pack = ValuationPack(
             valuation_id=valuation_id,
             company_id=request.company_id,
@@ -706,8 +743,8 @@ class InstitutionalResearchService:
             assumption_evidence_ids=sorted(evidence_ids),
             invalidation_conditions=request.invalidation_conditions,
             blocking_codes=[],
-            source_artifact_ids=sorted(valuation_source_ids),
-            source_object_hashes=sorted(valuation_source_hashes),
+            source_artifact_ids=valuation_source_ids,
+            source_object_hashes=valuation_source_hashes,
             created_at=request.as_of,
         )
         self._persist(

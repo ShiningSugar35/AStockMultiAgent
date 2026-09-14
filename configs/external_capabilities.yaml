@@ -74,6 +74,42 @@ capabilities:
     fixed_version_required: true
     optional_dependency: false
     exit_contract: Disable the optional capability admission; the Provider Registry contract and stored lead snapshots remain auditable.
+  - capability_id: qcc-enterprise-intelligence-mcp
+    display_name: QCC Enterprise Intelligence MCP
+    kind: MCP
+    logical_capabilities: [enterprise.change, enterprise.personnel, enterprise.profile, enterprise.risk]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: SECONDARY_STRUCTURED
+    completeness_ceiling: EXACT_ITEM
+    qualification_validity_days: 45
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Disconnect the optional QCC MCP route; official exchange/CNINFO/government Web evidence remains available.
+  - capability_id: qcc-enterprise-intelligence-api
+    display_name: QCC Enterprise Intelligence API
+    kind: API
+    logical_capabilities: [enterprise.change, enterprise.personnel, enterprise.profile, enterprise.risk]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: SECONDARY_STRUCTURED
+    completeness_ceiling: EXACT_ITEM
+    qualification_validity_days: 45
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Disable the optional QCC API route; MCP and official Web routes remain independent.
+  - capability_id: tianyancha-enterprise-intelligence-api
+    display_name: Tianyancha Enterprise Intelligence API
+    kind: API
+    logical_capabilities: [enterprise.change, enterprise.personnel, enterprise.profile, enterprise.risk]
+    default_stage: SHADOW
+    maximum_stage: PRODUCTION_BACKUP
+    source_class_ceiling: SECONDARY_STRUCTURED
+    completeness_ceiling: EXACT_ITEM
+    qualification_validity_days: 45
+    fixed_version_required: true
+    optional_dependency: true
+    exit_contract: Disable the optional Tianyancha route; QCC and official Web routes remain independent.
   - capability_id: playwright-mcp
     display_name: Microsoft Playwright MCP
     kind: MCP

@@ -850,6 +850,8 @@ def test_research_team_cli_is_discoverable() -> None:
         "research-team-schema",
         "industry-research-archetypes",
         "industry-research-resolve",
+        "industry-research-methodologies",
+        "industry-research-methodology",
         "research-team-plan",
         "research-team-company-plan",
         "research-coverage-score",
@@ -1419,4 +1421,27 @@ def test_research_coverage_separates_private_edge_from_core_readiness(tmp_path: 
     assert report.core_coverage_pass
     assert report.score.private_skill_coverage == 0
     assert report.score.private_skill_is_edge_only
+    assert not report.private_skill_gates_recommendation
+
+def test_private_skills_cannot_rescue_insufficient_industry_core_coverage(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+    report = service.evaluate_coverage(
+        ResearchCoverageRequest(
+            company_id="600001",
+            universal_required_ids=["business", "forecast", "valuation"],
+            universal_completed_ids=["business", "forecast", "valuation"],
+            industry_required_ids=["competition", "cycle", "kpi", "regulation"],
+            industry_completed_ids=["competition"],
+            private_skill_available_ids=["blogger-a", "blogger-b", "blogger-c"],
+            private_skill_matched_ids=["blogger-a", "blogger-b", "blogger-c"],
+            evidence_required_ids=["annual", "interim"],
+            evidence_satisfied_ids=["annual", "interim"],
+            created_at=NOW,
+        )
+    )
+
+    assert report.score.private_skill_coverage == 100
+    assert not report.core_coverage_pass
+    assert report.score.industry_specialist_coverage == 25
+    assert report.missing_industry_ids == ["cycle", "kpi", "regulation"]
     assert not report.private_skill_gates_recommendation

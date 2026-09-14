@@ -30,3 +30,59 @@ alias_groups:
     skill_terms: ["光伏"]
   - board_contains: ["电力"]
     skill_terms: ["电力"]
+
+# Broad, sector-neutral research-budget buckets. Internal research grouping only;
+# this is not a certified industry taxonomy and carries no Candidate/BUY authority.
+# Exchange official master uses CSRC top-level industry codes. The map is deliberately
+# broad: it allocates research budget but never claims a certified portfolio taxonomy.
+official_industry_code_map:
+  A: AGRICULTURE
+  B: RESOURCES
+  C: INDUSTRIALS
+  D: ENERGY_UTILITIES
+  E: INDUSTRIALS
+  F: COMMERCE_DISTRIBUTION
+  G: TRANSPORTATION
+  H: CONSUMER
+  I: HARD_TECH
+  J: FINANCIALS
+  K: REAL_ESTATE
+  L: INDUSTRIALS
+  M: INDUSTRIALS
+  N: ENERGY_UTILITIES
+  O: CONSUMER
+  P: CONSUMER
+  Q: HEALTHCARE
+  R: CONSUMER
+  S: INDUSTRIALS
+breadth_domains:
+  - domain_id: FINANCIALS
+    board_contains: ["银行", "保险", "证券", "多元金融"]
+  - domain_id: HEALTHCARE
+    board_contains: ["医药", "医药制造", "医疗器械", "医疗服务", "生物制品", "卫生"]
+  - domain_id: CONSUMER
+    board_contains: ["白酒", "食品饮料", "食品制造", "农副食品", "家电", "家具", "零售", "商贸零售", "旅游酒店", "住宿", "餐饮", "文化传播"]
+  - domain_id: COMMERCE_DISTRIBUTION
+    board_contains: ["批发和零售", "批发零售", "批发", "贸易", "供应链服务"]
+  - domain_id: HARD_TECH
+    board_contains: ["半导体", "电子元件", "通信设备", "计算机设备", "计算机、通信和其他电子设备", "软件和信息技术"]
+  - domain_id: AUTOMOTIVE
+    board_contains: ["汽车整车", "汽车零部件", "汽车制造"]
+  - domain_id: ENERGY_UTILITIES
+    board_contains: ["煤炭", "煤炭开采", "石油", "石油和天然气开采", "电力", "热力", "燃气", "水生产和供应"]
+  - domain_id: RESOURCES
+    board_contains: ["采矿", "矿业", "开采专业及辅助"]
+  - domain_id: MATERIALS
+    board_contains: ["有色", "有色金属", "钢铁", "黑色金属", "化工", "化学原料", "化学制品", "建材", "非金属矿物", "橡胶和塑料"]
+  - domain_id: INDUSTRIALS
+    board_contains: ["工程机械", "专用设备", "通用设备", "电网设备", "仪器仪表", "电气机械", "金属制品", "铁路、船舶"]
+  - domain_id: AGRICULTURE
+    board_contains: ["农牧饲渔", "农业", "林业", "畜牧", "养殖", "种业", "渔业"]
+  - domain_id: TRANSPORTATION
+    board_contains: ["航运港口", "航空机场", "物流", "铁路公路", "交通运输", "道路运输", "水上运输", "仓储"]
+  - domain_id: REAL_ESTATE
+    board_contains: ["房地产"]
+  - domain_id: DEFENSE
+    board_contains: ["军工", "航天航空", "航空航天"]
+  - domain_id: NEW_ENERGY
+    board_contains: ["光伏设备", "电池", "风电设备"]

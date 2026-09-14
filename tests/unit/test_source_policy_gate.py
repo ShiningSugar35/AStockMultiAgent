@@ -50,6 +50,55 @@ def test_registered_official_exact_url_can_enter_snapshot_admission() -> None:
     assert not decision.exhaustive_proof_allowed
 
 
+def test_specific_enterprise_authority_domain_wins_over_generic_gov_cn_suffix() -> None:
+    gate = SourcePolicyGate()
+
+    gsxt = gate.validate(
+        _proposal(
+            capability="enterprise.change",
+            candidate_url="https://www.gsxt.gov.cn/example/company-change",
+        )
+    )
+    credit = gate.validate(
+        _proposal(
+            capability="enterprise.risk",
+            candidate_url="https://www.creditchina.gov.cn/example/risk",
+        )
+    )
+    court = gate.validate(
+        _proposal(
+            capability="enterprise.risk",
+            candidate_url="https://zxgk.court.gov.cn/example/enforcement",
+        )
+    )
+
+    assert gsxt.allowed and gsxt.source_id == "gsxt-official-web"
+    assert credit.allowed and credit.source_id == "credit-china-official-web"
+    assert court.allowed and court.source_id == "court-enforcement-official-web"
+
+
+
+
+def test_generic_gov_cn_is_not_a_blanket_enterprise_personnel_authority() -> None:
+    gate = SourcePolicyGate()
+    enterprise = gate.validate(
+        _proposal(
+            capability="enterprise.personnel",
+            candidate_url="https://example-city.gov.cn/appointment/detail.html",
+        )
+    )
+    authoritative_fact = gate.validate(
+        _proposal(
+            capability="web.authoritative_fact",
+            candidate_url="https://example-city.gov.cn/appointment/detail.html",
+        )
+    )
+
+    assert not enterprise.allowed
+    assert enterprise.reason_codes == ["AUTHORITY_SOURCE_LACKS_CAPABILITY"]
+    assert authoritative_fact.allowed
+    assert authoritative_fact.source_id == "government-official-web"
+
 def test_formal_official_web_requires_https_and_rejects_url_credentials() -> None:
     gate = SourcePolicyGate()
 

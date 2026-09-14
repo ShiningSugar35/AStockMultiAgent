@@ -9,7 +9,7 @@ description: Build an evidence-linked catalyst and risk event timeline for an A-
 
 - Consume only the ready `company-catalyst` task from the existing `ResearchTeamPlan`; do not create a parallel plan or free-form news workflow.
 - Preserve company identity, `as_of`, acquisition lineage and upstream macro, policy, industry and governance artifacts.
-- Primary authority is exchange/CNINFO/issuer/regulator/court/procurement or another formal event record. News, social posts and calendars are discovery leads until the exact official document is frozen.
+- Primary authority is exchange/CNINFO/issuer/regulator/court/procurement/government/official enterprise-credit records or another formal event record. Cover directors/senior-management/controller/legal-representative changes, key-person public-office appointments, equity pledge/freeze, business-registration changes, administrative penalties, enforcement/credit/litigation, subsidiaries/partners and material upstream/downstream key-person events in addition to ordinary earnings/policy/contracts. For optional commercial enterprise intelligence use the source router: qualified platform MCP first for `enterprise.*`, then qualified official SDK/API, then authoritative Web; QCC/Tianyancha-style sources remain secondary evidence and never displace a stronger official filing. News, social posts and calendars are discovery leads until an admissible immutable source is frozen.
 
 ## Procedure
 

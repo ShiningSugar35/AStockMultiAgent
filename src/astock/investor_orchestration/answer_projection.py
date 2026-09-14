@@ -25,6 +25,7 @@ from astock.investor_orchestration.models import (
 from astock.investor_orchestration.output_validation import RegisteredOutputVerifier, output_model
 from astock.investor_orchestration.utils import content_hash
 from astock.research.presentation import audit_public_answer
+from astock.schemas.entry_quality import EntryQualityState
 from astock.schemas.external_accounts import ExternalAccountOperationReceipt
 from astock.schemas.full_research import RecommendationResearchReceipt
 from astock.schemas.institutional_research import InstitutionalDecisionContext
@@ -47,6 +48,15 @@ _LOCAL = frozenset(
         "RESPONSE_GATEWAY",
     }
 )
+_ENTRY_QUALITY_PUBLIC_TEXT = {
+    EntryQualityState.ATTRACTIVE_DISLOCATION: "中长期价格位置较低，且已有企稳迹象",
+    EntryQualityState.BASE_BUILDING: "处于中低位筑底区间",
+    EntryQualityState.TREND_CONFIRMED: "趋势已经确认，但并非绝对低位",
+    EntryQualityState.FALLING_KNIFE_RISK: "价格虽低，但下跌趋势尚未充分企稳",
+    EntryQualityState.EXTENDED: "趋势偏强，但相对中期位置已经明显延伸",
+    EntryQualityState.NEUTRAL: "价格位置与趋势处于中性区间",
+    EntryQualityState.INSUFFICIENT_HISTORY: "可验证的价格位置历史不足",
+}
 
 
 @dataclass(frozen=True)
@@ -229,6 +239,16 @@ def _position_reasons(index: _FullResearchPublicIndex, position: Any) -> list[st
         f"安全边际{_decimal(valuation.margin_of_safety * 100)}%，"
         f"证据置信度{_decimal(ranking.evidence_confidence * 100)}%。",
     ]
+    if valuation.entry_quality_state is not None:
+        entry_text = _ENTRY_QUALITY_PUBLIC_TEXT[valuation.entry_quality_state]
+        score = (
+            f"，入场位置评分{_decimal(valuation.entry_quality_score * 100)}/100"
+            if valuation.entry_quality_score is not None
+            else ""
+        )
+        values.append(
+            f"{_code(instrument)}入场位置：{entry_text}{score}；该判断只用于建仓节奏。"
+        )
     values.extend(f"{_code(instrument)}催化剂：{_text(value)}" for value in narrative.catalysts)
     return values
 

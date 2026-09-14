@@ -35,6 +35,7 @@ from astock.schemas.full_research import (
     MacroResearchOutcome,
     NewsEvent,
     NewsEventCoverage,
+    NewsEventResearchPack,
     PortfolioPositionPlan,
     RecommendationValuationSnapshot,
     SourceAuthority,
@@ -385,6 +386,12 @@ def _news() -> tuple[NewsEvent, NewsEventCoverage]:
             "investigation",
             "safety_incident",
             "management",
+            "key_personnel_external_appointment",
+            "ownership_control",
+            "equity_pledge_freeze",
+            "business_registration",
+            "credit_enforcement",
+            "key_partner_personnel",
             "industry_pricing",
             "supply_chain",
             "overseas_sanctions_trade",
@@ -870,6 +877,38 @@ def test_company_history_and_news_window_contracts_are_hard_gates() -> None:
                 "covered_windows_days": (7, 30, 90, 180),
             }
         )
+
+
+def test_legacy_news_categories_remain_readable_but_do_not_satisfy_current_policy() -> None:
+    event, current = _news()
+    new_categories = {
+        "key_personnel_external_appointment",
+        "ownership_control",
+        "equity_pledge_freeze",
+        "business_registration",
+        "credit_enforcement",
+        "key_partner_personnel",
+    }
+    legacy = NewsEventCoverage.model_validate(
+        {
+            **current.model_dump(mode="json"),
+            "covered_categories": tuple(
+                item for item in current.covered_categories if item not in new_categories
+            ),
+        }
+    )
+    pack = NewsEventResearchPack(
+        instrument_id=event.instrument_id or "600001.XSHG",
+        as_of=legacy.as_of,
+        events=(event,),
+        coverage=legacy,
+        evidence_ids=("evidence:legacy-news",),
+        created_at=NOW,
+    )
+
+    assert not pack.recommendation_ready(
+        required_categories=tuple(sorted(new_categories))
+    )
 
 
 def test_missing_factor_dimension_cannot_be_zero_filled_or_remain_buy_eligible() -> None:

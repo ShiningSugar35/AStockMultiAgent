@@ -34,6 +34,7 @@ class SourceAccessPolicy:
     strong_official_capability_tokens: tuple[str, ...]
     weights: dict[str, Decimal]
     transport_scores: dict[str, Decimal]
+    transport_scores_by_capability_prefix: dict[str, dict[str, Decimal]]
     officiality_scores: dict[str, Decimal]
     health_scores: dict[str, Decimal]
 
@@ -49,6 +50,18 @@ def load_source_access_policy(path: Path) -> SourceAccessPolicy:
         raise ValueError("Source-access policy must keep Manual last")
     weights = _decimal_map(raw.get("weights"), "weights")
     transport_scores = _decimal_map(raw.get("transport_scores"), "transport_scores")
+    raw_scoped_transport = raw.get("transport_scores_by_capability_prefix", {})
+    if not isinstance(raw_scoped_transport, dict):
+        raise ValueError("Scoped transport scores must be a mapping")
+    scoped_transport_scores: dict[str, dict[str, Decimal]] = {}
+    for prefix, values in raw_scoped_transport.items():
+        normalized_prefix = str(prefix).strip().lower()
+        if not normalized_prefix:
+            raise ValueError("Scoped transport score prefix must be non-empty")
+        scores = _decimal_map(values, f"transport_scores_by_capability_prefix:{prefix}")
+        if set(scores) != set(transport_scores):
+            raise ValueError("Scoped transport scores must define the canonical transport set")
+        scoped_transport_scores[normalized_prefix] = scores
     officiality_scores = _decimal_map(raw.get("officiality_scores"), "officiality_scores")
     health_scores = _decimal_map(raw.get("health_scores"), "health_scores")
     required_weight_keys = {
@@ -76,6 +89,7 @@ def load_source_access_policy(path: Path) -> SourceAccessPolicy:
         strong_official_capability_tokens=tuple(str(item).lower() for item in tokens),
         weights=weights,
         transport_scores=transport_scores,
+        transport_scores_by_capability_prefix=scoped_transport_scores,
         officiality_scores=officiality_scores,
         health_scores=health_scores,
     )
@@ -161,7 +175,7 @@ class SourceAccessRouter:
             automated,
             key=lambda item: (
                 0 if strong_official and item.available and self._is_primary_official(item) else 1,
-                -self._score(item),
+                -self._score(item, request.requested_capability),
                 0 if request.source_id is not None and item.source_id == request.source_id else 1,
                 item.source_id,
                 item.transport.value,
@@ -190,7 +204,8 @@ class SourceAccessRouter:
             selected_source_id = selected.source_id
             reason = (
                 f"{selected.reason}; source={selected.source_id}; "
-                f"policy={self.policy.policy_version}; score={self._score(selected)}"
+                f"policy={self.policy.policy_version}; "
+                f"score={self._score(selected, request.requested_capability)}"
             )
         else:
             selected_transport = AccessTransport.MANUAL
@@ -244,7 +259,11 @@ class SourceAccessRouter:
         )
         return decision
 
-    def _score(self, item: TransportCapability) -> Decimal:
+    def _score(
+        self,
+        item: TransportCapability,
+        requested_capability: str | None = None,
+    ) -> Decimal:
         weights = self.policy.weights
         officiality_key = item.officiality
         if officiality_key == "UNKNOWN":
@@ -254,7 +273,19 @@ class SourceAccessRouter:
                 officiality_key = "SECONDARY_STRUCTURED"
         officiality = self.policy.officiality_scores.get(officiality_key, Decimal("0"))
         health = self.policy.health_scores.get(item.health_status, Decimal("0"))
-        transport = self.policy.transport_scores.get(item.transport.value, Decimal("0"))
+        transport_scores = self.policy.transport_scores
+        if requested_capability is not None:
+            normalized = requested_capability.lower()
+            matching_prefixes = [
+                prefix
+                for prefix in self.policy.transport_scores_by_capability_prefix
+                if normalized.startswith(prefix)
+            ]
+            if matching_prefixes:
+                transport_scores = self.policy.transport_scores_by_capability_prefix[
+                    max(matching_prefixes, key=len)
+                ]
+        transport = transport_scores.get(item.transport.value, Decimal("0"))
         latency_score = Decimal("1") / (Decimal("1") + Decimal(item.latency_ms) / Decimal("1000"))
         retryable_failure = Decimal("1") if item.retryable_failure else Decimal("0")
         formal_eligibility = Decimal("1") if item.formal_eligible else Decimal("0")

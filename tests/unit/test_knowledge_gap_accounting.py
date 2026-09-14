@@ -243,3 +243,50 @@ def test_gap_cutoff_uses_current_open_state_when_boundary_millisecond_is_ambiguo
 
     assert not gap_cutoff_history_available(state, cutoff)
     assert count_open_gap_boundaries(state, _AUTHOR, data_cutoff_at=cutoff) == 1
+
+
+def test_gap_cutoff_ignores_same_millisecond_event_outside_selected_scope(state) -> None:
+    cutoff = datetime(2026, 7, 22, 12, 0, 0, 123500, tzinfo=UTC)
+    state.upsert_collection_scope(
+        author_id=_AUTHOR,
+        content_type="answers",
+        status="COMPLETE",
+    )
+    comment_scope = state.upsert_collection_scope(
+        author_id=_AUTHOR,
+        content_type="comments:answers:answer-1:__root__",
+        status="PARTIAL",
+    )
+    _record_gap(state, comment_scope, {"comment_page": 0})
+    with state.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_gap_temporal_meta SET reliable_from=? WHERE singleton=1",
+            ("2026-07-22T11:59:59.999+00:00",),
+        )
+        connection.execute(
+            "UPDATE collection_gap_state_event SET occurred_at=? WHERE scope_id=?",
+            ("2026-07-22T12:00:00.123+00:00", comment_scope),
+        )
+
+    assert not gap_cutoff_history_available(state, cutoff)
+    assert gap_cutoff_history_available(
+        state,
+        cutoff,
+        author_source_id=_AUTHOR,
+        content_type="answers",
+    )
+    assert gap_cutoff_history_available(
+        state,
+        cutoff,
+        author_source_id=_AUTHOR,
+        excluded_scope_prefix="comments:%",
+    )
+    assert (
+        count_open_gap_boundaries(
+            state,
+            _AUTHOR,
+            content_type="answers",
+            data_cutoff_at=cutoff,
+        )
+        == 0
+    )

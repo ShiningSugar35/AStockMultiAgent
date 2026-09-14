@@ -1,0 +1,342 @@
+schema_version: industry-methodologies-v1
+registry_version: industry-methodologies-v1
+released_at: 2026-09-14T00:00:00Z
+policy:
+  private_skill_required_for_analysis: false
+  specialist_draft_required: false
+  fact_authority_allowed: false
+  recommendation_allowed: false
+  allow_generic_fallback_for_uncovered_archetype: true
+
+sources:
+  - source_id: acca-cfa-sector-analysis
+    publisher: ACCA & CFA Institute
+    title: Sector Analysis – A Framework for Investors
+    url: https://www.accaglobal.com/hk/en/professional-insights/global-profession/ACCA-CFAI-sector-analysis.html
+    source_kind: PROFESSIONAL_STANDARD
+  - source_id: cfa-industry-competitive-analysis
+    publisher: CFA Institute
+    title: Industry and Competitive Analysis
+    url: https://www.cfainstitute.org/insights/professional-learning/refresher-readings/2026/industry-and-competitive-analysis
+    source_kind: PROFESSIONAL_STANDARD
+  - source_id: damodaran-financial-services-valuation
+    publisher: NYU Stern / Aswath Damodaran
+    title: Investment Valuation – Valuing Financial Services Firms
+    url: https://pages.stern.nyu.edu/adamodar/New_Home_Page/Inv4ed.htm
+    source_kind: ACADEMIC_DATA
+  - source_id: damodaran-sector-benchmarks
+    publisher: NYU Stern / Aswath Damodaran
+    title: Margin and Return on Invested Capital by Sector
+    url: https://pages.stern.nyu.edu/adamodar/New_Home_Page/datafile/mgnroc.html
+    source_kind: ACADEMIC_DATA
+  - source_id: fdic-qbp
+    publisher: Federal Deposit Insurance Corporation
+    title: Quarterly Banking Profile Graph Book
+    url: https://www.fdic.gov/quarterly-banking-profile/fdic-qbp-graph-book-535
+    source_kind: REGULATOR
+  - source_id: fda-drug-development
+    publisher: U.S. Food and Drug Administration
+    title: The Drug Development Process
+    url: https://www.fda.gov/patients/learn-about-drug-and-device-approvals/drug-development-process
+    source_kind: REGULATOR
+  - source_id: iea-ev-battery
+    publisher: International Energy Agency
+    title: Global EV Outlook 2026 – Electric Vehicle Batteries
+    url: https://www.iea.org/reports/global-ev-outlook-2026/electric-vehicle-batteries
+    source_kind: INTERGOVERNMENTAL
+  - source_id: nareit-affo
+    publisher: Nareit
+    title: Adjusted Funds from Operations (AFFO)
+    url: https://www.reit.com/glossary/adjusted-funds-operations-affo
+    source_kind: INDUSTRY_STANDARD
+  - source_id: usda-commodity-cost-returns
+    publisher: USDA Economic Research Service
+    title: Commodity Costs and Returns
+    url: https://www.ers.usda.gov/data-products/commodity-costs-and-returns
+    source_kind: REGULATOR
+  - source_id: wgc-aisc
+    publisher: World Gold Council
+    title: Non-GAAP Metrics Guide – AISC and AIC
+    url: https://www.gold.org/gold-standards/non-gaap-metrics-guide
+    source_kind: INDUSTRY_STANDARD
+
+methodologies:
+  - methodology_id: GENERIC_COMPETITIVE_CORE
+    name: 通用行业与竞争结构核心框架
+    archetype_ids: []
+    generic_fallback: true
+    source_ids: [cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 行业边界、规模、增长、盈利和市场份额变化分别是什么，哪些来自宏观/行业而非公司自身？
+      - 新进入者、替代品、客户议价、供应商议价和竞争强度如何改变利润池？
+      - PESTLE 外部因素中哪些会改变需求、供给、成本、资本强度或监管约束？
+      - 公司相对行业的竞争优势是否可由资源、能力和可验证经营指标支持？
+    operating_metrics: [市场规模与增速, 市占率, 毛利率与经营利润率, ROIC, 销售资本比, 营运资本强度, 资本开支强度]
+    valuation_lenses: [行业中枢利润率, ROIC与资本成本, 周期标准化盈利, 同业倍数可比性, DCF]
+    red_flags: [把行业景气当公司护城河, 单一估值倍数跨行业比较, 忽略资本强度, 忽略会计口径和租赁研发调整, 用行业标签替代公司证据]
+
+  - methodology_id: BANKING_CORE
+    name: 银行资产负债与资本质量框架
+    archetype_ids: [BANK]
+    source_ids: [acca-cfa-sector-analysis, damodaran-financial-services-valuation, fdic-qbp]
+    analysis_questions:
+      - 贷款与存款增长、资金来源和利率变化如何共同决定净息差与可持续ROE？
+      - 贷款质量、逾期/不良、核销、拨备和资本缓冲是否足以覆盖信用周期？
+      - 非息收入、交易收入和财富管理收入中哪些可重复，哪些高度依赖市场环境？
+      - PB变化能否由ROE相对资本成本、增长、资产质量和监管资本约束解释？
+    operating_metrics: [净息差, 贷款与存款增速, 存贷比, 低成本存款占比, 不良与逾期率, 净核销率, 拨备覆盖, 核心资本, ROA, ROE, 成本收入比, 非息收入占比]
+    valuation_lenses: [PB-ROE, 股息折现, FCFE, 超额收益模型]
+    red_flags: [用工业企业自由现金流直接估银行, 低PB忽略坏账与拨备, 高ROE依赖过度杠杆, 交易收入被当作稳定利润, 资本不足仍外推高增长]
+
+  - methodology_id: INSURANCE_CORE
+    name: 保险承保与资产负债匹配框架
+    archetype_ids: [INSURANCE]
+    source_ids: [acca-cfa-sector-analysis, damodaran-financial-services-valuation]
+    analysis_questions:
+      - 保费/新业务增长来自真实渗透和产品竞争力还是费用驱动，承保利润是否可持续？
+      - 准备金、赔付/综合成本率、偿付能力和资产负债久期是否覆盖尾部风险？
+      - 投资收益对利率和权益市场的敏感度有多大，是否掩盖承保端恶化？
+      - PEV/PB/PE变化能否由新业务价值、ROE、资本成本与增长质量解释？
+    operating_metrics: [保费增速, 新业务价值, 综合成本率或赔付率, 准备金充足度, 偿付能力, 资产负债久期, 投资收益率, ROE, 渠道结构]
+    valuation_lenses: [PEV, PB-ROE, PE, 股息折现, SOTP]
+    red_flags: [准备金假设过于乐观, 资产负债错配, 投资收益掩盖承保亏损, 高费用换增长, PEV口径和新业务价值假设不可比]
+
+  - methodology_id: SECURITIES_CORE
+    name: 券商与资本市场业务收益质量框架
+    archetype_ids: [SECURITIES]
+    source_ids: [cfa-industry-competitive-analysis, damodaran-financial-services-valuation, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 经纪、投行、资管/财富、自营和信用业务的收入结构与周期敏感度分别是什么？
+      - 客户资产、市场份额和资本使用效率能否形成稳定ROE，而非依靠高波动自营收益？
+      - 资本约束、杠杆、流动性和风险敞口是否与业务扩张相匹配？
+    operating_metrics: [经纪市场份额, 投行项目与承销规模, AUM或客户资产, 手续费净收入, 自营收益占比, ROE, 杠杆率, 流动性与净资本指标]
+    valuation_lenses: [PB-ROE, PE, 超额收益模型, SOTP]
+    red_flags: [把牛市交易收入外推永续, 低PB忽略资本效率, 高杠杆自营驱动ROE, AUM增长但费率持续下滑, 项目储备不等于可确认收入]
+
+  - methodology_id: PROPERTY_ASSET_CORE
+    name: 地产开发与资产运营框架
+    archetype_ids: [REAL_ESTATE]
+    source_ids: [acca-cfa-sector-analysis, damodaran-sector-benchmarks, nareit-affo]
+    analysis_questions:
+      - 开发销售、租金/运营等收入来源的稳定性和资本占用有何差异？
+      - 去化、库存、土地/项目获取、融资久期和现金短债如何共同决定流动性风险？
+      - 资产型业务的FFO/AFFO或开发型业务的NAV是否与真实维护资本开支和债务匹配？
+    operating_metrics: [销售额, 去化率, 未售库存, 净负债率, 现金短债比, 租金与入住率, FFO, AFFO, 维护资本开支]
+    valuation_lenses: [NAV, RNAV, PB, FFO或AFFO倍数, DCF, SOTP]
+    red_flags: [把开发商与REIT混用同一倍数, AFFO口径不透明, 高短债低现金, 依靠持续加杠杆维持销售, 隐性库存减值]
+
+  - methodology_id: SOFTWARE_CORE
+    name: 软件订阅与数字产品单位经济框架
+    archetype_ids: [SOFTWARE]
+    source_ids: [acca-cfa-sector-analysis, cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 增长来自新客、续费、提价、席位扩张还是一次性项目，ARR与现金收入是否一致？
+      - 研发和销售投入能否形成留存、产品壁垒与经营杠杆，而不是持续依赖高获客成本？
+      - 云成本、实施成本、资本化研发和股权激励是否让表面毛利/利润高估真实单位经济？
+    operating_metrics: [ARR或经常性收入, 续约率或流失率, 单客收入, 毛利率, 销售费用率, 研发强度, 经营现金流, 自由现金流, 客户集中度]
+    valuation_lenses: [DCF, EV-Sales, EV-FCF, PE, R&D调整后ROIC]
+    red_flags: [把TAM等同可实现收入, ARR与现金回款背离, 高增长但续费恶化, 研发资本化掩盖费用, 获客成本长期无经营杠杆]
+
+  - methodology_id: SEMICONDUCTOR_CORE
+    name: 半导体周期与技术路线框架
+    archetype_ids: [SEMICONDUCTOR]
+    source_ids: [acca-cfa-sector-analysis, cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 产品代际、制程/设计能力和终端周期如何传导到ASP、出货、份额与毛利？
+      - 产能利用率、库存天数和客户拉货是否处在补库、去库还是供需紧张阶段？
+      - 研发与资本开支能否形成下一代产品收入，还是在错误技术路线形成沉没成本？
+    operating_metrics: [出货量, ASP, 市占率, 产能利用率, 库存周转, 毛利率, 研发强度, 资本开支, 客户集中度]
+    valuation_lenses: [DCF, PE, EV-EBITDA, 周期中枢估值, R&D调整后ROIC]
+    red_flags: [峰值毛利外推, 渠道库存与终端需求混淆, 客户集中未入情景, 资本开支领先需求过多, 技术路线切换未计减值]
+
+  - methodology_id: COMMUNICATIONS_CORE
+    name: 通信运营与设备需求框架
+    archetype_ids: [COMMUNICATIONS]
+    source_ids: [acca-cfa-sector-analysis, cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 若为运营商，用户、ARPU、流量、网络利用与资本开支如何形成自由现金流；若为设备商，客户资本开支与份额如何传导到订单和ASP？
+      - 频谱/网络升级、技术替代和客户集中是否改变进入壁垒或投资回收期？
+      - 资本开支下降是成熟后的现金释放还是竞争/需求恶化的信号？
+    operating_metrics: [用户净增, ARPU, 流量增速, 网络利用率, 资本开支强度, 设备ASP, 订单或出货, 客户集中度, 自由现金流]
+    valuation_lenses: [DCF, EV-EBITDA, PE, EV-Sales, 股息折现]
+    red_flags: [运营商与设备商混用同一KPI, 客户资本开支周期遗漏, 高份额但价格持续下滑, 网络投资回报不足, 单一大客户依赖]
+
+  - methodology_id: BIOTECH_CORE
+    name: 创新药临床管线与风险调整框架
+    archetype_ids: [BIOTECH]
+    source_ids: [acca-cfa-sector-analysis, damodaran-sector-benchmarks, fda-drug-development]
+    analysis_questions:
+      - 每条核心管线处在 discovery/preclinical/clinical/review 的什么阶段，关键终点、样本设计与成功概率如何？
+      - 峰值销售、渗透率、定价/支付、上市时间与竞争格局如何转化为风险调整后的管线价值？
+      - 现金跑道、研发支出和融资需求能否覆盖下一个关键临床/审批里程碑？
+    operating_metrics: [管线阶段, 临床成功概率, 关键终点, 入组与里程碑进度, 现金跑道, 研发费用率, 峰值销售, 支付或集采暴露, 产品集中度]
+    valuation_lenses: [rNPV, 风险调整峰值销售, SOTP, DCF]
+    red_flags: [把早期管线按成功产品估值, 忽略试验终点与样本设计, 峰值销售无渗透率约束, 现金跑道不足, 单管线价值占比过高]
+
+  - methodology_id: PHARMA_CORE
+    name: 成熟制药产品组合与专利周期框架
+    archetype_ids: [PHARMA]
+    source_ids: [acca-cfa-sector-analysis, damodaran-sector-benchmarks, fda-drug-development]
+    analysis_questions:
+      - 收入增长来自销量、价格、产品结构、新品上市还是渠道库存，已商业化产品的现金流可持续性如何？
+      - 核心产品专利/独占期、仿制竞争、集采/支付和渠道变化如何影响中期价格与份额？
+      - 研发管线能否在成熟产品衰退前形成可验证的新增长，研发生产率和资本回报是否改善？
+    operating_metrics: [核心产品销量与ASP, 产品集中度, 专利或独占期, 渠道库存, 毛利率, 研发费用率, 新品收入占比, 集采或支付暴露, 经营现金流, ROIC]
+    valuation_lenses: [DCF, PE, SOTP, 风险调整管线价值, 正常化ROIC]
+    red_flags: [渠道压货, 专利悬崖未入情景, 集采降价敏感性不足, 研发投入高但新品产出弱, 单一产品依赖]
+
+  - methodology_id: CONSUMER_DEMAND_CORE
+    name: 消费品牌零售与食品需求框架
+    archetype_ids: [CONSUMER]
+    source_ids: [acca-cfa-sector-analysis, cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 增长来自真实终端需求、价格提升、渠道扩张还是库存前置？
+      - 品牌、渠道、产品组合和私牌/替代品如何影响复购、议价权和毛利？
+      - 促销、获客和渠道返利是否以牺牲现金流或经销商健康换取收入？
+    operating_metrics: [销量与ASP, 同店或终端增速, 渠道库存, 经销商回款, 毛利率, 销售费用率, ROIC, 现金转换]
+    valuation_lenses: [DCF, PE, EV-EBITDA, 股息折现, 单店或单位经济]
+    red_flags: [渠道压货, 促销换增长, 库存增速长期高于收入, 品牌溢价下滑, 应收与预付款异常]
+
+  - methodology_id: AUTOMOTIVE_CORE
+    name: 汽车销量与单车经济框架
+    archetype_ids: [AUTOMOTIVE]
+    source_ids: [damodaran-sector-benchmarks, iea-ev-battery]
+    analysis_questions:
+      - 车型周期、区域需求、价格与产品结构如何传导到销量、单车收入和毛利？
+      - 新能源渗透与电池成本变化是提升单车经济还是被价格竞争转让给消费者？
+      - 渠道库存、产能利用、质保与海外扩张是否支持当前利润率和资本回报？
+    operating_metrics: [销量, 单车收入, 单车毛利, 新能源占比, 渠道库存, 产能利用率, 质保费用, 原材料成本, 海外收入]
+    valuation_lenses: [DCF, PE, EV-EBITDA, 周期中枢估值, 单车单位经济]
+    red_flags: [批发量代替终端销量, 降价换份额但毛利恶化, 渠道库存累积, 质保成本低估, 海外销量忽略关税与本地化成本]
+
+  - methodology_id: NEW_ENERGY_CORE
+    name: 新能源设备与电池成本曲线框架
+    archetype_ids: [NEW_ENERGY]
+    source_ids: [damodaran-sector-benchmarks, iea-ev-battery]
+    analysis_questions:
+      - 终端装机/电池需求、技术路线和区域政策如何传导到出货、ASP与有效产能利用？
+      - 原材料、良率、能耗和规模学习如何决定单位成本，价格下降是技术降本还是亏损竞争？
+      - 产业链产能集中/过剩与海外供应链限制如何改变议价权和资本回报？
+    operating_metrics: [GW或GWh出货, ASP, 单位成本, 良率或转换效率, 产能利用率, 库存, 原材料成本, 资本开支, 海外收入]
+    valuation_lenses: [DCF, PE, EV-EBITDA, 周期中枢估值, 单位产能与成本曲线]
+    red_flags: [名义产能等同有效产能, 技术路线淘汰风险, 价格低于可持续成本, 扩产快于需求, 海外政策与供应链限制遗漏]
+
+  - methodology_id: UTILITIES_CORE
+    name: 公用事业监管回报与现金流框架
+    archetype_ids: [UTILITIES]
+    source_ids: [acca-cfa-sector-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 电价/水价/气价机制、利用率、燃料结构和需求增长如何决定可持续单位利润？
+      - 大额资本开支能否进入可回收资产基数或由长期合同覆盖，ROIC是否高于资本成本？
+      - 高杠杆和高分红是否由稳定现金流支持，还是挤压维护与转型投资？
+    operating_metrics: [利用小时或负荷率, 许可或实现价格, 燃料成本, 资本开支, 净负债, ROIC, 自由现金流, 股息覆盖, 应收回款]
+    valuation_lenses: [DCF, EV-EBITDA, 股息折现, PB, 资产基础估值]
+    red_flags: [监管价格假设过度乐观, 资本开支回报低于资本成本, 高分红靠加杠杆, 燃料成本传导机制缺失, 维护资本开支被低估]
+
+  - methodology_id: COAL_CORE
+    name: 煤炭资源与成本曲线框架
+    archetype_ids: [COAL]
+    source_ids: [cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 可采储量、产量、实现煤价和单位开采/运输成本在成本曲线中的位置是什么？
+      - 安监、环保、产能核定和资本开支如何限制有效供给与现金成本？
+      - 当前高利润与周期中枢利润差异多大，分红是否在中枢价格下仍可覆盖？
+    operating_metrics: [可采储量, 产量, 实现煤价, 单位开采成本, 运输成本, 资本开支, 净负债, 自由现金流, 股息覆盖]
+    valuation_lenses: [周期中枢PE, EV-EBITDA, DCF, NAV, 股息折现]
+    red_flags: [峰值煤价外推永续, 储量未经可采性验证, 安环与复垦成本低估, 扩产审批不确定, 高分红依赖峰值利润]
+
+  - methodology_id: METALS_MINING_CORE
+    name: 金属矿业储量与全成本框架
+    archetype_ids: [METALS_MINING]
+    source_ids: [damodaran-sector-benchmarks, wgc-aisc]
+    analysis_questions:
+      - 储量、品位、回收率、产量和实现价格如何共同决定矿山寿命与现金流？
+      - 单位现金成本/AISC等非GAAP成本是否能回勾法定报表并包含维持性资本开支？
+      - 新项目资本开支、爬坡和商品价格情景如何改变NAV与资产负债表承受力？
+    operating_metrics: [可采储量, 品位, 回收率, 产量, 实现价格, 单位现金成本, AISC或全成本, 矿山寿命, 资本开支, 净负债]
+    valuation_lenses: [NAV, DCF, EV-EBITDA, 周期中枢PE, 成本曲线情景]
+    red_flags: [资源量等同可采储量, 非GAAP成本不可回勾, 忽略项目爬坡, 现货价外推永续, 成长资本开支与融资能力不匹配]
+
+  - methodology_id: CHEMICALS_CORE
+    name: 化工价差与产能周期框架
+    archetype_ids: [CHEMICALS]
+    source_ids: [cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 原料价格、产品价格与加工价差如何决定单位盈利，价差处于周期什么位置？
+      - 新增产能、开工率、库存与检修如何影响未来有效供给和议价权？
+      - 能耗、环保、安全和技术路线变化是否会改变边际成本与资本开支需求？
+    operating_metrics: [产品价格, 原料价格, 产品价差, 开工率, 库存, 新增产能, 单位能耗, 毛利率, 资本开支, ROIC]
+    valuation_lenses: [DCF, EV-EBITDA, 周期中枢PE, 正常化ROIC, 成本曲线情景]
+    red_flags: [峰值价差外推, 名义产能等同有效供给, 原料套保影响遗漏, 环保安全成本低估, 扩产在景气高点集中]
+
+  - methodology_id: MACHINERY_CORE
+    name: 机械装备订单与产能利用框架
+    archetype_ids: [MACHINERY]
+    source_ids: [acca-cfa-sector-analysis, cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 新签订单、在手订单和book-to-bill如何领先收入，取消/延期和交付周期会怎样影响确认节奏？
+      - 产能利用率、固定成本、原材料与产品结构如何决定增量毛利和周期弹性？
+      - 应收、合同资产、预付款和库存是否与订单增长匹配并能转化为经营现金流？
+    operating_metrics: [新签订单, 在手订单, book-to-bill, 交付周期, 产能利用率, ASP, 毛利率, 应收与合同资产, 库存, 经营现金流, 资本开支]
+    valuation_lenses: [DCF, PE, EV-EBITDA, 周期中枢估值, 订单覆盖与现金转换]
+    red_flags: [订单不等于可确认收入, 应收持续快于收入, 库存积压, 固定成本利用率恶化, 高景气期扩产过度]
+
+  - methodology_id: DEFENSE_CORE
+    name: 军工预算订单与项目里程碑框架
+    archetype_ids: [DEFENSE]
+    source_ids: [cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 国防预算、采购计划和型号/项目里程碑如何转化为公司可执行订单，而不是把宏观预算直接当公司收入？
+      - 订单、预付款、交付验收、应收和回款的时点是否与收入确认和现金流一致？
+      - 客户集中、保密约束、研发周期和产能扩张如何影响项目风险、资本占用和利润率？
+    operating_metrics: [在手订单, 项目里程碑, 预付款, 交付与验收进度, 应收与合同资产, 研发强度, 产能利用率, 毛利率, 经营现金流, 客户集中度]
+    valuation_lenses: [DCF, PE, EV-EBITDA, SOTP, 订单覆盖与现金转换]
+    red_flags: [宏观预算直接映射公司收入, 订单与验收回款脱节, 单一客户依赖, 研发资本化掩盖费用, 扩产领先可验证订单]
+
+  - methodology_id: CONSTRUCTION_MATERIALS_CORE
+    name: 建材价格产能与工程现金流框架
+    archetype_ids: [CONSTRUCTION_MATERIALS]
+    source_ids: [acca-cfa-sector-analysis, cfa-industry-competitive-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 水泥/玻璃/建材等产品的区域需求、价格、原燃料成本和产能利用如何决定单位利润与周期位置？
+      - 工程建设业务的新签合同、合同资产、应收和现金回款如何从订单转化为真实利润与现金流？
+      - 地产/基建需求、错峰生产、环保约束和新增产能如何改变区域供需与资本回报？
+    operating_metrics: [销量或新签合同, ASP或工程毛利率, 产能利用率, 原燃料成本, 库存, 应收与合同资产, 经营现金流, 新增产能, 资本开支, ROIC]
+    valuation_lenses: [EV-EBITDA, PE, PB, DCF, 周期中枢估值, 正常化ROIC]
+    red_flags: [峰值价格或订单外推, 区域供需被全国平均掩盖, 应收与合同资产增长过快, 新增产能快于需求, 环保与能耗成本低估]
+
+  - methodology_id: TRANSPORT_NETWORK_CORE
+    name: 航空航运物流网络经济框架
+    archetype_ids: [TRANSPORTATION]
+    source_ids: [acca-cfa-sector-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 运量、运价/客票收益、运力投放和利用率如何共同决定单位利润？
+      - 油价、租赁、人工和固定资产负担对盈亏平衡点的敏感度如何？
+      - 网络密度、港口/航线资源、服务水平与资本强度能否形成持续优势？
+    operating_metrics: [运量, 运价或票价收益, 客座率或装载率, 可用运力, 单位成本, 燃油成本, 租赁负担, 准点或周转效率]
+    valuation_lenses: [EV-EBITDA, DCF, PB, 周期标准化利润, 租赁调整后ROIC]
+    red_flags: [高固定成本下用峰值运价估值, 忽略租赁债务, 运力扩张快于需求, 油价敏感性缺失, 网络份额无盈利质量]
+
+  - methodology_id: AGRICULTURE_COST_CORE
+    name: 农业养殖成本与供需框架
+    archetype_ids: [AGRICULTURE]
+    source_ids: [acca-cfa-sector-analysis, usda-commodity-cost-returns]
+    analysis_questions:
+      - 产量/出栏、价格、饲料/种苗/土地等单位成本和生物资产周期如何形成利润？
+      - 库存/存栏、天气、疫病和政策如何影响未来供给弹性而非仅当前价格？
+      - 成本优势是否来自可持续生产率还是暂时低投入/会计口径？
+    operating_metrics: [出栏或产量, 产品价格, 单位生产成本, 饲料或关键投入成本, 存栏或库存, 单位资本回报, 现金成本, 生物资产变化]
+    valuation_lenses: [周期中枢估值, PB, DCF, 单位成本曲线, 正常化盈利]
+    red_flags: [商品现价外推, 忽略生物资产周期, 疫病和天气未入情景, 成本口径不可比, 扩产快于现金流]
+
+  - methodology_id: BUSINESS_SERVICES_CORE
+    name: 商业与专业服务利用率框架
+    archetype_ids: [BUSINESS_SERVICES]
+    source_ids: [acca-cfa-sector-analysis, damodaran-sector-benchmarks]
+    analysis_questions:
+      - 收入由客户数、单客收入、项目量还是利用率驱动，哪些变量具有复购性？
+      - 人效、实验室/网络固定成本利用、价格竞争和并购整合如何影响增量利润率？
+      - 轻资产表象下是否存在高营运资本、资本化投入或商誉风险？
+    operating_metrics: [客户数, 单客收入, 续约或复购, 人效, 利用率, 毛利率, 经营现金流, 应收周转, 商誉与并购贡献]
+    valuation_lenses: [DCF, PE, EV-EBITDA, ROIC, 单位经济]
+    red_flags: [并购驱动收入掩盖内生增长, 人效恶化, 应收增长过快, 利用率不足, 商誉减值风险]

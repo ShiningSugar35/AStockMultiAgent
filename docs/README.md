@@ -108,6 +108,7 @@ Skill 是单个专业角色的方法与工具合同，不是自由人格提示�
 - [组合与持仓决策](architecture/portfolio-holding-decision-v1.md)
 - [连续投资研究](architecture/continuous-investment-research-v1.md)
 - [全市场研究团队](architecture/full-market-research-team-v1.md)
+- [推荐广度、入场质量与企业事件情报](architecture/recommendation-breadth-entry-event-intelligence-v1.md)
 - [Serenity 方法层](architecture/serenity-method-layer-v1.md)
 - [公共回复合同](architecture/public-response-contract-v1.md)
 - [投资请求统一编排蓝图](architecture/investment-request-orchestration-v1.md)

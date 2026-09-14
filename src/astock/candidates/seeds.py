@@ -56,6 +56,7 @@ from astock.schemas.universe_coverage import (
 )
 
 _CURRENT_LIVE_TOLERANCE = timedelta(minutes=15)
+_INDUSTRY_CACHE_FRESHNESS = timedelta(days=30)
 _FULL_MARKET_COVERAGE_RATIO = 0.995
 _EQUITY_MARKETS = (Market.XSHG, Market.XSHE, Market.BJSE)
 
@@ -345,6 +346,7 @@ class ResearchSeedProviderRouter:
         ):
             raise ValueError("Market seed snapshot failed verification")
         official_symbols = _official_coverage_symbols(proof_payload, market)
+        official_industry_by_symbol = _official_industry_by_symbol(proof_payload, market)
         observed_symbols = _seed_payload_symbols(payload, market)
         if not observed_symbols:
             raise ValueError("Market seed payload contains no valid market symbols")
@@ -378,6 +380,11 @@ class ResearchSeedProviderRouter:
                 "coverage_proof_snapshot_ids": proof_ids,
                 "coverage_proof_object_hashes": proof_hashes,
                 "coverage_proof_complete": True,
+                "official_industry_by_symbol": {
+                    symbol: official_industry_by_symbol[symbol]
+                    for symbol in sorted(observed_symbols)
+                    if symbol in official_industry_by_symbol
+                },
             }
         )
         object_ref = self.objects.put_json(decorated)
@@ -480,9 +487,16 @@ class ResearchSeedProviderRouter:
                 continue
             try:
                 board_fetch = cast(Callable[..., tuple[dict[str, object], Any]], fetch)
-                return board_fetch(live=live)
+                payload, snapshot = board_fetch(live=live)
+                if live:
+                    self._cache_industry_payload("boards", payload, snapshot)
+                return payload, snapshot
             except (AStockError, OSError, RuntimeError, ValueError) as exc:
                 last_error = exc
+        if live:
+            cached = self._cached_industry_payload("boards", "EXPERT_DOMAIN_TAXONOMY")
+            if cached is not None:
+                return cached
         if last_error is not None:
             raise last_error
         raise RuntimeError("No routed provider exposes industry-board discovery")
@@ -497,12 +511,104 @@ class ResearchSeedProviderRouter:
                 continue
             try:
                 constituent_fetch = cast(Callable[..., tuple[dict[str, object], Any]], fetch)
-                return constituent_fetch(board_code, live=live)
+                payload, snapshot = constituent_fetch(board_code, live=live)
+                if live:
+                    self._cache_industry_payload(f"constituents:{board_code}", payload, snapshot)
+                return payload, snapshot
             except (AStockError, OSError, RuntimeError, ValueError) as exc:
                 last_error = exc
+        if live:
+            cached = self._cached_industry_payload(
+                f"constituents:{board_code}",
+                "EXPERT_DOMAIN_CONSTITUENTS",
+                board_code=board_code,
+            )
+            if cached is not None:
+                return cached
         if last_error is not None:
             raise last_error
         raise RuntimeError("No routed provider exposes industry-constituent discovery")
+
+    def _cache_industry_payload(
+        self,
+        scope_key: str,
+        payload: dict[str, object],
+        raw_snapshot: Any,
+    ) -> None:
+        if self.state is None or self.objects is None:
+            return
+        snapshot = cast(SourceSnapshot, raw_snapshot)
+        if not self.objects.verify(snapshot.object_sha256):
+            return
+        request = payload.get("_astock_request")
+        if not isinstance(request, dict):
+            return
+        if scope_key == "boards":
+            if request.get("purpose") != "EXPERT_DOMAIN_TAXONOMY":
+                return
+        else:
+            board_code = scope_key.removeprefix("constituents:")
+            if (
+                request.get("purpose") != "EXPERT_DOMAIN_CONSTITUENTS"
+                or request.get("board_code") != board_code
+            ):
+                return
+        normalized = self.objects.put_json(payload)
+        self.state.set_checkpoint(
+            scope_type="research-seed-industry-cache",
+            scope_key=scope_key,
+            cursor={
+                "snapshot_id": snapshot.snapshot_id,
+                "payload_object_hash": normalized.sha256,
+                "available_to_system_at": snapshot.available_to_system_at.isoformat(),
+            },
+            status="READY",
+            object_hash=normalized.sha256,
+        )
+
+    def _cached_industry_payload(
+        self,
+        scope_key: str,
+        expected_purpose: str,
+        *,
+        board_code: str | None = None,
+    ) -> tuple[dict[str, object], SourceSnapshot] | None:
+        if self.state is None or self.objects is None:
+            return None
+        checkpoint = self.state.get_checkpoint("research-seed-industry-cache", scope_key)
+        if checkpoint is None or checkpoint.get("status") != "READY":
+            return None
+        cursor = checkpoint.get("cursor")
+        if not isinstance(cursor, dict):
+            return None
+        snapshot_id = str(cursor.get("snapshot_id") or "")
+        payload_hash = str(cursor.get("payload_object_hash") or "")
+        snapshot = self.state.get_snapshot(snapshot_id)
+        if (
+            snapshot is None
+            or not self.objects.verify(snapshot.object_sha256)
+            or not payload_hash
+            or not self.objects.verify(payload_hash)
+            or datetime.now(UTC) - snapshot.available_to_system_at > _INDUSTRY_CACHE_FRESHNESS
+        ):
+            return None
+        try:
+            payload = json.loads(self.objects.get_bytes(payload_hash))
+            raw_payload = json.loads(self.objects.get_bytes(snapshot.object_sha256))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(payload, dict) or not isinstance(raw_payload, dict):
+            return None
+        payload_without_request = dict(payload)
+        payload_without_request.pop("_astock_request", None)
+        if raw_payload not in (payload, payload_without_request):
+            return None
+        request = payload.get("_astock_request")
+        if not isinstance(request, dict) or request.get("purpose") != expected_purpose:
+            return None
+        if board_code is not None and request.get("board_code") != board_code:
+            return None
+        return cast(dict[str, object], payload), snapshot
 
 
 def _safe_float(value: object) -> float:
@@ -598,6 +704,44 @@ def _official_coverage_symbols(
     if total <= 0 or len(master_rows) != total or len(symbols) != total:
         raise ValueError("Universe coverage proof is incomplete")
     return symbols
+
+
+def _official_industry_by_symbol(
+    payload: dict[str, object],
+    market: Market,
+) -> dict[str, str]:
+    request = payload.get("_astock_request")
+    if not isinstance(request, dict) or request.get("market") != market.value:
+        return {}
+    rows = payload.get("rows")
+    if isinstance(rows, list):
+        result: dict[str, str] = {}
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "")
+            industry = str(item.get("industry") or "").strip()
+            industry_code = str(item.get("industry_code") or "").strip()
+            if len(code) != 6 or not code.isdigit() or not industry:
+                continue
+            result[code] = f"{industry_code} {industry}".strip()
+        return result
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return {}
+    diff = data.get("diff")
+    master_rows = list(diff.values()) if isinstance(diff, dict) else diff
+    if not isinstance(master_rows, list):
+        return {}
+    result = {}
+    for item in master_rows:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("f12") or "")
+        industry = str(item.get("f100") or "").strip()
+        if len(code) == 6 and code.isdigit() and industry:
+            result[code] = industry
+    return result
 
 
 def _seed_payload_symbols(payload: dict[str, object], market: Market) -> set[str]:
@@ -1046,6 +1190,7 @@ class _RawMarketRow:
     amount_cny: float
     turnover_rate: float
     float_market_cap_cny: float
+    industry_label: str | None
     snapshot_id: str
 
 
@@ -1058,6 +1203,7 @@ class _MarketRow:
     amount_cny: float
     turnover_rate: float
     float_market_cap_cny: float
+    industry_label: str | None
     market_score: float
     snapshot_id: str
 
@@ -1078,6 +1224,7 @@ class _SeedAccumulator:
     origins: set[ResearchSeedOrigin] = field(default_factory=set)
     authors: set[str] = field(default_factory=set)
     domains: set[str] = field(default_factory=set)
+    breadth_domains: set[str] = field(default_factory=set)
     support_skills: set[str] = field(default_factory=set)
     reasons: set[str] = field(default_factory=set)
     snapshot_ids: set[str] = field(default_factory=set)
@@ -1087,6 +1234,12 @@ class _SeedAccumulator:
 class _DomainAliasGroup:
     board_contains: tuple[str, ...]
     skill_terms: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _BreadthDomain:
+    domain_id: str
+    board_contains: tuple[str, ...]
 
 
 class ResearchSeedService:
@@ -1110,6 +1263,12 @@ class ResearchSeedService:
         self.candidates = CandidateRepository(state)
         self.visual_skills = VisualSkillRepository(state)
         self.alias_groups = self._load_alias_groups(
+            project_root / "configs" / "research_seed_domains.yaml"
+        )
+        self.breadth_domains = self._load_breadth_domains(
+            project_root / "configs" / "research_seed_domains.yaml"
+        )
+        self.official_industry_code_map = self._load_official_industry_code_map(
             project_root / "configs" / "research_seed_domains.yaml"
         )
         self.author_names = self._load_author_names(
@@ -1212,10 +1371,12 @@ class ResearchSeedService:
         ):
             warnings.add("FORMAL_UNIVERSE_DENOMINATOR_NOT_RECONCILED")
 
-        for row in sorted(
+        blind_market_rows = sorted(
             market_rows.values(),
             key=lambda item: (-item.market_score, item.company_id),
-        )[: request.max_market_seeds]:
+        )[: request.max_market_seeds]
+        blind_company_ids = {item.company_id for item in blind_market_rows}
+        for row in blind_market_rows:
             accumulator = self._accumulator(accumulators, row)
             accumulator.origins.add(ResearchSeedOrigin.MARKET)
             accumulator.priority = max(accumulator.priority, 0.60 + 0.25 * row.market_score)
@@ -1264,46 +1425,98 @@ class ResearchSeedService:
             warnings.add("EXPERT_SKILL_REGISTRY_UNAVAILABLE")
         else:
             release_hash = str(release["release_object_hash"])
-            release_id = str(release["release_id"])
             if not self.objects.verify(release_hash):
                 warnings.add("EXPERT_SKILL_REGISTRY_OBJECT_UNAVAILABLE")
                 release = None
             else:
                 source_hashes.add(release_hash)
-                try:
-                    board_payload, board_snapshot = self.provider.fetch_industry_boards(
-                        live=request.live
-                    )
-                    cutoff = max(cutoff, board_snapshot.available_to_system_at)
-                    source_snapshots[board_snapshot.snapshot_id] = board_snapshot.object_sha256
-                    source_hashes.add(board_snapshot.object_sha256)
-                    boards = self._parse_boards(board_payload)
-                    profiles = self._expert_profiles(
-                        release_id=release_id,
-                        rows=self.visual_skills.overlay_skill_rows(release_id),
-                        boards=boards,
-                        request=request,
-                    )
-                    self._apply_expert_seeds(
-                        profiles=profiles,
-                        market_rows=market_rows,
-                        accumulators=accumulators,
-                        request=request,
-                        source_snapshots=source_snapshots,
-                        source_hashes=source_hashes,
-                    )
-                except (AStockError, OSError, RuntimeError, ValueError):
+
+        boards: list[tuple[str, str]] = []
+        needs_taxonomy = request.max_breadth_challenger_seeds > 0 or release is not None
+        if needs_taxonomy:
+            try:
+                board_payload, raw_board_snapshot = self.provider.fetch_industry_boards(
+                    live=request.live
+                )
+                board_snapshot = cast(SourceSnapshot, raw_board_snapshot)
+                cutoff = max(cutoff, board_snapshot.available_to_system_at)
+                source_snapshots[board_snapshot.snapshot_id] = board_snapshot.object_sha256
+                source_hashes.add(board_snapshot.object_sha256)
+                boards = self._parse_boards(board_payload)
+            except (AStockError, OSError, RuntimeError, ValueError):
+                if release is not None:
                     warnings.add("EXPERT_DOMAIN_MARKET_TAXONOMY_UNAVAILABLE")
+
+        blind_breadth_domain_counts: dict[str, int] = {}
+        if request.max_breadth_challenger_seeds > 0:
+            try:
+                blind_breadth_domain_counts, breadth_cutoff = self._apply_breadth_challengers(
+                    boards=boards,
+                    blind_company_ids=blind_company_ids,
+                    market_rows=market_rows,
+                    accumulators=accumulators,
+                    request=request,
+                    source_snapshots=source_snapshots,
+                    source_hashes=source_hashes,
+                )
+                if breadth_cutoff is not None:
+                    cutoff = max(cutoff, breadth_cutoff)
+                if blind_company_ids and not blind_breadth_domain_counts:
+                    warnings.add("BREADTH_DOMAIN_MAPPING_UNAVAILABLE")
+            except (AStockError, OSError, RuntimeError, ValueError):
+                warnings.add("BREADTH_CHALLENGER_RESEARCH_UNAVAILABLE")
+
+        if release is not None and boards:
+            release_id = str(release["release_id"])
+            try:
+                profiles = self._expert_profiles(
+                    release_id=release_id,
+                    rows=self.visual_skills.overlay_skill_rows(release_id),
+                    boards=boards,
+                    request=request,
+                )
+                self._apply_expert_seeds(
+                    profiles=profiles,
+                    market_rows=market_rows,
+                    accumulators=accumulators,
+                    request=request,
+                    source_snapshots=source_snapshots,
+                    source_hashes=source_hashes,
+                )
+            except (AStockError, OSError, RuntimeError, ValueError):
+                warnings.add("EXPERT_DOMAIN_MARKET_TAXONOMY_UNAVAILABLE")
 
         all_seeds = [self._finalize_seed(item, request.as_of) for item in accumulators.values()]
         all_seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
-        blind = [item for item in all_seeds if ResearchSeedOrigin.MARKET in item.origins][
-            : min(request.max_market_seeds, request.max_total_seeds)
-        ]
-        selected_ids = {item.seed_id for item in blind}
+        blind = sorted(
+            (item for item in all_seeds if ResearchSeedOrigin.MARKET in item.origins),
+            key=lambda item: (-(item.market_liquidity_score or 0.0), item.company_id),
+        )[: min(request.max_market_seeds, request.max_total_seeds)]
+        breadth_budget = min(
+            request.max_breadth_challenger_seeds,
+            max(0, request.max_total_seeds - len(blind)),
+        )
+        breadth = sorted(
+            (
+                item
+                for item in all_seeds
+                if ResearchSeedOrigin.BREADTH_CHALLENGER in item.origins
+                and ResearchSeedOrigin.MARKET not in item.origins
+            ),
+            key=lambda item: (-(item.market_liquidity_score or 0.0), item.company_id),
+        )[:breadth_budget]
+        selected_ids = {item.seed_id for item in [*blind, *breadth]}
         fill = [item for item in all_seeds if item.seed_id not in selected_ids]
-        seeds = [*blind, *fill[: max(0, request.max_total_seeds - len(blind))]]
+        seeds = [
+            *blind,
+            *breadth,
+            *fill[: max(0, request.max_total_seeds - len(blind) - len(breadth))],
+        ]
         seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
+        selected_breadth_domain_counts: dict[str, int] = defaultdict(int)
+        for seed in seeds:
+            for domain_id in seed.breadth_domain_ids:
+                selected_breadth_domain_counts[domain_id] += 1
         coverage_level = universe_coverage_proof.coverage_level
         engineering_full_universe = coverage_level in {
             UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE,
@@ -1372,6 +1585,11 @@ class ResearchSeedService:
             universe_coverage_status=universe_coverage_status,
             formal_full_market_coverage_allowed=formal_full_universe,
             market_seed_count=sum(ResearchSeedOrigin.MARKET in item.origins for item in seeds),
+            breadth_seed_count=sum(
+                ResearchSeedOrigin.BREADTH_CHALLENGER in item.origins for item in seeds
+            ),
+            blind_breadth_domain_counts=blind_breadth_domain_counts,
+            selected_breadth_domain_counts=dict(sorted(selected_breadth_domain_counts.items())),
             expert_seed_count=sum(
                 ResearchSeedOrigin.EXPERT_SKILL in item.origins for item in seeds
             ),
@@ -1497,6 +1715,188 @@ class ResearchSeedService:
             "recommendation_allowed": False,
             "paper_ledger_write_allowed": False,
             "broker_execution_allowed": False,
+        }
+
+    def _apply_breadth_challengers(
+        self,
+        *,
+        boards: list[tuple[str, str]],
+        blind_company_ids: set[str],
+        market_rows: dict[str, _MarketRow],
+        accumulators: dict[str, _SeedAccumulator],
+        request: ResearchSeedRequest,
+        source_snapshots: dict[str, str],
+        source_hashes: set[str],
+    ) -> tuple[dict[str, int], datetime | None]:
+        if not blind_company_ids or request.max_breadth_challenger_seeds <= 0:
+            return {}, None
+
+        company_domains: dict[str, set[str]] = defaultdict(set)
+        for company_id, row in market_rows.items():
+            domain_id = self._breadth_domain_from_industry_label(row.industry_label)
+            if domain_id is not None:
+                company_domains[company_id].add(domain_id)
+
+        grouped = self._breadth_board_groups(
+            boards,
+            max_per_domain=request.breadth_max_boards_per_domain,
+        )
+        targets = [
+            (domain_id, board_code)
+            for domain_id, board_codes in sorted(grouped.items())
+            for board_code in board_codes
+        ]
+
+        def fetch(
+            target: tuple[str, str],
+        ) -> tuple[str, str, list[dict[str, object]], SourceSnapshot]:
+            domain_id, board_code = target
+            payload, raw_snapshot = self.provider.fetch_industry_constituents(
+                board_code,
+                live=request.live,
+            )
+            snapshot = cast(SourceSnapshot, raw_snapshot)
+            rows = self._constituent_rows(payload, board_code)
+            return domain_id, board_code, rows, snapshot
+
+        company_domain_snapshots: dict[tuple[str, str], set[str]] = defaultdict(set)
+        latest_available: datetime | None = None
+        if targets:
+            workers = min(max(1, request.market_fetch_workers), len(targets))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(fetch, target): target for target in targets}
+                for future in as_completed(futures):
+                    try:
+                        domain_id, _board_code, rows, snapshot = future.result()
+                    except (AStockError, OSError, RuntimeError, ValueError):
+                        continue
+                    source_snapshots[snapshot.snapshot_id] = snapshot.object_sha256
+                    source_hashes.add(snapshot.object_sha256)
+                    latest_available = (
+                        snapshot.available_to_system_at
+                        if latest_available is None
+                        else max(latest_available, snapshot.available_to_system_at)
+                    )
+                    for raw in rows:
+                        company_id = str(raw.get("f12") or "")
+                        if company_id not in market_rows:
+                            continue
+                        company_domains[company_id].add(domain_id)
+                        company_domain_snapshots[(company_id, domain_id)].add(
+                            snapshot.snapshot_id
+                        )
+
+        for company_id, domains in company_domains.items():
+            accumulator = accumulators.get(company_id)
+            if accumulator is not None:
+                accumulator.breadth_domains.update(domains)
+
+        blind_counts: dict[str, int] = defaultdict(int)
+        for company_id in blind_company_ids:
+            for domain_id in company_domains.get(company_id, set()):
+                blind_counts[domain_id] += 1
+        represented = set(blind_counts)
+        blind_scores = [
+            market_rows[company_id].market_score
+            for company_id in blind_company_ids
+            if company_id in market_rows
+        ]
+        cutoff_score = min(blind_scores) if blind_scores else 0.0
+        minimum_score = cutoff_score * request.breadth_min_market_score_ratio
+
+        best_by_domain: dict[str, _MarketRow] = {}
+        for company_id, domains in company_domains.items():
+            if company_id in blind_company_ids:
+                continue
+            row = market_rows[company_id]
+            if row.market_score < minimum_score:
+                continue
+            for domain_id in domains - represented:
+                previous = best_by_domain.get(domain_id)
+                if previous is None or (-row.market_score, row.company_id) < (
+                    -previous.market_score,
+                    previous.company_id,
+                ):
+                    best_by_domain[domain_id] = row
+
+        ranked = sorted(
+            best_by_domain.items(),
+            key=lambda item: (-item[1].market_score, item[0], item[1].company_id),
+        )
+        selected_companies: set[str] = set()
+        for _domain_id, row in ranked:
+            if len(selected_companies) >= request.max_breadth_challenger_seeds:
+                break
+            if row.company_id in selected_companies:
+                continue
+            selected_companies.add(row.company_id)
+            accumulator = self._accumulator(accumulators, row)
+            accumulator.origins.add(ResearchSeedOrigin.BREADTH_CHALLENGER)
+            accumulator.breadth_domains.update(company_domains[row.company_id])
+            accumulator.priority = max(accumulator.priority, 0.55 + 0.20 * row.market_score)
+            accumulator.reasons.add("SECTOR_NEUTRAL_BREADTH_RESEARCH_SEED")
+            accumulator.snapshot_ids.add(row.snapshot_id)
+            for candidate_domain in company_domains[row.company_id]:
+                accumulator.snapshot_ids.update(
+                    company_domain_snapshots.get((row.company_id, candidate_domain), set())
+                )
+        return dict(sorted(blind_counts.items())), latest_available
+
+    def _breadth_domain_from_industry_label(self, label: str | None) -> str | None:
+        if label is None:
+            return None
+        normalized_label = label.strip()
+        if not normalized_label:
+            return None
+        normalized = self._normalize(normalized_label)
+        matches: list[tuple[int, str]] = []
+        for domain in self.breadth_domains:
+            specificity = max(
+                (
+                    len(self._normalize(token))
+                    for token in domain.board_contains
+                    if self._normalize(token) in normalized
+                ),
+                default=0,
+            )
+            if specificity:
+                matches.append((specificity, domain.domain_id))
+        if matches:
+            return max(matches, key=lambda item: (item[0], item[1]))[1]
+        first = normalized_label[0].upper()
+        if first.isascii() and first.isalpha():
+            return self.official_industry_code_map.get(first)
+        return None
+
+    def _breadth_board_groups(
+        self,
+        boards: list[tuple[str, str]],
+        *,
+        max_per_domain: int,
+    ) -> dict[str, list[str]]:
+        grouped: dict[str, list[tuple[int, str]]] = defaultdict(list)
+        for board_code, board_name in boards:
+            normalized = self._normalize(board_name)
+            matches: list[tuple[int, str]] = []
+            for domain in self.breadth_domains:
+                specificity = max(
+                    (
+                        len(self._normalize(token))
+                        for token in domain.board_contains
+                        if self._normalize(token) in normalized
+                    ),
+                    default=0,
+                )
+                if specificity:
+                    matches.append((specificity, domain.domain_id))
+            if not matches:
+                continue
+            _, domain_id = max(matches, key=lambda item: (item[0], item[1]))
+            specificity = max(item[0] for item in matches if item[1] == domain_id)
+            grouped[domain_id].append((-specificity, board_code))
+        return {
+            domain_id: [board_code for _, board_code in sorted(values)[:max_per_domain]]
+            for domain_id, values in sorted(grouped.items())
         }
 
     def _apply_expert_seeds(
@@ -1636,6 +2036,12 @@ class ResearchSeedService:
             raise ValueError("research-seed market snapshot provenance mismatch")
         rows = self._payload_rows(payload)
         result: list[_RawMarketRow] = []
+        raw_industry_map = payload.get("official_industry_by_symbol")
+        official_industry_by_symbol = (
+            {str(key): str(value) for key, value in raw_industry_map.items()}
+            if isinstance(raw_industry_map, dict)
+            else {}
+        )
         normalized_source = payload.get("_astock_source")
         normalized_rows = normalized_source in {"SINA_MARKET_CENTER", "TENCENT_QUOTE_BATCH"}
         for row in rows:
@@ -1674,6 +2080,7 @@ class ResearchSeedService:
                     amount_cny=amount,
                     turnover_rate=turnover,
                     float_market_cap_cny=float_cap,
+                    industry_label=official_industry_by_symbol.get(company_id),
                     snapshot_id=snapshot_id,
                 )
             )
@@ -1711,6 +2118,7 @@ class ResearchSeedService:
                     amount_cny=row.amount_cny,
                     turnover_rate=row.turnover_rate,
                     float_market_cap_cny=row.float_market_cap_cny,
+                    industry_label=row.industry_label,
                     market_score=min(1.0, max(0.0, score)),
                     snapshot_id=row.snapshot_id,
                 )
@@ -1884,6 +2292,7 @@ class ResearchSeedService:
                 "candidate_version_id": accumulator.candidate_version_id,
                 "authors": sorted(accumulator.authors),
                 "domains": sorted(accumulator.domains),
+                "breadth_domains": sorted(accumulator.breadth_domains),
                 "support_skills": sorted(accumulator.support_skills),
                 "snapshots": sorted(accumulator.snapshot_ids),
             }
@@ -1905,6 +2314,7 @@ class ResearchSeedService:
             expert_author_source_ids=sorted(accumulator.authors),
             expert_domain_names=sorted(accumulator.domains),
             expert_domain_support_skill_ids=sorted(accumulator.support_skills),
+            breadth_domain_ids=sorted(accumulator.breadth_domains),
             reason_codes=sorted(accumulator.reasons),
             source_snapshot_ids=sorted(accumulator.snapshot_ids),
             created_at=created_at,
@@ -2001,6 +2411,68 @@ class ResearchSeedService:
                 )
             )
         return tuple(result)
+
+    @staticmethod
+    def _load_breadth_domains(path: Path) -> tuple[_BreadthDomain, ...]:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema_version") != (
+            "research-seed-domain-aliases-v1"
+        ):
+            raise ValueError("research-seed breadth domain configuration is invalid")
+        rows = payload.get("breadth_domains")
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("research-seed breadth domains are missing")
+        result: list[_BreadthDomain] = []
+        seen: set[str] = set()
+        for item in rows:
+            if not isinstance(item, dict):
+                raise ValueError("research-seed breadth domain is invalid")
+            domain_id = str(item.get("domain_id") or "").strip()
+            board_contains = item.get("board_contains")
+            if (
+                not domain_id
+                or domain_id in seen
+                or not isinstance(board_contains, list)
+                or not board_contains
+            ):
+                raise ValueError("research-seed breadth domain is incomplete")
+            seen.add(domain_id)
+            result.append(
+                _BreadthDomain(
+                    domain_id=domain_id,
+                    board_contains=tuple(str(value) for value in board_contains),
+                )
+            )
+        return tuple(result)
+
+    @staticmethod
+    def _load_official_industry_code_map(path: Path) -> dict[str, str]:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema_version") != (
+            "research-seed-domain-aliases-v1"
+        ):
+            raise ValueError("research-seed official industry mapping is invalid")
+        raw_mapping = payload.get("official_industry_code_map")
+        if not isinstance(raw_mapping, dict) or not raw_mapping:
+            raise ValueError("research-seed official industry mapping is missing")
+        mapping = {
+            str(code).strip().upper(): str(domain_id).strip()
+            for code, domain_id in raw_mapping.items()
+        }
+        valid_domains = {
+            str(item.get("domain_id") or "").strip()
+            for item in payload.get("breadth_domains", [])
+            if isinstance(item, dict)
+        }
+        if (
+            any(len(code) != 1 or not code.isalpha() for code in mapping)
+            or any(
+                not domain_id or domain_id not in valid_domains
+                for domain_id in mapping.values()
+            )
+        ):
+            raise ValueError("research-seed official industry mapping is inconsistent")
+        return dict(sorted(mapping.items()))
 
     @staticmethod
     def _load_author_names(path: Path) -> dict[str, str]:

@@ -712,6 +712,14 @@ def test_market_price_anchor_is_required_for_market_implied_expectations(
     assert valuation.market_price_anchor == anchor
     assert price_artifact in valuation.source_artifact_ids
     assert price_ref.sha256 in valuation.source_object_hashes
+    bindings = dict(
+        zip(valuation.source_artifact_ids, valuation.source_object_hashes, strict=True)
+    )
+    assert bindings[price_artifact] == price_ref.sha256
+    for artifact_id, object_hash in bindings.items():
+        registered = state.artifact_record(artifact_id)
+        assert registered is not None
+        assert str(registered["object_hash"]) == object_hash
     assert all(item.expected_return is not None for item in valuation.results)
     implied_scale = next(
         item

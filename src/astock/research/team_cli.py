@@ -10,6 +10,7 @@ from typing import Annotated, Any
 import typer
 
 from astock.research.industry_archetypes import IndustryResearchRegistry
+from astock.research.industry_methodologies import IndustryMethodologyRegistry
 from astock.research.team import ResearchTeamService
 from astock.schemas.research_team import (
     FullResearchInputReadinessRequest,
@@ -42,6 +43,13 @@ def register_research_team_commands(
             paths.root / "configs" / "industry_research_archetypes.yaml"
         )
 
+    def industry_methodology_registry() -> IndustryMethodologyRegistry:
+        paths, _, _ = services()
+        return IndustryMethodologyRegistry.load(
+            paths.root / "configs" / "industry_methodologies.yaml",
+            archetypes=industry_registry(),
+        )
+
     @app.command("research-runtime-profile")
     def research_runtime_profile() -> None:
         emit(team().runtime_profile())
@@ -66,6 +74,14 @@ def register_research_team_commands(
     @app.command("industry-research-resolve")
     def industry_research_resolve(query: Annotated[str, typer.Argument()]) -> None:
         emit(industry_registry().resolve(query))
+
+    @app.command("industry-research-methodologies")
+    def industry_research_methodologies() -> None:
+        emit(industry_methodology_registry().inventory())
+
+    @app.command("industry-research-methodology")
+    def industry_research_methodology(query: Annotated[str, typer.Argument()]) -> None:
+        emit(industry_methodology_registry().resolve(query))
 
     @app.command("research-team-plan")
     def research_team_plan(

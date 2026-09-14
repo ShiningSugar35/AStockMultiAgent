@@ -32,6 +32,9 @@ acquisition:
 discovery:
   max_total_seeds: 40
   max_market_seeds: 20
+  max_breadth_challenger_seeds: 6
+  breadth_min_market_score_ratio: 0.82
+  breadth_max_boards_per_domain: 3
   max_expert_seeds_per_author: 10
   minimum_domain_skill_count: 3
   skill_share_gate_enabled: false

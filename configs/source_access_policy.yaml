@@ -1,6 +1,6 @@
 schema_version: source-access-policy-v2
 manual_last: true
-strong_official_capability_tokens: [official, financial, disclosure, corporate_action, identity]
+strong_official_capability_tokens: [official, financial, disclosure, corporate_action, identity, enterprise]
 weights:
   formal_eligibility: 120
   officiality: 100
@@ -21,6 +21,14 @@ transport_scores:
   BROWSER: 2.8
   SEARCH: 2.8
   MANUAL: 0
+transport_scores_by_capability_prefix:
+  "enterprise.":
+    LOCAL: 5
+    MCP: 4
+    API: 3
+    BROWSER: 2.8
+    SEARCH: 2.8
+    MANUAL: 0
 officiality_scores:
   PRIMARY_OFFICIAL: 3
   SECONDARY_STRUCTURED: 1

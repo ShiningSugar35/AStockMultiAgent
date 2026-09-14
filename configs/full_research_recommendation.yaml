@@ -70,6 +70,12 @@ news_categories:
   - investigation
   - safety_incident
   - management
+  - key_personnel_external_appointment
+  - ownership_control
+  - equity_pledge_freeze
+  - business_registration
+  - credit_enforcement
+  - key_partner_personnel
   - industry_pricing
   - supply_chain
   - overseas_sanctions_trade
@@ -111,6 +117,14 @@ portfolio:
   cvar_confidence: 0.95
   transaction_cost_bps: 12
   default_slippage_bps: 8
+  entry_quality_weight_multipliers:
+    ATTRACTIVE_DISLOCATION: 1.00
+    BASE_BUILDING: 0.90
+    TREND_CONFIRMED: 0.85
+    NEUTRAL: 0.75
+    FALLING_KNIFE_RISK: 0.40
+    EXTENDED: 0.50
+    INSUFFICIENT_HISTORY: 0.60
 
 execution:
   current_quote_freshness_sla_seconds: 120

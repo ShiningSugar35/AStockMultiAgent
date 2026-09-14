@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
+from astock.schemas.entry_quality import EntryQualityState
 
 _SHA256 = r"^[0-9a-f]{64}$"
 
@@ -82,6 +83,7 @@ class SourceAuthority(StrEnum):
 
 class EventEvidenceClass(StrEnum):
     OFFICIAL_FILING = "OFFICIAL_FILING"
+    SECONDARY_STRUCTURED = "SECONDARY_STRUCTURED"
     CONFIRMED_NEWS = "CONFIRMED_NEWS"
     ANALYST_INTERPRETATION = "ANALYST_INTERPRETATION"
     MARKET_RUMOR = "MARKET_RUMOR"
@@ -493,6 +495,9 @@ class RecommendationValuationSnapshot(AStockModel):
     margin_of_safety: Decimal
     historical_percentile: Decimal | None = Field(default=None, ge=0, le=1)
     peer_relative_percentile: Decimal | None = Field(default=None, ge=0, le=1)
+    entry_quality_state: EntryQualityState | None = None
+    entry_quality_score: Decimal | None = Field(default=None, ge=0, le=1)
+    entry_quality_reason_codes: tuple[str, ...] = ()
     source_artifact_ids: tuple[str, ...] = Field(min_length=1)
     source_object_hashes: tuple[str, ...] = Field(min_length=1)
 
@@ -525,12 +530,35 @@ class NewsEvent(AStockModel):
     instrument_id: str | None = None
     event_timestamp: AwareDatetime
     source_id: str = Field(min_length=1)
+    category: str = "uncategorized"
+    related_entity_ids: tuple[str, ...] = ()
+    person_names: tuple[str, ...] = ()
+    relation_scope: Literal[
+        "COMPANY",
+        "CONTROLLER",
+        "SUBSIDIARY",
+        "PARTNER",
+        "UPSTREAM",
+        "DOWNSTREAM",
+        "PUBLIC_OFFICE",
+        "INDUSTRY",
+        "POLICY",
+    ] = "COMPANY"
     evidence_class: EventEvidenceClass
     confidence: Decimal = Field(ge=0, le=1)
     expected_direction: Literal["POSITIVE", "NEGATIVE", "MIXED", "NEUTRAL", "UNKNOWN"]
     impact_horizon: str = Field(min_length=1)
     already_priced_probability: Decimal = Field(ge=0, le=1)
     summary: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_event_relations(self) -> NewsEvent:
+        if not self.category.strip():
+            raise ValueError("news event category must be non-empty")
+        for values in (self.related_entity_ids, self.person_names):
+            if values != tuple(sorted(set(values))):
+                raise ValueError("news event relation values must be sorted and unique")
+        return self
 
 
 class NewsEventCoverage(AStockModel):
@@ -712,6 +740,9 @@ class CandidateRankingEntry(AStockModel):
     catalyst: Decimal
     macro_fit: Decimal
     industry_fit: Decimal
+    entry_quality_state: EntryQualityState | None = None
+    entry_quality_score: Decimal | None = Field(default=None, ge=0, le=1)
+    entry_timing_risk: bool = False
     momentum: Decimal | None
     liquidity: Decimal | None
     accounting_risk: Decimal = Field(ge=0)

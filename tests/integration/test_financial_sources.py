@@ -1081,6 +1081,9 @@ def test_live_normalization_failure_reports_persisted_raw_snapshot(
         malformed_capture,
     )
     monkeypatch.setattr(service.providers["sina-financial"], "fetch", fail_backup)
+    # This test exercises structured-provider normalization failure only. Keep the
+    # independent official-report recovery lane offline so CI never reaches CNINFO.
+    monkeypatch.setattr(service.official, "get", lambda *args, **kwargs: None)
     report = service.sync(
         "000001",
         Market.XSHE,

@@ -908,6 +908,25 @@ class FullResearchRecommendationService:
                 object_hash=reference.sha256,
                 input_hashes=input_hashes,
             )
+            if self.store is not None:
+                import logging
+                import sqlite3
+
+                from astock.investor_orchestration.entry_watch import enroll_waiting_entries
+                from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
+
+                try:
+                    enroll_waiting_entries(
+                        receipt,
+                        ResearchSubjectRegistryService(self.store),
+                        self.state,
+                        self.objects,
+                    )
+                except (ValueError, OSError, sqlite3.Error) as exc:
+                    # Optional monitoring cannot turn a valid sealed analysis into NEEDS_INFO.
+                    logging.getLogger(__name__).warning(
+                        "Optional entry-watch enrollment deferred: %s", type(exc).__name__
+                    )
             if receipt.publication.formal_recommendation_allowed and receipt.portfolio.positions:
                 from astock.investor_orchestration.models import PortfolioLane, SubjectEventKind
                 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from astock.investor_orchestration.canonical_state import (
     CanonicalStateProjectionReader,
@@ -105,7 +107,33 @@ class InvestorSessionPreflightService:
             **receipt_body,
         )
         persisted = self.store.save_or_get_preflight(receipt)
-        return persisted.model_copy(update={"built_from_cache": built_from_cache}, deep=True)
+        public_receipt = persisted.model_copy(
+            update={"built_from_cache": built_from_cache}, deep=True
+        )
+        self._update_position_documents(public_receipt)
+        return public_receipt
+
+    @staticmethod
+    def _position_document_project_root(state_path: Path) -> Path:
+        """Keep optional readable projections inside this repository tree."""
+        repository_root = Path(__file__).resolve().parents[3]
+        resolved = state_path.resolve()
+        if not resolved.is_relative_to(repository_root):
+            return repository_root
+        return resolved.parent.parent if resolved.parent.name == "runtime" else resolved.parent
+
+    def _update_position_documents(self, receipt: InvestorSessionPreflightReceipt) -> None:
+        """Best-effort readable projection; never block canonical preflight on document I/O."""
+        try:
+            from astock.investor_orchestration.position_documents import PositionDocumentProjector
+            from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
+
+            project_root = self._position_document_project_root(self.store.path)
+            PositionDocumentProjector(
+                project_root, ResearchSubjectRegistryService(self.store)
+            ).update(receipt)
+        except (OSError, UnicodeError, ValueError, sqlite3.Error):
+            return
 
     def _build_state(
         self,

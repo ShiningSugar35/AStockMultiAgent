@@ -9,6 +9,7 @@ from pathlib import PurePath, PureWindowsPath
 
 from astock.research.internal_vocabulary import internal_vocabulary_terms
 from astock.research.presentation_policy import PresentationPolicy, load_presentation_policy
+from astock.research.report_style import public_status_text, style_findings, terminology_note
 from astock.schemas.presentation import (
     BudgetStatus,
     ConclusionStrength,
@@ -87,7 +88,8 @@ _ANSWER_POLICY_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "RAW_MACHINE_STATE_EXPOSED",
         (
-            r"needs_info",
+            r"needs?_info",
+            r"(?<!\[)\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b(?!\])",
             r"claim_ids_required",
             r"evidence_pack_required",
             r"trade_protocol_outcome",
@@ -268,7 +270,9 @@ class ResponseGateway:
             context = context.model_copy(update={"task_type": narrative.task_type})
 
         payload = _investor_payload(narrative, context=context, policy=self.policy)
-        text = normalize_public_text(_render_investor_text(payload), policy=self.policy)
+        text = normalize_public_text(
+            _render_investor_text(payload, self.policy), policy=self.policy
+        )
         required = _required_fingerprint_for_payload(payload, narrative.locked_facts)
         audit = audit_public_answer(
             text,
@@ -297,7 +301,7 @@ class ResponseGateway:
             headline=self.policy.safe_fallback_text,
             conclusion_strength=ConclusionStrength.NOT_CERTIFIED,
         )
-        safe_text = _render_investor_text(safe_payload)
+        safe_text = _render_investor_text(safe_payload, self.policy)
         safe_audit = audit_public_answer(
             safe_text,
             context=context,
@@ -361,6 +365,11 @@ def classify_response_mode(
         return explicit_mode
     selected = policy or load_presentation_policy()
     normalized = re.sub(r"\s+", "", request_text.casefold())
+    if re.match(
+        r"^(?:本次|这次)(?:任务)?(?:是|为|属于)(?:开发需求|开发任务|系统开发|调试任务)",
+        normalized,
+    ):
+        return ResponseMode.DEVELOPER
     for negated_phrase in selected.diagnostic_negation_terms:
         normalized = normalized.replace(
             re.sub(r"\s+", "", negated_phrase.casefold()),
@@ -511,6 +520,7 @@ def audit_public_answer(
         findings.add("PUBLIC_ANSWER_REPETITIVE")
     if any(item.casefold() in stripped.casefold() for item in selected.forbidden_expressions):
         findings.add("CHINESE_STYLE_FORBIDDEN_EXPRESSION")
+    findings.update(style_findings(stripped, selected.prose_style_patterns))
     if _english_density(stripped, selected) > selected.english_density_threshold:
         findings.add("CHINESE_STYLE_EXCESSIVE_ENGLISH")
     if re.search(
@@ -591,7 +601,13 @@ def audit_public_answer(
         secret_exposed=secret_exposed,
         private_path_exposed=private_path_exposed,
         internal_implementation_exposed=internal_exposed,
-        safe_to_send=not ordered,
+        # Style-only rework is distinct from missing investment evidence.
+        # Unverified drafts still fail; checked facts retain every safety gate.
+        safe_to_send=not ordered or (
+            checked
+            and not fact_drift
+            and all(code.startswith("CHINESE_STYLE_") for code in ordered)
+        ),
         raw_answer_echoed=False,
     )
 
@@ -674,6 +690,9 @@ def normalize_public_text(
     """Clean deterministic style only when all critical fact tokens stay identical."""
 
     selected = policy or load_presentation_policy()
+    translated = public_status_text(text)
+    if translated != text:
+        return translated
     before = extract_fact_fingerprint(text)
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     normalized = re.sub(r"[ \t]+", " ", normalized)
@@ -719,7 +738,7 @@ def extract_fact_fingerprint(
         label
         for strength, label in _STRENGTH_LABELS.items()
         if strength is not ConclusionStrength.UNSPECIFIED
-        and re.search(rf"结论强度[:：]\s*{re.escape(label)}(?:\s|$|[。；，])", text)
+        and re.search(rf"(?:结论强度|判断把握)[:：]\s*{re.escape(label)}(?:\s|$|[。；，])", text)
     ]
     return FactFingerprint(
         entities=_ordered_unique(entity for entity in known_entities if entity and entity in text),
@@ -827,31 +846,35 @@ def _investor_payload(
         citations=_dedupe_items(narrative.citations),
         report_reference=_safe_report_reference(narrative.report_path),
     )
-    while payload.reasons and len(_render_investor_text(payload)) > budget.max_chars:
+    while payload.reasons and len(_render_investor_text(payload, policy)) > budget.max_chars:
         payload = payload.model_copy(update={"reasons": payload.reasons[:-1]})
     return payload
 
 
-def _render_investor_text(payload: InvestorPresentationModel) -> str:
-    lines = [f"主体：{payload.subject}", f"结论：{payload.headline}"]
+def _render_investor_text(
+    payload: InvestorPresentationModel, policy: PresentationPolicy | None = None
+) -> str:
+    paragraphs = [payload.subject, payload.headline]
     if payload.conclusion_strength is not ConclusionStrength.UNSPECIFIED:
-        lines.append(f"结论强度：{_STRENGTH_LABELS[payload.conclusion_strength]}")
+        paragraphs.append(f"判断把握：{_STRENGTH_LABELS[payload.conclusion_strength]}")
     if payload.valuation_or_odds:
-        lines.append("估值与赔率：" + "；".join(payload.valuation_or_odds))
+        paragraphs.append("估值方面，" + "；".join(payload.valuation_or_odds))
     if payload.reasons:
-        lines.append("主要依据：")
-        lines.extend(f"- {item}" for item in payload.reasons)
+        paragraphs.append("。".join(item.rstrip("。") for item in payload.reasons) + "。")
     if payload.risk:
-        lines.append(f"最大风险：{payload.risk}")
+        paragraphs.append(f"主要风险在于：{payload.risk}")
     if payload.change_condition:
-        lines.append(f"改变判断的条件：{payload.change_condition}")
+        paragraphs.append(f"若出现以下变化，需要重新审视上述判断：{payload.change_condition}")
     if payload.data_as_of:
-        lines.append(f"数据截至：{payload.data_as_of}")
+        paragraphs.append(f"以上资料截至{payload.data_as_of}。")
+    note = terminology_note("\n".join(paragraphs), policy.term_explanations if policy else {})
+    if note:
+        paragraphs.append(note)
     if payload.report_reference:
-        lines.append(f"{payload.report_reference.label}：{payload.report_reference.file_name}")
+        paragraphs.append(f"相关报告：{payload.report_reference.file_name}")
     if payload.citations:
-        lines.append("来源：" + "；".join(payload.citations))
-    return "\n".join(lines)
+        paragraphs.append("资料来源：" + "；".join(payload.citations))
+    return "\n\n".join(paragraphs)
 
 
 def _render_developer_text(payload: DeveloperDiagnosticsModel) -> str:

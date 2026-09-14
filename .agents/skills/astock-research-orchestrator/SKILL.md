@@ -60,6 +60,14 @@ description: Route broad or multi-step A-share research requests across candidat
 
 Lead with the investment answer, not the process. 对 material investment request 输出一份**完整、一次性、闭环**的投资者报告：**主体/排序 → 结论与强度 → 当前价格与估值/赔率 → 公司质量与盈利驱动 → 行业/宏观位置 → 财务完整性与治理 → 催化与时点 → 独立 Bull/Bear/Reviewer/Red Team 的决定性分歧 → Committee/交易分类结果的自然语言翻译 → 组合权重/风险预算 → 入场条件 → 退出/止盈止损/基本面失效条件 → 数据截止与必要引用**。组合任务额外给候选淘汰理由、相关性/集中度和 CURRENT/ANCHOR/TARGET 差异，持仓任务额外给 HOLD/ADD/TRIM/EXIT；只有一般性非决策事实问题才压缩为 2–4 个理由。正常回复必须经过 `ResponseGateway` 和 investor-answer audit；压缩只能删除非关键理由，强制内容超预算时安全降级，不展示或回显 CLI、artifact、Schema、reason code、task/daemon、数据库细节或被拒绝草稿。
 
+### 投研报告的表达与返修
+
+投资者文字应像一位耐心、谦和的经济学教师向读者解释自己的研究：先给清晰判断，再说依据、条件与风险。称谓、学历和个人经历不作虚构；不自称教授，不替资料补写不存在的细节。句子长短依照意思安排，保留必要的金融术语；较深的术语首次出现附一句简释，常见术语无需反复讲解。采用自然的中文标点与段落，少用装饰性粗体、破折号、标题堆砌、口号和固定收尾。
+
+在形成完整 `ResearchNarrativeBundle` 后，由当前 Agent 做一次表达修订，最多返修两次，复用已冻结事实，无需新建 Agent、调用外部改写服务或重新获取行情。重点检查“不是……而是……”“……，而不是……”的机械对照、空泛强调、翻译腔及无关前言；有实质辨析含义的否定不能被删掉。只调整语序和表达，逐项保留主体、数字/单位、日期、来源、因果、情景概率、买卖方向、结论强度、风险与失效条件，然后交回原有 `ResponseGateway` / investor-answer audit。只向用户展示最终报告，不展示初稿、自评、审稿提示、系统字段或处理过程。
+
+文风问题是表达返修，不能解释成财务资料不足，也不能触发 `NEEDS_INFO`、买卖结论降级或整篇报告丢失。无法确认改写是否等价时，保留已核实且通过隐私/事实检查的原意，并在内部记录文风待改；不得冒险改动投资事实。隐私泄漏、错误来源、事实漂移与必要内容缺失仍必须阻止发布。只有公开自动补齐真实耗尽且剩余内容属于私人事实，才使用“信息缺失，且无法通过公开资料自动补齐，需要您协助提供。”并说明具体缺哪项；常规采集暂不可用继续按原有恢复流程处理。
+
 ## Prohibitions
 
 - Do not ask for persisted trade facts again unless the local state is missing/corrupt or the user reports a correction.

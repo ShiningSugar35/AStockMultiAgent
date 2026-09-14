@@ -1499,3 +1499,26 @@ def test_paper_status_reuses_single_audited_snapshot_in_one_cli_call() -> None:
     assert "_consume_prefetched_status(account_id) or self.status" in ledger_source
     assert "paper-status-prime-single-snapshot-v1" in cli_source
     assert ".prime_status_snapshot(" in cli_source
+
+
+def test_preflight_projects_lightweight_position_documents_idempotently(
+    store: InvestorOrchestrationStore,
+) -> None:
+    _seed_existing_state(store)
+    service = InvestorSessionPreflightService(store)
+    service.build(_request(request_id="position-doc-one"))
+    root = store.path.parent / "user_state" / "position_tracking"
+    active = root / "当前持仓.md"
+    state = root / ".projection.json"
+    assert active.exists() and state.exists()
+    first_mtime = state.stat().st_mtime_ns
+    text = active.read_text(encoding="utf-8")
+    assert "XSHG:600519" in text
+    assert "首次快照" in text
+    monitor = root / "主动跟踪计划.md"
+    assert monitor.exists()
+    monitor_text = monitor.read_text(encoding="utf-8")
+    assert "不得下真实交易指令" in monitor_text
+    assert "PRE_OPEN@09:10" in monitor_text and "POST_CLOSE@15:30" in monitor_text
+    service.build(_request(request_id="position-doc-two"))
+    assert state.stat().st_mtime_ns == first_mtime

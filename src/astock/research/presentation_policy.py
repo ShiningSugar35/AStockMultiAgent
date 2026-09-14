@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -33,6 +34,8 @@ class PresentationPolicy:
     forbidden_expressions: tuple[str, ...]
     protected_terms: tuple[str, ...]
     budgets: dict[ResponseTaskType, ResponseBudget]
+    prose_style_patterns: tuple[str, ...] = ()
+    term_explanations: dict[str, str] = field(default_factory=dict)
 
     def budget(self, task_type: ResponseTaskType) -> ResponseBudget:
         try:
@@ -76,9 +79,7 @@ def load_presentation_policy(path: Path | None = None) -> PresentationPolicy:
     diagnostic_negation_terms = _unique_non_empty_strings(
         raw.get("diagnostic_negation_terms"), "diagnostic_negation_terms"
     )
-    forbidden = _unique_non_empty_strings(
-        raw.get("forbidden_expressions"), "forbidden_expressions"
-    )
+    forbidden = _unique_non_empty_strings(raw.get("forbidden_expressions"), "forbidden_expressions")
     protected = _unique_non_empty_strings(raw.get("protected_terms"), "protected_terms")
     max_bullets = _positive_int(raw.get("max_bullets"), "max_bullets")
     max_heading_level = _positive_int(raw.get("max_heading_level"), "max_heading_level")
@@ -92,6 +93,16 @@ def load_presentation_policy(path: Path | None = None) -> PresentationPolicy:
     locale = str(raw.get("locale") or "").strip()
     if not safe_fallback_text or not locale:
         raise ValueError("Presentation policy locale and safe fallback text are required")
+
+    patterns = tuple(str(value) for value in raw.get("prose_style_patterns", ()))
+    for pattern in patterns:
+        re.compile(pattern)
+    explanations = raw.get("term_explanations", {})
+    if not isinstance(explanations, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) or not key or not value
+        for key, value in explanations.items()
+    ):
+        raise ValueError("term_explanations must contain non-empty text pairs")
 
     return PresentationPolicy(
         schema_version="presentation-policy-v1",
@@ -107,6 +118,8 @@ def load_presentation_policy(path: Path | None = None) -> PresentationPolicy:
         forbidden_expressions=forbidden,
         protected_terms=protected,
         budgets=budgets,
+        prose_style_patterns=patterns,
+        term_explanations=dict(explanations),
     )
 
 

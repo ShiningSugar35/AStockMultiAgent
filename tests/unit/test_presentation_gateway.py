@@ -315,10 +315,7 @@ def test_every_locked_fact_deletion_or_change_fails(
     assert audit.status == "FAIL"
     assert audit.fact_equivalence_status is FactEquivalenceStatus.FAIL
     assert audit.fact_drift_detected is True
-    assert (
-        audit.required_content_preserved is False
-        or "PUBLIC_FACT_ADDED" in audit.finding_codes
-    )
+    assert audit.required_content_preserved is False or "PUBLIC_FACT_ADDED" in audit.finding_codes
 
 
 def test_canonical_contract_accepts_legacy_aliases_but_serializes_one_shape() -> None:
@@ -458,9 +455,7 @@ def test_deep_research_narrative_upgrades_quick_view_budget_and_preserves_risk_s
     assert isinstance(rendered.payload, InvestorPresentationModel)
     assert rendered.payload.reasons == reasons
     assert rendered.payload.risk == "需求下行会压低盈利。；估值收缩会放大回撤。"
-    assert rendered.payload.change_condition == (
-        "盈利预测显著上修。；估值回到更有安全边际的位置。"
-    )
+    assert rendered.payload.change_condition == ("盈利预测显著上修。；估值回到更有安全边际的位置。")
     assert not rendered.safe_fallback_used
 
 
@@ -471,10 +466,7 @@ def test_length_reduction_only_removes_noncritical_reasons() -> None:
         headline="当前估值偏高，更适合持有等待。",
         conclusion_strength=ConclusionStrength.HIGH,
         valuation_or_odds=["参考价1400.00元，预期收益区间8%至12%。"],
-        reasons=[
-            f"第{index}条辅助理由：" + "经营数据仍需持续观察。" * 12
-            for index in range(12)
-        ],
+        reasons=[f"第{index}条辅助理由：" + "经营数据仍需持续观察。" * 12 for index in range(12)],
         risks=["需求低于预期可能压低盈利中枢。"],
         change_conditions=["2026年9月30日15:00后盈利超预期且估值回落。"],
         data_as_of=NOW,
@@ -593,17 +585,11 @@ def test_machine_cli_contracts_are_preserved_and_public_commands_are_additive() 
     }
 
     assert "public_investor_payload" not in functions["research_investor_view"]
-    assert "public_investor_payload" not in functions[
-        "research_acquisition_investor_view"
-    ]
+    assert "public_investor_payload" not in functions["research_acquisition_investor_view"]
     assert "investor_view_from_run" in functions["research_investor_view"]
-    assert "investor_view_from_acquisition" in functions[
-        "research_acquisition_investor_view"
-    ]
+    assert "investor_view_from_acquisition" in functions["research_acquisition_investor_view"]
     assert "public_investor_payload" in functions["research_public_view"]
-    assert "public_investor_payload" in functions[
-        "research_acquisition_public_view"
-    ]
+    assert "public_investor_payload" in functions["research_acquisition_public_view"]
 
 
 def test_stable_machine_view_schema_has_not_been_replaced() -> None:
@@ -648,3 +634,31 @@ def test_parameterized_contract_exceeds_minimum_and_covers_required_categories()
     assert total >= 150
     assert len(_NEGATED_DIAGNOSTIC_PROMPTS) >= 10
     assert len(_DRIFT_CASES) >= 10
+
+
+@pytest.mark.parametrize("text", ["这不是估值问题，而是增长问题。", "重点在现金流，而不是故事。"])
+def test_formulaic_contrast_style_is_rejected(text: str) -> None:
+    audit = audit_public_answer(text)
+    assert "CHINESE_STYLE_TEMPLATE_CONTRAST" in audit.finding_codes
+
+
+def test_machine_status_is_rendered_as_natural_investor_language_without_false_manual_gap() -> None:
+    assert normalize_public_text("NEEDS_INFO") == "信息尚未核实完整，暂不形成投资结论。"
+    audit = audit_public_answer(normalize_public_text("NEEDS_INFO"))
+    assert audit.status == "PASS"
+
+
+def test_investor_render_uses_narrative_paragraphs_and_explains_advanced_term() -> None:
+    gateway = ResponseGateway()
+    narrative = ResearchNarrativeBundle(
+        subject="示例公司（600000）",
+        headline="当前价格仍需留出安全边际。",
+        reasons=["DCF结果对长期增长假设较敏感。"],
+        risks=["盈利低于预期会压低合理价值。"],
+    )
+    rendered = gateway.render(gateway.context("请分析这家公司"), narrative=narrative)
+    assert rendered.safe_fallback_used is False
+    assert "主体：" not in rendered.text
+    assert "主要依据：" not in rendered.text
+    assert "DCF指将未来现金流折算成今天的价值" in rendered.text
+    assert "600000" in rendered.text

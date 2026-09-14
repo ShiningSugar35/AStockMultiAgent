@@ -4,7 +4,7 @@ import importlib.util
 import json
 import shutil
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -95,6 +95,16 @@ from tests.unit.test_scheduled_paper_replay_adapter import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture
+def project_tmp_path() -> Iterator[Path]:
+    path = PROJECT_ROOT / "runtime" / "pytest" / f"scheduled-semantic-{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 class _ThreeDomainPaperReference(_ReferenceFixture):
@@ -509,11 +519,11 @@ def test_scheduled_semantic_preflight_rejects_monitor_drift_after_research(
 
 
 def test_controlled_live_consumes_prepared_double_gate_without_enabling_feature(
-    tmp_path: Path,
+    project_tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    bank = _build_recorded_bank(tmp_path)
+    bank = _build_recorded_bank(project_tmp_path)
     run_id = "prepared-controlled-double-gate"
     market_artifact_id = _canonical_market_anchor(bank)
     _audit, source_request, report_id = _five_family_source_report(
@@ -643,7 +653,7 @@ def test_controlled_live_consumes_prepared_double_gate_without_enabling_feature(
     checkpoint = bank.store.get_scheduled_checkpoint(binding.binding_id, unprepared.schedule_bucket)
     assert checkpoint is not None and checkpoint["status"] == "READY"
     assert bank.store.completed_schedule_buckets(binding.binding_id) == set()
-    request_file = tmp_path / "prepared-scheduled-request.json"
+    request_file = project_tmp_path / "prepared-scheduled-request.json"
     request_file.write_text(prepared.model_dump_json(indent=2), encoding="utf-8")
 
     economic_tables = (

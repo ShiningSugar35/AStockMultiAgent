@@ -1,7 +1,19 @@
 schema_version: presentation-policy-v1
 locale: zh-CN
 default_mode: INVESTOR
-safe_fallback_text: "当前无法安全生成公开答复。已保留内部诊断信息，请稍后重试。"
+safe_fallback_text: "现有资料尚不足以支持可靠的投资判断，本次不作买卖建议。"
+prose_style_patterns:
+  - '(?:不是|并非|不只是|不仅仅是)[^。！？\n]{1,100}[，,；;][^。！？\n]{0,8}而是'
+  - '[，,；;]\s*而不是[^。！？\n]{1,100}'
+  - '让我们(?:深入|一探|一起走进)|这才是真正的|不妨让我们'
+term_explanations:
+  CVaR: 极端不利情形下的平均损失
+  DCF: 将未来现金流折算成今天的价值
+  夏普比率: 每承担一份波动风险获得的超额收益
+  久期: 债券价格对利率变化的敏感程度
+  风险平价: 按风险贡献分配仓位的方法
+  盈利修正: 对未来利润预期的上调或下调
+  尾部风险: 低概率但损失可能很大的风险
 max_bullets: 8
 max_heading_level: 2
 semantic_duplicate_threshold: 0.92

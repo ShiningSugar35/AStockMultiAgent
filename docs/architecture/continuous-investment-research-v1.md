@@ -240,6 +240,18 @@ Agent 可从正式研究生成 typed rule，但必须显式落盘；daemon 禁�
 - bounded retry + exponential backoff；
 - 每轮完成写 run summary。
 
+### 3.10 会话级持仓文档投影与平台定时复核
+
+每次投资类 Agent 激活，在权威 external account / paper ledger / preflight 已经恢复并通过各自审计后，系统做一次**可失败、可重建、Git-ignore** 的轻量文档投影到 `user_state/position_tracking/`。该层服务 Agent 续接和人工阅读，不拥有经济事实，也不新增数据库或交易账本。
+
+- `当前持仓.md`：按实盘/模拟盘保留活动持仓、首次记录时间、首次可核实观察价、成本、当前可核实估值、首次研究快照和后续 material delta。首次快照一经形成保持不变；后来的研究不得倒填成买入时已知信息。
+- 首次有可用且已经封存的 `RecommendationResearchReceipt` 时，只读冻结简明投资逻辑、基本面覆盖、行业周期、宏观环境、财务审计、治理和研究时价格；没有正式工件就明确缺席，不调用模型或 Provider 补造历史。
+- `已结束交易.md`：只有权威账户读取完整且持仓确认消失时才从活动投影转入归档。归档保留跟踪时间；实际卖出成交时间、费用或净收益没有 canonical 证据时明确写“尚未核实”，不得用最后一次核对时间冒充成交时间。
+- `.projection.json` 与 `.projection.pending.json` 只是可恢复生成缓存。lane 读取失败、账户身份暂缺、损坏缓存、并发写入或较旧观察均不得解释成清仓；既有活动记录和归档应保守保留。
+- 无 material change 时不重写文档；估值、重大事件或 canonical 持仓变化才产生增量更新。`max_subjects_per_run` 仅是单批预算，超过 50 个标的必须继续分批，不能从监控宇宙静默删除。
+
+平台 Scheduled Tasks 只作为可选的语义复核/通知层。盘前、盘中、收盘后的任务应重新读取允许的连接能力并以 canonical 持仓/正式观察集合为准；任务创建成功、启用成功和某一轮实际读取/研究成功是三个不同事实，必须分别记录。平台任务不能下真实交易指令，也不能创建/回放模拟订单。平台连接不可用时，本地 Continuous Monitor 和下次投资会话的增量恢复继续工作，不能把“没读到”翻译成“没有持仓”。
+
 ## 4. Skills 与工作流改造
 
 新增 `$continuous-investment-monitor`：

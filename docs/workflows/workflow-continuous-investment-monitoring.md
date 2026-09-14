@@ -15,8 +15,8 @@
 
 ## Flow
 
-1. **会话恢复**：同步 paper account → 读取 `continuous-monitor-status` → 优先处理当前持仓/目标标的的 material 未解决事件与 pending task。
-2. **新单股研究**：`$company-deep-research` 完成正式链 → `$continuous-investment-monitor` 以 `ANALYZED` enroll → 仅把已有结构化证据支持的价格/回撤/复核条件写成 typed rule。
+1. **会话恢复**：恢复 external account + paper account → 读取 `continuous-monitor-status` → 优先处理当前持仓/目标标的的 material 未解决事件与 pending task → 以通过审计的 preflight 快照 best-effort 更新 Git-ignore 的 `user_state/position_tracking/`。文档投影失败不改变 canonical 持仓，也不能触发 NEEDS_INFO。
+2. **新单股研究**：`$company-deep-research` 完成正式链 → `$continuous-investment-monitor` 以 `ANALYZED` enroll → 仅把已有结构化证据支持的价格/回撤/复核条件写成 typed rule。正式 WAIT/WATCH 且进入时机不成熟的高潜力标的继续留在观察集合，而不是要求用户再次发问才跟踪。
 3. **荐股**：`$candidate-scan` 完成 seed → promotion → candidate → 单股深研/投委会；只有正式 WATCH / APPROVE_SIMULATION 集合以 `RECOMMENDED` enroll。
 4. **常驻循环**：60m canonical 行情、CNINFO、GDELT lead、Catalyst、scheduled review、paper replay 按各自 cadence 执行；每 target/source 独立 cursor、backoff 和失败隔离。
 5. **事件分流**：
@@ -28,6 +28,7 @@
    - 开放 paper order：只对既有已确认订单运行 deterministic replay，fill 后再形成持仓变化事件。
 6. **研究闭环**：Research Agent 消费 pending task → 复核证据和受影响模块 → 更新正式冻结研究/交易计划 → `continuous-monitor-reviewed` → ack 已处理事件。
 7. **组合闭环**：持仓发生 fill、material thesis delta 或风险阈值变化时，调用 `$holding-monitor` / `$portfolio-manager`；组合层不能覆盖单股 REJECT/WATCH/NEEDS_INFO。
+8. **可选平台复核**：若 ChatGPT Scheduled Tasks 在当前账户/连接权限下可用，创建少量盘前、盘中、收盘后复核任务。每次运行都重新读取 canonical 持仓和正式观察集合，按 `max_subjects_per_run` 分批；只在 material change 时通知。任务创建/启用不能冒充某轮已经成功读取本机项目，实际运行证据单独核验。平台任务不得提交真实订单、创建模拟订单或执行 paper replay。
 
 ## Stop conditions
 

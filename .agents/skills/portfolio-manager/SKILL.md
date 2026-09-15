@@ -5,12 +5,12 @@ description: Evaluate portfolio risk, complete a planned purchase with complemen
 
 # 组合构建、风险互补与迁移
 
-1. **先恢复真实用户态**。若 paper account 存在，先 `local-portfolio-sync-paper`；随后读取 `local-portfolio-status`、`portfolio-local-snapshot` 与 `continuous-monitor-status`。未成交订单不是持仓。外部既成交易以本机 `trades.md` 为事实源，SQLite paper ledger 只拥有模拟订单/成交事实。
+1. **先恢复真实用户态**。若 paper account 存在，先 `local-portfolio-sync-paper`；随后读取 `local-portfolio-status`、`portfolio-local-snapshot` 与 `continuous-monitor-status`。未成交订单不是持仓。外部既成交易以 append-only external-account event 为事实源，`trades.md` 只是兼容投影，SQLite paper ledger 只拥有模拟订单/成交事实。
 2. Existing paper-portfolio diagnostics remain available through `portfolio-paper-evaluate`; a `RESEARCH_READY` Candidate still has **no** portfolio-weight authority until the formal company/Committee chain closes.
 3. 区分两类任务：
    - **已有组合复核**：从当前持仓、现金约束和最近 review 分析集中度、相关性、beta/因子、回撤、CVaR/CDaR、流动性、实施成本和压力情景。
    - **计划买入 X 后补全组合**：先确认 X 的 current 正式研究仍可用，再比较 `CURRENT → ANCHOR_ONLY → TARGET`。先回答“加入 X 会新增什么风险”，再寻找互补资产，不要先列股票再事后解释。
-4. 用户风险/资金约束是输入，不是模型产物。确认或恢复投资期限、可用资本/现金、最大总暴露、单股/行业、相关性、回撤、流动性、换手和必须保留/禁止持仓。关键约束未知时，可以给风险诊断和条件方案，但不得伪造现金、总资产或风险承受能力；数量区间只能在 NAV/价格/交易单位都可证明时给出。
+4. 先读取本次已冻结的投资预期：本金与目标年化按本轮明确值、最近可验证的同账户用户历史、策略默认 100000 元/100% 顺序分别恢复。模型默认值必须明确标注，不能冒充真实 NAV/现金或自动提高风险承受。目标年化用于同期限盈亏路径和条件入场价；期限不可比时只给情景与缺口说明，不伪造达标结论。用户风险/资金约束是输入，不是模型产物。确认或恢复投资期限、可用资本/现金、最大总暴露、单股/行业、相关性、回撤、流动性、换手和必须保留/禁止持仓。关键约束未知时，可以给风险诊断和条件方案，但不得伪造现金、总资产或风险承受能力；数量区间只能在 NAV/价格/交易单位都可证明时给出。
 5. 对当前持仓或 planned anchor 运行 `portfolio-evaluate`/既有正式研究链，使用公司行动调整后的 PIT 研究收益序列做组合风险；原始未复权价格仍只用于真实成交/数量换算。不要用除权跳变制造虚假相关或回撤。
 6. **风险缺口驱动候选**：根据 concentration / market beta / industry / factor / cycle / liquidity / scenario 等 gap 定义候选特征。股票候选只能从可证明 Universe → ResearchSeed/Candidate → `$company-deep-research`/Research Team 进入，最终成员仍必须是 current Committee/Classification 允许的正式组合候选。Web/新闻可以解释风险机制或核验事实，不能临时手选股票替代 Universe lineage。
 7. 候选数量保持 bounded：风险预筛通常 6–12 个，只有最有希望改善指定 gap 的 2–5 个进入完整公司深研。复用同一会话行情、因子、行业和协方差输入，不为每个 allocator 重复抓取。

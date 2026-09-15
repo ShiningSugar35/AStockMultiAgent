@@ -17,9 +17,11 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
 
 ## Flow
 
-1. **Refresh local investor state**
+1. **Refresh local investor state and investment expectation**
    - Sync/read the local paper portfolio and unresolved continuous-monitor items.
-   - This does not create research authority.
+   - Resolve principal and target annual return independently before Full Research: current explicit request value first, then the newest verifiable recorded value in recent formal recommendation history, then the policy defaults of RMB 100,000 and 100% annual target. Model DEFAULT values never hide older user values; malformed objects and other-account entries are skipped. Restore from registered request logs as well as formal recommendation/holding-research contracts, then freeze the small context before capability execution.
+   - The annual target is a planning objective, never a promised return or authority to relax mandatory research, concentration, liquidity, risk, margin/shorting or broker constraints. If current approved candidates cannot support the target path under hard limits, retain cash and expose the objective gap.
+   - This state restore does not create research authority.
 
 2. **Create the durable team plan**
    - Run `uv run astock research-team-plan`.
@@ -63,6 +65,7 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
 9. **Stage 9 — portfolio**
    - Portfolio construction may use only committee-approved names.
    - Concentration/sector/risk constraints are evaluated here; no candidate/expert seed bypasses this stage.
+   - Freeze annual and explicit-horizon profit targets from the resolved principal/annual target; compare them with the weighted valuation return and downside scenario. The annual target may tighten the maximum acceptable entry price through the target-return hurdle only when the valuation horizon is known. Unknown/mixed horizons yield a disclosed non-comparable status and no invented numeric gap. Entry costs/slippage are deducted from notional-based scenario P&L; exit costs remain explicitly unknown. It never increases leverage or overrides hard risk limits.
 
 10. **Stage 10 — deterministic Full Research input gate**
     - Build `FullResearchInputReadinessRequest` only after required work is complete.

@@ -51,7 +51,7 @@
 9. 必要引用；
 10. 安全化后的正式报告文件名。
 
-只要源叙事提供了风险、变化条件、数据时点、估值/赔率、引用或报告引用，这些内容即属于强制字段。长度控制不得删除它们。对于 `FULL_RESEARCH_RECOMMENDATION / DEEP_RESEARCH / FORMAL_REPORT`，多个已冻结风险与多个改变判断/失效条件必须全部进入公共投影；可去重，但不得静默丢弃。
+只要源叙事提供了风险、变化条件、数据时点、估值/赔率、引用或报告引用，这些内容即属于强制字段。长度控制不得删除它们。对于 `FULL_RESEARCH_RECOMMENDATION / DEEP_RESEARCH / FORMAL_REPORT`，多个已冻结风险与多个改变判断/失效条件必须全部进入公共投影；可去重，但不得静默丢弃。`FULL_RESEARCH_RECOMMENDATION` 必须自然呈现目标年化、具备可核实共同期限时的目标收益路径，以及可用时的情景收益率、下行比例与目标缺口（百分点）；目标年化明确为规划目标而非收益承诺。本金仅保留在内部已注册请求和计算中，公开回复无论采用本轮、历史还是默认值，均不得输出其具体数值，也不得通过现金/配置/盈亏金额或持有/建议股数间接披露。账户和模拟状态公开展示同样采用比例，证券公开单价和发行人财务数据不作全局数字脱敏。旧记录只改变公开投影，不回写原始工件、经济事实或哈希；隐私审计拒绝必须使用不回显金额的展示提示，不得谎称投资研究资料缺失。
 
 material investment request（荐股、买卖判断、持仓处置、组合推荐）统一使用 `FULL_RESEARCH_RECOMMENDATION`，只有最终 `RecommendationResearchReceipt + Publication Gate` 允许 investor view 后才进入本合同。Seed/Candidate/Acquisition/Team/Committee/Portfolio 中间态不具公共投资结论资格；展示层不得用“下一步可以继续研究”把上游仍可自动完成的工作转交用户。完整但非交易决策型公司研究可使用 `DEEP_RESEARCH`；`COMPANY_QUICK_VIEW` 只服务非决策快速事实/研究。canonical narrative 已明确 task type 时，网关只能升级到对应决策级预算，不得反向降级或改变研究事实。
 

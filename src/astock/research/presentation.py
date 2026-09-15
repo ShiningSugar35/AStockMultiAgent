@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from difflib import SequenceMatcher
 from pathlib import PurePath, PureWindowsPath
 
+from astock.research.capital_privacy import capital_disclosure_findings, redact_capital_amounts
 from astock.research.internal_vocabulary import internal_vocabulary_terms
 from astock.research.presentation_policy import PresentationPolicy, load_presentation_policy
 from astock.research.report_style import public_status_text, style_findings, terminology_note
@@ -298,7 +299,11 @@ class ResponseGateway:
                 context=context,
                 policy=self.policy,
             ),
-            headline=self.policy.safe_fallback_text,
+            headline=(
+                "这份内容含有账户资金信息，公开展示需改用仓位比例和收益率。"
+                if "PRIVATE_CAPITAL_AMOUNT_EXPOSED" in audit.finding_codes
+                else self.policy.safe_fallback_text
+            ),
             conclusion_strength=ConclusionStrength.NOT_CERTIFIED,
         )
         safe_text = _render_investor_text(safe_payload, self.policy)
@@ -531,6 +536,7 @@ def audit_public_answer(
     if re.search(r"[\u4e00-\u9fff][,:;][\u4e00-\u9fff]", stripped):
         findings.add("CHINESE_STYLE_HALF_WIDTH_PUNCTUATION")
 
+    findings.update(capital_disclosure_findings(stripped))
     secret_exposed = _contains_secret(stripped)
     if secret_exposed:
         findings.add("SECRET_OR_CREDENTIAL_EXPOSED")
@@ -603,7 +609,8 @@ def audit_public_answer(
         internal_implementation_exposed=internal_exposed,
         # Style-only rework is distinct from missing investment evidence.
         # Unverified drafts still fail; checked facts retain every safety gate.
-        safe_to_send=not ordered or (
+        safe_to_send=not ordered
+        or (
             checked
             and not fact_drift
             and all(code.startswith("CHINESE_STYLE_") for code in ordered)
@@ -632,6 +639,7 @@ def audit_developer_answer(
     budget_exceeded = len(stripped) > budget.max_chars
     if budget_exceeded:
         findings.add("DEVELOPER_ANSWER_TOO_LONG")
+    findings.update(capital_disclosure_findings(stripped))
     secret_exposed = _contains_secret(stripped)
     private_path_exposed = _PRIVATE_PATH_PATTERN.search(stripped) is not None
     if secret_exposed:
@@ -774,7 +782,7 @@ def extract_fact_fingerprint(
 
 
 def redact_sensitive_text(text: str) -> str:
-    value = text
+    value = redact_capital_amounts(text)
     for pattern in _SECRET_PATTERNS:
         value = re.sub(pattern, "[REDACTED]", value)
     return _PRIVATE_PATH_PATTERN.sub("[PRIVATE_PATH]", value)

@@ -13,6 +13,7 @@ from astock.investor_orchestration.models import (
 from astock.investor_orchestration.output_validation import RegisteredOutputVerifier
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
+from astock.research.capital_privacy import CapitalDisclosureError, capital_disclosure_findings
 from astock.research.presentation import audit_public_answer
 
 _LOG = logging.getLogger(__name__)
@@ -120,7 +121,9 @@ class InvestorAnswerGateway:
                 change_conditions=(),
                 evidence_as_of=preflight.as_of,
             )
-            return self._safe_answer(fallback, preflight)
+            return self._safe_answer(
+                fallback, preflight, privacy_blocked=isinstance(exc, CapitalDisclosureError)
+            )
         return self.render(
             draft,
             preflight=preflight,
@@ -228,8 +231,30 @@ class InvestorAnswerGateway:
 
     @staticmethod
     def _safe_answer(
-        draft: InvestorAnswerDraft, preflight: InvestorSessionPreflightReceipt
+        draft: InvestorAnswerDraft,
+        preflight: InvestorSessionPreflightReceipt,
+        *,
+        privacy_blocked: bool = False,
     ) -> InvestorAnswer:
+        visible = "\n".join(
+            (
+                draft.conclusion, *draft.reasons, *draft.risks, *draft.actions,
+                *draft.change_conditions, draft.actual_holding_section or "",
+                draft.paper_holding_section or "",
+            )
+        )
+        if privacy_blocked or capital_disclosure_findings(visible):
+            return InvestorAnswer(
+                request_id=draft.request_id,
+                conclusion="为保护账户隐私，本次暂不展示涉及账户信息的投资建议。",
+                reasons=("对外展示采用仓位、收益和风险比例，不公开账户金额或持仓数量。",),
+                risks=("尚未通过核验的投资结论不能作为买卖依据。",),
+                actions=(),
+                change_conditions=("完成隐私处理与必要核验后再展示投资建议。",),
+                evidence_as_of=min(draft.evidence_as_of, preflight.as_of),
+                degraded=True,
+                degradation_reason="账户信息需要隐藏后再展示。",
+            )
         # Never retain unchecked directions, numbers, dates or credentials from
         # any draft field in the fallback. Diagnostics stay out of the public model.
         return InvestorAnswer(

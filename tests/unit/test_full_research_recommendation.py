@@ -37,6 +37,7 @@ from astock.schemas.full_research import (
     NewsEventCoverage,
     NewsEventResearchPack,
     PortfolioPositionPlan,
+    RecommendationResearchReceipt,
     RecommendationValuationSnapshot,
     SourceAuthority,
     SourceFamily,
@@ -724,12 +725,122 @@ def test_default_model_portfolio_is_explicit_and_does_not_ask_for_missing_constr
     contract = service.request_contract(_request("推荐现在可以买的股票"))
     assert contract.portfolio_assumptions.source.value == "MODEL_PORTFOLIO"
     assert contract.portfolio_assumptions.capital_rmb == Decimal("100000")
+    assert contract.portfolio_assumptions.target_annual_return == Decimal("1")
+    assert contract.portfolio_assumptions.capital_source.value == "DEFAULT"
+    assert contract.portfolio_assumptions.target_annual_return_source.value == "DEFAULT"
     assert contract.portfolio_assumptions.risk_profile == "MEDIUM"
     assert (
         contract.portfolio_assumptions.horizon_min_months,
         contract.portfolio_assumptions.horizon_max_months,
     ) == (3, 12)
     assert contract.portfolio_assumptions.cash_allowed
+
+
+def test_current_text_principal_and_annual_target_enter_request_contract() -> None:
+    service = FullResearchRecommendationService()
+    contract = service.request_contract(
+        _request("本金20万，年化目标30%，推荐现在可以买的股票")
+    )
+
+    assert contract.portfolio_assumptions.capital_rmb == Decimal("200000")
+    assert contract.portfolio_assumptions.target_annual_return == Decimal("0.3")
+    assert contract.portfolio_assumptions.capital_source.value == "CURRENT_USER"
+    assert contract.portfolio_assumptions.target_annual_return_source.value == "CURRENT_USER"
+
+
+def test_target_return_propagates_to_profit_loss_plan_and_public_answer() -> None:
+    service = FullResearchRecommendationService()
+    receipt = _build_receipt(
+        service,
+        _request("推荐现在可以买的股票", request_id="expectation-public"),
+    )
+
+    assert receipt.portfolio.target_annual_return == Decimal("1")
+    assert receipt.portfolio.annual_profit_target == Decimal("100000")
+    assert receipt.portfolio.target_horizon_profit is None
+    assert receipt.portfolio.modeled_downside_loss is not None
+    assert receipt.portfolio.modeled_downside_loss >= Decimal("0")
+    assert receipt.portfolio.objective_status in {
+        "MEETS_HORIZON_TARGET",
+        "BELOW_HORIZON_TARGET",
+        "HORIZON_NOT_COMPARABLE",
+    }
+    projected = VerifiedAnswerProjector._full_research_decision(
+        cast(Any, SimpleNamespace(outputs={"FULL_RESEARCH_GATE": (receipt,)}))
+    )
+    assert any("目标年化100%" in item for item in projected["reasons"])
+    assert any("不构成收益承诺" in item for item in projected["reasons"])
+    assert any("估值下行情景加权损失" in item for item in projected["reasons"])
+    if receipt.portfolio.objective_status == "BELOW_HORIZON_TARGET":
+        assert any("不会为了追求目标年化" in item for item in projected["risks"])
+        assert any("组合仍低于目标收益路径" in item for item in projected["actions"])
+
+
+def test_higher_annual_target_tightens_maximum_acceptable_entry_price() -> None:
+    from astock.investor_orchestration.investment_objectives import goal_entry_ceiling
+
+    valuation = _valuation("600001.XSHG").model_copy(
+        update={"return_horizon_months": Decimal("12")}
+    )
+    low = goal_entry_ceiling(Decimal("0"), valuation)
+    high = goal_entry_ceiling(Decimal("1"), valuation)
+    assert low is not None and high is not None
+    assert high == low / 2
+    assert goal_entry_ceiling(Decimal("1"), _valuation("600001.XSHG")) is None
+
+
+def test_legacy_receipt_without_expectation_fields_still_replays() -> None:
+    service = FullResearchRecommendationService()
+    current = _build_receipt(
+        service,
+        _request(
+            "本金10万，年化目标0%，推荐现在可以买的股票",
+            request_id="legacy-expectation-compat",
+        ),
+    )
+    payload = current.model_dump(mode="python")
+    assumptions = payload["request_contract"]["portfolio_assumptions"]
+    for key in (
+        "target_annual_return",
+        "capital_source",
+        "target_annual_return_source",
+    ):
+        assumptions.pop(key, None)
+    for key in (
+        "target_annual_return",
+        "annual_profit_target",
+        "target_horizon_months",
+        "target_horizon_return",
+        "target_horizon_profit",
+        "expected_research_return",
+        "expected_research_profit",
+        "modeled_downside_loss",
+        "return_objective_gap",
+        "objective_status",
+    ):
+        payload["portfolio"].pop(key, None)
+    payload["optimizer_inputs"].pop("target_annual_return", None)
+    for key in (
+        "objective_status",
+        "target_horizon_profit",
+        "expected_research_profit",
+        "modeled_downside_loss",
+    ):
+        payload["optimizer_outputs"].pop(key, None)
+    payload.pop("receipt_id")
+    payload.pop("receipt_hash")
+    legacy_hash = content_hash(payload)
+    legacy = RecommendationResearchReceipt.model_validate(
+        {
+            **payload,
+            "receipt_id": f"RecommendationResearchReceipt:{legacy_hash}",
+            "receipt_hash": legacy_hash,
+        }
+    )
+
+    assert legacy.request_contract.portfolio_assumptions.target_annual_return is None
+    assert legacy.portfolio.target_annual_return is None
+    assert service.verify_receipt(legacy)["status"] == "PASS"
 
 
 def test_mandatory_dag_rejects_silent_skip_and_fake_pass() -> None:

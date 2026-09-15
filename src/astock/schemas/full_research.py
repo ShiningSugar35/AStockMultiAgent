@@ -94,10 +94,27 @@ class PortfolioAssumptionSource(StrEnum):
     MODEL_PORTFOLIO = "MODEL_PORTFOLIO"
 
 
+class InvestmentExpectationValueSource(StrEnum):
+    CURRENT_USER = "CURRENT_USER"
+    RECENT_HISTORY = "RECENT_HISTORY"
+    DEFAULT = "DEFAULT"
+
+
 class ModelPortfolioAssumptions(AStockModel):
     schema_version: str = "model-portfolio-assumptions-v1"
     source: PortfolioAssumptionSource
     capital_rmb: Decimal = Field(gt=0)
+    target_annual_return: Decimal | None = Field(
+        default=None, ge=0, exclude_if=lambda value: value is None
+    )
+    capital_source: InvestmentExpectationValueSource | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    target_annual_return_source: InvestmentExpectationValueSource | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    expectation_history_references: tuple[str, ...] = Field(default=(), exclude_if=lambda v: not v)
+    expectation_notes: tuple[str, ...] = Field(default=(), exclude_if=lambda v: not v)
     risk_profile: Literal["LOW", "MEDIUM", "HIGH"] = "MEDIUM"
     horizon_min_months: int = Field(ge=1)
     horizon_max_months: int = Field(ge=1)
@@ -127,6 +144,7 @@ class FullResearchRequestContract(AStockModel):
     request_id: str = Field(min_length=1)
     as_of_timestamp: AwareDatetime
     raw_text_hash: str = Field(pattern=_SHA256)
+    account_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
     intent: Literal["FULL_RESEARCH_RECOMMENDATION"] = "FULL_RESEARCH_RECOMMENDATION"
     portfolio_assumptions: ModelPortfolioAssumptions
     requested_instruments: tuple[str, ...] = ()
@@ -490,6 +508,9 @@ class RecommendationValuationSnapshot(AStockModel):
     methods: tuple[str, ...] = Field(min_length=2)
     current_price: Decimal = Field(gt=0)
     scenarios: tuple[ValuationScenario, ...] = Field(min_length=3, max_length=3)
+    return_horizon_months: Decimal | None = Field(
+        default=None, gt=0, exclude_if=lambda v: v is None
+    )
     expected_return_mean: Decimal
     expected_return_downside: Decimal
     margin_of_safety: Decimal
@@ -787,6 +808,37 @@ class PortfolioPositionPlan(AStockModel):
 class PortfolioConstructionSnapshot(AStockModel):
     schema_version: str = "recommendation-portfolio-construction-v1"
     capital: Decimal = Field(gt=0)
+    target_annual_return: Decimal | None = Field(
+        default=None, ge=0, exclude_if=lambda value: value is None
+    )
+    annual_profit_target: Decimal | None = Field(
+        default=None, ge=0, exclude_if=lambda value: value is None
+    )
+    target_horizon_months: Decimal | None = Field(
+        default=None, gt=0, exclude_if=lambda value: value is None
+    )
+    target_horizon_return: Decimal | None = Field(
+        default=None, ge=0, exclude_if=lambda value: value is None
+    )
+    target_horizon_profit: Decimal | None = Field(
+        default=None, ge=0, exclude_if=lambda value: value is None
+    )
+    expected_research_return: Decimal | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    expected_research_profit: Decimal | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    modeled_downside_loss: Decimal | None = Field(
+        default=None, ge=0, exclude_if=lambda value: value is None
+    )
+    return_objective_gap: Decimal | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    objective_status: Literal[
+        "MEETS_HORIZON_TARGET", "BELOW_HORIZON_TARGET",
+        "NO_ELIGIBLE_POSITIONS", "HORIZON_NOT_COMPARABLE"
+    ] | None = Field(default=None, exclude_if=lambda value: value is None)
     positions: tuple[PortfolioPositionPlan, ...]
     cash: Decimal = Field(ge=0)
     cash_weight: Decimal = Field(ge=0, le=1)
@@ -811,6 +863,75 @@ class PortfolioConstructionSnapshot(AStockModel):
             raise ValueError("portfolio weights plus cash must sum to one")
         if len({item.instrument_id for item in self.positions}) != len(self.positions):
             raise ValueError("portfolio positions must be unique")
+        base_objective_values = (
+            self.target_annual_return,
+            self.annual_profit_target,
+            self.expected_research_return,
+            self.expected_research_profit,
+            self.modeled_downside_loss,
+            self.objective_status,
+        )
+        horizon_objective_values = (
+            self.target_horizon_months,
+            self.target_horizon_return,
+            self.target_horizon_profit,
+            self.return_objective_gap,
+        )
+        if all(value is None for value in (*base_objective_values, *horizon_objective_values)):
+            return self
+        if any(value is None for value in base_objective_values):
+            raise ValueError(
+                "investment expectation base objective fields must be complete when present"
+            )
+        assert self.target_annual_return is not None
+        assert self.annual_profit_target is not None
+        assert self.expected_research_return is not None
+        assert self.expected_research_profit is not None
+        assert self.objective_status is not None
+        if (
+            abs(self.annual_profit_target - self.capital * self.target_annual_return)
+            > Decimal("0.02")
+        ):
+            raise ValueError("annual profit target must reconcile to capital and annual target")
+        if (
+            abs(self.expected_research_profit - self.capital * self.expected_research_return)
+            > Decimal("0.02")
+        ):
+            raise ValueError(
+                "expected research profit must reconcile to capital and expected return"
+            )
+        if self.objective_status in {"HORIZON_NOT_COMPARABLE", "NO_ELIGIBLE_POSITIONS"}:
+            if any(value is not None for value in horizon_objective_values):
+                raise ValueError(
+                    "non-comparable or empty portfolios must not claim a horizon target gap"
+                )
+            if self.objective_status == "NO_ELIGIBLE_POSITIONS" and self.positions:
+                raise ValueError("NO_ELIGIBLE_POSITIONS requires an empty portfolio")
+            if self.objective_status == "HORIZON_NOT_COMPARABLE" and not self.positions:
+                raise ValueError("HORIZON_NOT_COMPARABLE requires at least one position")
+            return self
+        if any(value is None for value in horizon_objective_values):
+            raise ValueError("comparable objective status requires complete horizon fields")
+        assert self.target_horizon_return is not None
+        assert self.target_horizon_profit is not None
+        assert self.return_objective_gap is not None
+        if (
+            abs(self.target_horizon_profit - self.capital * self.target_horizon_return)
+            > Decimal("0.02")
+        ):
+            raise ValueError("horizon profit target must reconcile to capital and horizon target")
+        if abs(
+            self.return_objective_gap
+            - (self.target_horizon_return - self.expected_research_return)
+        ) > Decimal("0.000001"):
+            raise ValueError("return objective gap must reconcile to target and expected return")
+        expected_status = (
+            "MEETS_HORIZON_TARGET"
+            if self.return_objective_gap <= 0
+            else "BELOW_HORIZON_TARGET"
+        )
+        if self.objective_status != expected_status:
+            raise ValueError("return objective status conflicts with the portfolio objective gap")
         return self
 
 
@@ -868,6 +989,11 @@ class ExecutionInstruction(AStockModel):
     buy_range_low: Decimal | None = Field(default=None, gt=0)
     buy_range_high: Decimal | None = Field(default=None, gt=0)
     maximum_acceptable_price: Decimal | None = Field(default=None, gt=0)
+    goal_entry_price_ceiling: Decimal | None = Field(
+        default=None, gt=0, exclude_if=lambda v: v is None
+    )
+    scenario_profit_rmb: Decimal | None = Field(default=None, exclude_if=lambda v: v is None)
+    downside_loss_rmb: Decimal | None = Field(default=None, ge=0, exclude_if=lambda v: v is None)
     add_conditions: tuple[str, ...]
     reduce_exit_conditions: tuple[str, ...]
     thesis_invalidation_conditions: tuple[str, ...] = Field(min_length=1)

@@ -337,6 +337,34 @@ class StateStore:
         result["input_hashes"] = json.loads(result.pop("input_hashes_json"))
         return result
 
+    def recent_artifact_records(
+        self,
+        artifact_type: str | tuple[str, ...],
+        *,
+        limit: int = 16,
+        scan_limit: int = 1024,
+    ) -> tuple[dict[str, Any], ...]:
+        """Bound both examined registry rows and object references; never create a DB."""
+        kinds = (artifact_type,) if isinstance(artifact_type, str) else artifact_type
+        if not kinds or any(not value.strip() for value in kinds):
+            raise ValueError("artifact_type must be non-empty")
+        if not 1 <= limit <= 64:
+            raise ValueError("artifact history limit must be between 1 and 64")
+        if not limit <= scan_limit <= 8192:
+            raise ValueError("artifact scan limit must cover result limit and be at most 8192")
+        placeholders = ",".join("?" for _ in kinds)
+        uri = self.path.as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=0.2)) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT artifact_id,type,schema_version,object_hash,created_at FROM "
+                "(SELECT rowid AS sequence,artifact_id,type,schema_version,object_hash,created_at "
+                "FROM artifact_registry ORDER BY rowid DESC LIMIT ?) "
+                f"WHERE type IN ({placeholders}) ORDER BY sequence DESC LIMIT ?",
+                (scan_limit, *kinds, limit),
+            ).fetchall()
+        return tuple(dict(row) for row in rows)
+
     def set_collection_checkpoint(
         self,
         checkpoint: CollectionCheckpoint,

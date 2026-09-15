@@ -43,7 +43,7 @@
 - `ResearchSubjectRegistry` 统一登记历史研究、推荐、监控与持仓相关主体；
 - 投资者公共输出必须经过 `ResponseGateway` 与输出审计；
 - 市场状态作为共享输入进入相关投资研究；
-- material investment decision 进一步强制进入 `FULL_RESEARCH_RECOMMENDATION`，上游 capability coverage 不能替代最终 Full Research Publication Gate。
+- material investment decision 进一步强制进入 `FULL_RESEARCH_RECOMMENDATION`，上游 capability coverage 不能替代最终 Full Research Publication Gate；进入 Full Research 前本金与目标年化按当前明确值 → 最近已注册用户请求/持仓及荐股研究记录 → 100000 元 / 100% 默认值分别解析并冻结。目标年化只约束收益路径、盈亏预算和更严格的可接受入场价，不授予更高风险权限。
 
 ## 3. 当前目标架构
 
@@ -58,6 +58,7 @@ User message
        └─ latest valid market/regime snapshot identity
   → Intent & Entity Resolution
        └─ material investment decision → FULL_RESEARCH_RECOMMENDATION
+  → frozen investment expectation (registered request contract; no account writes)
   → CapabilityPolicyPlanner / CapabilityExecutor
        ├─ REQUIRED / CONDITIONAL / PROHIBITED
        ├─ deterministic services + specialist Agents
@@ -65,7 +66,7 @@ User message
        └─ CapabilityCoverageReceipt
   → FullResearchInputReadiness (upstream only)
   → FullResearchReceiptAssembler
-       ├─ Request Contract + MODEL_PORTFOLIO assumptions when needed
+       ├─ Request Contract + principal/target-return expectation (current → history → default)
        ├─ one Point-in-Time source/evidence graph
        ├─ Financial/Governance CriticalVeto
        ├─ multi-model valuation + factor/ranking
@@ -408,3 +409,23 @@ OpenAI Agents SDK 将多 Agent 编排分为 LLM 驱动与代码驱动，并允�
 风险治理采用 NIST AI RMF 的 Govern/Map/Measure/Manage 思路组织文档、场景、量化验收和上线/回滚，但不把该框架当成机械检查表：
 
 - https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf
+
+
+## 投资预期上下文（WP-25）
+
+状态：CURRENT / IMPLEMENTED。机器入口为 `FullResearchRecommendationService.request_contract`；`InvestorOrchestrationService.prepare` 在能力执行前解析并冻结既有 `FullResearchRequestContract`。`investment_expectations.py` 只处理用户意图与已验证的历史，`investment_objectives.py` 只对已准入研究作 Decimal 目标/盈亏投影，没有新增 Router、估值模型、分配器、账本或迁移。
+
+- 本金和目标年化分别优先本轮明确值，再读同账户已注册请求日志、冻结请求合同和完整研究记录，最后按版本化配置使用 100000 元与 1.00（100%）的模型假设。零年化有效；模型 DEFAULT 不是用户声明，不得遮住更早真实目标。明确为零/负数的本金不能被静默替换成假资金。
+- 历史使用只读 SQLite 连接；最多检查最近 1024 条 registry 行、读取其中 16 个相关对象，每个至多 512 KiB；这些上限均在配置。只读缺库不会创建文件，损坏/其它账户/未来记录跳过；历史不可读只作已标注默认分析，不等同于没有持仓。最近记录按可验证语义时间排序，复杂度有界，不遍历 ObjectStore。默认查询窗口外记录不声称已扫描。
+- 小型请求合同按 request id 注册在现有 ObjectStore/registry，并在重试中复用；不存在第二套用户资金状态。保存失败保持当前分析可用并记录内部警告。历史助手示例、持仓市值、数据源估值收益不得冒充用户本金/目标。
+- 年度目标利润为本金乘目标年化。期间路径按复利折算，优先使用已冻结公司研究的明确期限；未知/混合期限不做伪精确年化比较，不用原先任意的 7.5 个月中点充当估值期。情景盈亏以证券名义金额计算，扣除已估算建仓成本/滑点，卖出税费未知明确说明。
+- 条件入场价是基础估值情景按目标折现后的门槛，且只能收紧原有安全边际价格上限；当前价格不满足时给条件方案，不能声称即时可买。目标缺口不提高单股/行业/流动性/风险阈值。止盈、止损、时间退出与基本面失效继续沿用既有正式研究证据；下行情景不是最大亏损保证。
+- 新字段缺省为 None 并从旧结构序列化中排除；旧 receipt 内容、语义 hash 和重放不回填新目标。公开报告显示目标年化、来源语义、仓位/收益/风险比例与非承诺说明，不展示本金、账户资产/现金金额、配置金额、持有/建议股数、账户级绝对盈亏或 registry/内部字段；这些数值仅留在内部计算与账本。
+
+权威依据（2026-09-15 检索）：CFA Institute Standard III(C) Suitability 要求在建议前了解风险与收益目标、财务约束并定期复核，且从整体组合评价适配性。采用目标与风险分离原则；不把该标准解释成“100%目标具有可实现保证”。Pydantic 官方 serialization 文档的字段级 `exclude_if` 用于维持旧不可变对象序列化兼容，不新增依赖。
+
+参考：
+- https://www.cfainstitute.org/standards/professionals/code-ethics-standards/standards-of-practice-iii-c
+- https://docs.pydantic.dev/latest/concepts/serialization/
+
+验证按 L2 定向执行：新解析/历史/目标测算边界、Full Research、请求编排、持仓 assembly、公开投影与相关文档合同；不改财报/估值计算、账本/PIT/Universe 或正式 Release，因此不机械重跑全仓。若后续修改上述高风险计算或权限，仍按 AGENTS 升级 L3。

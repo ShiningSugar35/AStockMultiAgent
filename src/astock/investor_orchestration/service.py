@@ -59,6 +59,14 @@ class InvestorOrchestrationService:
         self.gateway = gateway or InvestorAnswerGateway(store)
         self.subjects = ResearchSubjectRegistryService(store)
 
+    def _freeze_investment_expectation(self, request: InvestorRequestEnvelope) -> None:
+        """Freeze recommendation objectives before request binding or capability work."""
+        if request.normalized_intent.value != "FULL_RESEARCH_RECOMMENDATION":
+            return
+        from astock.investor_orchestration.full_research import FullResearchRecommendationService
+
+        FullResearchRecommendationService(self.store).request_contract(request)
+
     def freeze_current_request(
         self, request: InvestorRequestEnvelope, *, artifact_ids: tuple[str, ...]
     ) -> InvestorRequestEnvelope:
@@ -80,6 +88,7 @@ class InvestorOrchestrationService:
             raise ValueError(
                 "current freeze is read-only; economic requests use their original confirmation"
             )
+        self._freeze_investment_expectation(request)
         self._bind_original_request(request)
         return DecisionFreezeService(self.store).freeze(request, artifact_ids=artifact_ids)
 
@@ -184,6 +193,7 @@ class InvestorOrchestrationService:
         ):
             raise ValueError("registered inputs require non-empty tuples of artifact identities")
         verifier = RegisteredOutputVerifier(self.store)
+        self._freeze_investment_expectation(request)
         self._bind_original_request(request)
         with schedule_run_ownership(
             self.store.path, "investor-registered-inputs", request.request_id
@@ -263,6 +273,7 @@ class InvestorOrchestrationService:
         scenario_requirements: Mapping[str, Any] | None = None,
     ) -> tuple[InvestorSessionPreflightReceipt, CapabilityExecutionPlan]:
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
+        self._freeze_investment_expectation(request)
         self._bind_original_request(request)
         preflight = self.preflight_service.build(request)
         plan = self.planner.plan(

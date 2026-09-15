@@ -4,6 +4,7 @@ status: ENABLED
 
 model_portfolio_defaults:
   capital_rmb: 100000
+  target_annual_return: 1.00
   risk_profile: MEDIUM
   horizon_min_months: 3
   horizon_max_months: 12
@@ -13,6 +14,11 @@ model_portfolio_defaults:
   cash_allowed: true
   target_position_min: 5
   target_position_max: 8
+
+investment_expectation:
+  history_limit: 16
+  registry_scan_limit: 1024
+  max_history_object_bytes: 524288
 
 mandatory_dag:
   allowed_statuses: [PASS, FAIL, BLOCKED, DEGRADED]

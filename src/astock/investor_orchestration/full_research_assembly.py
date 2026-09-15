@@ -239,8 +239,26 @@ class FullResearchReceiptAssembler:
         conflicts = self._conflicts(financial_packs, sources)
         pit = self.research.point_in_time_snapshot(request, sources, conflicts=conflicts)
 
+        horizon_contexts: dict[str, tuple[Decimal, str, str]] = {}
+        for item in company_contexts:
+            if item.draft.decision_horizon_end <= request.evidence_cutoff.date():
+                continue
+            artifact_id = f"InstitutionalDecisionContext:{item.context_id}"
+            record = self.state.artifact_record(artifact_id)
+            if record is None or not self.objects.verify(str(record["object_hash"])):
+                continue
+            months = (
+                Decimal((item.draft.decision_horizon_end - request.evidence_cutoff.date()).days)
+                * Decimal("12")
+                / Decimal("365")
+            )
+            horizon_contexts[item.company_id] = (
+                months,
+                artifact_id,
+                str(record["object_hash"]),
+            )
         valuations = tuple(
-            self._valuation(item)
+            self._valuation(item, return_horizon_context=horizon_contexts.get(item.company_id))
             for item in valuation_packs
             if item.market_price_anchor is not None
         )
@@ -377,12 +395,17 @@ class FullResearchReceiptAssembler:
                 "execution_plans": execution_plans,
                 "optimizer_inputs": {
                     "capital_rmb": contract.portfolio_assumptions.capital_rmb,
+                    "target_annual_return": contract.portfolio_assumptions.target_annual_return,
                     "candidate_count": len(candidates),
                     "eligible_count": sum(item.eligible for item in candidates),
                 },
                 "optimizer_outputs": {
                     "position_count": len(portfolio.positions),
                     "cash_weight_bps": int(portfolio.cash_weight * Decimal("10000")),
+                    "objective_status": portfolio.objective_status,
+                    "target_horizon_profit": portfolio.target_horizon_profit,
+                    "expected_research_profit": portfolio.expected_research_profit,
+                    "modeled_downside_loss": portfolio.modeled_downside_loss,
                 },
                 "publication": publication,
                 "model_versions": {
@@ -1171,7 +1194,12 @@ class FullResearchReceiptAssembler:
             raise ValueError("fallback source artifact/hash lineage is unavailable or drifted")
         return {fallback_artifact_id: fallback_object_hash}
 
-    def _valuation(self, pack: ValuationPack) -> RecommendationValuationSnapshot:
+    def _valuation(
+        self,
+        pack: ValuationPack,
+        *,
+        return_horizon_context: tuple[Decimal, str, str] | None = None,
+    ) -> RecommendationValuationSnapshot:
         if pack.status is not InstitutionalArtifactStatus.READY or pack.market_price_anchor is None:
             raise ValueError("formal Full Research valuation requires a READY priced ValuationPack")
         entry_context = self._entry_quality_context(pack)
@@ -1219,6 +1247,15 @@ class FullResearchReceiptAssembler:
                     "entry-quality source artifact/hash binding conflicts with valuation"
                 )
             source_bindings[entry_artifact_id] = entry_object_hash
+        return_horizon_months = None
+        if return_horizon_context is not None:
+            return_horizon_months, horizon_artifact_id, horizon_object_hash = (
+                return_horizon_context
+            )
+            existing_hash = source_bindings.get(horizon_artifact_id)
+            if existing_hash is not None and existing_hash != horizon_object_hash:
+                raise ValueError("decision-horizon source conflicts with valuation lineage")
+            source_bindings[horizon_artifact_id] = horizon_object_hash
         source_ids = tuple(sorted(source_bindings))
         source_hashes = tuple(source_bindings[artifact_id] for artifact_id in source_ids)
         return RecommendationValuationSnapshot(
@@ -1227,6 +1264,7 @@ class FullResearchReceiptAssembler:
             methods=tuple(sorted(methods)),
             current_price=pack.market_price_anchor.price,
             scenarios=tuple(scenarios),
+            return_horizon_months=return_horizon_months,
             expected_return_mean=expected,
             expected_return_downside=scenarios[0].expected_return,
             margin_of_safety=(base_value - pack.market_price_anchor.price) / base_value,

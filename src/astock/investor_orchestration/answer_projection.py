@@ -24,6 +24,7 @@ from astock.investor_orchestration.models import (
 )
 from astock.investor_orchestration.output_validation import RegisteredOutputVerifier, output_model
 from astock.investor_orchestration.utils import content_hash
+from astock.research.capital_privacy import CapitalDisclosureError
 from astock.research.presentation import audit_public_answer
 from astock.schemas.entry_quality import EntryQualityState
 from astock.schemas.external_accounts import ExternalAccountOperationReceipt
@@ -139,12 +140,30 @@ def _full_research_index(receipt: RecommendationResearchReceipt) -> _FullResearc
 
 def _full_research_base_reasons(receipt: RecommendationResearchReceipt) -> list[str]:
     assumptions = receipt.request_contract.portfolio_assumptions
-    return [
+    portfolio = receipt.portfolio
+    base: list[str] = []
+    # Goals are public; the bankroll and its monetary derivatives remain private.
+    if assumptions.target_annual_return is not None:
+        base.append(
+            f"本次以目标年化{_decimal(assumptions.target_annual_return * 100)}%规划，"
+            "用于评估配置和收益路径，不构成收益承诺。"
+        )
+    base.append(
         f"宏观环境：{_text(receipt.macro.macro_regime)}；流动性：{_text(receipt.macro.liquidity_regime)}；"
-        f"风险偏好：{_text(receipt.macro.risk_appetite)}。",
-        f"组合假设：本金{_decimal(assumptions.capital_rmb)}元，风险属性{assumptions.risk_profile}，"
-        f"期限{assumptions.horizon_min_months}-{assumptions.horizon_max_months}个月；允许保留现金。",
-    ]
+        f"风险偏好：{_text(receipt.macro.risk_appetite)}。"
+    )
+    if portfolio.target_horizon_months is not None and portfolio.target_horizon_return is not None:
+        base.append(
+            f"按可核实的共同研究期限{_decimal(portfolio.target_horizon_months)}个月折算，"
+            f"目标回报约{_decimal(portfolio.target_horizon_return * 100)}%。"
+        )
+    else:
+        base.append(
+            f"计划持有期限为{assumptions.horizon_min_months}-{assumptions.horizon_max_months}个月；"
+            "估值回报期限尚未统一，因此只展示情景收益率，不直接判断目标年化能否达到。"
+        )
+    base.extend(assumptions.expectation_notes)
+    return base
 
 
 def _holding_review_fields(
@@ -163,15 +182,15 @@ def _holding_review_fields(
     }
     for review in receipt.holding_reviews:
         code = _code(review.instrument_id)
-        quantity = (
-            f"，当前数量{_decimal(review.current_quantity)}股"
-            if review.current_quantity is not None
+        weight = (
+            f"，当前仓位{_decimal(review.current_weight * 100)}%"
+            if review.current_weight is not None
             else ""
         )
         confidence = _decimal(review.action_confidence * 100)
         reasons.append(
             f"{code}持仓复核：投资逻辑{_text(review.thesis_strength_change)}，"
-            f"风险变化{_text(review.risk_change)}，置信度{confidence}%{quantity}。"
+            f"风险变化{_text(review.risk_change)}，置信度{confidence}%{weight}。"
         )
         action = labels[review.recommended_action]
         detail = ""
@@ -180,8 +199,6 @@ def _holding_review_fields(
                 f"，目标权重{_decimal(review.target_weight_lower * 100)}%-"
                 f"{_decimal(review.target_weight_upper * 100)}%"
             )
-        if review.target_quantity_min is not None and review.target_quantity_max is not None:
-            detail += f"，目标数量{review.target_quantity_min}-{review.target_quantity_max}股"
         actions.append(f"{code}：{action}{detail}。")
         if review.risk_change not in {"UNCHANGED", "LOWER"}:
             risks.append(f"{code}持仓风险状态：{_text(review.risk_change)}。")
@@ -302,6 +319,19 @@ def _position_actions(
         f"{_code(instrument)}减仓/退出条件：{_text(value)}"
         for value in execution.reduce_exit_conditions
     )
+    if execution.goal_entry_price_ceiling is not None:
+        actions.append(f"{_code(instrument)}按基础估值情景与目标年化倒推的条件买入价不高于{_decimal(execution.goal_entry_price_ceiling)}元；这不是价格预测，仍需满足盈利、估值与风险条件。")
+    if (
+        execution.scenario_profit_rmb is not None
+        and execution.downside_loss_rmb is not None
+        and position.target_amount > 0
+    ):
+        scenario_return = execution.scenario_profit_rmb / position.target_amount * 100
+        downside_return = execution.downside_loss_rmb / position.target_amount * 100
+        actions.append(
+            f"{_code(instrument)}相对该标的配置额，情景预期收益率约{_decimal(scenario_return)}%，"
+            f"下行情景损失比例约{_decimal(downside_return)}%；盈利假设失效时复核退出。"
+        )
     actions.append(f"{_code(instrument)}时间退出：{_text(execution.time_stop_condition)}")
     actions.append(f"{_code(instrument)}估值退出：{_text(execution.valuation_exit_condition)}")
     actions.extend(
@@ -311,14 +341,16 @@ def _position_actions(
     if receipt.publication.instant_trade_parameters_allowed:
         if execution.initial_shares is None or execution.target_shares is None:
             raise ValueError("instant publication lacks executable share quantities")
+        target_weight = _decimal(position.target_weight * 100)
         if existing_holding:
-            actions.append(
-                f"{_code(instrument)}基于现有持仓调整至目标{execution.target_shares}股。"
+            actions.append(f"{_code(instrument)}结合现有持仓按条件调整至目标仓位{target_weight}%。")
+        elif execution.target_shares:
+            first_weight = (
+                position.target_weight * Decimal(execution.initial_shares)
+                / Decimal(execution.target_shares) * 100
             )
-        else:
             actions.append(
-                f"{_code(instrument)}首仓{execution.initial_shares}股，"
-                f"目标{execution.target_shares}股。"
+                f"{_code(instrument)}首仓比例约{_decimal(first_weight)}%，目标仓位{target_weight}%。"
             )
     return actions, conditions
 
@@ -345,8 +377,7 @@ def _portfolio_summary(
         receipt.portfolio.factor_exposures.items(), key=lambda item: (-abs(item[1]), item[0])
     )[:3]
     reasons.append(
-        f"组合保留现金{_decimal(receipt.portfolio.cash)}元，"
-        f"现金权重{_decimal(receipt.portfolio.cash_weight * 100)}%。"
+        f"组合现金权重{_decimal(receipt.portfolio.cash_weight * 100)}%。"
     )
     if top_factors:
         reasons.append(
@@ -354,22 +385,45 @@ def _portfolio_summary(
             + "、".join(f"{labels.get(name, name)}{_decimal(value)}" for name, value in top_factors)
             + "。"
         )
+    if (
+        receipt.portfolio.expected_research_return is not None
+        and receipt.portfolio.expected_research_profit is not None
+        and receipt.portfolio.modeled_downside_loss is not None
+    ):
+        downside_pct = receipt.portfolio.modeled_downside_loss / receipt.portfolio.capital * 100
+        reasons.append(
+            f"组合当前估值情景加权预期回报约"
+            f"{_decimal(receipt.portfolio.expected_research_return * 100)}%，"
+            f"估值下行情景加权损失占组合资产约"
+            f"{_decimal(downside_pct)}%。"
+        )
     reasons.append(
         f"组合风险：Beta {_decimal(receipt.risk_audit.portfolio_beta)}，"
         f"预期波动{_decimal(receipt.risk_audit.expected_volatility * 100)}%，"
         f"预期短缺{_decimal(receipt.risk_audit.expected_shortfall * 100)}%，"
         f"最大回撤代理{_decimal(receipt.risk_audit.max_drawdown_proxy * 100)}%。"
     )
-    if not receipt.publication.instant_trade_parameters_allowed:
+    if receipt.portfolio.objective_status == "BELOW_HORIZON_TARGET":
+        assert receipt.portfolio.return_objective_gap is not None
+        gap_percentage_points = max(Decimal("0"), receipt.portfolio.return_objective_gap) * 100
         risks.append(
-            "当前研究结论可发布，但即时行情未满足新鲜度硬门；股数仅在重新取得有效报价后生成。"
+            f"按当前已通过研究的组合，估值期预期回报距离目标路径仍差约"
+            f"{_decimal(gap_percentage_points)}个百分点。继续遵守集中度、流动性和风险上限，"
+            "不会为了追求目标年化自动放大杠杆或突破风险约束。"
         )
+    elif receipt.portfolio.objective_status == "HORIZON_NOT_COMPARABLE":
+        risks.append("各标的估值期限尚未统一或未明确，当前情景盈亏不能直接与目标年化比较；不据此宣称目标可达。")
+    elif receipt.portfolio.objective_status == "NO_ELIGIBLE_POSITIONS":
+        risks.append("当前没有满足完整研究与风险约束的可配置标的，目标收益暂不具备可执行组合。")
+    risks.append("上述情景盈亏已扣除估算建仓费用和滑点，尚未计入卖出税费；下行情景不是最大亏损保证，跳空和流动性不足可能使实际损失更大。")
+    if not receipt.publication.instant_trade_parameters_allowed:
+        risks.append("当前报价时效不足，执行前需重新核实有效报价。")
     if receipt.rejected_candidates:
         reasons.append(
             "其余候选因估值、质量、治理、财务、证据或组合约束未达标而被保留在淘汰记录中，未为凑数放行。"
         )
     if receipt.portfolio.cash_weight > Decimal("0"):
-        actions.append("组合替代方案是保留未使用现金，而不是用低质量或低流动性标的强行填仓。")
+        actions.append("未配置的仓位保留现金，不用低质量或低流动性标的填仓。")
 
 
 class VerifiedAnswerProjector:
@@ -508,7 +562,10 @@ class VerifiedAnswerProjector:
             draft.actual_holding_section or "",
             draft.paper_holding_section or "",
         ]
-        if not audit_public_answer("\n".join(part for part in visible if part)).safe_to_send:
+        audit = audit_public_answer("\n".join(part for part in visible if part))
+        if "PRIVATE_CAPITAL_AMOUNT_EXPOSED" in audit.finding_codes:
+            raise CapitalDisclosureError()
+        if not audit.safe_to_send:
             raise ValueError("verified domain output failed the public presentation audit")
         return draft
 
@@ -582,7 +639,7 @@ class VerifiedAnswerProjector:
         detail = "模拟订单请求已准备，但尚未确认、尚未成交。"
         if receipt.instrument_id and receipt.quantity:
             detail = (
-                f"{_code(receipt.instrument_id)}的{receipt.quantity}股模拟订单请求已准备，"
+                f"{_code(receipt.instrument_id)}的模拟订单请求已准备，"
                 "但尚未确认、尚未成交。"
             )
         return {
@@ -692,25 +749,32 @@ class VerifiedAnswerProjector:
             raise ValueError("paper frozen cash differs from the account snapshot")
         orders = [item for item in lane.open_orders if item.account_id == nav.account_id]
         positions = [item for item in lane.positions if item.account_id == nav.account_id]
-        reasons = ["资金数额来自同一时点已核对的模拟账本。"]
+        reasons = ["账户状态来自同一时点已核对的模拟记录；公开展示使用比例。"]
         if orders:
             reasons.append(f"有{len(orders)}笔未完成模拟订单；订单尚未成交的部分不计为持仓。")
         if nav.frozen_cash_fen:
             reasons.append(
-                f"另有{_decimal(Decimal(nav.frozen_cash_fen) / 100)}元为模拟订单冻结资金。"
+                f"模拟订单冻结资金占账户资产"
+                f"{_decimal(Decimal(nav.frozen_cash_fen) / Decimal(nav.nav_fen) * 100)}%。"
+                if nav.nav_fen > 0
+                else "存在模拟订单冻结资金；净资产非正时不计算资金比例。"
             )
         section = None
         if positions:
             section = (
                 "模拟持仓："
                 + "；".join(
-                    f"{_code(position.instrument_id)}，{_decimal(position.quantity)}股"
-                    for position in positions
+                    _code(position.instrument_id) for position in positions
                 )
                 + "。"
             )
         return {
-            "conclusion": f"该模拟账户可用现金为{_decimal(cash)}元。",
+            "conclusion": (
+                f"该模拟账户可用现金占账户资产"
+                f"{_decimal(Decimal(nav.cash_fen) / Decimal(nav.nav_fen) * 100)}%。"
+                if nav.nav_fen > 0
+                else "该模拟账户净资产非正，暂不计算资金比例，应先核对账户风险。"
+            ),
             "reasons": _unique(reasons),
             "risks": ("模拟结果不代表真实账户表现。",),
             "actions": (),

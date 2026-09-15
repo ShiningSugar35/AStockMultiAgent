@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -14,8 +15,17 @@ from typing import Any, Literal, cast
 
 import yaml
 
+from astock.core.errors import StorageError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.investor_orchestration.investment_expectations import (
+    current_expectation_values,
+    resolve_investment_expectation,
+)
+from astock.investor_orchestration.investment_objectives import (
+    goal_entry_ceiling,
+    objective_projection,
+)
 from astock.investor_orchestration.models import InvestorRequestEnvelope
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
@@ -217,27 +227,70 @@ class FullResearchRecommendationService:
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
         if request.normalized_intent.value != "FULL_RESEARCH_RECOMMENDATION":
             raise ValueError("recommendation request did not enter FULL_RESEARCH_RECOMMENDATION")
+        cached = self._cached_expectation_contract(request)
+        if cached is not None:
+            return cached
+        parent = self._parent_expectation_contract(request)
+        if parent is not None:
+            contract = FullResearchRequestContract(
+                request_id=request.request_id,
+                as_of_timestamp=request.evidence_cutoff,
+                raw_text_hash=content_hash(request.raw_text),
+                account_id=request.account_id,
+                portfolio_assumptions=parent.portfolio_assumptions,
+                requested_instruments=tuple(request.entity_ids),
+                requested_count=self._requested_count(request.raw_text),
+                current_recommendation=request.research_mode == "CURRENT",
+                decision_context=(
+                    "EXISTING_HOLDING"
+                    if request.metadata.get("full_research_holding_context")
+                    else "NEW_ALLOCATION"
+                ),
+            )
+            self._persist_expectation_contract(contract)
+            return self._cached_expectation_contract(request) or contract
         defaults = self.policy.raw["model_portfolio_defaults"]
-        supplied = request.metadata.get("portfolio_assumptions")
-        if isinstance(supplied, Mapping):
-            payload = dict(supplied)
-            source = PortfolioAssumptionSource.USER
+        supplied_raw = request.metadata.get("portfolio_assumptions")
+        supplied = supplied_raw if isinstance(supplied_raw, Mapping) else None
+        payload = dict(defaults)
+        user_constraints: dict[str, str | int | float | bool] = {}
+        if supplied is not None:
+            payload.update(supplied)
             user_constraints = {
                 str(key): value
-                for key, value in payload.items()
+                for key, value in supplied.items()
                 if isinstance(value, (str, int, float, bool))
             }
-        else:
-            payload = dict(defaults)
-            source = PortfolioAssumptionSource.MODEL_PORTFOLIO
-            user_constraints = {}
+        expectation = resolve_investment_expectation(
+            raw_text=request.raw_text,
+            supplied_assumptions=supplied,
+            defaults=defaults,
+            state=self.state,
+            objects=self.objects,
+            request_id=request.request_id,
+            account_id=request.account_id,
+            as_of=request.question_time,
+            **self.policy.raw.get("investment_expectation", {}),
+        )
+        source = (
+            PortfolioAssumptionSource.USER
+            if supplied is not None
+            or expectation.capital_source.value == "CURRENT_USER"
+            or expectation.target_annual_return_source.value == "CURRENT_USER"
+            else PortfolioAssumptionSource.MODEL_PORTFOLIO
+        )
         risk_profile_raw = str(payload.get("risk_profile", defaults["risk_profile"])).upper()
         if risk_profile_raw not in {"LOW", "MEDIUM", "HIGH"}:
             raise ValueError("portfolio risk profile must be LOW, MEDIUM or HIGH")
         risk_profile = cast(Literal["LOW", "MEDIUM", "HIGH"], risk_profile_raw)
         assumptions = ModelPortfolioAssumptions(
             source=source,
-            capital_rmb=Decimal(str(payload.get("capital_rmb", defaults["capital_rmb"]))),
+            capital_rmb=expectation.capital_rmb,
+            target_annual_return=expectation.target_annual_return,
+            capital_source=expectation.capital_source,
+            target_annual_return_source=expectation.target_annual_return_source,
+            expectation_history_references=expectation.history_references,
+            expectation_notes=expectation.notes,
             risk_profile=risk_profile,
             horizon_min_months=int(
                 payload.get("horizon_min_months", defaults["horizon_min_months"])
@@ -258,10 +311,11 @@ class FullResearchRecommendationService:
             user_constraints=user_constraints,
         )
         requested_count = self._requested_count(request.raw_text)
-        return FullResearchRequestContract(
+        contract = FullResearchRequestContract(
             request_id=request.request_id,
             as_of_timestamp=request.evidence_cutoff,
             raw_text_hash=content_hash(request.raw_text),
+            account_id=request.account_id,
             portfolio_assumptions=assumptions,
             requested_instruments=tuple(request.entity_ids),
             requested_count=requested_count,
@@ -271,6 +325,115 @@ class FullResearchRecommendationService:
                 if request.metadata.get("full_research_holding_context")
                 else "NEW_ALLOCATION"
             ),
+        )
+
+        self._persist_expectation_contract(contract)
+        return self._cached_expectation_contract(request) or contract
+
+    def _parent_expectation_contract(
+        self, request: InvestorRequestEnvelope
+    ) -> FullResearchRequestContract | None:
+        if (
+            request.parent_request_id is None
+            or self.state is None
+            or self.objects is None
+            or not self.state.path.is_file()
+        ):
+            return None
+        record = self.state.artifact_record(
+            f"FullResearchRequestContract:{content_hash(request.parent_request_id)}"
+        )
+        if record is None:
+            return None
+        if record["type"] != "FullResearchRequestContract":
+            raise ValueError("parent request identity collides with another artifact type")
+        try:
+            contract = FullResearchRequestContract.model_validate_json(
+                self.objects.get_bytes(str(record["object_hash"]))
+            )
+        except (StorageError, OSError, ValueError) as exc:
+            raise ValueError("parent investment expectation contract is unavailable") from exc
+        if contract.account_id != request.account_id:
+            raise ValueError("child request cannot reuse another account's investment expectation")
+        supplied_raw = request.metadata.get("portfolio_assumptions")
+        supplied = supplied_raw if isinstance(supplied_raw, Mapping) else None
+        current_capital, current_target = current_expectation_values(request.raw_text, supplied)
+        if (
+            current_capital is not None
+            and current_capital != contract.portfolio_assumptions.capital_rmb
+        ):
+            raise ValueError("child request changes the frozen parent principal")
+        if (
+            current_target is not None
+            and current_target != contract.portfolio_assumptions.target_annual_return
+        ):
+            raise ValueError("child request changes the frozen parent annual target")
+        return contract
+
+    def _cached_expectation_contract(
+        self, request: InvestorRequestEnvelope
+    ) -> FullResearchRequestContract | None:
+        if self.state is None or self.objects is None or not self.state.path.is_file():
+            return None
+        try:
+            record = self.state.artifact_record(
+                f"FullResearchRequestContract:{content_hash(request.request_id)}"
+            )
+        except (OSError, sqlite3.Error):
+            return None
+        if record is None:
+            return None
+        if record["type"] != "FullResearchRequestContract":
+            raise ValueError("request identity collides with another artifact type")
+        try:
+            contract = FullResearchRequestContract.model_validate_json(
+                self.objects.get_bytes(str(record["object_hash"]))
+            )
+        except (StorageError, OSError, ValueError) as exc:
+            raise ValueError("frozen investment expectation contract is unavailable") from exc
+        if (
+            contract.raw_text_hash != content_hash(request.raw_text)
+            or contract.account_id != request.account_id
+        ):
+            raise ValueError("request identity already has different investment expectations")
+        supplied_raw = request.metadata.get("portfolio_assumptions")
+        supplied = supplied_raw if isinstance(supplied_raw, Mapping) else None
+        current_capital, current_target = current_expectation_values(request.raw_text, supplied)
+        if (
+            current_capital is not None
+            and current_capital != contract.portfolio_assumptions.capital_rmb
+        ):
+            raise ValueError("request identity changes the frozen principal")
+        if (
+            current_target is not None
+            and current_target != contract.portfolio_assumptions.target_annual_return
+        ):
+            raise ValueError("request identity changes the frozen annual target")
+        if supplied is not None:
+            supplied_constraints = {
+                str(key): value
+                for key, value in supplied.items()
+                if isinstance(value, (str, int, float, bool))
+            }
+            if supplied_constraints != contract.portfolio_assumptions.user_constraints:
+                raise ValueError("request identity changes frozen portfolio assumptions")
+        return contract
+
+    def _persist_expectation_contract(self, contract: FullResearchRequestContract) -> None:
+        if self.state is None or self.objects is None or not self.state.path.is_file():
+            return
+        ref = self.objects.put_json(contract.model_dump(mode="json"))
+        input_hashes: list[str] = []
+        for artifact_id in contract.portfolio_assumptions.expectation_history_references:
+            record = self.state.artifact_record(artifact_id)
+            if record is not None:
+                input_hashes.append(str(record["object_hash"]))
+        self.state.register_artifact(
+            artifact_id=f"FullResearchRequestContract:{content_hash(contract.request_id)}",
+            artifact_type="FullResearchRequestContract",
+            schema_version=contract.schema_version,
+            object_hash=ref.sha256,
+            input_hashes=sorted(set(input_hashes)),
         )
 
     @staticmethod
@@ -412,10 +575,11 @@ class FullResearchRecommendationService:
             int(config["target_position_max"]),
         )
         eligible = tuple(islice((item for item in candidates if item.eligible), target_max))
+        valuation_by_id = {item.instrument_id: item for item in valuations}
         positions, industry_weights, remaining_capital = self._build_positions(
             capital=capital,
             eligible=eligible,
-            valuations={item.instrument_id: item for item in valuations},
+            valuations=valuation_by_id,
             max_single=max_single,
             max_industry=max_industry,
             lot=lot,
@@ -436,8 +600,10 @@ class FullResearchRecommendationService:
             max_corr=max_corr,
         )
         cash = max(Decimal("0"), remaining_capital)
+        objective = objective_projection(contract.portfolio_assumptions, positions, valuation_by_id)
         return PortfolioConstructionSnapshot(
             capital=capital,
+            **objective,
             positions=positions,
             cash=cash,
             cash_weight=cash / capital,
@@ -665,6 +831,16 @@ class FullResearchRecommendationService:
         add_by_id = add_conditions or {}
         exit_by_id = exit_conditions or {}
         event_by_id = event_exit_conditions or {}
+        objective_add_condition = (
+            "组合仍低于目标收益路径时，仅在该标的估值赔率改善且原有风险约束继续满足时加仓"
+            if portfolio.objective_status == "BELOW_HORIZON_TARGET"
+            else None
+        )
+        objective_reduce_condition = (
+            "组合仍低于目标收益路径且该标的赔率或风险贡献继续落后时，优先复核减仓"
+            if portfolio.objective_status == "BELOW_HORIZON_TARGET"
+            else None
+        )
         sla = self.policy.quote_freshness_sla_seconds
         minimum_mos = Decimal(
             str(self.policy.raw["execution"].get("minimum_base_case_margin_of_safety", 0.15))
@@ -686,7 +862,19 @@ class FullResearchRecommendationService:
             scenarios = {item.scenario: item for item in valuation.scenarios}
             bear = scenarios["BEAR"].per_share_value
             base = scenarios["BASE"].per_share_value
-            maximum_price = base * (Decimal("1") - minimum_mos)
+            safety_price_cap = base * (Decimal("1") - minimum_mos)
+            notional = position.reference_price * position.target_shares
+            entry_cost = position.estimated_cost + position.estimated_slippage
+            entry_cost_rate = entry_cost / notional if notional else Decimal("0")
+            target_return_price_cap = (
+                goal_entry_ceiling(portfolio.target_annual_return, valuation, entry_cost_rate)
+                if portfolio.objective_status
+                in {"MEETS_HORIZON_TARGET", "BELOW_HORIZON_TARGET"}
+                else None
+            )
+            # Return-objective pricing is a research condition only. Keep the
+            # canonical valuation/execution ceiling and order authority unchanged.
+            maximum_price = safety_price_cap
             center = support.get(
                 position.instrument_id, min(valuation.current_price, maximum_price)
             )
@@ -720,16 +908,23 @@ class FullResearchRecommendationService:
                     buy_range_low=buy_low,
                     buy_range_high=buy_high,
                     maximum_acceptable_price=maximum_price,
+                    goal_entry_price_ceiling=target_return_price_cap,
+                    scenario_profit_rmb=notional * valuation.expected_return_mean - entry_cost,
+                    downside_loss_rmb=notional * max(
+                        Decimal("0"), -valuation.expected_return_downside
+                    ) + entry_cost,
                     add_conditions=tuple(
                         add_by_id.get(
                             position.instrument_id, ("估值安全边际扩大且核心投资逻辑继续成立",)
                         )
-                    ),
+                    )
+                    + ((objective_add_condition,) if objective_add_condition else ()),
                     reduce_exit_conditions=tuple(
                         exit_by_id.get(
                             position.instrument_id, ("风险预算被突破或相对赔率显著恶化",)
                         )
-                    ),
+                    )
+                    + ((objective_reduce_condition,) if objective_reduce_condition else ()),
                     thesis_invalidation_conditions=thesis,
                     time_stop_condition="在计划投资期限内催化剂未兑现且预期收益不再覆盖风险预算时复核退出",
                     valuation_exit_condition="价格达到或超过基础/乐观情景合理价值且预期收益不足时减仓或退出",
@@ -1032,6 +1227,18 @@ class FullResearchRecommendationService:
     def _verify_receipt_portfolio(receipt: RecommendationResearchReceipt) -> None:
         rankings = {item.instrument_id: item for item in receipt.candidate_rankings}
         valuations = {item.instrument_id: item for item in receipt.valuations}
+        assumptions = receipt.request_contract.portfolio_assumptions
+        if receipt.portfolio.capital != assumptions.capital_rmb:
+            raise ValueError("portfolio capital differs from the request investment expectation")
+        if assumptions.target_annual_return is not None:
+            expected = objective_projection(assumptions, receipt.portfolio.positions, valuations)
+            for key, value in expected.items():
+                actual = getattr(receipt.portfolio, key)
+                if isinstance(value, Decimal) and isinstance(actual, Decimal):
+                    if abs(value - actual) > Decimal("0.000001"):
+                        raise ValueError("investment objective projection cannot be replayed")
+                elif actual != value:
+                    raise ValueError("investment objective projection cannot be replayed")
         for position in receipt.portfolio.positions:
             ranking = rankings.get(position.instrument_id)
             if ranking is None or not ranking.eligible:

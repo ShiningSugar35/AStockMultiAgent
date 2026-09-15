@@ -8,9 +8,11 @@ Primary skill: `$portfolio-manager`.
 
 ## Flow
 
-1. **Accept only eligible research inputs**
+1. **Freeze investment expectation and accept only eligible research inputs**
+   - For material recommendation/portfolio decisions, principal and target annual return must already be resolved independently as current explicit value → recent verifiable formal recommendation history → policy default RMB 100,000 / 100%. Model DEFAULT is not a user preference; skip it and corrupt/other-account history. The registered request contract is frozen before capability execution and reused across retries.
    - Each candidate must come from the approved research/Committee chain required by the portfolio request.
    - Candidate ranking, ResearchSeed or unreviewed company narrative cannot become portfolio weight directly.
+   - The annual target is an objective, not a promised return. It cannot authorize leverage, shorting, larger hard limits or admission of an otherwise rejected company.
 
 2. **Evaluate the current portfolio**
    - For paper holdings use `portfolio-paper-evaluate --account-id <account> --live`; otherwise use a frozen portfolio request with `portfolio-evaluate`.
@@ -22,6 +24,7 @@ Primary skill: `$portfolio-manager`.
 
 4. **Construct policy-enabled comparable proposals**
    - Run `portfolio-construct`. Allocator availability and default method come only from versioned `portfolio-allocators` policy + `PortfolioAllocatorRegistry`; `PortfolioService` must not maintain a second method switch.
+   - For the Full Research recommendation portfolio, calculate annual profit target, explicit-horizon compounded target, weighted expected research profit, modeled downside loss and objective gap. Use the target-return hurdle only to make the acceptable entry-price ceiling stricter; keep existing concentration, sector, liquidity and risk caps authoritative.
    - Current active policy enables four plugins: `EQUAL_WEIGHT_CONSTRAINED` (default robust baseline), `INVERSE_VOLATILITY`, `HIERARCHICAL_RISK`, and `SHRINKAGE_MIN_VARIANCE` (Ledoit-Wolf + long-only minimum variance). Adding another allocator requires a registered deterministic plugin and policy version, not editing `_proposals()`.
    - Apply hard single-name/total exposure/group constraints after plugin score generation and before publishing a proposal.
    - Unallocatable capital remains cash.

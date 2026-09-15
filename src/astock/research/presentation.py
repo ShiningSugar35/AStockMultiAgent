@@ -329,7 +329,7 @@ class ResponseGateway:
     ) -> RenderedResponse:
         if diagnostics is None:
             raise ValueError("Developer Mode requires allowlisted diagnostics input")
-        payload = _developer_payload(diagnostics)
+        payload = _developer_payload(diagnostics, request_text=context.request_text)
         text = _render_developer_text(payload)
         audit = audit_developer_answer(text, context=context, policy=self.policy)
         fallback_used = False
@@ -497,6 +497,7 @@ def audit_public_answer(
     policy: PresentationPolicy | None = None,
     source_text: str | None = None,
     required_fingerprint: FactFingerprint | None = None,
+    request_text: str | None = None,
     allowed_private_paths: Iterable[str] = (),
 ) -> PresentationAudit:
     selected = policy or load_presentation_policy()
@@ -536,7 +537,12 @@ def audit_public_answer(
     if re.search(r"[\u4e00-\u9fff][,:;][\u4e00-\u9fff]", stripped):
         findings.add("CHINESE_STYLE_HALF_WIDTH_PUNCTUATION")
 
-    findings.update(capital_disclosure_findings(stripped))
+    privacy_request_text = (
+        request_text if request_text is not None else resolved_context.request_text
+    )
+    findings.update(
+        capital_disclosure_findings(stripped, request_text=privacy_request_text)
+    )
     secret_exposed = _contains_secret(stripped)
     if secret_exposed:
         findings.add("SECRET_OR_CREDENTIAL_EXPOSED")
@@ -639,7 +645,9 @@ def audit_developer_answer(
     budget_exceeded = len(stripped) > budget.max_chars
     if budget_exceeded:
         findings.add("DEVELOPER_ANSWER_TOO_LONG")
-    findings.update(capital_disclosure_findings(stripped))
+    findings.update(
+        capital_disclosure_findings(stripped, request_text=resolved_context.request_text)
+    )
     secret_exposed = _contains_secret(stripped)
     private_path_exposed = _PRIVATE_PATH_PATTERN.search(stripped) is not None
     if secret_exposed:
@@ -781,8 +789,8 @@ def extract_fact_fingerprint(
     )
 
 
-def redact_sensitive_text(text: str) -> str:
-    value = redact_capital_amounts(text)
+def redact_sensitive_text(text: str, *, request_text: str | None = None) -> str:
+    value = redact_capital_amounts(text, request_text=request_text)
     for pattern in _SECRET_PATTERNS:
         value = re.sub(pattern, "[REDACTED]", value)
     return _PRIVATE_PATH_PATTERN.sub("[PRIVATE_PATH]", value)
@@ -790,14 +798,20 @@ def redact_sensitive_text(text: str) -> str:
 
 def _developer_payload(
     diagnostics: DeveloperDiagnosticsInput,
+    *,
+    request_text: str | None = None,
 ) -> DeveloperDiagnosticsModel:
     return DeveloperDiagnosticsModel(
-        user_impact=redact_sensitive_text(diagnostics.user_impact),
-        failure_class=redact_sensitive_text(diagnostics.failure_class),
-        correlation_id=redact_sensitive_text(diagnostics.correlation_id),
-        stage=(redact_sensitive_text(diagnostics.stage) if diagnostics.stage else None),
+        user_impact=redact_sensitive_text(diagnostics.user_impact, request_text=request_text),
+        failure_class=redact_sensitive_text(diagnostics.failure_class, request_text=request_text),
+        correlation_id=redact_sensitive_text(diagnostics.correlation_id, request_text=request_text),
+        stage=(
+            redact_sensitive_text(diagnostics.stage, request_text=request_text)
+            if diagnostics.stage else None
+        ),
         next_action=(
-            redact_sensitive_text(diagnostics.next_action) if diagnostics.next_action else None
+            redact_sensitive_text(diagnostics.next_action, request_text=request_text)
+            if diagnostics.next_action else None
         ),
     )
 
@@ -949,7 +963,7 @@ def _safe_fallback_subject(
     context: ResponseContext,
     policy: PresentationPolicy,
 ) -> str:
-    candidate = redact_sensitive_text(value)
+    candidate = redact_sensitive_text(value, request_text=context.request_text)
     if candidate != value:
         return "研究对象"
     audit = audit_public_answer(

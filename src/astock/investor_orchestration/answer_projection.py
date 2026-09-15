@@ -24,7 +24,10 @@ from astock.investor_orchestration.models import (
 )
 from astock.investor_orchestration.output_validation import RegisteredOutputVerifier, output_model
 from astock.investor_orchestration.utils import content_hash
-from astock.research.capital_privacy import CapitalDisclosureError
+from astock.research.capital_privacy import (
+    CapitalDisclosureError,
+    requested_personal_detail_categories,
+)
 from astock.research.presentation import audit_public_answer
 from astock.schemas.entry_quality import EntryQualityState
 from astock.schemas.external_accounts import ExternalAccountOperationReceipt
@@ -142,12 +145,31 @@ def _full_research_base_reasons(receipt: RecommendationResearchReceipt) -> list[
     assumptions = receipt.request_contract.portfolio_assumptions
     portfolio = receipt.portfolio
     base: list[str] = []
-    # Goals are public; the bankroll and its monetary derivatives remain private.
+    origins = {
+        "CURRENT_USER": "本轮给出",
+        "RECENT_HISTORY": "沿用最近已记录值",
+        "DEFAULT": "采用模型默认假设",
+    }
+    capital_origin = (
+        origins.get(assumptions.capital_source.value, "组合规划假设")
+        if assumptions.capital_source is not None
+        else "组合规划假设"
+    )
+    base.append(
+        f"本轮按本金{_decimal(assumptions.capital_rmb)}元（{capital_origin}）进行组合规划。"
+    )
     if assumptions.target_annual_return is not None:
+        target_origin = (
+            origins.get(assumptions.target_annual_return_source.value, "组合规划假设")
+            if assumptions.target_annual_return_source is not None
+            else "组合规划假设"
+        )
         base.append(
-            f"本次以目标年化{_decimal(assumptions.target_annual_return * 100)}%规划，"
+            f"目标年化{_decimal(assumptions.target_annual_return * 100)}%（{target_origin}），"
             "用于评估配置和收益路径，不构成收益承诺。"
         )
+        if portfolio.annual_profit_target is not None:
+            base.append(f"对应全年目标盈利约{_decimal(portfolio.annual_profit_target)}元。")
     base.append(
         f"宏观环境：{_text(receipt.macro.macro_regime)}；流动性：{_text(receipt.macro.liquidity_regime)}；"
         f"风险偏好：{_text(receipt.macro.risk_appetite)}。"
@@ -168,6 +190,8 @@ def _full_research_base_reasons(receipt: RecommendationResearchReceipt) -> list[
 
 def _holding_review_fields(
     receipt: RecommendationResearchReceipt,
+    *,
+    requested_details: frozenset[str] = frozenset(),
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     reasons: list[str] = []
     risks: list[str] = []
@@ -182,6 +206,11 @@ def _holding_review_fields(
     }
     for review in receipt.holding_reviews:
         code = _code(review.instrument_id)
+        quantity = (
+            f"，当前数量{_decimal(review.current_quantity)}股"
+            if "holding_quantity" in requested_details and review.current_quantity is not None
+            else ""
+        )
         weight = (
             f"，当前仓位{_decimal(review.current_weight * 100)}%"
             if review.current_weight is not None
@@ -190,7 +219,7 @@ def _holding_review_fields(
         confidence = _decimal(review.action_confidence * 100)
         reasons.append(
             f"{code}持仓复核：投资逻辑{_text(review.thesis_strength_change)}，"
-            f"风险变化{_text(review.risk_change)}，置信度{confidence}%{weight}。"
+            f"风险变化{_text(review.risk_change)}，置信度{confidence}%{weight}{quantity}。"
         )
         action = labels[review.recommended_action]
         detail = ""
@@ -199,6 +228,8 @@ def _holding_review_fields(
                 f"，目标权重{_decimal(review.target_weight_lower * 100)}%-"
                 f"{_decimal(review.target_weight_upper * 100)}%"
             )
+        if review.target_quantity_min is not None and review.target_quantity_max is not None:
+            detail += f"，目标数量{review.target_quantity_min}-{review.target_quantity_max}股"
         actions.append(f"{code}：{action}{detail}。")
         if review.risk_change not in {"UNCHANGED", "LOWER"}:
             risks.append(f"{code}持仓风险状态：{_text(review.risk_change)}。")
@@ -213,12 +244,14 @@ def _holding_review_fields(
 def _full_research_no_buy(
     receipt: RecommendationResearchReceipt,
     reasons: list[str],
+    *,
+    requested_details: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     rejected = "、".join(_code(instrument) for instrument in sorted(receipt.rejected_candidates))
     if rejected:
         reasons.append(f"被淘汰候选：{rejected}；至少一项估值、质量、治理、证据或组合约束未达标。")
     holding_reasons, holding_risks, holding_actions, holding_conditions = _holding_review_fields(
-        receipt
+        receipt, requested_details=requested_details
     )
     reasons.extend(holding_reasons)
     risks = list(holding_risks)
@@ -341,16 +374,13 @@ def _position_actions(
     if receipt.publication.instant_trade_parameters_allowed:
         if execution.initial_shares is None or execution.target_shares is None:
             raise ValueError("instant publication lacks executable share quantities")
-        target_weight = _decimal(position.target_weight * 100)
         if existing_holding:
-            actions.append(f"{_code(instrument)}结合现有持仓按条件调整至目标仓位{target_weight}%。")
-        elif execution.target_shares:
-            first_weight = (
-                position.target_weight * Decimal(execution.initial_shares)
-                / Decimal(execution.target_shares) * 100
-            )
             actions.append(
-                f"{_code(instrument)}首仓比例约{_decimal(first_weight)}%，目标仓位{target_weight}%。"
+                f"{_code(instrument)}结合现有持仓按条件调整至目标{execution.target_shares}股。"
+            )
+        else:
+            actions.append(
+                f"{_code(instrument)}首仓{execution.initial_shares}股，目标{execution.target_shares}股。"
             )
     return actions, conditions
 
@@ -377,7 +407,8 @@ def _portfolio_summary(
         receipt.portfolio.factor_exposures.items(), key=lambda item: (-abs(item[1]), item[0])
     )[:3]
     reasons.append(
-        f"组合现金权重{_decimal(receipt.portfolio.cash_weight * 100)}%。"
+        f"组合保留现金{_decimal(receipt.portfolio.cash)}元，"
+        f"现金权重{_decimal(receipt.portfolio.cash_weight * 100)}%。"
     )
     if top_factors:
         reasons.append(
@@ -394,8 +425,9 @@ def _portfolio_summary(
         reasons.append(
             f"组合当前估值情景加权预期回报约"
             f"{_decimal(receipt.portfolio.expected_research_return * 100)}%，"
-            f"估值下行情景加权损失占组合资产约"
-            f"{_decimal(downside_pct)}%。"
+            f"对应预期盈亏约{_decimal(receipt.portfolio.expected_research_profit)}元；"
+            f"估值下行情景加权损失约{_decimal(receipt.portfolio.modeled_downside_loss)}元，"
+            f"约占组合资产{_decimal(downside_pct)}%。"
         )
     reasons.append(
         f"组合风险：Beta {_decimal(receipt.risk_audit.portfolio_beta)}，"
@@ -562,7 +594,12 @@ class VerifiedAnswerProjector:
             draft.actual_holding_section or "",
             draft.paper_holding_section or "",
         ]
-        audit = audit_public_answer("\n".join(part for part in visible if part))
+        audit = audit_public_answer(
+            "\n".join(part for part in visible if part),
+            context=None,
+            source_text=None,
+            request_text=request.raw_text,
+        )
         if "PRIVATE_CAPITAL_AMOUNT_EXPOSED" in audit.finding_codes:
             raise CapitalDisclosureError()
         if not audit.safe_to_send:
@@ -749,28 +786,43 @@ class VerifiedAnswerProjector:
             raise ValueError("paper frozen cash differs from the account snapshot")
         orders = [item for item in lane.open_orders if item.account_id == nav.account_id]
         positions = [item for item in lane.positions if item.account_id == nav.account_id]
-        reasons = ["账户状态来自同一时点已核对的模拟记录；公开展示使用比例。"]
+        requested_details = requested_personal_detail_categories(inputs.request.raw_text)
+        show_amounts = "account_amount" in requested_details
+        show_quantity = "holding_quantity" in requested_details
+        reasons = ["账户状态来自同一时点已核对的模拟记录。"]
         if orders:
             reasons.append(f"有{len(orders)}笔未完成模拟订单；订单尚未成交的部分不计为持仓。")
         if nav.frozen_cash_fen:
-            reasons.append(
-                f"模拟订单冻结资金占账户资产"
-                f"{_decimal(Decimal(nav.frozen_cash_fen) / Decimal(nav.nav_fen) * 100)}%。"
-                if nav.nav_fen > 0
-                else "存在模拟订单冻结资金；净资产非正时不计算资金比例。"
-            )
+            if show_amounts:
+                reasons.append(
+                    f"模拟订单冻结资金为{_decimal(Decimal(nav.frozen_cash_fen) / 100)}元。"
+                )
+            else:
+                reasons.append(
+                    f"模拟订单冻结资金占账户资产"
+                    f"{_decimal(Decimal(nav.frozen_cash_fen) / Decimal(nav.nav_fen) * 100)}%。"
+                    if nav.nav_fen > 0
+                    else "存在模拟订单冻结资金；净资产非正时不计算资金比例。"
+                )
         section = None
         if positions:
             section = (
                 "模拟持仓："
                 + "；".join(
-                    _code(position.instrument_id) for position in positions
+                    (
+                        f"{_code(position.instrument_id)}，{_decimal(position.quantity)}股"
+                        if show_quantity
+                        else _code(position.instrument_id)
+                    )
+                    for position in positions
                 )
                 + "。"
             )
         return {
             "conclusion": (
-                f"该模拟账户可用现金占账户资产"
+                f"该模拟账户可用现金为{_decimal(cash)}元。"
+                if show_amounts
+                else f"该模拟账户可用现金占账户资产"
                 f"{_decimal(Decimal(nav.cash_fen) / Decimal(nav.nav_fen) * 100)}%。"
                 if nav.nav_fen > 0
                 else "该模拟账户净资产非正，暂不计算资金比例，应先核对账户风险。"
@@ -814,12 +866,18 @@ class VerifiedAnswerProjector:
     @staticmethod
     def _full_research_decision(inputs: VerifiedInputs) -> dict[str, Any]:
         receipt = _full_research_receipt(inputs)
+        request = getattr(inputs, "request", None)
+        requested_details = requested_personal_detail_categories(
+            request.raw_text if request is not None else None
+        )
         reasons = _full_research_base_reasons(receipt)
         if not receipt.portfolio.positions:
-            return _full_research_no_buy(receipt, reasons)
+            return _full_research_no_buy(
+                receipt, reasons, requested_details=requested_details
+            )
         index = _full_research_index(receipt)
         holding_reasons, holding_risks, holding_actions, holding_conditions = (
-            _holding_review_fields(receipt)
+            _holding_review_fields(receipt, requested_details=requested_details)
         )
         reasons.extend(holding_reasons)
         risks: list[str] = list(holding_risks)

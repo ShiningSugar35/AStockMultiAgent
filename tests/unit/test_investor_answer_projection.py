@@ -58,8 +58,8 @@ def test_verified_answer_can_be_generated_without_an_untrusted_draft(
     answer = publish(coverage_receipt_id=coverage.receipt_id)
     assert not answer.degraded
     assert answer.request_id == request.request_id
-    assert "现金占账户资产100%" in answer.conclusion
-    assert "1000元" not in answer.model_dump_json()
+    assert "可用现金为1000元" in answer.conclusion
+    assert "1000元" in answer.model_dump_json()
     assert "99999999" not in answer.model_dump_json()
     assert answer.evidence_as_of == preflight.as_of
     assert answer == publish(coverage_receipt_id=coverage.receipt_id)
@@ -114,8 +114,8 @@ def test_candidate_projection_directly_uses_verified_cash(environment, projectio
     _, preflight, _, coverage, _, _ = good_run(environment)
     projector = projection_class(RegisteredOutputVerifier(environment.store))
     first = projector.derive(preflight, coverage)
-    assert first.conclusion == "该模拟账户可用现金占账户资产100%。"
-    assert "1000元" not in first.model_dump_json()
+    assert first.conclusion == "该模拟账户可用现金为1000元。"
+    assert "1000元" in first.model_dump_json()
     assert first.actual_holding_section is None and first.paper_holding_section is None
     assert first == projector.derive(preflight, coverage)
     artifact_id, persisted = projector.freeze(preflight, coverage)
@@ -275,7 +275,7 @@ def test_real_paper_status_scenario_generates_a_certified_answer_without_a_draft
     assert result.failures == ()
     assert result.coverage_complete
     assert not result.answer.degraded
-    assert result.answer.conclusion == "该模拟账户可用现金占账户资产100%。"
+    assert result.answer.conclusion == "该模拟账户可用现金为1000元。"
 
 
 def test_missing_required_domain_result_never_gets_a_verified_answer(environment) -> None:
@@ -309,7 +309,7 @@ def test_public_cli_publishes_only_the_reproducible_answer(environment) -> None:
     )
     assert outcome.exit_code == 0, outcome.output
     payload = json.loads(outcome.stdout)
-    assert payload["conclusion"] == "该模拟账户可用现金占账户资产100%。"
+    assert payload["conclusion"] == "该模拟账户可用现金为1000元。"
     assert payload["degraded"] is False
     assert "preflight" not in outcome.stdout
     assert "source_artifact_ids" not in outcome.stdout
@@ -350,7 +350,7 @@ def test_registered_cli_uses_verified_inputs_and_never_reexecutes_economic_opera
     second = runner.invoke(app, command)
     assert first.exit_code == second.exit_code == 0, (first.output, second.output)
     assert json.loads(first.stdout) == json.loads(second.stdout)
-    assert json.loads(first.stdout)["conclusion"] == "该模拟账户可用现金占账户资产100%。"
+    assert json.loads(first.stdout)["conclusion"] == "该模拟账户可用现金为1000元。"
     with environment.store.connect() as connection:
         after = [tuple(row) for row in connection.execute("SELECT * FROM journal ORDER BY seq")]
     assert before == after

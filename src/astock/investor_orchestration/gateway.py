@@ -200,6 +200,17 @@ class InvestorAnswerGateway:
         if not verified:
             return self._safe_answer(draft, preflight)
 
+        request_text = ""
+        if self.verifier is not None:
+            try:
+                from astock.investor_orchestration.answer_projection import VerifiedAnswerProjector
+
+                request_text = VerifiedAnswerProjector(self.verifier).inputs(
+                    preflight, coverage
+                ).request.raw_text
+            except (ValueError, OSError, StorageError):
+                return self._safe_answer(draft, preflight)
+
         actual_section = (
             draft.actual_holding_section if preflight.context.actual.positions else None
         )
@@ -213,10 +224,13 @@ class InvestorAnswerGateway:
             actual_section or "",
             paper_section or "",
         ]
-        audit = audit_public_answer("\n".join(part for part in public_parts if part))
+        audit = audit_public_answer(
+            "\n".join(part for part in public_parts if part),
+            request_text=request_text,
+        )
         if not audit.safe_to_send:
             _LOG.warning("investor output rejected: %s", audit.finding_codes)
-            return self._safe_answer(draft, preflight)
+            return self._safe_answer(draft, preflight, request_text=request_text)
         return InvestorAnswer(
             request_id=draft.request_id,
             conclusion=draft.conclusion,
@@ -235,6 +249,7 @@ class InvestorAnswerGateway:
         preflight: InvestorSessionPreflightReceipt,
         *,
         privacy_blocked: bool = False,
+        request_text: str | None = None,
     ) -> InvestorAnswer:
         visible = "\n".join(
             (
@@ -243,7 +258,9 @@ class InvestorAnswerGateway:
                 draft.paper_holding_section or "",
             )
         )
-        if privacy_blocked or capital_disclosure_findings(visible):
+        if privacy_blocked or capital_disclosure_findings(
+            visible, request_text=request_text
+        ):
             return InvestorAnswer(
                 request_id=draft.request_id,
                 conclusion="为保护账户隐私，本次暂不展示涉及账户信息的投资建议。",

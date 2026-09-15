@@ -34,6 +34,13 @@ _PATTERNS = (
         re.IGNORECASE,
     ),
 )
+# Only unambiguous issuer-subject clauses qualify. A company word somewhere in a
+# personal recommendation must not become a privacy bypass for the rest of a sentence.
+_ISSUER_PREFIX = re.compile(
+    r"^(?:上市公司|该公司|公司|发行人|企业|集团|控股股东|大股东|实际控制人|股东)"
+    r"(?:(?:预计|预期|披露|实现|累计|合计|本期|报告期|本年度|去年|今年|目前|"
+    r"直接|间接|已|共|仍|净|上半年|下半年|年度)|[\d年月日\s:：()（）]){0,24}$"
+)
 
 
 def _scan_text(text: str) -> str:
@@ -41,21 +48,41 @@ def _scan_text(text: str) -> str:
     return _INVISIBLE.sub("", value)
 
 
+def _is_private_match(index: int, match: re.Match[str], text: str) -> bool:
+    if index < 2:
+        return True  # Explicit principal/account labels never inherit an issuer exemption.
+    if index == 3 and not match.group(0).startswith("持有"):
+        return True  # A recommendation is not an issuer-ownership disclosure.
+    prefix = re.split(r"[\n。；;，,]", text[max(0, match.start() - 96):match.start()])[-1]
+    return _ISSUER_PREFIX.fullmatch(prefix.strip()) is None
+
+
 def capital_disclosure_findings(text: str) -> tuple[str, ...]:
     """Return an amount-free finding; thresholds and a specific principal are irrelevant."""
     normalized = _scan_text(text)
-    if any(pattern.search(normalized) for pattern in _PATTERNS):
-        return ("PRIVATE_CAPITAL_AMOUNT_EXPOSED",)
+    for index, pattern in enumerate(_PATTERNS):
+        if any(
+            _is_private_match(index, match, normalized) for match in pattern.finditer(normalized)
+        ):
+            return ("PRIVATE_CAPITAL_AMOUNT_EXPOSED",)
     return ()
 
 
 def redact_capital_amounts(text: str) -> str:
-    """Redact labelled capital in diagnostics without touching security-price figures."""
+    """Redact personal funds while preserving unambiguous public issuer facts."""
     if not capital_disclosure_findings(text):
         return text
     normalized = _scan_text(text)
-    for pattern in _PATTERNS:
-        normalized = pattern.sub("账户金额或数量已隐藏", normalized)
+    for index, pattern in enumerate(_PATTERNS):
+        current = normalized
+        normalized = pattern.sub(
+            lambda match, index=index, current=current: (
+                "账户金额或数量已隐藏"
+                if _is_private_match(index, match, current)
+                else match.group(0)
+            ),
+            current,
+        )
     return normalized
 
 

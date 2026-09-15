@@ -726,6 +726,8 @@ def test_default_model_portfolio_is_explicit_and_does_not_ask_for_missing_constr
     assert contract.portfolio_assumptions.source.value == "MODEL_PORTFOLIO"
     assert contract.portfolio_assumptions.capital_rmb == Decimal("100000")
     assert contract.portfolio_assumptions.target_annual_return == Decimal("1")
+    assert contract.portfolio_assumptions.capital_source is not None
+    assert contract.portfolio_assumptions.target_annual_return_source is not None
     assert contract.portfolio_assumptions.capital_source.value == "DEFAULT"
     assert contract.portfolio_assumptions.target_annual_return_source.value == "DEFAULT"
     assert contract.portfolio_assumptions.risk_profile == "MEDIUM"
@@ -744,6 +746,8 @@ def test_current_text_principal_and_annual_target_enter_request_contract() -> No
 
     assert contract.portfolio_assumptions.capital_rmb == Decimal("200000")
     assert contract.portfolio_assumptions.target_annual_return == Decimal("0.3")
+    assert contract.portfolio_assumptions.capital_source is not None
+    assert contract.portfolio_assumptions.target_annual_return_source is not None
     assert contract.portfolio_assumptions.capital_source.value == "CURRENT_USER"
     assert contract.portfolio_assumptions.target_annual_return_source.value == "CURRENT_USER"
 

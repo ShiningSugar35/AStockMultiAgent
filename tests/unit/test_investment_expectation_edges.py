@@ -141,13 +141,20 @@ def test_false_receipt_does_not_become_user_preferences(tmp_path: Path) -> None:
 
 
 def test_goal_projection_uses_notional_net_of_costs_and_does_not_compare_unknown_periods() -> None:
-    assumptions = ModelPortfolioAssumptions(source="MODEL_PORTFOLIO", capital_rmb=100000,
-        target_annual_return=1, horizon_min_months=3, horizon_max_months=12,
-        target_position_min=1, target_position_max=5)
+    from astock.schemas.full_research import PortfolioAssumptionSource
+
+    assumptions = ModelPortfolioAssumptions(
+        source=PortfolioAssumptionSource.MODEL_PORTFOLIO, capital_rmb=Decimal("100000"),
+        target_annual_return=Decimal("1"), horizon_min_months=3, horizon_max_months=12,
+        target_position_min=1, target_position_max=5,
+    )
     valuation = _valuation("600001.XSHG")
-    position = PortfolioPositionPlan(instrument_id=valuation.instrument_id, industry_id="industry",
-        target_weight=Decimal("0.1002"), target_amount=10020, reference_price=10,
-        target_shares=1000, lot_size=100, estimated_cost=12, estimated_slippage=8)
+    position = PortfolioPositionPlan(
+        instrument_id=valuation.instrument_id, industry_id="industry",
+        target_weight=Decimal("0.1002"), target_amount=Decimal("10020"),
+        reference_price=Decimal("10"), target_shares=1000, lot_size=100,
+        estimated_cost=Decimal("12"), estimated_slippage=Decimal("8"),
+    )
     result = objective_projection(assumptions, (position,), {valuation.instrument_id: valuation})
     assert result["annual_profit_target"] == 100000
     assert result["target_horizon_months"] is None

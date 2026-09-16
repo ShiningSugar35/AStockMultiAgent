@@ -58,6 +58,17 @@ uv run astock continuous-monitor-status
 
 完整命令以 `uv run astock --help` 和各子命令 `--help` 为准；README 不复制整个 CLI 目录。
 
+### 可选 Provider 凭据
+
+Tushare / Finnhub 等可选数据源默认从项目根目录 `.env` 读取本机凭据；`.env` 已被 Git 忽略，不会进入仓库。也可以继续使用系统/进程环境变量，且环境变量优先于 `.env`。
+
+```text
+TUSHARE_TOKEN=
+FINNHUB_API_KEY=
+```
+
+可先复制 `.env.example`，填入自己账号的值，再运行 `uv run astock provider-credentials-status` 检查是否已识别。状态命令只显示 `configured` 与来源，不回显凭据正文。
+
 ## 架构概览
 
 ```text

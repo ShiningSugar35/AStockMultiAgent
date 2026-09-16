@@ -117,6 +117,10 @@ def test_old_network_probe_can_recover_but_access_denial_cannot(tmp_path, denied
 def test_missing_credentials_are_not_need_info(tmp_path, monkeypatch):
     _, state, objects = _runtime(tmp_path)
     monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "astock.providers.runtime.credential_is_configured",
+        lambda *args, **kwargs: False,
+    )
     result = SupplementalEvidenceService(PROJECT_ROOT, state, objects).collect(
         request("news.global.lead"), live=True,
     )

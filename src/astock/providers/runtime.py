@@ -10,7 +10,6 @@ import importlib
 import importlib.util
 import inspect
 import json
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -20,6 +19,7 @@ from typing import Any, TypeVar
 import httpx
 import yaml
 
+from astock.core.credentials import credential_is_configured
 from astock.core.errors import AStockError, PublicErrorMapper
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
@@ -91,6 +91,7 @@ class ProviderFactory:
         *,
         fixture_scope: Path | None = None,
         dialects: dict[str, ProviderDialect] | None = None,
+        project_root: Path | None = None,
     ) -> None:
         self.registry = registry
         self.profiles = profiles
@@ -99,10 +100,15 @@ class ProviderFactory:
         self.fixture_root = fixture_root.resolve()
         self.fixture_scope = fixture_scope.resolve() if fixture_scope is not None else None
         self.dialects = dialects or {}
+        self.project_root = (
+            project_root.resolve()
+            if project_root is not None
+            else resolve_project_root(module_file=Path(__file__))
+        )
         self.source_breaker = SourceCircuitBreaker(state)
         self.clock = lambda: datetime.now(UTC)
         self.external_capabilities = ExternalCapabilityService(
-            resolve_project_root(module_file=Path(__file__)), state, objects
+            self.project_root, state, objects
         )
         self._instances: dict[str, object] = {}
 
@@ -317,7 +323,10 @@ class ProviderFactory:
         # for private investment inputs. Do not import SDKs or disclose key values.
         setup_ready = (
             not definition.credential_environment
-            or bool(os.environ.get(definition.credential_environment, "").strip())
+            or credential_is_configured(
+                definition.credential_environment,
+                project_root=self.project_root,
+            )
         ) and (
             not definition.optional_package
             or importlib.util.find_spec(definition.optional_package) is not None
@@ -490,6 +499,8 @@ class ProviderFactory:
             kwargs["object_store"] = self.objects
         if "state" in parameters:
             kwargs["state"] = self.state
+        if "project_root" in parameters:
+            kwargs["project_root"] = self.project_root
         if "transport_profile" in parameters and definition.transport_profile:
             try:
                 kwargs["transport_profile"] = self.profiles[definition.transport_profile]

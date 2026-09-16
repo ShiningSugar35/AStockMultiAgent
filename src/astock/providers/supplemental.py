@@ -17,6 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from astock.core.credentials import CredentialSource, resolve_credential
 from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.object_store import ObjectStore
@@ -24,6 +25,7 @@ from astock.core.project_root import resolve_project_root
 from astock.core.state import StateStore
 from astock.providers.base import HttpProviderBase
 from astock.providers.config import load_provider_registry
+from astock.providers.http_resilience import HttpClientLike
 from astock.providers.runtime import ProviderFactory, TransportProfile, load_transport_profiles
 from astock.schemas import Market, SourceSnapshot
 
@@ -193,7 +195,29 @@ class AKShareHintProvider(_HintPersistence):
         return payload
 
 
-class TushareHintProvider(HttpProviderBase):
+class _CredentialHttpProvider(HttpProviderBase):
+    def __init__(
+        self,
+        object_store: ObjectStore,
+        state: StateStore,
+        *,
+        client: HttpClientLike | None = None,
+        timeout_seconds: float = 20.0,
+        project_root: Path | None = None,
+    ) -> None:
+        super().__init__(
+            object_store,
+            state,
+            client=client,
+            timeout_seconds=timeout_seconds,
+        )
+        self.project_root = project_root or resolve_project_root(module_file=Path(__file__))
+
+    def credential(self, name: str) -> str:
+        return _credential(name, project_root=self.project_root)
+
+
+class TushareHintProvider(_CredentialHttpProvider):
     provider_id = "tushare-reference-hints"
 
     def fetch_hints(
@@ -201,7 +225,7 @@ class TushareHintProvider(HttpProviderBase):
     ) -> tuple[list[dict[str, str]], SourceSnapshot]:
         if request.capability != "market.reference.hint":
             raise ValueError("Tushare hint capability mismatch")
-        credential = _credential("TUSHARE_TOKEN")
+        credential = self.credential("TUSHARE_TOKEN")
         response, _ = self._request(
             "POST", "https://api.tushare.pro",
             json={
@@ -240,7 +264,7 @@ class TushareHintProvider(HttpProviderBase):
         return normalize_daily(raw_rows, request, kind="tushare"), snapshot
 
 
-class FinnhubNewsHintProvider(HttpProviderBase):
+class FinnhubNewsHintProvider(_CredentialHttpProvider):
     provider_id = "finnhub-news-hints"
 
     def fetch_hints(
@@ -248,7 +272,7 @@ class FinnhubNewsHintProvider(HttpProviderBase):
     ) -> tuple[list[dict[str, str]], SourceSnapshot]:
         if request.capability != "news.global.lead":
             raise ValueError("Finnhub is a global news lead, not certified A-share coverage")
-        credential = _credential("FINNHUB_API_KEY")
+        credential = self.credential("FINNHUB_API_KEY")
         response, _ = self._request(
             "GET", "https://finnhub.io/api/v1/news", params={"category": "general"},
             headers={"X-Finnhub-Token": credential},
@@ -281,13 +305,18 @@ class FinnhubNewsHintProvider(HttpProviderBase):
         return rows, snapshot
 
 
-def _credential(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
+def _credential(name: str, *, project_root: Path | None = None) -> str:
+    resolution = resolve_credential(name, project_root=project_root)
+    if resolution.configured and resolution.value is not None:
+        return resolution.value
+    if resolution.source is CredentialSource.INVALID_DOTENV:
         raise ProviderError(
-            "Optional provider is not configured", failure_class=FailureClass.AUTH_REQUIRED,
+            "Optional provider credential configuration is invalid",
+            failure_class=FailureClass.DATA_QUALITY,
         )
-    return value
+    raise ProviderError(
+        "Optional provider is not configured", failure_class=FailureClass.AUTH_REQUIRED,
+    )
 
 
 def normalize_daily(
@@ -348,7 +377,10 @@ class SupplementalEvidenceService:
         self.factory = ProviderFactory(
             load_provider_registry(root / "configs/provider_registry.yaml"),
             load_transport_profiles(root / "configs/transport_profiles.yaml"),
-            objects, state, root / "tests/fixtures",
+            objects,
+            state,
+            root / "tests/fixtures",
+            project_root=root,
         )
 
     def collect(self, request: SupplementalRequest, *, live: bool = False) -> dict[str, Any]:

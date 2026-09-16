@@ -41,6 +41,8 @@ rules:
     changed:
       - src/astock/providers/*
       - src/astock/core/source_*.py
+      - src/astock/core/credentials.py
+      - .env.example
       - src/astock/market_data/reference*.py
       - src/astock/schemas/provider.py
       - configs/provider*.yaml

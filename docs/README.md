@@ -195,3 +195,7 @@ PROPOSED architecture/ADR
 - NIST AI RMF 1.0: https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf
 
 这些资料只支持治理方法；本仓库的安全和投资边界仍以 `AGENTS.md` 与机器合同为准。
+
+## Adaptive recovery and task-based validation
+
+- [Adaptive public-data recovery and impact-based validation](architecture/adaptive-recovery-and-validation-v1.md): public versus private gaps, optional source capabilities, gate inventory coverage and reviewed test selection.

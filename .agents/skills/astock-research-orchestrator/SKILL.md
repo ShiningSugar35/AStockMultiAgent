@@ -79,3 +79,7 @@ Lead with the investment answer, not the process. 对 material investment reques
 - Do not treat an unfilled simulated order as a holding.
 - Do not claim ETF paper execution is generally enabled: it remains default-off and requires a valid independent instrument rule plus the existing confirmation/replay chain. Shorting, futures, options, margin and real-broker execution remain unavailable.
 - Do not create or send a real brokerage order.
+
+## Public-data recovery before escalation
+
+A public acquisition failure is not private missing input. Follow the canonical continuation and the recovery supplement in the linked current-company/evidence workflows. Try applicable providers and authoritative Web, consume verified evidence, and resume only affected nodes. `research-supplemental-acquire` exposes optional AKShare/Tushare reference hints and Finnhub global news leads; credentials and live access are optional and no hint bypasses formal certification. Exhausted public recovery returns a bounded unresolved result, not a fabricated private-material request or endless automatic retry.

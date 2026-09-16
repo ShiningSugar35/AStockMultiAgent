@@ -429,7 +429,7 @@ def test_continuation_accepts_non_default_bounded_recovery_budget(tmp_path: Path
     service, _acquisition, _state, _objects = _service(tmp_path, gap_rounds=[True])
     record = service.start(_request(request_id="budget-900", budget_seconds=900))
     assert record.automatic_resolution_budget_seconds == 900
-    assert record.deadline_at == NOW + timedelta(seconds=900)
+    assert record.deadline_at == record.started_at + timedelta(seconds=900)
 
 
 def test_start_is_idempotent_for_the_same_request(tmp_path: Path) -> None:
@@ -468,9 +468,9 @@ def test_manual_escalation_occurs_only_after_bounded_automatic_rounds(tmp_path: 
     escalated = service.resume(second_failure.continuation_id)
 
     assert acquisition.calls == 2
-    assert escalated.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT
+    assert escalated.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
     assert escalated.automatic_budget_exhausted
-    assert escalated.manual_actions
+    assert not escalated.manual_actions
     assert not escalated.investor_view_allowed
 
 
@@ -649,7 +649,7 @@ def test_run_to_terminal_uses_the_configured_final_automatic_round_before_escala
 
     assert acquisition.calls == 1
     assert resolver_calls == [started.external_tasks[0].task_id]
-    assert final.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT
+    assert final.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
     assert final.automatic_budget_exhausted is True
     assert len(final.automatic_resolution_artifact_ids) == 1
 
@@ -705,10 +705,10 @@ def test_final_automatic_round_does_not_gain_an_extra_resolver_round_when_bound_
     escalated = service.resume(bound.continuation_id)
 
     assert acquisition.calls == 2
-    assert escalated.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT
+    assert escalated.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
     assert escalated.automatic_rounds_completed == 1
     assert escalated.automatic_budget_exhausted is True
-    assert escalated.manual_actions
+    assert not escalated.manual_actions
     assert not escalated.investor_view_allowed
 
 
@@ -846,9 +846,9 @@ def test_public_source_failure_escalates_only_after_automatic_budget_exhaustion(
     )
     exhausted = service.resume(second_failure.continuation_id)
 
-    assert exhausted.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT
+    assert exhausted.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
     assert exhausted.automatic_budget_exhausted is True
     assert exhausted.private_material_required is False
-    assert len(exhausted.manual_actions) == 1
+    assert exhausted.manual_actions == []
     assert len(exhausted.automatic_resolution_artifact_ids) == 2
     assert acquisition.calls == 2

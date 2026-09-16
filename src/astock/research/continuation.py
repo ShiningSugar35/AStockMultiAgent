@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+import httpx
+
 from astock.core.hashing import content_hash
 from astock.core.logging import emit_operational_event
 from astock.core.object_store import ObjectStore
@@ -79,6 +81,12 @@ class CurrentResearchContinuationService:
         if existing is not None:
             return existing
 
+        if (
+            request.automatic_resolution_budget_seconds
+            > self.policy.automatic_resolution_budget_seconds
+        ):
+            raise ValueError("requested recovery budget exceeds the active policy limit")
+        started_at = self.clock()
         request_ref = self.objects.put_json(request.model_dump(mode="json"))
         self.state.register_artifact(
             artifact_id=f"CurrentResearchContinuationRequest:{continuation_id}",
@@ -114,8 +122,8 @@ class CurrentResearchContinuationService:
             market=request.market,
             lookback_days=request.lookback_days,
             planner_plan_artifact_id=request.planner_plan_artifact_id,
-            started_at=request.created_at,
-            deadline_at=request.created_at
+            started_at=started_at,
+            deadline_at=started_at
             + timedelta(seconds=request.automatic_resolution_budget_seconds),
             status=status,
             automatic_resolution_budget_seconds=request.automatic_resolution_budget_seconds,
@@ -166,7 +174,25 @@ class CurrentResearchContinuationService:
                     record = self.resume(record.continuation_id)
                     continue
                 for task in unresolved:
-                    result = resolve_external(record, task)
+                    if self.clock() >= record.deadline_at:
+                        return self._escalate_manual(record)
+                    try:
+                        result = resolve_external(record, task)
+                    except (
+                        TimeoutError, ConnectionError, httpx.TimeoutException, httpx.NetworkError,
+                    ):
+                        # Preserve bounded recovery and diagnostics without logging a URL,
+                        # credential or the transport's arbitrary exception message.
+                        result = CurrentResearchAutomaticResolution(
+                            continuation_id=record.continuation_id,
+                            task_id=task.task_id,
+                            failure_code="AUTOMATIC_RESOLVER_TRANSIENT_TRANSPORT",
+                            created_at=self.clock(),
+                        )
+                    if result.task_id != task.task_id:
+                        raise ValueError(
+                            "automatic resolver result does not match the requested task"
+                        )
                     record = self._apply_automatic_resolution(record, result)
                     if record.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT:
                         return record
@@ -527,8 +553,14 @@ class CurrentResearchContinuationService:
                 CurrentResearchContinuationStatus.TEAM_RESEARCH_REQUIRED,
             },
             "investment_conclusion_blocked": not record.investor_view_allowed,
-            "user_assistance_request_allowed": record.status
-            is CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
+            "user_assistance_request_allowed": (
+                record.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT
+                and record.private_material_required
+            ),
+            "public_data_unavailable": (
+                record.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
+                or (record.automatic_budget_exhausted and not record.private_material_required)
+            ),
             "investor_view_allowed": record.investor_view_allowed,
             "full_research_input_ready": record.full_research_input_ready,
             "broker_execution_allowed": False,
@@ -540,9 +572,9 @@ class CurrentResearchContinuationService:
             raise ValueError("unknown current research continuation")
         if (
             record.automatic_resolution_budget_seconds
-            != self.policy.automatic_resolution_budget_seconds
+            > self.policy.automatic_resolution_budget_seconds
         ):
-            raise ValueError("stored current research continuation uses a non-canonical budget")
+            raise ValueError("stored continuation exceeds the active recovery budget")
         return record
 
     @staticmethod
@@ -664,8 +696,8 @@ class CurrentResearchContinuationService:
             capability=task.capability,
             instruction=task.research_question,
             why_needed=(
-                "The required formal material is private or otherwise unavailable to all "
-                "approved automatic public-source channels."
+                "The resolver identified required private material or authorization; "
+                "public-source unavailability alone is not a private-input requirement."
             ),
             created_at=self.clock(),
         )
@@ -683,29 +715,15 @@ class CurrentResearchContinuationService:
         self,
         record: CurrentResearchContinuation,
     ) -> CurrentResearchContinuation:
-        unresolved = [
-            item
-            for item in record.external_tasks
-            if item.status is not ExternalResearchTaskStatus.RESOLVED
-        ]
-        manual_actions = [
-            ManualResearchAction(
-                capability=item.capability,
-                instruction=item.research_question,
-                why_needed=(
-                    "Automatic official-source acquisition and bounded Web evidence recovery "
-                    "were exhausted; provide only private or otherwise inaccessible "
-                    "formal material."
-                ),
-                created_at=self.clock(),
-            )
-            for item in sorted(unresolved, key=lambda task: task.capability.value)
-        ]
+        # Keep the old method name for internal compatibility. Exhaustion describes
+        # this attempt, not proof that every public source is unavailable or that
+        # the user owns the missing material. Legacy v1 checkpoints remain readable.
         updated = record.model_copy(
             update={
-                "status": CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
-                "manual_actions": manual_actions,
+                "status": CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
+                "manual_actions": [],
                 "automatic_budget_exhausted": True,
+                "private_material_required": False,
             }
         )
         return self._persist(updated)
@@ -785,6 +803,7 @@ class CurrentResearchContinuationService:
                 in {
                     CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
                     CurrentResearchContinuationStatus.FAILED,
+                    CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
                 }
                 else OperationalSeverity.INFO
             ),

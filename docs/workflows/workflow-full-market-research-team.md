@@ -110,3 +110,11 @@ Formal market-wide recommendation stops immediately at `OBSERVATION_ONLY` if the
 - Same-run raw snapshots and registered artifacts are reused rather than refetched.
 - No GPU, Redis, Kafka, Temporal or background daemon is required.
 - The full run may consume the configured two-hour resolution budget when data providers or authoritative Web evidence are slow; duration itself is not a quality gate.
+
+## Recovery and optional source supplement
+
+Before returning any public-data `NEEDS_INFO`/unavailable result, the Agent must attempt the existing canonical acquisition, applicable alternate providers, and authoritative Web recovery within the current request budget. Use `research-supplemental-schema` and `research-supplemental-acquire <request.json> --live` for `market.reference.hint` (AKShare/Tushare) or `news.global.lead` (Finnhub) when relevant. Missing optional keys are a source availability issue, not missing investor input. BaoStock stays on the established reference route. Register the returned capture, inspect original-source provenance, and bring verified facts back through the failed canonical node; hint captures are not financial certification, independent EASTMONEY cross-checks, complete Universe proof, or publication permission.
+
+After public recovery is genuinely exhausted, `PUBLIC_DATA_UNAVAILABLE` records a bounded unresolved attempt with no private-material demand. Preserve acquired evidence and describe only the remaining uncertainty. Ask for user input only when it is actually private or requires their authorization. Do not let an unavailable source, incomplete intermediate artifact or exhausted budget trigger an endless full-graph rerun. LLM query/source/parse proposals remain allowed; truth, accounting, historical PIT and execution checks remain deterministic.
+
+Current implementation, validation scope and known limitations: `docs/architecture/adaptive-recovery-and-validation-v1.md`.

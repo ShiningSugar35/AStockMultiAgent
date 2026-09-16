@@ -8,7 +8,7 @@ from collections.abc import Mapping
 # Adapted design patterns, not copied upstream skill text. See the WP-24 scouting note.
 _QUOTES = re.compile(r"“[^”\n]*”|「[^」\n]*」|https?://[^\s）)]+")
 _STATUS_LABEL = re.compile(
-    r"^\s*(?:状态\s*[:：]\s*)?`?(NEEDS?_INFO|BLOCKED|UNAVAILABLE|PENDING|READY)`?\s*[。.]?\s*$",
+    r"^\s*(?:状态\s*[:：]\s*)?`?(NEEDS?_INFO|PUBLIC_DATA_UNAVAILABLE|BLOCKED|UNAVAILABLE|PENDING|READY)`?\s*[。.]?\s*$",
     re.I,
 )
 
@@ -25,7 +25,7 @@ def public_status_text(text: str) -> str:
     status = match[1].upper()
     if status in {"NEED_INFO", "NEEDS_INFO"}:
         return "信息尚未核实完整，暂不形成投资结论。"
-    if status in {"BLOCKED", "UNAVAILABLE"}:
+    if status in {"BLOCKED", "UNAVAILABLE", "PUBLIC_DATA_UNAVAILABLE"}:
         return "本次尚未取得足以支持判断的可靠资料，暂不形成投资结论。"
     if status == "READY":
         return "研究材料已整理，投资判断仍需结合估值与风险。"

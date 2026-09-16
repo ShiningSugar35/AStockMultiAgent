@@ -57,12 +57,19 @@ class HttpProviderBase:
         *,
         params: Mapping[str, str | int] | None = None,
         data: Mapping[str, str] | None = None,
+        json: object = None,
+        headers: Mapping[str, str] | None = None,
     ) -> tuple[httpx.Response, int]:
         """Execute one bounded transport request and normalize provider failures once."""
 
         started = time.perf_counter()
         try:
-            response = self.client.request(method, url, params=params, data=data)
+            if json is None and headers is None:
+                response = self.client.request(method, url, params=params, data=data)
+            else:
+                response = self.client.request(
+                    method, url, params=params, data=data, json=json, headers=headers
+                )
         except httpx.TimeoutException as exc:
             raise ProviderError(
                 f"{self.provider_id} timed out",
@@ -74,7 +81,7 @@ class HttpProviderBase:
                 f"{self.provider_id} network request failed",
                 failure_class=FailureClass.NETWORK,
                 retryable=True,
-                details={"error": str(exc)},
+                details={"error_type": type(exc).__name__},
             ) from exc
         latency_ms = round((time.perf_counter() - started) * 1000)
         if response.status_code == 429:

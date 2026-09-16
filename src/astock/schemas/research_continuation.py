@@ -22,6 +22,7 @@ class CurrentResearchContinuationStatus(StrEnum):
     READY_FOR_INVESTOR_VIEW = "READY_FOR_INVESTOR_VIEW"
     OBSERVATION_ONLY_FOR_INVESTOR_VIEW = "OBSERVATION_ONLY_FOR_INVESTOR_VIEW"
     NEEDS_USER_INPUT = "NEEDS_USER_INPUT"
+    PUBLIC_DATA_UNAVAILABLE = "PUBLIC_DATA_UNAVAILABLE"
     FAILED = "FAILED"
 
 
@@ -184,8 +185,17 @@ class CurrentResearchContinuation(AStockModel):
                 raise ValueError(
                     "NEEDS_USER_INPUT requires exhausted automatic channels or private material"
                 )
+        elif self.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE:
+            if (
+                not unresolved
+                or not self.automatic_budget_exhausted
+                or self.private_material_required
+                or self.manual_actions
+                or self.team_plan_id is not None
+            ):
+                raise ValueError("public-data exhaustion cannot request private user material")
         elif self.automatic_budget_exhausted or self.private_material_required:
-            raise ValueError("manual-escalation flags are valid only for NEEDS_USER_INPUT")
+            raise ValueError("recovery flags require a corresponding terminal gap state")
         return self
 
 

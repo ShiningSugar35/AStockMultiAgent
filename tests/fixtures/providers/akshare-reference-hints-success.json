@@ -1,0 +1,23 @@
+{
+  "schema_version": "provider-self-probe-v1",
+  "provider_id": "akshare-reference-hints",
+  "operation": "supplemental-hints",
+  "record_count": 1,
+  "quality": true,
+  "checked_capabilities": [
+    "market.reference.hint"
+  ],
+  "request": {
+    "capability": "market.reference.hint",
+    "symbol": "600519",
+    "market": "XSHG",
+    "start": "2026-09-01",
+    "end": "2026-09-02"
+  },
+  "records": [
+    {
+      "fixture_only": true,
+      "description": "synthetic capability contract; never live evidence"
+    }
+  ]
+}

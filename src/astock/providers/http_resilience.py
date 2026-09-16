@@ -37,6 +37,8 @@ class HttpClientLike(Protocol):
         *,
         params: Mapping[str, str | int] | None = None,
         data: Mapping[str, str] | None = None,
+        json: object = None,
+        headers: Mapping[str, str] | None = None,
     ) -> httpx.Response: ...
 
     def close(self) -> None: ...
@@ -107,6 +109,8 @@ class ResilientHttpClient:
         *,
         params: Mapping[str, str | int] | None = None,
         data: Mapping[str, str] | None = None,
+        json: object = None,
+        headers: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         normalized_method = method.upper()
         attempt_limit = self.max_attempts if normalized_method in self.retry_methods else 1
@@ -139,13 +143,16 @@ class ResilientHttpClient:
                 )
             lane_name, client = self._lanes[attempt % len(self._lanes)]
             try:
-                response = client.request(
-                    normalized_method,
-                    url,
-                    params=params,
-                    data=data,
-                    timeout=min(self.timeout_seconds, remaining),
-                )
+                if json is None and headers is None:
+                    response = client.request(
+                        normalized_method, url, params=params, data=data,
+                        timeout=min(self.timeout_seconds, remaining),
+                    )
+                else:
+                    response = client.request(
+                        normalized_method, url, params=params, data=data, json=json,
+                        headers=headers, timeout=min(self.timeout_seconds, remaining),
+                    )
             except httpx.HTTPError as exc:
                 last_error = exc
                 retry_planned = attempt + 1 < attempt_limit

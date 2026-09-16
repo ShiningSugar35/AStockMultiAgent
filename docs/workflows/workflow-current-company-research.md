@@ -33,7 +33,7 @@ Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, wi
    - `SourceAccessRouter` is policy-driven rather than a fixed API→Browser chain: officiality, capability match, health, freshness, latency, cost/auth friction and retryability are scored, while strong official evidence retains hard priority and Manual remains last.
    - If a provider path needs adaptive recovery, Agent may propose a `ProviderRecoveryProposal`; only `adaptive-recovery-validate` may admit allowlisted capability-compatible paths.
    - Route unresolved bounded evidence questions to `$evidence-investigation` and cross-check material facts across independent authoritative sources where practical.
-   - Only after automatic provider and authoritative Web paths are exhausted may the user be asked for help, and all remaining actions must be consolidated into one checklist.
+   - After automatic provider and authoritative Web paths are exhausted, ask for help only for an explicitly identified private input or user authorization; consolidate such actions into one checklist. Public unavailability alone is not a user-material requirement.
 
 5. **Plan and formalize the research chain**
    - For current live research use `uv run astock research-plan <company_id> --mode LIVE` or `uv run astock research-run-company <company_id> --mode LIVE --institutional-research-required` without a question-time `--as-of`.
@@ -97,7 +97,7 @@ The current-company workflow is one durable request, not a sequence of user prom
 - `READY_FOR_INVESTOR_VIEW`: the complete lineage supports a formal recommendation.
 - `OBSERVATION_ONLY_FOR_INVESTOR_VIEW`: the complete lineage supports an explicitly labelled
   observation view, but at least one formal recommendation gate failed.
-- `NEEDS_USER_INPUT`: only bounded automatic-channel exhaustion or genuinely private source material may trigger a user request. User-supplied material resumes the same continuation.
+- `NEEDS_USER_INPUT`: only genuinely private source material or authorization may trigger a user request. Public-channel exhaustion uses `PUBLIC_DATA_UNAVAILABLE` without manual actions. User-supplied private material resumes the same continuation.
 
 Every internal continuation status must preserve `investment_conclusion_blocked=true`,
 `same_request_continuation_required=true`, and `broker_execution_allowed=false`; normal investor answers must not expose those backend fields. Public-source
@@ -118,3 +118,11 @@ become ready; role labels alone are not an implementation:
 Each Skill returns the exact typed role output, freezes its evidence lineage, records
 contradictions and abstains when its formal gate cannot be supported. The committee may consume
 only registered typed outputs from completed dependencies.
+
+## Recovery and optional source supplement
+
+Before returning any public-data `NEEDS_INFO`/unavailable result, the Agent must attempt the existing canonical acquisition, applicable alternate providers, and authoritative Web recovery within the current request budget. Use `research-supplemental-schema` and `research-supplemental-acquire <request.json> --live` for `market.reference.hint` (AKShare/Tushare) or `news.global.lead` (Finnhub) when relevant. Missing optional keys are a source availability issue, not missing investor input. BaoStock stays on the established reference route. Register the returned capture, inspect original-source provenance, and bring verified facts back through the failed canonical node; hint captures are not financial certification, independent EASTMONEY cross-checks, complete Universe proof, or publication permission.
+
+After public recovery is genuinely exhausted, `PUBLIC_DATA_UNAVAILABLE` records a bounded unresolved attempt with no private-material demand. Preserve acquired evidence and describe only the remaining uncertainty. Ask for user input only when it is actually private or requires their authorization. Do not let an unavailable source, incomplete intermediate artifact or exhausted budget trigger an endless full-graph rerun. LLM query/source/parse proposals remain allowed; truth, accounting, historical PIT and execution checks remain deterministic.
+
+Current implementation, validation scope and known limitations: `docs/architecture/adaptive-recovery-and-validation-v1.md`.

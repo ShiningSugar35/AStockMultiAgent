@@ -1,0 +1,91 @@
+version: validation-impact-v1
+# Risk controls determine WHAT must be tested; impact determines HOW MUCH.
+full_suite_paths:
+  - migrations/*
+  - src/astock/core/state.py
+  - src/astock/core/object_store.py
+  - src/astock/core/hashing.py
+  - src/astock/schemas/base.py
+  - src/astock/settings.py
+  - pyproject.toml
+  - uv.lock
+  - tests/conftest.py
+rules:
+  - name: documentation-contracts
+    changed: ['*.md', 'docs/*', '.agents/*', 'planning/*']
+    tests:
+      - tests/unit/test_document_governance.py
+      - tests/unit/test_workflow_docs.py
+      - tests/unit/test_repo_skills.py
+      - tests/unit/test_company_research_continuation_docs.py
+  - name: bounded-current-recovery
+    changed:
+      - src/astock/research/continuation*
+      - src/astock/schemas/research_continuation.py
+      - src/astock/research/acquisition.py
+    tests:
+      - tests/unit/test_current_research*.py
+      - tests/unit/test_adaptive_recovery_wp27.py
+      - tests/unit/test_research_team.py
+  - name: investment-closure
+    changed: [src/astock/investor_orchestration/closure.py]
+    tests:
+      - tests/unit/test_investment_request_closure.py
+      - tests/unit/test_investor_orchestration.py
+  - name: public-report-style
+    changed: [src/astock/research/report_style.py]
+    tests:
+      - tests/unit/test_presentation_gateway.py
+      - tests/unit/test_presentation_humanize_experiment.py
+  - name: source-routing-and-adapters
+    changed:
+      - src/astock/providers/*
+      - src/astock/core/source_*.py
+      - src/astock/market_data/reference*.py
+      - src/astock/schemas/provider.py
+      - configs/provider*.yaml
+      - configs/source*.yaml
+      - configs/market_reference.yaml
+      - configs/transport_profiles.yaml
+    tests:
+      - tests/unit/test_provider_*.py
+      - tests/unit/test_source_*.py
+      - tests/unit/test_reference_data_schemas.py
+      - tests/integration/test_market_reference.py
+      - tests/integration/test_provider_probe.py
+  - name: financial-domain
+    changed:
+      - src/astock/financial_sources/*
+      - src/astock/financial_integrity/*
+      - src/astock/schemas/financial*.py
+      - configs/financial*.yaml
+    tests:
+      - tests/unit/test_financial*.py
+      - tests/unit/test_candidate_financial_policy.py
+      - tests/unit/test_full_research_source_binding.py
+      - tests/integration/test_financial*.py
+  - name: validation-tooling
+    changed:
+      - scripts/plan_validation.py
+      - scripts/audit_gate_inventory.py
+      - scripts/run_local_quality.py
+      - configs/validation_impact.yaml
+    tests:
+      - tests/unit/test_validation_planning.py
+      - tests/unit/test_document_governance.py
+      - tests/unit/test_workflow_docs.py
+  - name: changed-tests
+    changed: ['tests/*']
+    tests: [tests/unit/test_validation_planning.py]
+  - name: supplemental-cli-wiring
+    changed: [src/astock/cli.py, src/astock/research/continuation_cli.py]
+    tests:
+      - tests/unit/test_provider_supplemental.py
+      - tests/unit/test_investor_orchestration.py
+      - tests/unit/test_open_source_audits.py
+      - tests/unit/test_current_research_productization.py
+  - name: optional-source-contracts
+    changed:
+      - src/astock/providers/supplemental*.py
+      - tests/fixtures/providers/*-hints-success.json
+    tests: [tests/unit/test_provider_supplemental.py]

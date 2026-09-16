@@ -38,7 +38,7 @@ Primary skill: `$evidence-investigation`.
    - Web material that cannot yet enter a formal artifact may support a clearly labelled provisional explanation, but cannot silently satisfy a frozen formal gate.
 
 6. **Manual intervention is last**
-   - Only after provider and authoritative Web paths are exhausted may manual user help be requested.
+   - Exhaust provider and authoritative Web recovery before escalation. Request manual user help only for explicitly identified private input or user authorization; a remaining public gap is an unresolved public-data result.
    - Aggregate all remaining requests into one checklist: exact document/action, why it matters, and what will resume after it is supplied.
 
 7. **Close the named gap only**
@@ -55,3 +55,11 @@ Normal investor-facing output should say the resolved fact or plain-language rem
 - Never call “no search result” proof of nonexistence.
 - Never upgrade community content into statutory/official authority.
 - Never ask the user to fetch a public authoritative source the Agent can obtain automatically.
+
+## Recovery and optional source supplement
+
+Before returning any public-data `NEEDS_INFO`/unavailable result, the Agent must attempt the existing canonical acquisition, applicable alternate providers, and authoritative Web recovery within the current request budget. Use `research-supplemental-schema` and `research-supplemental-acquire <request.json> --live` for `market.reference.hint` (AKShare/Tushare) or `news.global.lead` (Finnhub) when relevant. Missing optional keys are a source availability issue, not missing investor input. BaoStock stays on the established reference route. Register the returned capture, inspect original-source provenance, and bring verified facts back through the failed canonical node; hint captures are not financial certification, independent EASTMONEY cross-checks, complete Universe proof, or publication permission.
+
+After public recovery is genuinely exhausted, `PUBLIC_DATA_UNAVAILABLE` records a bounded unresolved attempt with no private-material demand. Preserve acquired evidence and describe only the remaining uncertainty. Ask for user input only when it is actually private or requires their authorization. Do not let an unavailable source, incomplete intermediate artifact or exhausted budget trigger an endless full-graph rerun. LLM query/source/parse proposals remain allowed; truth, accounting, historical PIT and execution checks remain deterministic.
+
+Current implementation, validation scope and known limitations: `docs/architecture/adaptive-recovery-and-validation-v1.md`.

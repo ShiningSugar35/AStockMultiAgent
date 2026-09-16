@@ -359,3 +359,60 @@ providers:
     probe_operation: macro-indicator
     probe_target: {indicator_code: "refined_oil_price"}
     recorded_fixture: tests/fixtures/providers/ndrc-pricing-policy-release-success.json
+  - provider_id: akshare-reference-hints
+    adapter_class: astock.providers.supplemental:AKShareHintProvider
+    capabilities: [market.reference.hint]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics: {market.reference.hint: DISCOVERY_ONLY}
+    independence_group: EASTMONEY
+    cache_ttl_seconds: 300
+    cost_class: LOW
+    transport: SDK_TCP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    priority: 20
+    probe_operation: supplemental-hints
+    probe_target: {symbol: "600519", market: XSHG, capability: market.reference.hint}
+    recorded_fixture: tests/fixtures/providers/akshare-reference-hints-success.json
+    optional_package: akshare
+    transport_profile: eastmoney-browser-v1
+  - provider_id: tushare-reference-hints
+    adapter_class: astock.providers.supplemental:TushareHintProvider
+    capabilities: [market.reference.hint]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics: {market.reference.hint: DISCOVERY_ONLY}
+    independence_group: TUSHARE
+    cache_ttl_seconds: 300
+    cost_class: LOW
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 10
+    priority: 20
+    probe_operation: supplemental-hints
+    probe_target: {symbol: "600519", market: XSHG, capability: market.reference.hint}
+    recorded_fixture: tests/fixtures/providers/tushare-reference-hints-success.json
+    credential_environment: TUSHARE_TOKEN
+    transport_profile: supplemental-auth-v1
+  - provider_id: finnhub-news-hints
+    adapter_class: astock.providers.supplemental:FinnhubNewsHintProvider
+    capabilities: [news.global.lead]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics: {news.global.lead: DISCOVERY_ONLY}
+    independence_group: FINNHUB
+    cache_ttl_seconds: 300
+    cost_class: LOW
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 10
+    priority: 20
+    probe_operation: supplemental-hints
+    probe_target: {symbol: "600519", market: XSHG, capability: news.global.lead}
+    recorded_fixture: tests/fixtures/providers/finnhub-news-hints-success.json
+    credential_environment: FINNHUB_API_KEY
+    transport_profile: supplemental-auth-v1

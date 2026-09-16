@@ -31,6 +31,9 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
         "pboc-monetary-policy-release",
         "mof-fiscal-policy-release",
         "ndrc-pricing-policy-release",
+        "akshare-reference-hints",
+        "tushare-reference-hints",
+        "finnhub-news-hints",
     ]
     assert "corporate_actions.ledger_ready" in registry.capability_gaps
     assert "financial.structured" not in registry.capability_gaps

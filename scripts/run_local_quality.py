@@ -19,7 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 def fingerprint() -> str:
     digest = hashlib.sha256()
     files = set(ROOT.glob("*.md")) | {ROOT / "pyproject.toml", ROOT / "uv.lock"}
-    for directory in ("src", "tests", "configs", "migrations", "planning", "docs", "scripts"):
+    for directory in (
+        "src", "tests", "configs", "migrations", "planning", "docs", "scripts", ".agents",
+    ):
         for path in (ROOT / directory).rglob("*"):
             if any(part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in path.parts):
                 continue
@@ -32,7 +34,16 @@ def fingerprint() -> str:
     return digest.hexdigest()
 
 
+def configure_console() -> None:
+    """Keep Windows legacy console encoding from aborting a valid test receipt."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def main() -> int:
+    configure_console()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tool", choices=("pytest", "ruff", "pyright", "python"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -102,10 +113,11 @@ def main() -> int:
             errors="replace",
         )
         assert process.stdout is not None
-        for line in process.stdout:
-            log.write(line)
-            log.flush()
-            print(line, end="", flush=True)
+        with process.stdout:
+            for line in process.stdout:
+                log.write(line)
+                log.flush()
+                print(line, end="", flush=True)
         child_exit_code = process.wait()
     after = fingerprint()
     result = {

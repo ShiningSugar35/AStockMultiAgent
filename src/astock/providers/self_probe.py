@@ -44,7 +44,27 @@ class ProviderSelfProbeRunner:
         started = time.perf_counter()
         provider = self.factory.create(definition.provider_id)
         operation = definition.probe_operation
-        if operation == "market-bars":
+        if operation == "supplemental-hints":
+            from astock.providers.supplemental import SupplementalRequest
+
+            fetch = getattr(provider, "fetch_hints", None)
+            if not callable(fetch):
+                raise ValueError("supplemental provider has no hint interface")
+            today = datetime.now(UTC).date()
+            request = SupplementalRequest.model_validate({
+                "capability": definition.probe_target["capability"],
+                "symbol": definition.probe_target["symbol"],
+                "market": definition.probe_target["market"],
+                "start": today - timedelta(days=7), "end": today,
+            })
+            capture = fetch(request)
+            if not isinstance(capture, tuple) or len(capture) != 2:
+                raise ValueError("supplemental capture must contain rows and a snapshot")
+            rows, _snapshot = capture
+            if not isinstance(rows, list):
+                raise ValueError("supplemental capture rows must be a list")
+            record_count, quality = len(rows), bool(rows)
+        elif operation == "market-bars":
             record_count, quality = self._market_bars(provider, definition.probe_target)
         elif operation == "reference-identity":
             record_count, quality = self._reference_identity(provider, definition.probe_target)
@@ -279,7 +299,12 @@ def checked_capabilities(definition: ProviderDefinition) -> list[str]:
 def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
     operation = definition.probe_operation
     capabilities = definition.capabilities
-    if operation == "market-bars":
+    if operation == "supplemental-hints":
+        selected = [
+            item for item in capabilities
+            if item in {"market.reference.hint", "news.global.lead"}
+        ]
+    elif operation == "market-bars":
         selected = [item for item in capabilities if item.startswith("market.raw_")]
     elif operation == "reference-identity":
         selected = [item for item in capabilities if item == "instrument.identity"]

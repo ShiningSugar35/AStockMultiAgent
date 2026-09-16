@@ -72,6 +72,8 @@ class ProviderDefinition(_StrictModel):
         default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
     )
     production_backup: bool = False
+    credential_environment: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]+$")
+    optional_package: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]*$")
 
     @field_validator("capabilities")
     @classmethod

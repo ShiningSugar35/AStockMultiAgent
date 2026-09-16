@@ -25,6 +25,7 @@ class InvestmentClosureState(StrEnum):
     CONTINUE_AUTOMATICALLY = "CONTINUE_AUTOMATICALLY"
     READY_FOR_INVESTOR_VIEW = "READY_FOR_INVESTOR_VIEW"
     NEEDS_USER_INPUT = "NEEDS_USER_INPUT"
+    PUBLIC_DATA_UNAVAILABLE = "PUBLIC_DATA_UNAVAILABLE"
 
 
 class InvestmentClosureDecision(StrictModel):
@@ -150,11 +151,15 @@ class InvestmentRequestClosurePolicy:
         return InvestmentClosureDecision(
             request_id=request.request_id,
             intent=request.normalized_intent,
-            state=InvestmentClosureState.CONTINUE_AUTOMATICALLY,
+            state=(
+                InvestmentClosureState.PUBLIC_DATA_UNAVAILABLE
+                if automatic_resolution_exhausted
+                else InvestmentClosureState.CONTINUE_AUTOMATICALLY
+            ),
             required_capabilities=required,
             completed_capabilities=completed,
             missing_capabilities=missing,
-            same_request_continuation_required=True,
+            same_request_continuation_required=not automatic_resolution_exhausted,
             investment_conclusion_blocked=True,
             investor_view_allowed=False,
             automatic_resolution_exhausted=automatic_resolution_exhausted,

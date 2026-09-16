@@ -8,6 +8,7 @@ from typing import Annotated, Any
 
 import typer
 
+from astock.providers.supplemental_cli import register_supplemental_commands
 from astock.research.continuation import CurrentResearchContinuationService
 from astock.schemas.research_continuation import (
     CurrentResearchAutomaticResolution,
@@ -22,6 +23,8 @@ def register_current_research_continuation_commands(
     emit: Callable[[Any], None],
 ) -> None:
     """Register durable acquisition, evidence binding, team, and readiness transitions."""
+
+    register_supplemental_commands(app, services, emit)
 
     def continuation() -> CurrentResearchContinuationService:
         paths, state, objects = services()

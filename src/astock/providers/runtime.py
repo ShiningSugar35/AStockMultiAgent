@@ -7,9 +7,12 @@ Core services ask for a capability or provider id; they do not know constructor 
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import inspect
 import json
+import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, TypeVar
@@ -64,6 +67,16 @@ class TransportProfile:
     retry_status_codes: tuple[int, ...] = (502, 503, 504)
     retry_methods: tuple[str, ...] = ("GET", "HEAD")
 
+    @property
+    def lane_trust_env(self) -> tuple[bool, ...]:
+        """One versioned lane interpretation shared by HTTP and isolated SDKs."""
+        return {
+            "ENV_ONLY": (True,),
+            "DIRECT_ONLY": (False,),
+            "ENV_THEN_DIRECT": (True, False),
+            "DIRECT_THEN_ENV": (False, True),
+        }[self.proxy_strategy]
+
 
 class ProviderFactory:
     """Instantiate provider adapters from the versioned provider registry."""
@@ -87,6 +100,7 @@ class ProviderFactory:
         self.fixture_scope = fixture_scope.resolve() if fixture_scope is not None else None
         self.dialects = dialects or {}
         self.source_breaker = SourceCircuitBreaker(state)
+        self.clock = lambda: datetime.now(UTC)
         self.external_capabilities = ExternalCapabilityService(
             resolve_project_root(module_file=Path(__file__)), state, objects
         )
@@ -212,6 +226,17 @@ class ProviderFactory:
             and report.failure_code is ProviderProbeFailureCode.CAPABILITY_NOT_PROBED
         ):
             return ProviderHealthStatus.HEALTHY
+        if (
+            report.status is ProviderHealthStatus.UNAVAILABLE
+            and report.failure_code in {
+                ProviderProbeFailureCode.NETWORK, ProviderProbeFailureCode.TIMEOUT,
+            }
+            and (self.clock() - report.completed_at).total_seconds()
+            >= self.source_breaker.policy.cooldown_seconds
+        ):
+            # A transient probe is not an eternal veto. Re-enter the canonical
+            # circuit/validation path without rewriting evidence or asserting health.
+            return ProviderHealthStatus.NOT_PROBED
         return report.status
 
     def catalog_capabilities(self, capability: str) -> list[TransportCapability]:
@@ -288,6 +313,16 @@ class ProviderFactory:
             ProviderHealthStatus.UNAVAILABLE,
             ProviderHealthStatus.CORRUPT,
         }
+        # Missing optional setup is a route availability fact, never a request
+        # for private investment inputs. Do not import SDKs or disclose key values.
+        setup_ready = (
+            not definition.credential_environment
+            or bool(os.environ.get(definition.credential_environment, "").strip())
+        ) and (
+            not definition.optional_package
+            or importlib.util.find_spec(definition.optional_package) is not None
+        )
+        available = available and setup_ready
         semantics = definition.completeness_semantics.get(
             capability, CompletenessSemantics.NOT_APPLICABLE
         )
@@ -355,7 +390,7 @@ class ProviderFactory:
             freshness_score=freshness_score,
             latency_ms=0,
             cost_efficiency_score=cost_efficiency,
-            auth_ease_score=Decimal("1"),
+            auth_ease_score=Decimal("1") if setup_ready else Decimal("0"),
             retryable_failure=health_status == ProviderHealthStatus.DEGRADED.value,
             production_backup=definition.production_backup,
             external_capability_id=definition.external_capability_id,
@@ -455,6 +490,11 @@ class ProviderFactory:
             kwargs["object_store"] = self.objects
         if "state" in parameters:
             kwargs["state"] = self.state
+        if "transport_profile" in parameters and definition.transport_profile:
+            try:
+                kwargs["transport_profile"] = self.profiles[definition.transport_profile]
+            except KeyError as exc:
+                raise ValueError("Provider SDK transport profile is unavailable") from exc
         if "fixture_root" in parameters:
             subdir = Path(definition.fixture_subdir or "")
             if self.fixture_scope is not None and definition.fixture_subdir:
@@ -586,17 +626,11 @@ def _build_resilient_client(
     *,
     elapsed_budget_seconds: float,
 ) -> ResilientHttpClient:
-    lanes = {
-        "ENV_ONLY": (True,),
-        "DIRECT_ONLY": (False,),
-        "ENV_THEN_DIRECT": (True, False),
-        "DIRECT_THEN_ENV": (False, True),
-    }[profile.proxy_strategy]
     return ResilientHttpClient(
         timeout_seconds=profile.timeout_seconds,
         follow_redirects=profile.follow_redirects,
         headers=profile.headers,
-        lane_trust_env=lanes,
+        lane_trust_env=profile.lane_trust_env,
         max_attempts=profile.max_attempts,
         backoff_seconds=profile.backoff_seconds,
         jitter_seconds=profile.jitter_seconds,

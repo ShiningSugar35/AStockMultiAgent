@@ -41,6 +41,7 @@ from astock.schemas.candidates import (
     CandidateRecord,
     CandidateScanRequest,
     CandidateScanStatus,
+    CandidateSignalDisposition,
     CandidateSignalType,
     CandidateSourceMode,
     CandidateTradability,
@@ -83,6 +84,7 @@ def _release(
     source_mode: CandidateSourceMode = CandidateSourceMode.LOCAL,
     company_id_override: str | None = None,
     proven_company_ids: list[str] | None = None,
+    research_seed_origins: list[str] | None = None,
 ) -> CandidateInputRelease:
     available_at = as_of - timedelta(hours=1)
     roles = [
@@ -216,6 +218,12 @@ def _release(
                 )
             ]
             if include_signals
+            else []
+        ),
+        research_seed_origins=sorted(research_seed_origins or []),
+        research_seed_reason_codes=(
+            ["LONG_HORIZON_VALUE_RESEARCH_SEED"]
+            if research_seed_origins and "LONG_HORIZON_VALUE" in research_seed_origins
             else []
         ),
         financial_flags=(
@@ -410,9 +418,44 @@ def test_candidate_scan_vertical_emits_all_signals_and_audits(
         objects.get_bytes(str(manifest_row["manifest_object_hash"]))
     )
     signals = service.parquet.read_signals(manifest.descriptor)
-    assert {item.signal_type for item in signals} == set(CandidateSignalType)
+    assert {item.signal_type for item in signals} == set(CandidateSignalType) - {
+        CandidateSignalType.RESEARCH_SEED_PRIOR
+    }
     assert service.audit(report.scan_id).status.value == "PASS"
     assert "中文候选运行时" in str(service.parquet.root)
+
+
+def test_long_horizon_value_seed_prior_can_enter_research_ready_without_short_term_event(
+    candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
+) -> None:
+    service, state, objects = candidate_runtime
+    as_of = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    release = _release(
+        state,
+        objects,
+        "release:value-prior",
+        as_of,
+        include_signals=False,
+        research_seed_origins=["LONG_HORIZON_VALUE"],
+    )
+    report = service.scan(_request(service, release))
+    record = service.status(scan_id=report.scan_id)["records"][0]
+    assert record.lifecycle_status is CandidateLifecycleStatus.RESEARCH_READY
+    assert record.strength.value == "MODERATE"
+    manifest_row = service.repository.get_signal_manifest(report.scan_id)
+    assert manifest_row is not None
+    from astock.schemas.candidates import CandidateSignalManifest
+
+    manifest = CandidateSignalManifest.model_validate_json(
+        objects.get_bytes(str(manifest_row["manifest_object_hash"]))
+    )
+    signals = service.parquet.read_signals(manifest.descriptor)
+    prior = next(
+        item for item in signals if item.signal_type is CandidateSignalType.RESEARCH_SEED_PRIOR
+    )
+    assert prior.disposition is CandidateSignalDisposition.SUPPORT
+    assert "RESEARCH_PRIORITY_ONLY" in prior.reason_codes
+    assert "SEED_ORIGIN:LONG_HORIZON_VALUE" in prior.reason_codes
 
 
 def test_price_volume_or_watchlist_alone_never_becomes_research_ready(

@@ -479,6 +479,7 @@ def _build_receipt(
     financial_veto: bool = False,
     governance_veto: bool = False,
     all_ineligible: bool = False,
+    ineligible_reason: str = "VALUATION_TOO_HIGH",
     dominant_exposure: str | None = None,
     holding_action: Literal["HOLD", "ADD", "TRIM", "EXIT", "REVIEW"] | None = None,
 ):
@@ -536,7 +537,7 @@ def _build_receipt(
             factor,
             industry_id=f"IND-{index + 1}",
             eligible=not all_ineligible,
-            reason="VALUATION_TOO_HIGH" if all_ineligible else None,
+            reason=ineligible_reason if all_ineligible else None,
         )
         for index, (code, factor) in enumerate(zip(codes, factors, strict=True))
     )
@@ -695,6 +696,21 @@ def test_existing_holding_receipt_requires_and_preserves_holding_action() -> Non
     assert "现有持仓处置" in projected["conclusion"]
     assert any("减仓" in item for item in projected["actions"])
     assert any("下一份正式财报" in item for item in projected["change_conditions"])
+
+
+def test_committee_watch_is_presented_as_observation_not_hard_rejection() -> None:
+    service = FullResearchRecommendationService()
+    receipt = _build_receipt(
+        service,
+        _request("推荐现在可以买的股票", request_id="watch-public"),
+        all_ineligible=True,
+        ineligible_reason="COMMITTEE_WATCH",
+    )
+    projected = VerifiedAnswerProjector._full_research_decision(
+        cast(Any, SimpleNamespace(outputs={"FULL_RESEARCH_GATE": (receipt,)}))
+    )
+    assert any("重点观察" in item and "600001" in item for item in projected["reasons"])
+    assert not any("暂不考虑" in item for item in projected["reasons"])
 
 
 def test_holding_add_cannot_bypass_candidate_admission() -> None:
@@ -1122,6 +1138,34 @@ def test_receipt_can_be_persisted_replayed_offline_and_auto_enrolled_for_trackin
     assert replay["position_count"] == 1
     watchlist = store.subject_events(event_types=("MONITOR_ENROLLED",))
     assert any(item.artifact_id == receipt.receipt_id for item in watchlist)
+
+
+def test_committee_watch_candidate_enters_observation_watchlist(tmp_path: Path) -> None:
+    store = InvestorOrchestrationStore(tmp_path / "state.sqlite")
+    store.initialize()
+    service = FullResearchRecommendationService(store)
+    receipt = _build_receipt(
+        service,
+        _request("推荐现在可以买的股票"),
+        all_ineligible=True,
+        ineligible_reason="COMMITTEE_WATCH",
+    )
+    assert receipt.publication.formal_recommendation_allowed
+    assert not receipt.portfolio.positions
+    watchlist = store.subject_events(event_types=("WATCHLIST_ADDED",))
+    assert any(
+        item.instrument_id == "600001.XSHG" and item.artifact_id == receipt.receipt_id
+        for item in watchlist
+    )
+
+
+def test_hard_rejected_candidate_does_not_enter_observation_watchlist(tmp_path: Path) -> None:
+    store = InvestorOrchestrationStore(tmp_path / "state.sqlite")
+    store.initialize()
+    service = FullResearchRecommendationService(store)
+    receipt = _build_receipt(service, _request("推荐现在可以买的股票"), all_ineligible=True)
+    assert receipt.publication.formal_recommendation_allowed
+    assert store.subject_events(event_types=("WATCHLIST_ADDED",)) == ()
 
 
 def test_receipt_tamper_is_detected() -> None:

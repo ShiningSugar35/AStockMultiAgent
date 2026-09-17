@@ -24,15 +24,16 @@ acquisition:
     STANDARD: 3
     HIGH_RESOURCE: 4
   max_deep_candidates_by_resource:
-    LOW_RESOURCE: 6
-    STANDARD: 8
-    HIGH_RESOURCE: 10
+    LOW_RESOURCE: 8
+    STANDARD: 12
+    HIGH_RESOURCE: 16
   same_run_snapshot_reuse: true
   max_retry_rounds: 3
 discovery:
-  max_total_seeds: 40
-  max_market_seeds: 20
-  max_breadth_challenger_seeds: 6
+  max_total_seeds: 80
+  max_market_seeds: 40
+  max_breadth_challenger_seeds: 12
+  max_long_horizon_value_seeds: 16
   breadth_min_market_score_ratio: 0.82
   breadth_max_boards_per_domain: 3
   max_expert_seeds_per_author: 10

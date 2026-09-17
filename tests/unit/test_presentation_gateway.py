@@ -291,6 +291,31 @@ def test_normalization_preserves_critical_financial_facts(text: str) -> None:
     assert "综上所述" not in normalized
 
 
+def test_investor_scenario_terms_are_chinese_and_internal_freeze_wording_is_removed() -> None:
+    text = "BEAR 8.24 元，BASE 24.73 元，BULL 49.45 元；冻结估值基于冻结快照。"
+    normalized = normalize_public_text(text)
+    assert "空头看跌 8.24 元" in normalized
+    assert "基准情景 24.73 元" in normalized
+    assert "多头看涨 49.45 元" in normalized
+    assert "冻结估值" not in normalized
+    assert "冻结快照" not in normalized
+    assert "估值基于当前资料" in normalized
+    assert extract_fact_fingerprint(normalized) == extract_fact_fingerprint(text)
+
+
+def test_investor_term_translation_does_not_rewrite_unrelated_words_or_real_freeze_events() -> None:
+    text = (
+        "Database coverage 98%，Bullishness 不是本轮公开结论；"
+        "asset base 与 cost base 保持原义；股权冻结风险仍需核实。"
+    )
+    normalized = normalize_public_text(text)
+    assert "Database" in normalized
+    assert "Bullishness" in normalized
+    assert "asset base" in normalized
+    assert "cost base" in normalized
+    assert "股权冻结风险" in normalized
+
+
 @pytest.mark.parametrize("text", _SECRET_OR_PATH_TEXTS)
 def test_secret_or_private_path_is_explicitly_reported(text: str) -> None:
     audit = audit_public_answer(text)

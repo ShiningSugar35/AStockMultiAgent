@@ -70,6 +70,7 @@ class ResearchTeamPolicy:
     skill_share_gate_enabled: bool
     reserve_blind_market_tranche: bool
     max_breadth_challenger_seeds: int
+    max_long_horizon_value_seeds: int
     breadth_min_market_score_ratio: float
     breadth_max_boards_per_domain: int
     expert_overlay_max_priority_bonus: float
@@ -152,6 +153,9 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
         skill_share_gate_enabled=bool(discovery.get("skill_share_gate_enabled")),
         reserve_blind_market_tranche=bool(discovery.get("reserve_blind_market_tranche")),
         max_breadth_challenger_seeds=int(discovery.get("max_breadth_challenger_seeds", 0)),
+        max_long_horizon_value_seeds=int(
+            discovery.get("max_long_horizon_value_seeds", 0)
+        ),
         breadth_min_market_score_ratio=float(
             discovery.get("breadth_min_market_score_ratio", 0.0)
         ),
@@ -181,6 +185,8 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
         raise ValueError("blind market tranche reservation must remain enabled")
     if not 0 <= policy.max_breadth_challenger_seeds <= 20:
         raise ValueError("breadth challenger seed budget is outside governance bounds")
+    if not 0 <= policy.max_long_horizon_value_seeds <= 30:
+        raise ValueError("long-horizon value seed budget is outside governance bounds")
     if not 0 <= policy.breadth_min_market_score_ratio <= 1:
         raise ValueError("breadth challenger market-score ratio is outside 0..1")
     if not 1 <= policy.breadth_max_boards_per_domain <= 8:

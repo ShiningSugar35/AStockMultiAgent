@@ -12,6 +12,23 @@ _STATUS_LABEL = re.compile(
     re.I,
 )
 
+# Investor-facing terminology translation. Internal artifact/state names remain
+# available in developer diagnostics but never appear as public prose. Scenario
+# tokens use bounded regexes so ordinary English words are not accidentally edited.
+_PUBLIC_TERM_PATTERNS = (
+    (re.compile(r"(?<![A-Za-z])(?:BearCase|BEAR_CASE|Bear Case)(?![A-Za-z])", re.I), "空头看跌"),
+    (re.compile(r"(?<![A-Za-z])(?:BaseCase|BASE_CASE|Base Case)(?![A-Za-z])", re.I), "基准情景"),
+    (re.compile(r"(?<![A-Za-z])(?:BullCase|BULL_CASE|Bull Case)(?![A-Za-z])", re.I), "多头看涨"),
+    (re.compile(r"(?<![A-Za-z])BEAR(?=\s*[:：]?\s*[-+]?\d)"), "空头看跌"),
+    (re.compile(r"(?<![A-Za-z])BASE(?=\s*[:：]?\s*[-+]?\d)"), "基准情景"),
+    (re.compile(r"(?<![A-Za-z])BULL(?=\s*[:：]?\s*[-+]?\d)"), "多头看涨"),
+    (re.compile(r"冻结估值"), "估值"),
+    (re.compile(r"冻结价格"), "价格"),
+    (re.compile(r"冻结数据"), "数据"),
+    (re.compile(r"冻结快照"), "当前资料"),
+    (re.compile(r"冻结证据"), "现有证据"),
+)
+
 
 def public_status_text(text: str) -> str:
     """Translate standalone machine states only; arbitrary diagnostic sentences stay rejected.
@@ -19,6 +36,8 @@ def public_status_text(text: str) -> str:
     NEEDS_INFO alone does not prove that public recovery was exhausted or that
     private input is needed. The caller must state a genuine manual gap explicitly.
     """
+    for pattern, target in _PUBLIC_TERM_PATTERNS:
+        text = pattern.sub(target, text)
     match = _STATUS_LABEL.fullmatch(text)
     if match is None:
         return text

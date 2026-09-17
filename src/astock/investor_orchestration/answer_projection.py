@@ -247,9 +247,22 @@ def _full_research_no_buy(
     *,
     requested_details: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    rejected = "、".join(_code(instrument) for instrument in sorted(receipt.rejected_candidates))
+    watch = "、".join(
+        _code(instrument)
+        for instrument, rejection_reasons in sorted(receipt.rejected_candidates.items())
+        if set(rejection_reasons) == {"COMMITTEE_WATCH"}
+    )
+    rejected = "、".join(
+        _code(instrument)
+        for instrument, rejection_reasons in sorted(receipt.rejected_candidates.items())
+        if set(rejection_reasons) != {"COMMITTEE_WATCH"}
+    )
+    if watch:
+        reasons.append(
+            f"重点观察：{watch}；研究逻辑尚未转化为当前组合仓位，继续等待估值、安全边际或入场条件改善。"
+        )
     if rejected:
-        reasons.append(f"被淘汰候选：{rejected}；至少一项估值、质量、治理、证据或组合约束未达标。")
+        reasons.append(f"暂不考虑：{rejected}；至少一项估值、质量、治理、证据或组合约束未达标。")
     holding_reasons, holding_risks, holding_actions, holding_conditions = _holding_review_fields(
         receipt, requested_details=requested_details
     )

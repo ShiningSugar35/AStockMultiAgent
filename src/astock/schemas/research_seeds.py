@@ -30,6 +30,7 @@ class ResearchSeedOrigin(StrEnum):
     EXISTING_CANDIDATE = "EXISTING_CANDIDATE"
     MARKET = "MARKET"
     BREADTH_CHALLENGER = "BREADTH_CHALLENGER"
+    LONG_HORIZON_VALUE = "LONG_HORIZON_VALUE"
     EXPERT_SKILL = "EXPERT_SKILL"
 
 
@@ -84,6 +85,12 @@ class ResearchSeed(AStockModel):
     amount_cny: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     turnover_rate: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     float_market_cap_cny: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    industry_label: str | None = None
+    pe_ttm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    pb_mrq: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    long_horizon_value_score: float | None = Field(
+        default=None, ge=0, le=1, allow_inf_nan=False
+    )
     candidate_version_id: str | None = None
     candidate_strength: str | None = None
     expert_author_source_ids: list[str] = Field(default_factory=list)
@@ -117,9 +124,13 @@ class ResearchSeed(AStockModel):
 class ResearchSeedRequest(AStockModel):
     schema_version: str = "research-seed-request-v1"
     as_of: AwareDatetime
-    max_total_seeds: int = Field(default=40, ge=5, le=100)
-    max_market_seeds: int = Field(default=20, ge=0, le=60)
-    max_breadth_challenger_seeds: int = Field(default=6, ge=0, le=20)
+    # Expand research breadth without lowering downstream quality gates. More
+    # seeds enter the research funnel; Committee and Publication rules remain
+    # unchanged.
+    max_total_seeds: int = Field(default=80, ge=5, le=100)
+    max_market_seeds: int = Field(default=40, ge=0, le=60)
+    max_breadth_challenger_seeds: int = Field(default=12, ge=0, le=20)
+    max_long_horizon_value_seeds: int = Field(default=16, ge=0, le=30)
     breadth_min_market_score_ratio: float = Field(default=0.82, ge=0, le=1)
     breadth_max_boards_per_domain: int = Field(default=3, ge=1, le=8)
     max_expert_seeds_per_author: int = Field(default=10, ge=0, le=30)
@@ -155,6 +166,8 @@ class ResearchSeedReport(AStockModel):
     formal_full_market_coverage_allowed: bool = False
     market_seed_count: int = Field(ge=0)
     breadth_seed_count: int = Field(default=0, ge=0)
+    long_horizon_value_seed_count: int = Field(default=0, ge=0)
+    selected_industry_counts: dict[str, int] = Field(default_factory=dict)
     blind_breadth_domain_counts: dict[str, int] = Field(default_factory=dict)
     selected_breadth_domain_counts: dict[str, int] = Field(default_factory=dict)
     expert_seed_count: int = Field(ge=0)

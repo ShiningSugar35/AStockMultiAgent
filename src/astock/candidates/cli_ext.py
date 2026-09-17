@@ -185,8 +185,9 @@ def register_candidate_input_commands(
     def research_seeds(
         as_of: Annotated[str | None, typer.Option("--as-of")] = None,
         live: Annotated[bool, typer.Option("--live")] = False,
-        max_total_seeds: Annotated[int, typer.Option(min=5, max=100)] = 40,
-        max_market_seeds: Annotated[int, typer.Option(min=0, max=60)] = 20,
+        max_total_seeds: Annotated[int, typer.Option(min=5, max=100)] = 80,
+        max_market_seeds: Annotated[int, typer.Option(min=0, max=60)] = 40,
+        max_long_horizon_value_seeds: Annotated[int | None, typer.Option(min=0, max=30)] = None,
         max_expert_seeds_per_author: Annotated[int, typer.Option(min=0, max=30)] = 10,
     ) -> None:
         timestamp = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
@@ -199,6 +200,11 @@ def register_candidate_input_commands(
             max_total_seeds=max_total_seeds,
             max_market_seeds=max_market_seeds,
             max_breadth_challenger_seeds=team_policy.max_breadth_challenger_seeds,
+            max_long_horizon_value_seeds=(
+                team_policy.max_long_horizon_value_seeds
+                if max_long_horizon_value_seeds is None
+                else max_long_horizon_value_seeds
+            ),
             breadth_min_market_score_ratio=team_policy.breadth_min_market_score_ratio,
             breadth_max_boards_per_domain=team_policy.breadth_max_boards_per_domain,
             max_expert_seeds_per_author=max_expert_seeds_per_author,
@@ -223,7 +229,7 @@ def register_candidate_input_commands(
     def research_seeds_promote(
         seed_report_artifact_id: Annotated[str, typer.Argument()],
         live: Annotated[bool, typer.Option("--live")] = False,
-        max_seeds: Annotated[int, typer.Option(min=1, max=60)] = 20,
+        max_seeds: Annotated[int, typer.Option(min=1, max=60)] = 60,
     ) -> None:
         request = SeedPromotionRequest(
             seed_report_artifact_id=seed_report_artifact_id,

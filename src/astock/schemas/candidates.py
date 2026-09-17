@@ -73,6 +73,7 @@ class CandidateHoldingChange(StrEnum):
 class CandidateSignalType(StrEnum):
     ANNOUNCEMENT_EVENT = "ANNOUNCEMENT_EVENT"
     FINANCIAL_ANOMALY = "FINANCIAL_ANOMALY"
+    RESEARCH_SEED_PRIOR = "RESEARCH_SEED_PRIOR"
     PRICE_VOLUME_CLUE = "PRICE_VOLUME_CLUE"
     USER_WATCHLIST = "USER_WATCHLIST"
     HOLDING_REVIEW = "HOLDING_REVIEW"
@@ -325,6 +326,8 @@ class CandidateCompanyInput(AStockModel):
     daily_points: list[CandidateDailyPoint] = Field(default_factory=list)
     announcement_events: list[CandidateAnnouncementEvent] = Field(default_factory=list)
     financial_flags: list[CandidateFinancialFlag] = Field(default_factory=list)
+    research_seed_origins: list[str] = Field(default_factory=list)
+    research_seed_reason_codes: list[str] = Field(default_factory=list)
     watchlist_intents: list[CandidateWatchlistIntent] = Field(default_factory=list)
     holding_observations: list[CandidateHoldingObservation] = Field(default_factory=list)
 
@@ -339,6 +342,9 @@ class CandidateCompanyInput(AStockModel):
             raise ValueError("only indices may be INDEX_CONTEXT")
         if len({item.session_date for item in self.daily_points}) != len(self.daily_points):
             raise ValueError("daily point session dates must be unique")
+        for values in (self.research_seed_origins, self.research_seed_reason_codes):
+            if values != sorted(set(values)):
+                raise ValueError("candidate research-seed metadata must be sorted and unique")
         return self
 
 

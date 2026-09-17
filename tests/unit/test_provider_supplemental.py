@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -21,6 +21,7 @@ from astock.providers.supplemental import (
     _sdk_environment,
     normalize_daily,
 )
+from astock.schemas import SourceSnapshot
 from tests.unit.test_current_research_continuation import PROJECT_ROOT, _runtime
 
 
@@ -210,6 +211,78 @@ def test_finnhub_header_and_news_scope(tmp_path, monkeypatch):
     assert "token" not in str(seen[0].url).lower()
     assert snapshot.source_id == "finnhub-news-hints"
     assert len(rows) == 1
+
+
+def test_finnhub_rotates_comma_separated_keys_on_access_failure(tmp_path, monkeypatch):
+    _, state, objects = _runtime(tmp_path)
+    monkeypatch.setenv(
+        "FINNHUB_API_KEY",
+        "synthetic-key-a, synthetic-key-b, synthetic-key-c",
+    )
+    seen = []
+
+    def transport(incoming):
+        token = incoming.headers["X-Finnhub-Token"]
+        seen.append(token)
+        if token in {"synthetic-key-a", "synthetic-key-b"}:
+            return httpx.Response(403, json={"error": "denied"})
+        return httpx.Response(200, json=[{
+            "headline": "Recovered news", "url": "https://example.org/recovered",
+            "datetime": 1788220800, "source": "Example",
+        }])
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        rows, snapshot = FinnhubNewsHintProvider(objects, state, client=client).fetch_hints(
+            request("news.global.lead")
+        )
+    assert seen == ["synthetic-key-a", "synthetic-key-b", "synthetic-key-c"]
+    assert snapshot.source_id == "finnhub-news-hints"
+    assert rows[0]["title"] == "Recovered news"
+
+
+def test_news_discovery_collects_all_independent_live_sources(tmp_path, monkeypatch):
+    _, state, objects = _runtime(tmp_path)
+    monkeypatch.setenv("FINNHUB_API_KEY", "synthetic-news-test-key")
+    service = SupplementalEvidenceService(PROJECT_ROOT, state, objects)
+    definitions = service.factory.definitions_for_capability("news.discovery.lead")
+    provider_ids = {item.provider_id for item in definitions}
+    assert {"gdelt-news-leads", "finnhub-news-hints"} <= provider_ids
+
+    def fake_provider(provider_id):
+        def fetch_hints(_request):
+            now = datetime.now(UTC)
+            ref = objects.put_json({"provider_id": provider_id, "captured_at": now.isoformat()})
+            snapshot = SourceSnapshot(
+                snapshot_id=f"{provider_id}:{ref.sha256}",
+                source_id=provider_id,
+                object_sha256=ref.sha256,
+                fetched_at=now,
+                available_to_system_at=now,
+                source_url=f"https://example.org/{provider_id}",
+                mime="application/json",
+                byte_size=ref.byte_size,
+            )
+            state.register_snapshot(snapshot)
+            return ([{
+                "title": f"{provider_id} lead",
+                "url": f"https://example.org/{provider_id}/lead",
+                "published_at": now.isoformat(),
+                "publisher": provider_id,
+            }], snapshot)
+
+        return SimpleNamespace(fetch_hints=fetch_hints)
+
+    monkeypatch.setattr(service.factory, "create", fake_provider)
+    result = service.collect(request("news.discovery.lead"), live=True)
+    assert result["multi_source_news_attempted"] is True
+    assert set(result["independence_groups"]) >= {"GDELT", "FINNHUB"}
+    assert {item["provider_id"] for item in result["captures"]} >= {
+        "gdelt-news-leads",
+        "finnhub-news-hints",
+    }
+    assert sum(item["status"] == "CAPTURED" for item in result["attempts"]) >= 2
+    assert result["automatic_recovery_next"].startswith("OFFICIAL_WEB")
+    assert result["formal_use_allowed"] is False
 
 
 def test_worker_timeout_and_error_privacy(tmp_path, monkeypatch):

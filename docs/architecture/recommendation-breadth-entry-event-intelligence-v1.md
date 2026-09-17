@@ -36,7 +36,17 @@ breadth challenger 只允许：
 
 它不得替代 blind top-N，不得因某行业缺失而放松公司质量，不得使用 Serenity/Knowledge Skill 数量作为行业公平性打分。其 `BREADTH_CHALLENGER` origin 只表示“获得额外研究机会”，仍需 Promotion → Candidate → Company Research → Committee → Portfolio → Publication Gate。公共行业板块 taxonomy/constituent 只用于更细粒度增强与 Expert overlay；live 路由成功后会把已验证 Snapshot 与规范化 payload 指针冻结到本地 checkpoint，30 日内端点故障时可复用不可变缓存。即使该板块接口和缓存都不可用，breadth 仍优先使用交易所官方 master 的一级/细分行业字段；只有官方 master 也缺行业映射时 breadth 才显式降级，而 pure blind 始终继续运行。
 
-### 2.3 行业中性发现，不等于 Skills 数量平权
+### 2.3 长周期价值 challenger 与行业轮转
+
+长期持有/价值投资不能只依赖成交活跃度发现。当前发现预算因此分成互不替代的三条支线：默认最多 80 个 ResearchSeed，其中 pure blind market tranche 最多 40 个，`BREADTH_CHALLENGER` 最多 12 个，`LONG_HORIZON_VALUE` 最多 16 个；Promotion 默认最多推进 60 个 Seed。真正昂贵的公司深研继续按资源档限制为 LOW 8 / STANDARD 12 / HIGH 16 个，避免把“扩大研究面”变成全市场逐股 LLM 深研。
+
+`LONG_HORIZON_VALUE` 只在 pure blind 成员之外分配额外研究机会。当前确定性优先级由低 PE 相对分位 35%、低 PB 相对分位 30%、规模 20%、低换手 15% 组合；这些字段来自当前 market snapshot，只表达“值得进一步研究”，不是正式估值、目标价或买入信号。缺失 PE/PB 时不得猜值，相关股票只失去这条 challenger 的相应优势，不影响 pure blind 公平性。
+
+行业分散只作用于这笔额外价值研究预算：使用交易所官方 Instrument Master 穿透的行业描述分桶，在同等 bounded budget 下先跨行业轮转，再从同一行业取第二只；没有行业标签时退化为按市场区分的“未分类”桶而不是终止发现。该机制不是行业等权配额，也不会重排 pure blind。`ResearchSeedReport.selected_industry_counts` 只记录研究预算实际覆盖，供审计与后续复盘。
+
+无论来自 pure blind、breadth 还是 long-horizon value，Seed 都永久 `recommendation_allowed=false`；后续必须继续经过 Promotion → Candidate → Company Research → Financial/Governance → Forecast/Valuation → 独立多空与 Review → Committee → Portfolio → Publication Gate。
+
+### 2.4 行业中性发现，不等于 Skills 数量平权
 
 当前私人/博主 Skills 的来源在部分资源、有色、科技链更密集，因此禁止用“每个行业补齐相同数量 Skills”来制造表面均衡。正确分工是：
 
@@ -49,6 +59,12 @@ breadth challenger 只允许：
 - **方法论来源不是公司事实来源**：所有 public-core methodology 均固定 `fact_authority_allowed=false`、`recommendation_allowed=false`；FDIC/FDA/USDA 等境外来源只提供“应该看什么/如何分析”的方法，A 股公司的当前事实仍必须来自本轮交易所/CNINFO/发行人/监管/合格行业证据。当前已知 22 个 archetype 全部具备专项包；未来新增 archetype 若专项包尚未同步，则自动 `ARCHETYPE_FALLBACK → GENERIC_COMPETITIVE_CORE`，完全未分类查询则 `GENERIC_FALLBACK`，方法包缺失本身不得终止研究。
 
 因此 breadth 的目标是减少“研究机会被热点行业垄断”，公共方法论负责让非热门行业也具备稳定的 core research depth；私人 Skills 则继续提供可能有 alpha 的差异化 edge，而不是 readiness 前置门。
+
+### 2.5 正式组合、重点观察与暂不考虑
+
+扩大研究池后，正式输出必须区分“研究完成”和“当前应买入”。只有通过全部硬门且 `eligible=true` 的候选才能进入 Portfolio 权重。研究已完整、没有会计/治理 critical veto、且委员会唯一结论为 `WATCH` 的候选，允许在 sealed `RecommendationResearchReceipt` 发布后写入持续观察名单；它只表示“值得继续跟踪估值、安全边际或入场条件”，不能产生仓位、订单或 BUY 权威。
+
+存在财务、治理、证据、估值或其它组合硬约束失败的候选继续归为“暂不考虑”，不得因为组合为空而自动升级到观察名单。观察事件绑定当前 request、正式 receipt 与 as-of，保持可重放；观察名单的可选写入失败也不能反向改变已经通过 Publication Gate 的研究结论。
 
 ## 3. EntryQuality：好股票是否处在可接受的入场位置
 
@@ -116,6 +132,8 @@ Full Research 排序在公司预期收益、质量、估值之后才看 timing r
 1. 交易所 / CNINFO / 发行人 / 监管；
 2. 政府正式任命、国家企业信用信息公示、信用中国、法院/执行等具名官方域；
 3. 通过外部能力资格审计的企业数据库。
+
+新闻发现单独遵守“多源线索 + 官方落证”规则：当前 `news.discovery.lead` 在预算内同时尝试 GDELT、Finnhub 等所有已启用的独立 structured discovery source，不因第一家成功而停止；同一厂商或辛迪加转载不能冒充独立正式证据。无论第三方发现是否成功，重大公司事件、行业政策和监管判断都必须继续做权威 Web 检索，并回到交易所/CNINFO/发行人/监管/政府/法院/采购等 PRIMARY_OFFICIAL 记录后才能形成正式事实。第三方新闻永久 `formal_use_allowed=false`，只承担“告诉我们该去核实什么”的职责。
 
 对 `enterprise.*` 的**外部商业能力**，SourceAccessRouter 使用 capability-scoped transport preference：`MCP > API > Browser/Search > Manual`。这不改变 officiality/formal eligibility 的大权重，因此一个商业 MCP 不会因为“传输方式优先”压过交易所或政府的 PRIMARY_OFFICIAL 事实。
 

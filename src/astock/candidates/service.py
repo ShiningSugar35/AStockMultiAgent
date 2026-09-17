@@ -833,6 +833,9 @@ class CandidateScanService:
         signals: list[CandidateSignal] = []
         for company in release.companies:
             signals.extend(self._gate_signals(scan_id, request, company, artifacts))
+            seed_signal = self._research_seed_signal(scan_id, request, company, artifacts)
+            if seed_signal is not None:
+                signals.append(seed_signal)
             signals.extend(self._event_signals(scan_id, request, company, artifacts))
             signals.extend(self._financial_signals(scan_id, request, company, artifacts))
             signals.extend(self._watchlist_signals(scan_id, request, company, artifacts))
@@ -911,6 +914,35 @@ class CandidateScanService:
                 artifacts[company.instrument_artifact_id].evidence_ids,
             ),
         ]
+
+    def _research_seed_signal(
+        self,
+        scan_id: str,
+        request: CandidateScanRequest,
+        company: CandidateCompanyInput,
+        artifacts: dict[str, CandidateInputArtifact],
+    ) -> CandidateSignal | None:
+        eligible_origins = {"BREADTH_CHALLENGER", "LONG_HORIZON_VALUE"}
+        matched = sorted(eligible_origins.intersection(company.research_seed_origins))
+        if not matched:
+            return None
+        artifact = artifacts[company.instrument_artifact_id]
+        reasons = ["RESEARCH_PRIORITY_ONLY", *[f"SEED_ORIGIN:{item}" for item in matched]]
+        reasons.extend(company.research_seed_reason_codes)
+        return self._make_signal(
+            scan_id,
+            request,
+            company,
+            CandidateSignalType.RESEARCH_SEED_PRIOR,
+            artifact,
+            f"research-seed:{company.company_id}",
+            artifact.available_to_system_at,
+            artifact.available_to_system_at,
+            CandidateSignalDisposition.SUPPORT,
+            sorted(set(reasons)),
+            [],
+            severity=CandidateEvidenceSeverity.MEDIUM,
+        )
 
     def _event_signals(
         self,
@@ -1463,6 +1495,7 @@ class CandidateScanService:
                 CandidateSignalType.ANNOUNCEMENT_EVENT,
                 CandidateSignalType.FINANCIAL_ANOMALY,
                 CandidateSignalType.HOLDING_REVIEW,
+                CandidateSignalType.RESEARCH_SEED_PRIOR,
             }
         ]
         if any(item.severity is CandidateEvidenceSeverity.HIGH for item in supporting):

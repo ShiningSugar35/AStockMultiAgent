@@ -1192,6 +1192,8 @@ class _RawMarketRow:
     float_market_cap_cny: float
     industry_label: str | None
     snapshot_id: str
+    pe_ttm: float | None = None
+    pb_mrq: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1206,6 +1208,9 @@ class _MarketRow:
     industry_label: str | None
     market_score: float
     snapshot_id: str
+    pe_ttm: float | None = None
+    pb_mrq: float | None = None
+    long_horizon_value_score: float | None = None
 
 
 @dataclass(slots=True)
@@ -1219,6 +1224,10 @@ class _SeedAccumulator:
     amount_cny: float | None = None
     turnover_rate: float | None = None
     float_market_cap_cny: float | None = None
+    industry_label: str | None = None
+    pe_ttm: float | None = None
+    pb_mrq: float | None = None
+    long_horizon_value_score: float | None = None
     candidate_version_id: str | None = None
     candidate_strength: str | None = None
     origins: set[ResearchSeedOrigin] = field(default_factory=set)
@@ -1387,6 +1396,26 @@ class ResearchSeedService:
             )
             accumulator.snapshot_ids.add(row.snapshot_id)
 
+        long_horizon_value_rows = self._industry_balanced_market_rows(
+            [
+                item
+                for item in market_rows.values()
+                if item.company_id not in blind_company_ids
+                and item.long_horizon_value_score is not None
+            ],
+            limit=request.max_long_horizon_value_seeds,
+            score=lambda item: item.long_horizon_value_score or 0.0,
+        )
+        for row in long_horizon_value_rows:
+            accumulator = self._accumulator(accumulators, row)
+            accumulator.origins.add(ResearchSeedOrigin.LONG_HORIZON_VALUE)
+            accumulator.priority = max(
+                accumulator.priority,
+                0.60 + 0.25 * (row.long_horizon_value_score or 0.0),
+            )
+            accumulator.reasons.add("LONG_HORIZON_VALUE_RESEARCH_SEED")
+            accumulator.snapshot_ids.add(row.snapshot_id)
+
         if request.include_existing_candidates:
             for row in self.candidates.research_ready_records(
                 as_of=cutoff,
@@ -1492,9 +1521,26 @@ class ResearchSeedService:
             (item for item in all_seeds if ResearchSeedOrigin.MARKET in item.origins),
             key=lambda item: (-(item.market_liquidity_score or 0.0), item.company_id),
         )[: min(request.max_market_seeds, request.max_total_seeds)]
+        value_budget = min(
+            request.max_long_horizon_value_seeds,
+            max(0, request.max_total_seeds - len(blind)),
+        )
+        value = sorted(
+            (
+                item
+                for item in all_seeds
+                if ResearchSeedOrigin.LONG_HORIZON_VALUE in item.origins
+                and ResearchSeedOrigin.MARKET not in item.origins
+            ),
+            key=lambda item: (
+                -(item.long_horizon_value_score or 0.0),
+                -(item.market_liquidity_score or 0.0),
+                item.company_id,
+            ),
+        )[:value_budget]
         breadth_budget = min(
             request.max_breadth_challenger_seeds,
-            max(0, request.max_total_seeds - len(blind)),
+            max(0, request.max_total_seeds - len(blind) - len(value)),
         )
         breadth = sorted(
             (
@@ -1502,21 +1548,31 @@ class ResearchSeedService:
                 for item in all_seeds
                 if ResearchSeedOrigin.BREADTH_CHALLENGER in item.origins
                 and ResearchSeedOrigin.MARKET not in item.origins
+                and ResearchSeedOrigin.LONG_HORIZON_VALUE not in item.origins
             ),
             key=lambda item: (-(item.market_liquidity_score or 0.0), item.company_id),
         )[:breadth_budget]
-        selected_ids = {item.seed_id for item in [*blind, *breadth]}
+        selected_ids = {item.seed_id for item in [*blind, *value, *breadth]}
         fill = [item for item in all_seeds if item.seed_id not in selected_ids]
         seeds = [
             *blind,
+            *value,
             *breadth,
-            *fill[: max(0, request.max_total_seeds - len(blind) - len(breadth))],
+            *fill[
+                : max(
+                    0,
+                    request.max_total_seeds - len(blind) - len(value) - len(breadth),
+                )
+            ],
         ]
         seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
         selected_breadth_domain_counts: dict[str, int] = defaultdict(int)
+        selected_industry_counts: dict[str, int] = defaultdict(int)
         for seed in seeds:
             for domain_id in seed.breadth_domain_ids:
                 selected_breadth_domain_counts[domain_id] += 1
+            if seed.industry_label:
+                selected_industry_counts[seed.industry_label] += 1
         coverage_level = universe_coverage_proof.coverage_level
         engineering_full_universe = coverage_level in {
             UniverseCoverageLevel.ENGINEERING_HIGH_COVERAGE,
@@ -1588,6 +1644,10 @@ class ResearchSeedService:
             breadth_seed_count=sum(
                 ResearchSeedOrigin.BREADTH_CHALLENGER in item.origins for item in seeds
             ),
+            long_horizon_value_seed_count=sum(
+                ResearchSeedOrigin.LONG_HORIZON_VALUE in item.origins for item in seeds
+            ),
+            selected_industry_counts=dict(sorted(selected_industry_counts.items())),
             blind_breadth_domain_counts=blind_breadth_domain_counts,
             selected_breadth_domain_counts=dict(sorted(selected_breadth_domain_counts.items())),
             expert_seed_count=sum(
@@ -2058,6 +2118,8 @@ class ResearchSeedService:
                 else:
                     raw_float_cap = self._number(row.get("nmc"))
                     float_cap = raw_float_cap * 10_000 if raw_float_cap >= 0 else -1.0
+                pe_ttm = self._optional_positive_number(row.get("pe_ttm"))
+                pb_mrq = self._optional_positive_number(row.get("pb_mrq"))
             else:
                 company_id = str(row.get("f12") or "")
                 name = str(row.get("f14") or "").strip()
@@ -2065,6 +2127,8 @@ class ResearchSeedService:
                 amount = self._number(row.get("f6"))
                 turnover = self._number(row.get("f8"))
                 float_cap = self._number(row.get("f21"))
+                pe_ttm = self._optional_positive_number(row.get("f9"))
+                pb_mrq = self._optional_positive_number(row.get("f23"))
             if len(company_id) != 6 or not company_id.isdigit() or not name:
                 continue
             if self._excluded_name(name):
@@ -2082,6 +2146,8 @@ class ResearchSeedService:
                     float_market_cap_cny=float_cap,
                     industry_label=official_industry_by_symbol.get(company_id),
                     snapshot_id=snapshot_id,
+                    pe_ttm=pe_ttm,
+                    pb_mrq=pb_mrq,
                 )
             )
         return result
@@ -2106,6 +2172,26 @@ class ResearchSeedService:
         amount_rank = ResearchSeedService._percentile_ranks(amount_values)
         cap_rank = ResearchSeedService._percentile_ranks(cap_values)
         turnover_rank = ResearchSeedService._percentile_ranks(turnover_values)
+        value_indices = [
+            index
+            for index, row in enumerate(eligible)
+            if row.pe_ttm is not None and row.pb_mrq is not None
+        ]
+        value_scores: dict[int, float] = {}
+        if value_indices:
+            pe_rank = ResearchSeedService._percentile_ranks(
+                [eligible[index].pe_ttm or 0.0 for index in value_indices]
+            )
+            pb_rank = ResearchSeedService._percentile_ranks(
+                [eligible[index].pb_mrq or 0.0 for index in value_indices]
+            )
+            for local_index, global_index in enumerate(value_indices):
+                value_scores[global_index] = (
+                    0.35 * (1.0 - pe_rank[local_index])
+                    + 0.30 * (1.0 - pb_rank[local_index])
+                    + 0.20 * cap_rank[global_index]
+                    + 0.15 * (1.0 - turnover_rank[global_index])
+                )
         result: list[_MarketRow] = []
         for index, row in enumerate(eligible):
             score = 0.50 * amount_rank[index] + 0.35 * cap_rank[index] + 0.15 * turnover_rank[index]
@@ -2121,6 +2207,13 @@ class ResearchSeedService:
                     industry_label=row.industry_label,
                     market_score=min(1.0, max(0.0, score)),
                     snapshot_id=row.snapshot_id,
+                    pe_ttm=row.pe_ttm,
+                    pb_mrq=row.pb_mrq,
+                    long_horizon_value_score=(
+                        min(1.0, max(0.0, value_scores[index]))
+                        if index in value_scores
+                        else None
+                    ),
                 )
             )
         return result
@@ -2142,6 +2235,55 @@ class ResearchSeedService:
                 ranks[index] = percentile
             position = end
         return ranks
+
+    @staticmethod
+    def _industry_balanced_market_rows(
+        rows: list[_MarketRow],
+        *,
+        limit: int,
+        score: Callable[[_MarketRow], float],
+    ) -> list[_MarketRow]:
+        """Allocate bounded research slots across industries before taking duplicates.
+
+        This is a discovery-budget rule only. It cannot create Candidate, Committee,
+        portfolio or execution authority, and missing industry labels degrade to a
+        market-scoped bucket rather than stopping discovery.
+        """
+
+        if limit <= 0 or not rows:
+            return []
+        ordered = sorted(
+            rows,
+            key=lambda item: (-score(item), -item.market_score, item.company_id),
+        )
+        buckets: dict[str, list[_MarketRow]] = defaultdict(list)
+        for row in ordered:
+            label = (row.industry_label or "").strip() or f"未分类:{row.market.value}"
+            buckets[label].append(row)
+        offsets = {label: 0 for label in buckets}
+        selected: list[_MarketRow] = []
+        while len(selected) < limit:
+            active: list[tuple[str, _MarketRow]] = []
+            for label, bucket in buckets.items():
+                offset = offsets[label]
+                if offset < len(bucket):
+                    active.append((label, bucket[offset]))
+            if not active:
+                break
+            active.sort(
+                key=lambda item: (
+                    -score(item[1]),
+                    -item[1].market_score,
+                    item[1].company_id,
+                    item[0],
+                )
+            )
+            for label, row in active:
+                selected.append(row)
+                offsets[label] += 1
+                if len(selected) >= limit:
+                    break
+        return selected
 
     @staticmethod
     def _parse_boards(payload: dict[str, object]) -> list[tuple[str, str]]:
@@ -2242,6 +2384,11 @@ class ResearchSeedService:
                 return -1.0
         return -1.0
 
+    @classmethod
+    def _optional_positive_number(cls, value: object) -> float | None:
+        parsed = cls._number(value)
+        return parsed if parsed > 0 else None
+
     @staticmethod
     def _excluded_name(name: str) -> bool:
         normalized = name.upper().replace(" ", "")
@@ -2261,6 +2408,10 @@ class ResearchSeedService:
         accumulator.amount_cny = row.amount_cny
         accumulator.turnover_rate = row.turnover_rate
         accumulator.float_market_cap_cny = row.float_market_cap_cny
+        accumulator.industry_label = row.industry_label
+        accumulator.pe_ttm = row.pe_ttm
+        accumulator.pb_mrq = row.pb_mrq
+        accumulator.long_horizon_value_score = row.long_horizon_value_score
         accumulator.snapshot_ids.add(row.snapshot_id)
 
     @classmethod
@@ -2309,6 +2460,10 @@ class ResearchSeedService:
             amount_cny=accumulator.amount_cny,
             turnover_rate=accumulator.turnover_rate,
             float_market_cap_cny=accumulator.float_market_cap_cny,
+            industry_label=accumulator.industry_label,
+            pe_ttm=accumulator.pe_ttm,
+            pb_mrq=accumulator.pb_mrq,
+            long_horizon_value_score=accumulator.long_horizon_value_score,
             candidate_version_id=accumulator.candidate_version_id,
             candidate_strength=accumulator.candidate_strength,
             expert_author_source_ids=sorted(accumulator.authors),

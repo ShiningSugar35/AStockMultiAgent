@@ -66,6 +66,41 @@ rules:
       - tests/unit/test_candidate_financial_policy.py
       - tests/unit/test_full_research_source_binding.py
       - tests/integration/test_financial*.py
+  - name: candidate-discovery-and-promotion
+    changed:
+      - src/astock/candidates/*
+      - src/astock/schemas/research_seeds.py
+      - src/astock/schemas/candidates.py
+      - src/astock/schemas/candidate_promotion.py
+      - src/astock/research/team.py
+      - configs/research_team.yaml
+    tests:
+      - tests/unit/test_research_seeds.py
+      - tests/unit/test_candidate_scan.py
+      - tests/unit/test_candidate_promotion.py
+      - tests/unit/test_candidate_*policy.py
+      - tests/unit/test_research_team.py
+  - name: news-discovery-and-monitoring
+    changed:
+      - src/astock/monitoring/news.py
+    tests:
+      - tests/unit/test_news_capture_scope.py
+      - tests/unit/test_continuous_monitoring.py
+      - tests/unit/test_external_capabilities.py
+      - tests/unit/test_scheduled_preparation.py
+      - tests/integration/test_scheduled_input_coverage.py
+      - tests/integration/test_scheduled_semantic_coverage.py
+  - name: investor-publication-and-language
+    changed:
+      - src/astock/investor_orchestration/gateway.py
+      - src/astock/investor_orchestration/answer_projection.py
+      - src/astock/investor_orchestration/full_research.py
+    tests:
+      - tests/unit/test_full_research_recommendation.py
+      - tests/unit/test_investor_answer_*.py
+      - tests/unit/test_investor_orchestration_guards.py
+      - tests/unit/test_public_capital_privacy.py
+      - tests/unit/test_wp25_shareable_acceptance.py
   - name: validation-tooling
     changed:
       - scripts/plan_validation.py

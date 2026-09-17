@@ -566,6 +566,8 @@ class ResearchSeedPromotionService:
             daily_points=daily_points,
             announcement_events=(announcement_pack.events if announcement_pack is not None else []),
             financial_flags=financial_flags,
+            research_seed_origins=sorted(item.value for item in seed.origins),
+            research_seed_reason_codes=sorted(seed.reason_codes),
             created_at=effective_as_of,
         )
         artifacts = [

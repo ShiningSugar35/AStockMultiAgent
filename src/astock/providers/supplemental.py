@@ -32,7 +32,11 @@ from astock.schemas import Market, SourceSnapshot
 
 class SupplementalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    capability: Literal["market.reference.hint", "news.global.lead"] = "market.reference.hint"
+    capability: Literal[
+        "market.reference.hint",
+        "news.discovery.lead",
+        "news.global.lead",
+    ] = "market.reference.hint"
     symbol: str = Field(default="", pattern=r"^(?:\d{6})?$")
     market: Market = Market.XSHG
     start: date
@@ -216,6 +220,9 @@ class _CredentialHttpProvider(HttpProviderBase):
     def credential(self, name: str) -> str:
         return _credential(name, project_root=self.project_root)
 
+    def credentials(self, name: str) -> tuple[str, ...]:
+        return _credentials(name, project_root=self.project_root)
+
 
 class TushareHintProvider(_CredentialHttpProvider):
     provider_id = "tushare-reference-hints"
@@ -270,15 +277,34 @@ class FinnhubNewsHintProvider(_CredentialHttpProvider):
     def fetch_hints(
         self, request: SupplementalRequest,
     ) -> tuple[list[dict[str, str]], SourceSnapshot]:
-        if request.capability != "news.global.lead":
+        if request.capability not in {"news.discovery.lead", "news.global.lead"}:
             raise ValueError("Finnhub is a global news lead, not certified A-share coverage")
-        credential = self.credential("FINNHUB_API_KEY")
-        response, _ = self._request(
-            "GET", "https://finnhub.io/api/v1/news", params={"category": "general"},
-            headers={"X-Finnhub-Token": credential},
-        )
-        if credential.encode() in response.content:
-            raise _invalid("Finnhub response echoed authentication")
+        response = None
+        last_access_error: ProviderError | None = None
+        for credential in self.credentials("FINNHUB_API_KEY"):
+            try:
+                response, _ = self._request(
+                    "GET", "https://finnhub.io/api/v1/news", params={"category": "general"},
+                    headers={"X-Finnhub-Token": credential},
+                )
+            except ProviderError as exc:
+                if exc.failure_class in {
+                    FailureClass.ACCESS_RESTRICTED,
+                    FailureClass.RATE_LIMITED,
+                }:
+                    last_access_error = exc
+                    continue
+                raise
+            if credential.encode() in response.content:
+                raise _invalid("Finnhub response echoed authentication")
+            break
+        if response is None:
+            if last_access_error is not None:
+                raise last_access_error
+            raise ProviderError(
+                "Finnhub has no usable configured credential",
+                failure_class=FailureClass.AUTH_REQUIRED,
+            )
         payload = response.json()
         if not isinstance(payload, list):
             raise _invalid("Finnhub news unavailable")
@@ -309,6 +335,30 @@ def _credential(name: str, *, project_root: Path | None = None) -> str:
     resolution = resolve_credential(name, project_root=project_root)
     if resolution.configured and resolution.value is not None:
         return resolution.value
+    if resolution.source is CredentialSource.INVALID_DOTENV:
+        raise ProviderError(
+            "Optional provider credential configuration is invalid",
+            failure_class=FailureClass.DATA_QUALITY,
+        )
+    raise ProviderError(
+        "Optional provider is not configured", failure_class=FailureClass.AUTH_REQUIRED,
+    )
+
+
+def _credentials(name: str, *, project_root: Path | None = None) -> tuple[str, ...]:
+    resolution = resolve_credential(name, project_root=project_root)
+    if resolution.configured and resolution.value is not None:
+        values = tuple(
+            dict.fromkeys(
+                item.strip() for item in resolution.value.split(",") if item.strip()
+            )
+        )
+        if not values or len(values) > 8:
+            raise ProviderError(
+                "Optional provider credential list is invalid",
+                failure_class=FailureClass.DATA_QUALITY,
+            )
+        return values
     if resolution.source is CredentialSource.INVALID_DOTENV:
         raise ProviderError(
             "Optional provider credential configuration is invalid",
@@ -391,6 +441,7 @@ class SupplementalEvidenceService:
              if request.capability in item.capabilities]
         )
         captures, attempts = [], []
+        collect_all_independent_news_sources = request.capability == "news.discovery.lead"
         budget = float(self.factory.source_breaker.policy.default_elapsed_budget_seconds)
         deadline = time.monotonic() + budget
         for definition in definitions:
@@ -460,8 +511,9 @@ class SupplementalEvidenceService:
                 })
                 self.factory.record_capability_success(provider_id, request.capability, live=live)
                 attempts.append({"provider_id": provider_id, "status": "CAPTURED"})
-                if live:
-                    break  # The hint query is satisfied; formal cross-checking is a later stage.
+                if live and not collect_all_independent_news_sources:
+                    # Reference hints stop after one source; news discovery keeps all sources.
+                    break
             except (ProviderError, ValueError, KeyError) as exc:
                 error = exc if isinstance(exc, ProviderError) else _invalid(
                     "Supplemental response contract invalid",
@@ -473,6 +525,10 @@ class SupplementalEvidenceService:
         return {
             "status": "REFERENCE_HINTS_CAPTURED" if captures else "PUBLIC_DATA_UNAVAILABLE",
             "captures": captures, "attempts": attempts, "manual_actions": [],
+            "independence_groups": sorted(
+                {str(item["independence_group"]) for item in captures}
+            ),
+            "multi_source_news_attempted": collect_all_independent_news_sources,
             "automatic_recovery_next": "OFFICIAL_WEB_AND_CANONICAL_ACQUISITION_VALIDATION",
             "formal_use_allowed": False, "broker_execution_allowed": False,
         }

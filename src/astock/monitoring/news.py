@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -111,6 +111,44 @@ class GdeltNewsLeadProvider:
                 max_records=max_records,
             ).leads
         )
+
+    def fetch_hints(self, request: object) -> tuple[list[dict[str, str]], SourceSnapshot]:
+        """Expose checked GDELT results through the shared discovery-hint contract."""
+
+        if getattr(request, "capability", None) != self.capability:
+            raise ValueError("GDELT hint capability mismatch")
+        raw_start = getattr(request, "start", None)
+        raw_end = getattr(request, "end", None)
+        if not isinstance(raw_start, date) or not isinstance(raw_end, date):
+            raise ValueError("GDELT supplemental request requires a bounded date window")
+        symbol = str(getattr(request, "symbol", "")).strip()
+        if not symbol:
+            raise ValueError("GDELT company-news discovery requires a target symbol")
+        start = datetime.combine(raw_start, time.min, tzinfo=UTC)
+        end = min(
+            datetime.combine(raw_end + timedelta(days=1), time.min, tzinfo=UTC),
+            datetime.now(UTC),
+        )
+        receipt = self.search_checked(
+            names=[],
+            symbol=symbol,
+            start=start,
+            end=end,
+            max_records=100,
+        )
+        snapshot = self.state.get_snapshot(receipt.snapshot_id)
+        if snapshot is None:
+            raise ValueError("GDELT checked capture snapshot is unavailable")
+        rows = [
+            {
+                "title": item.title,
+                "url": item.url,
+                "published_at": item.seen_at.astimezone(UTC).isoformat(),
+                "publisher": item.domain,
+            }
+            for item in receipt.leads
+        ]
+        return rows, snapshot
 
     @staticmethod
     def query_text(*, names: list[str], symbol: str) -> str:

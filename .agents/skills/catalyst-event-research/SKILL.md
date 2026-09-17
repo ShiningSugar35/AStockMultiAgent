@@ -14,11 +14,13 @@ description: Build an evidence-linked catalyst and risk event timeline for an A-
 ## Procedure
 
 1. Inspect `uv run astock research-team-status <plan_id>` and confirm all declared dependencies are COMPLETE.
-2. Build one event ledger with event type, earliest/latest date or window, official source, preconditions, measurable outcome, thesis direction, probability range, impact range, dependency and status.
-3. Separate scheduled, contingent, rumored, cancelled and already realized events. Search absence is not negative proof.
-4. Use base rates or comparable historical events where defensible and disclose sample/transfer limits. Do not manufacture a precise probability merely to make expected value look quantitative.
-5. Model both catalyst and adverse-event paths, interaction/dependency, next evidence checkpoint and what would cancel or delay each event.
-6. Detect and remove double counting where an event is already embedded in forecast or valuation assumptions.
+2. Reuse valid existing captures, then run the shared `news.discovery.lead` lane so every currently available independent structured discovery source is attempted within the bounded budget. GDELT and Finnhub are complementary lead sources; one successful source must not suppress the others, and syndicated duplicates count as one lead family.
+3. Regardless of discovery-source success, continue authoritative Web search for material company, industry and policy events. Return to exchange/CNINFO/issuer/regulator/government/court/procurement primary records before admitting a formal fact; third-party news can never be the sole policy or material-event authority.
+4. Build one event ledger with event type, earliest/latest date or window, official source, preconditions, measurable outcome, thesis direction, probability range, impact range, dependency and status.
+5. Separate scheduled, contingent, rumored, cancelled and already realized events. Search absence is not negative proof.
+6. Use base rates or comparable historical events where defensible and disclose sample/transfer limits. Do not manufacture a precise probability merely to make expected value look quantitative.
+7. Model both catalyst and adverse-event paths, interaction/dependency, next evidence checkpoint and what would cancel or delay each event.
+8. Detect and remove double counting where an event is already embedded in forecast or valuation assumptions.
 
 ## Required output contract
 

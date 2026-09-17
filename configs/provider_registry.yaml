@@ -399,10 +399,10 @@ providers:
     transport_profile: supplemental-auth-v1
   - provider_id: finnhub-news-hints
     adapter_class: astock.providers.supplemental:FinnhubNewsHintProvider
-    capabilities: [news.global.lead]
+    capabilities: [news.discovery.lead, news.global.lead]
     source_class: SECONDARY_STRUCTURED
     formal_capabilities: []
-    completeness_semantics: {news.global.lead: DISCOVERY_ONLY}
+    completeness_semantics: {news.discovery.lead: DISCOVERY_ONLY, news.global.lead: DISCOVERY_ONLY}
     independence_group: FINNHUB
     cache_ttl_seconds: 300
     cost_class: LOW

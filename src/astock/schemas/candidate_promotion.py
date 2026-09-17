@@ -60,7 +60,7 @@ class SeedPromotionCompanyResult(AStockModel):
 class SeedPromotionRequest(AStockModel):
     schema_version: str = "seed-promotion-request-v1"
     seed_report_artifact_id: str = Field(min_length=1)
-    max_seeds: int = Field(default=20, ge=1, le=60)
+    max_seeds: int = Field(default=60, ge=1, le=60)
     reference_lookback_days: int = Field(default=140, ge=40, le=500)
     announcement_lookback_days: int = Field(default=90, ge=30, le=365)
     max_announcement_documents_per_company: int = Field(default=8, ge=1, le=20)

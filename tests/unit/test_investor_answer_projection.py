@@ -6,7 +6,7 @@ import pytest
 
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.investor_orchestration.gateway import InvestorAnswerGateway
+from astock.investor_orchestration.gateway import InvestorAnswerGateway, _localized_investor_draft
 from astock.investor_orchestration.models import RequestIntent, SideEffectClass
 from astock.investor_orchestration.scenarios import (
     BusinessScenario,
@@ -45,6 +45,24 @@ def test_registered_free_text_cannot_invent_a_cash_balance(environment: Environm
     )
     assert answer.degraded, "registering free text does not validate its economic claims"
     assert "99999999" not in answer.model_dump_json()
+
+
+def test_final_investor_gateway_localizes_scenario_and_snapshot_language(
+    environment: Environment,
+) -> None:
+    _, _, _, _, draft, _ = good_run(environment)
+    localized = _localized_investor_draft(
+        draft.model_copy(
+            update={
+                "conclusion": "BEAR 8.24元，BASE 24.73元，BULL 49.45元；冻结估值不支持追高。",
+                "reasons": ("冻结快照中的股权冻结风险仍需核实。",),
+            }
+        )
+    )
+    assert localized.conclusion == (
+        "空头看跌 8.24元，基准情景 24.73元，多头看涨 49.45元；估值不支持追高。"
+    )
+    assert localized.reasons == ("当前资料中的股权冻结风险仍需核实。",)
 
 
 def test_verified_answer_can_be_generated_without_an_untrusted_draft(

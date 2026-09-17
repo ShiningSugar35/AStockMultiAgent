@@ -460,6 +460,153 @@ def test_expert_overlay_priority_bonus_is_request_policy_driven(tmp_path: Path) 
     assert high.research_priority_score > low.research_priority_score
 
 
+def test_long_horizon_value_challenger_adds_cheap_nonblind_company(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+    provider = cast(Any, service.provider)
+    for payload in provider.market_payloads.values():
+        data = cast(dict[str, object], payload["data"])
+        rows = cast(list[dict[str, object]], data["diff"])
+        for row in rows:
+            symbol = str(row["f12"])
+            row["f9"] = {
+                "600001": 35.0,
+                "600002": 6.0,
+                "000001": 80.0,
+                "300001": 25.0,
+                "920001": 18.0,
+            }[symbol]
+            row["f23"] = {
+                "600001": 3.0,
+                "600002": 0.7,
+                "000001": 8.0,
+                "300001": 2.5,
+                "920001": 1.8,
+            }[symbol]
+
+    report = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=5,
+            max_market_seeds=1,
+            max_long_horizon_value_seeds=1,
+            max_breadth_challenger_seeds=0,
+            max_expert_seeds_per_author=0,
+            minimum_amount_cny=20_000_000,
+            minimum_float_market_cap_cny=2_000_000_000,
+            created_at=NOW,
+        )
+    )
+
+    blind = [item for item in report.seeds if ResearchSeedOrigin.MARKET in item.origins]
+    value = [
+        item
+        for item in report.seeds
+        if ResearchSeedOrigin.LONG_HORIZON_VALUE in item.origins
+        and ResearchSeedOrigin.MARKET not in item.origins
+    ]
+    assert [item.company_id for item in blind] == ["000001"]
+    assert [item.company_id for item in value] == ["600002"]
+    assert value[0].pe_ttm == 6.0
+    assert value[0].pb_mrq == 0.7
+    assert value[0].long_horizon_value_score is not None
+    assert "LONG_HORIZON_VALUE_RESEARCH_SEED" in value[0].reason_codes
+    assert report.market_seed_count == 1
+    assert report.long_horizon_value_seed_count == 1
+    assert value[0].recommendation_allowed is False
+
+
+def test_blind_market_budget_remains_pure_market_score_with_industry_metadata(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(tmp_path)
+    provider = cast(Any, service.provider)
+    provider.market_payloads[Market.XSHG]["official_industry_by_symbol"] = {
+        "600001": "电子元器件制造业",
+        "600002": "金融业",
+    }
+    provider.market_payloads[Market.XSHE]["official_industry_by_symbol"] = {
+        "000001": "电子元器件制造业",
+        "300001": "食品饮料制造业",
+    }
+
+    report = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=5,
+            max_market_seeds=2,
+            max_long_horizon_value_seeds=0,
+            max_breadth_challenger_seeds=0,
+            max_expert_seeds_per_author=0,
+            minimum_amount_cny=20_000_000,
+            minimum_float_market_cap_cny=2_000_000_000,
+            created_at=NOW,
+        )
+    )
+
+    blind = [item for item in report.seeds if ResearchSeedOrigin.MARKET in item.origins]
+    assert {item.company_id for item in blind} == {"600001", "000001"}
+    assert {item.industry_label for item in blind} == {"电子元器件制造业"}
+    assert all(item.recommendation_allowed is False for item in blind)
+
+
+def test_long_horizon_value_budget_round_robins_across_industries(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+    provider = cast(Any, service.provider)
+    provider.market_payloads[Market.XSHG]["official_industry_by_symbol"] = {
+        "600001": "金融业",
+        "600002": "金融业",
+    }
+    provider.market_payloads[Market.XSHE]["official_industry_by_symbol"] = {
+        "000001": "电子元器件制造业",
+        "300001": "食品饮料制造业",
+    }
+    for payload in provider.market_payloads.values():
+        data = cast(dict[str, object], payload["data"])
+        rows = cast(list[dict[str, object]], data["diff"])
+        for row in rows:
+            symbol = str(row["f12"])
+            row["f9"] = {
+                "600001": 35.0,
+                "600002": 6.0,
+                "000001": 7.0,
+                "300001": 20.0,
+                "920001": 18.0,
+            }[symbol]
+            row["f23"] = {
+                "600001": 3.0,
+                "600002": 0.7,
+                "000001": 0.8,
+                "300001": 2.0,
+                "920001": 1.8,
+            }[symbol]
+
+    report = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=5,
+            max_market_seeds=1,
+            max_long_horizon_value_seeds=2,
+            max_breadth_challenger_seeds=0,
+            max_expert_seeds_per_author=0,
+            minimum_amount_cny=20_000_000,
+            minimum_float_market_cap_cny=2_000_000_000,
+            created_at=NOW,
+        )
+    )
+
+    value = [
+        item
+        for item in report.seeds
+        if ResearchSeedOrigin.LONG_HORIZON_VALUE in item.origins
+        and ResearchSeedOrigin.MARKET not in item.origins
+    ]
+    assert {item.company_id for item in value} == {"600002", "300001"}
+    assert {item.industry_label for item in value} == {"金融业", "食品饮料制造业"}
+    assert report.selected_industry_counts["金融业"] == 1
+    assert report.selected_industry_counts["食品饮料制造业"] == 1
+    assert all(item.recommendation_allowed is False for item in value)
+
+
 def test_breadth_challenger_adds_only_near_cutoff_unrepresented_domain(tmp_path: Path) -> None:
     service, _, _ = _service(tmp_path)
     report = service.generate(

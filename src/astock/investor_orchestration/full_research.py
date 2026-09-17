@@ -1111,12 +1111,36 @@ class FullResearchRecommendationService:
                 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
 
                 try:
+                    registry = ResearchSubjectRegistryService(self.store)
                     enroll_waiting_entries(
                         receipt,
-                        ResearchSubjectRegistryService(self.store),
+                        registry,
                         self.state,
                         self.objects,
                     )
+                    if receipt.publication.formal_recommendation_allowed:
+                        for candidate in receipt.candidate_rankings:
+                            if (
+                                candidate.eligible
+                                or candidate.accounting_critical_veto
+                                or candidate.governance_critical_veto
+                                or set(candidate.rejection_reasons) != {"COMMITTEE_WATCH"}
+                            ):
+                                continue
+                            registry.add_watchlist(
+                                candidate.instrument_id,
+                                reason="formal research observation candidate",
+                                request_id=receipt.request_id,
+                                artifact_id=receipt.receipt_id,
+                                available_at=receipt.as_of,
+                                idempotency_key=content_hash(
+                                    {
+                                        "receipt_id": receipt.receipt_id,
+                                        "instrument_id": candidate.instrument_id,
+                                        "event": "FORMAL_OBSERVATION_CANDIDATE",
+                                    }
+                                ),
+                            )
                 except (ValueError, OSError, sqlite3.Error) as exc:
                     # Optional monitoring cannot turn a valid sealed analysis into NEEDS_INFO.
                     logging.getLogger(__name__).warning(

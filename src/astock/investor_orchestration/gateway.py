@@ -14,9 +14,32 @@ from astock.investor_orchestration.output_validation import RegisteredOutputVeri
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
 from astock.research.capital_privacy import CapitalDisclosureError, capital_disclosure_findings
-from astock.research.presentation import audit_public_answer
+from astock.research.presentation import audit_public_answer, normalize_public_text
 
 _LOG = logging.getLogger(__name__)
+
+
+
+
+def _localized_investor_draft(draft: InvestorAnswerDraft) -> InvestorAnswerDraft:
+    """Localize public prose after economic verification without changing facts."""
+
+    def clean(value: str | None) -> str | None:
+        return normalize_public_text(value) if value is not None else None
+
+    return draft.model_copy(
+        update={
+            "conclusion": normalize_public_text(draft.conclusion),
+            "reasons": tuple(normalize_public_text(item) for item in draft.reasons),
+            "risks": tuple(normalize_public_text(item) for item in draft.risks),
+            "actions": tuple(normalize_public_text(item) for item in draft.actions),
+            "change_conditions": tuple(
+                normalize_public_text(item) for item in draft.change_conditions
+            ),
+            "actual_holding_section": clean(draft.actual_holding_section),
+            "paper_holding_section": clean(draft.paper_holding_section),
+        }
+    )
 
 
 class InvestorDecisionAssembler:
@@ -211,16 +234,19 @@ class InvestorAnswerGateway:
             except (ValueError, OSError, StorageError):
                 return self._safe_answer(draft, preflight)
 
+        public_draft = _localized_investor_draft(draft)
         actual_section = (
-            draft.actual_holding_section if preflight.context.actual.positions else None
+            public_draft.actual_holding_section if preflight.context.actual.positions else None
         )
-        paper_section = draft.paper_holding_section if preflight.context.paper.positions else None
+        paper_section = (
+            public_draft.paper_holding_section if preflight.context.paper.positions else None
+        )
         public_parts = [
-            draft.conclusion,
-            *draft.reasons,
-            *draft.risks,
-            *draft.actions,
-            *draft.change_conditions,
+            public_draft.conclusion,
+            *public_draft.reasons,
+            *public_draft.risks,
+            *public_draft.actions,
+            *public_draft.change_conditions,
             actual_section or "",
             paper_section or "",
         ]
@@ -232,12 +258,12 @@ class InvestorAnswerGateway:
             _LOG.warning("investor output rejected: %s", audit.finding_codes)
             return self._safe_answer(draft, preflight, request_text=request_text)
         return InvestorAnswer(
-            request_id=draft.request_id,
-            conclusion=draft.conclusion,
-            reasons=draft.reasons,
-            risks=draft.risks,
-            actions=draft.actions,
-            change_conditions=draft.change_conditions,
+            request_id=public_draft.request_id,
+            conclusion=public_draft.conclusion,
+            reasons=public_draft.reasons,
+            risks=public_draft.risks,
+            actions=public_draft.actions,
+            change_conditions=public_draft.change_conditions,
             actual_holding_section=actual_section,
             paper_holding_section=paper_section,
             evidence_as_of=draft.evidence_as_of,

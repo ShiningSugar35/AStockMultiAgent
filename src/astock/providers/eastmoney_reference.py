@@ -154,7 +154,7 @@ class EastMoneyReferenceProvider(HttpProviderBase):
                     "invt": 2,
                     "fid": "f6",
                     "fs": _market_filter(market),
-                    "fields": "f2,f3,f6,f8,f12,f13,f14,f20,f21,f24,f25",
+                    "fields": "f2,f3,f6,f8,f9,f12,f13,f14,f20,f21,f23,f24,f25",
                 },
             )
         else:
@@ -223,7 +223,7 @@ class EastMoneyReferenceProvider(HttpProviderBase):
                     "invt": 2,
                     "fid": "f6",
                     "fs": f"b:{board_code}",
-                    "fields": "f2,f3,f6,f8,f12,f13,f14,f20,f21,f24,f25",
+                    "fields": "f2,f3,f6,f8,f9,f12,f13,f14,f20,f21,f23,f24,f25",
                 },
             )
         else:

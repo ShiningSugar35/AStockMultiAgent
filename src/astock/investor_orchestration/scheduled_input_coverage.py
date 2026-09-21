@@ -659,7 +659,10 @@ class ScheduledInputCoverageService:
         Reuse canonical release/raw/Parquet verification; cache only within this
         one audit so a later audit detects changed or missing source material.
         """
-        self.verifier._check_time(anchor.model_dump(mode="json"), request.as_of)
+        self.verifier._check_time(
+            anchor.model_dump(mode="json", exclude={"created_at"}),
+            request.as_of,
+        )
         self.verifier._verify_reference(anchor.source_artifact_id, anchor.source_object_hash)
         if anchor.source_artifact_id not in releases:
             manifest = DatasetReleaseManifest.model_validate(

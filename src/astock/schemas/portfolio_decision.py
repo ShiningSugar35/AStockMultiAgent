@@ -84,7 +84,6 @@ class ExternalTradeImportReceipt(AStockModel):
     position_projection: dict[str, object] | None = None
     requires_user_confirmation: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_receipt(self) -> ExternalTradeImportReceipt:
@@ -126,7 +125,6 @@ class UserPortfolioSnapshot(AStockModel):
     cash_known: bool = False
     source: Literal["LOCAL_USER_STATE", "EXTERNAL_ACCOUNT_DEFAULT"] = "LOCAL_USER_STATE"
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_snapshot(self) -> UserPortfolioSnapshot:
@@ -528,7 +526,6 @@ class ETFResearchMetrics(AStockModel):
     recommendation_allowed: Literal[False] = False
     portfolio_weight_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_metrics(self) -> ETFResearchMetrics:
@@ -704,7 +701,6 @@ class HedgeEffectivenessReport(AStockModel):
     source_artifact_ids: list[str]
     source_object_hashes: list[str]
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_hedge_report(self) -> HedgeEffectivenessReport:
@@ -830,7 +826,6 @@ class PortfolioComplementScreenReport(AStockModel):
     recommendation_allowed: Literal[False] = False
     portfolio_weight_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_screen(self) -> PortfolioComplementScreenReport:
@@ -940,7 +935,6 @@ class PortfolioTransitionReport(AStockModel):
     source_object_hashes: list[str]
     requires_user_confirmation: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_report(self) -> PortfolioTransitionReport:

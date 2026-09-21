@@ -8,8 +8,6 @@ from pathlib import Path
 
 import yaml
 
-from astock.schemas.candidates import CandidatePitStatus
-
 
 @dataclass(frozen=True, slots=True)
 class CandidateScanConfig:
@@ -20,7 +18,6 @@ class CandidateScanConfig:
     minimum_absolute_price_change: Decimal
     minimum_volume_ratio: Decimal
     canonical_announcement_events: frozenset[str]
-    formal_historical_pit_statuses: frozenset[CandidatePitStatus]
 
 
 def load_candidate_scan_config(path: Path) -> CandidateScanConfig:
@@ -36,11 +33,8 @@ def load_candidate_scan_config(path: Path) -> CandidateScanConfig:
     ).isdigit():
         raise ValueError("Unsupported candidate scan configuration")
     events = raw.get("canonical_announcement_events")
-    pit_statuses = raw.get("formal_historical_pit_statuses")
     if not isinstance(events, list) or not events:
         raise ValueError("Canonical announcement event list is empty")
-    if not isinstance(pit_statuses, list) or not pit_statuses:
-        raise ValueError("Formal historical PIT status list is empty")
     config = CandidateScanConfig(
         rules_version=str(raw["schema_version"]),
         minimum_trading_days=int(raw["minimum_trading_days"]),
@@ -49,9 +43,6 @@ def load_candidate_scan_config(path: Path) -> CandidateScanConfig:
         minimum_absolute_price_change=Decimal(str(raw["minimum_absolute_price_change"])),
         minimum_volume_ratio=Decimal(str(raw["minimum_volume_ratio"])),
         canonical_announcement_events=frozenset(str(item) for item in events),
-        formal_historical_pit_statuses=frozenset(
-            CandidatePitStatus(str(item)) for item in pit_statuses
-        ),
     )
     if config.minimum_trading_days < 5 or config.minimum_trading_days > 252:
         raise ValueError("candidate scan trading-day window must be in 5..252")
@@ -63,11 +54,6 @@ def load_candidate_scan_config(path: Path) -> CandidateScanConfig:
         raise ValueError("candidate scan price-change threshold cannot be negative")
     if config.minimum_volume_ratio <= 0:
         raise ValueError("candidate scan volume ratio must be positive")
-    if config.formal_historical_pit_statuses != {
-        CandidatePitStatus.CERTIFIED,
-        CandidatePitStatus.DOCUMENT_RECONSTRUCTED,
-    }:
-        raise ValueError("candidate-scan-v1 formal PIT gate is frozen")
     return config
 
 

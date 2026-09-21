@@ -279,7 +279,6 @@ def register_candidate_input_commands(
     @app.command("candidate-input-run")
     def candidate_input_run(
         release_file: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True)],
-        formal_historical: Annotated[bool, typer.Option()] = False,
         live: Annotated[bool, typer.Option()] = False,
     ) -> None:
         release = CandidateInputRelease.model_validate_json(
@@ -293,14 +292,12 @@ def register_candidate_input_commands(
                 {
                     "input_release_id": release.input_release_id,
                     "input_release_object_hash": object_hash,
-                    "formal_historical": formal_historical,
                     "live": live,
                 }
             ),
             input_release_id=release.input_release_id,
             input_release_object_hash=object_hash,
             as_of=release.as_of,
-            formal_historical=formal_historical,
             live=live,
             created_at=release.as_of,
         )

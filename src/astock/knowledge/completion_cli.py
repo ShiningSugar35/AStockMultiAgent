@@ -15,6 +15,7 @@ from astock.knowledge.completion_service import (
     ZhihuVisualCompletionService,
 )
 from astock.knowledge.provider import RepositoryKnowledgeSkillProvider
+from astock.knowledge.semantic_admission_service import SemanticAdmissionService
 from astock.knowledge.skill_audit import KnowledgeSkillAuditService
 from astock.knowledge.visual_pipeline import ZhihuVisualPipelineService
 from astock.knowledge.visual_skill_service import VisualSkillService
@@ -33,6 +34,10 @@ def register_knowledge_completion_commands(
     def skill_audit_service() -> KnowledgeSkillAuditService:
         paths, state, objects = services()
         return KnowledgeSkillAuditService(state, objects, paths.root)
+
+    def semantic_admission_service() -> SemanticAdmissionService:
+        _, state, objects = services()
+        return SemanticAdmissionService(state, objects)
 
     @app.command("knowledge-completion-review-plan")
     def review_plan(
@@ -223,6 +228,99 @@ def register_knowledge_completion_commands(
         confirm: Annotated[bool, typer.Option("--confirm")] = False,
     ) -> None:
         emit(skill_audit_service().prune_retired(audit_run_id, confirm=confirm))
+
+    @app.command("knowledge-semantic-admission-generate")
+    def semantic_admission_generate(
+        base_run_id: Annotated[str, typer.Argument()],
+        adjudication_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+        admitted_groups_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        emit(
+            semantic_admission_service().generate(
+                base_run_id=base_run_id,
+                adjudication_file=adjudication_file,
+                admitted_groups_file=admitted_groups_file,
+            )
+        )
+
+    @app.command("knowledge-semantic-admission-review")
+    def semantic_admission_review(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        emit(semantic_admission_service().review_all(base_run_id))
+
+    @app.command("knowledge-semantic-admission-audit")
+    def semantic_admission_audit(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        report = semantic_admission_service().audit(base_run_id)
+        emit(report)
+        if report.status != "PASS":
+            raise typer.Exit(code=3)
+
+    @app.command("knowledge-semantic-admission-publish")
+    def semantic_admission_publish(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        emit(semantic_admission_service().publish(base_run_id))
+
+    @app.command("knowledge-semantic-admission-status")
+    def semantic_admission_status(base_run_id: Annotated[str, typer.Argument()]) -> None:
+        emit(semantic_admission_service().status(base_run_id))
+
+    @app.command("knowledge-semantic-admission-finalize")
+    def semantic_admission_finalize(
+        base_run_id: Annotated[str, typer.Argument()],
+        adjudication_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+        admitted_groups_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        _, state, objects = services()
+        service = SemanticAdmissionService(state, objects)
+        generation = service.generate(
+            base_run_id=base_run_id,
+            adjudication_file=adjudication_file,
+            admitted_groups_file=admitted_groups_file,
+        )
+        review = service.review_all(base_run_id)
+        preflight = service.audit(base_run_id)
+        if preflight.status != "PASS":
+            raise RuntimeError(
+                f"semantic admission preflight failed: {preflight.finding_codes}"
+            )
+        release = service.publish(base_run_id)
+        final_audit = service.audit(base_run_id)
+        provider = RepositoryKnowledgeSkillProvider(
+            KnowledgeCompletionRepository(state),
+            objects,
+        ).status(base_run_id)
+        if final_audit.status != "PASS":
+            raise RuntimeError(
+                f"semantic admission final audit failed: {final_audit.finding_codes}"
+            )
+        if (
+            provider.status is not KnowledgeProviderReadiness.READY
+            or provider.reason_code != "AUDITED_SEMANTIC_REGISTRY_READY"
+        ):
+            raise RuntimeError(
+                f"semantic admission provider is not ready: {provider.reason_code}"
+            )
+        emit(
+            {
+                "generation": generation,
+                "review": review,
+                "preflight": preflight.model_dump(mode="json"),
+                "release": release,
+                "final_audit": final_audit.model_dump(mode="json"),
+                "provider": provider.model_dump(mode="json"),
+                "formal_committee_weight_allowed": False,
+            }
+        )
 
     @app.command("knowledge-zhihu-visual-capture")
     def visual_capture(

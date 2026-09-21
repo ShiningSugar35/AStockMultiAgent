@@ -21,6 +21,9 @@ def fingerprint() -> str:
     files = set(ROOT.glob("*.md")) | {ROOT / "pyproject.toml", ROOT / "uv.lock"}
     for directory in (
         "src", "tests", "configs", "migrations", "planning", "docs", "scripts", ".agents",
+        # Active audit manifests bind runtime source files and affect validation.
+        # Hash that small metadata tree, not vendor code or runtime/object data.
+        "third_party/audits",
     ):
         for path in (ROOT / directory).rglob("*"):
             if any(part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in path.parts):

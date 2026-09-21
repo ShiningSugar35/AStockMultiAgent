@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "dff1877b535cab078e2a0174006a43677e395640b7578195ee6a44f94884e950",
+  "report_id": "3170d5f22675669e4a2fe37b4881389bc5b79aacc37e3aeb91129958e3bf6060",
   "capability_id": "arelle",
   "candidate_version": "2.44.6",
   "requested_stage": "SHADOW",
@@ -9,7 +9,6 @@
     "license": "PASS",
     "terms_of_service": "PASS",
     "data_rights": "PASS",
-    "pit": "PASS",
     "provenance": "PASS",
     "credential_handling": "PASS",
     "sbom": "FAIL",
@@ -27,7 +26,7 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "b9228a4a11eebd138419ebae13fba495fa5bf2cccccf1d76ca02375ad025358c"
+    "5d18da62373ec827ffb51032376e3edf4b0e7f1f93292b98eadc7dc107390707"
   ],
   "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",

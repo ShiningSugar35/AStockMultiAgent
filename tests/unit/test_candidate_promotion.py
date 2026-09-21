@@ -21,7 +21,6 @@ from astock.schemas.candidates import (
     CandidateInputArtifact,
     CandidateInputRelease,
     CandidateInstrumentUniverseProof,
-    CandidatePitStatus,
     CandidateQualityStatus,
     CandidateTradability,
 )
@@ -34,7 +33,6 @@ from astock.schemas.reference_data import (
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
     ReferenceFileDescriptor,
-    ReferencePitStatus,
 )
 from astock.schemas.research_runtime import TradingClassificationCorporateActionBaseline
 from astock.schemas.research_seeds import (
@@ -58,8 +56,11 @@ class _FakeCandidateService:
         self.state = state
         self.objects = objects
         self.repository = _FakeCandidateRepository()
+        self.last_release: CandidateInputRelease | None = None
+        self.prior_signals: list[object] = []
 
     def stage_input_release(self, release: CandidateInputRelease) -> str:
+        self.last_release = release
         ref = self.objects.put_json(release.model_dump(mode="json"))
         self.state.register_artifact(
             artifact_id=f"candidate-input-release:{release.input_release_id}",
@@ -71,7 +72,21 @@ class _FakeCandidateService:
         return ref.sha256
 
     def scan(self, request: object) -> object:
-        del request
+        release = self.last_release
+        self.prior_signals = []
+        if release is not None:
+            artifacts = {item.artifact_id: item for item in release.artifacts}
+            scanner = object.__new__(CandidateScanService)
+            scanner.config = cast(Any, SimpleNamespace(rules_version="promotion-seam-v1"))
+            for company in release.companies:
+                signal = scanner._research_seed_signal(
+                    "a" * 64,
+                    cast(Any, request),
+                    company,
+                    artifacts,
+                )
+                if signal is not None:
+                    self.prior_signals.append(signal)
         return SimpleNamespace(scan_id="scan:promotion", status=SimpleNamespace(value="SUCCEEDED"))
 
     def audit(self, scan_id: str) -> object:
@@ -122,7 +137,6 @@ class _FakePromotionService(ResearchSeedPromotionService):
                     object_hash=ref.sha256,
                     coverage_status=CandidateCoverageStatus.COMPLETE,
                     available_to_system_at=NOW,
-                    pit_status=CandidatePitStatus.CERTIFIED,
                     created_at=NOW,
                 )
             )
@@ -142,6 +156,8 @@ class _FakePromotionService(ResearchSeedPromotionService):
             announcement_artifact_id=role_ids[CandidateArtifactRole.ANNOUNCEMENT_EVENTS],
             financial_artifact_id=role_ids[CandidateArtifactRole.FINANCIAL_INTEGRITY],
             quality_status=CandidateQualityStatus.PASS,
+            research_seed_origins=sorted(item.value for item in seed.origins),
+            research_seed_reason_codes=sorted(seed.reason_codes),
             created_at=NOW,
         )
         return company, artifacts, f"financial:{seed.company_id}", []
@@ -168,15 +184,20 @@ class _FakeEnrichmentGapPromotionService(_FakePromotionService):
         )
 
 
-def _seed(company_id: str, *, origins: list[ResearchSeedOrigin]) -> ResearchSeed:
+def _seed(
+    company_id: str,
+    *,
+    origins: list[ResearchSeedOrigin],
+    reason_codes: list[str] | None = None,
+) -> ResearchSeed:
     return ResearchSeed(
         seed_id=f"research-seed:{company_id}",
         company_id=company_id,
         market=Market.XSHG,
         name=f"公司{company_id}",
-        origins=origins,
+        origins=sorted(origins, key=lambda item: item.value),
         research_priority_score=0.8,
-        reason_codes=["TEST"],
+        reason_codes=sorted(reason_codes or ["TEST"]),
         candidate_version_id=(
             f"existing:{company_id}" if ResearchSeedOrigin.EXISTING_CANDIDATE in origins else None
         ),
@@ -208,6 +229,44 @@ def _register_seed_report(state: StateStore, objects: ObjectStore) -> str:
         market_seed_count=1,
         expert_seed_count=1,
         existing_candidate_seed_count=1,
+        created_at=NOW,
+    )
+    ref = objects.put_json(report.model_dump(mode="json"))
+    artifact_id = f"ResearchSeedReport:{report.report_id}"
+    state.register_artifact(
+        artifact_id=artifact_id,
+        artifact_type="ResearchSeedReport",
+        schema_version=report.schema_version,
+        object_hash=ref.sha256,
+        input_hashes=[],
+    )
+    return artifact_id
+
+
+def _register_single_seed_report(
+    state: StateStore,
+    objects: ObjectStore,
+    seed: ResearchSeed,
+    report_id: str,
+) -> str:
+    origins = set(seed.origins)
+    report = ResearchSeedReport(
+        report_id=report_id,
+        as_of=NOW,
+        data_cutoff_at=NOW,
+        status=ResearchSeedStatus.READY,
+        profiles=[],
+        seeds=[seed],
+        source_snapshot_ids=[],
+        source_object_hashes=[],
+        warning_codes=[],
+        market_seed_count=int(ResearchSeedOrigin.MARKET in origins),
+        breadth_seed_count=int(ResearchSeedOrigin.BREADTH_CHALLENGER in origins),
+        long_horizon_value_seed_count=int(
+            ResearchSeedOrigin.LONG_HORIZON_VALUE in origins
+        ),
+        expert_seed_count=int(ResearchSeedOrigin.EXPERT_SKILL in origins),
+        existing_candidate_seed_count=0,
         created_at=NOW,
     )
     ref = objects.put_json(report.model_dump(mode="json"))
@@ -296,7 +355,7 @@ def test_promotion_keeps_core_candidate_when_enrichment_needs_recovery(
     )
 
 
-def test_current_instrument_proof_does_not_require_historical_pit_marker(
+def test_instrument_proof_uses_current_source_identity_not_historical_pit(
     tmp_path: Path,
 ) -> None:
     state, objects = _runtime(tmp_path)
@@ -356,7 +415,6 @@ def test_current_instrument_proof_does_not_require_historical_pit_marker(
             status=ReferenceCoverageStatus.COMPLETE,
             created_at=NOW,
         ),
-        pit_status=ReferencePitStatus.UNVERIFIED,
         available_to_system_at=NOW,
         created_at=NOW,
     )
@@ -366,12 +424,11 @@ def test_current_instrument_proof_does_not_require_historical_pit_marker(
         artifact_type="DatasetReleaseManifest",
         artifact_schema_version=parent.schema_version,
         dataset_kind=ReferenceDatasetKind.INSTRUMENT_MASTER.value,
-        formal_status=CandidatePitStatus.NOT_PIT_SAFE.value,
+        formal_status=ReferenceCoverageStatus.COMPLETE.value,
         source_family=parent.provider_id,
         object_hash="8" * 64,
         coverage_status=CandidateCoverageStatus.COMPLETE,
         available_to_system_at=NOW,
-        pit_status=CandidatePitStatus.NOT_PIT_SAFE,
         source_snapshot_ids=parent.raw_snapshot_ids,
         created_at=NOW,
     )
@@ -386,20 +443,18 @@ def test_current_instrument_proof_does_not_require_historical_pit_marker(
         as_of=NOW,
         live=True,
     )
-    assert current.pit_status is CandidatePitStatus.NOT_PIT_SAFE
-
-    with pytest.raises(_PromotionBlocked) as historical:
-        service._instrument_subset_proof(
-            seed,
-            instrument=instrument,
-            parent_manifest=parent,
-            parent_artifact=parent_artifact,
-            seed_report_artifact_id="ResearchSeedReport:test",
-            seed_report_object_hash="9" * 64,
-            as_of=NOW,
-            live=False,
-        )
-    assert historical.value.reason_codes == ["HISTORICAL_INSTRUMENT_MASTER_NOT_PIT_SAFE"]
+    assert current.formal_status == ReferenceCoverageStatus.COMPLETE.value
+    recorded = service._instrument_subset_proof(
+        seed,
+        instrument=instrument,
+        parent_manifest=parent,
+        parent_artifact=parent_artifact,
+        seed_report_artifact_id="ResearchSeedReport:test",
+        seed_report_object_hash="9" * 64,
+        as_of=NOW,
+        live=False,
+    )
+    assert recorded.formal_status == ReferenceCoverageStatus.COMPLETE.value
 
 
 def test_plain_instrument_release_rejects_unproven_candidate_subset(
@@ -557,7 +612,6 @@ def test_seed_instrument_universe_proof_allows_only_the_frozen_seed_subset(
             status=ReferenceCoverageStatus.COMPLETE,
             created_at=NOW,
         ),
-        pit_status=ReferencePitStatus.RECONSTRUCTED,
         available_to_system_at=NOW,
         created_at=NOW,
     )
@@ -598,12 +652,11 @@ def test_seed_instrument_universe_proof_allows_only_the_frozen_seed_subset(
         artifact_type="CandidateInstrumentUniverseProof",
         artifact_schema_version=proof.schema_version,
         dataset_kind="INSTRUMENT_TRADABILITY_SUBSET",
-        formal_status=CandidatePitStatus.DOCUMENT_RECONSTRUCTED.value,
+        formal_status=ReferenceCoverageStatus.COMPLETE.value,
         source_family="seed-promotion-instrument-subset",
         object_hash=proof_ref.sha256,
         coverage_status=CandidateCoverageStatus.COMPLETE,
         available_to_system_at=NOW,
-        pit_status=CandidatePitStatus.DOCUMENT_RECONSTRUCTED,
         source_snapshot_ids=[snapshot.snapshot_id],
         created_at=NOW,
     )
@@ -703,7 +756,6 @@ def test_corporate_action_absence_requires_exact_cninfo_index_snapshot(tmp_path:
         object_hash=baseline_ref.sha256,
         coverage_status=CandidateCoverageStatus.COMPLETE,
         available_to_system_at=NOW,
-        pit_status=CandidatePitStatus.CERTIFIED,
         source_snapshot_ids=[snapshot.snapshot_id],
         created_at=NOW,
     )

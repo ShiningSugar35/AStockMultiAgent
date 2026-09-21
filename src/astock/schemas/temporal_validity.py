@@ -91,7 +91,6 @@ class TemporalNonInterferenceReport(AStockModel):
     production_admission_allowed: Literal[False] = False
     automatic_skill_modification_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 class KnowledgeCutoffAlphaPeriod(AStockModel):
@@ -144,7 +143,6 @@ class KnowledgeCutoffDiagnosticReport(AStockModel):
     production_admission_allowed: Literal[False] = False
     automatic_skill_modification_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 class TruncationInvarianceResult(AStockModel):

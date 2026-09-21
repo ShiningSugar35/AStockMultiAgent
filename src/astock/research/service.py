@@ -1,4 +1,4 @@
-"""Point-in-time evidence freezing and one-pass common BaseCase construction."""
+"""Current evidence freezing and one-pass common BaseCase construction."""
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.evidence.repository import EvidenceRepository
-from astock.pit.repository import PointInTimeRepository
-from astock.pit.service import PointInTimeService
 from astock.research.repository import ResearchRepository
 from astock.schemas import (
     BASE_CASE_SECTIONS,
@@ -25,7 +23,6 @@ from astock.schemas import (
     EvidenceFreezeRequest,
     EvidenceGrade,
     FrozenEvidencePack,
-    PointInTimeStatus,
     ResearchCoreConfig,
     ResearchCoverageStatus,
     ResearchGap,
@@ -57,46 +54,13 @@ class ResearchCoreService:
         self.object_store = object_store
         self.config = config
         self.evidence_repository = EvidenceRepository(state)
-        self.pit_repository = PointInTimeRepository(state)
         self.repository = ResearchRepository(state, object_store)
 
     def freeze_evidence(self, request: EvidenceFreezeRequest) -> EvidenceFreezeExecution:
         request = request.model_copy(update={"as_of": request.as_of.astimezone(UTC)})
         bundles = self._claim_bundles(request)
         evidence_by_id = self._evidence_for_bundles(bundles, request)
-        pit_id_by_evidence: dict[str, str | None] = {}
-        pit_status_by_evidence: dict[str, PointInTimeStatus | None] = {}
         degradation_codes: set[str] = set()
-        for evidence_id, evidence in evidence_by_id.items():
-            candidates = self.pit_repository.for_snapshot(evidence.snapshot_id)
-            if len(candidates) > 1:
-                raise ValueError(
-                    f"ambiguous PIT lineage for evidence {evidence_id}: "
-                    f"{len(candidates)} records"
-                )
-            if not candidates:
-                pit_id_by_evidence[evidence_id] = None
-                pit_status_by_evidence[evidence_id] = None
-                degradation_codes.add("PIT_METADATA_MISSING")
-                if request.formal_historical:
-                    raise ValueError(
-                        f"formal historical evidence lacks PIT metadata: {evidence_id}"
-                    )
-                continue
-            metadata = candidates[0]
-            PointInTimeService.assert_usable(
-                metadata,
-                request.as_of,
-                formal_historical=request.formal_historical,
-                allow_approximated=request.allow_approximated,
-            )
-            pit_id_by_evidence[evidence_id] = metadata.pit_id
-            pit_status_by_evidence[evidence_id] = metadata.point_in_time_status
-            if metadata.point_in_time_status is PointInTimeStatus.APPROXIMATED:
-                degradation_codes.add("APPROXIMATED_PIT_INCLUDED")
-            elif metadata.point_in_time_status is PointInTimeStatus.NOT_PIT_SAFE:
-                degradation_codes.add("NOT_PIT_SAFE_INCLUDED")
-
         conflicts = sorted(
             {
                 bundle.conflict.conflict_id: bundle.conflict
@@ -122,11 +86,8 @@ class ResearchCoreService:
         frozen_input = {
             "company_id": request.company_id,
             "as_of": request.as_of,
-            "formal_historical": request.formal_historical,
-            "allow_approximated": request.allow_approximated,
             "claims": [content_hash(bundle) for bundle in bundles],
             "evidence": [content_hash(evidence_by_id[item]) for item in evidence_ids],
-            "pit_ids": [pit_id_by_evidence[item] for item in evidence_ids],
         }
         frozen_input_hash = content_hash(frozen_input)
         pack_id = f"frozen-evidence:{frozen_input_hash}"
@@ -140,8 +101,6 @@ class ResearchCoreService:
             pack_id=pack_id,
             company_id=request.company_id,
             as_of=request.as_of,
-            formal_historical=request.formal_historical,
-            allow_approximated=request.allow_approximated,
             claim_ids=claim_ids,
             evidence_ids=evidence_ids,
             conflict_ids=[item.conflict_id for item in conflicts],
@@ -150,19 +109,6 @@ class ResearchCoreService:
                 evidence_id: evidence_by_id[evidence_id].evidence_grade
                 for evidence_id in evidence_ids
             },
-            pit_id_by_evidence_id={
-                evidence_id: pit_id_by_evidence[evidence_id]
-                for evidence_id in evidence_ids
-            },
-            pit_status_by_evidence_id={
-                evidence_id: pit_status_by_evidence[evidence_id]
-                for evidence_id in evidence_ids
-            },
-            missing_pit_evidence_ids=sorted(
-                evidence_id
-                for evidence_id, pit_id in pit_id_by_evidence.items()
-                if pit_id is None
-            ),
             coverage_status=coverage_status,
             degradation_codes=sorted(degradation_codes),
             frozen_input_sha256=frozen_input_hash,
@@ -271,18 +217,6 @@ class ResearchCoreService:
                     severity=ResearchGapSeverity.BLOCKING,
                     decision_impact="Conflicting frozen evidence prevents a high-confidence case.",
                     required_evidence=["RESOLVE_FROZEN_EVIDENCE_CONFLICT"],
-                    created_at=evidence_pack.frozen_at,
-                ),
-            )
-        if evidence_pack.missing_pit_evidence_ids:
-            code = "PIT_COVERAGE_INCOMPLETE"
-            gap_inputs.setdefault(
-                code,
-                ResearchGapInput(
-                    gap_code=code,
-                    severity=ResearchGapSeverity.MATERIAL,
-                    decision_impact="Some evidence lacks point-in-time metadata.",
-                    required_evidence=["REGISTER_POINT_IN_TIME_METADATA"],
                     created_at=evidence_pack.frozen_at,
                 ),
             )
@@ -397,27 +331,12 @@ class ResearchCoreService:
         evidence_pack = self.repository.get_evidence_pack(pack.evidence_pack_id)
         evidence_pack_missing = int(evidence_pack is None)
         frozen_evidence_missing = 0
-        frozen_pit_mismatch = 0
         if evidence_pack is not None:
             for evidence_id in evidence_pack.evidence_ids:
                 if self.evidence_repository.get_evidence(evidence_id) is None:
                     frozen_evidence_missing += 1
-                pit_id = evidence_pack.pit_id_by_evidence_id[evidence_id]
-                expected_status = evidence_pack.pit_status_by_evidence_id[evidence_id]
-                if pit_id is None:
-                    if expected_status is not None:
-                        frozen_pit_mismatch += 1
-                    continue
-                metadata = self.pit_repository.get(pit_id)
-                if (
-                    metadata is None
-                    or metadata.point_in_time_status is not expected_status
-                    or metadata.available_to_system_at > pack.as_of
-                ):
-                    frozen_pit_mismatch += 1
         missing_evidence = 0
         out_of_scope_evidence = 0
-        future_evidence = 0
         critical_grade_mismatch = 0
         evidence_scope = set(evidence_pack.evidence_ids) if evidence_pack else set()
         for finding in (
@@ -432,10 +351,6 @@ class ResearchCoreService:
             missing_evidence += sum(item is None for item in evidence_records)
             out_of_scope_evidence += sum(
                 evidence_id not in evidence_scope for evidence_id in finding.evidence_ids
-            )
-            future_evidence += sum(
-                item is not None and item.available_to_system_at > pack.as_of
-                for item in evidence_records
             )
             if finding.critical and not any(
                 item is not None and item.evidence_grade is EvidenceGrade.PRIMARY_OFFICIAL
@@ -472,10 +387,8 @@ class ResearchCoreService:
         findings = {
             "EVIDENCE_PACK_MISSING": evidence_pack_missing,
             "FROZEN_EVIDENCE_MISSING": frozen_evidence_missing,
-            "FROZEN_PIT_MISMATCH": frozen_pit_mismatch,
             "EVIDENCE_RECORD_MISSING": missing_evidence,
             "EVIDENCE_OUTSIDE_FROZEN_SCOPE": out_of_scope_evidence,
-            "FUTURE_EVIDENCE": future_evidence,
             "CRITICAL_EVIDENCE_GRADE_MISMATCH": critical_grade_mismatch,
             "METADATA_COUNT_MISMATCH": metadata_count_mismatch,
             "ARTIFACT_REGISTRY_MISMATCH": artifact_registry_mismatch,
@@ -492,10 +405,8 @@ class ResearchCoreService:
             "gap_count": len(pack.evidence_gaps),
             "evidence_pack_missing_count": evidence_pack_missing,
             "frozen_evidence_missing_count": frozen_evidence_missing,
-            "frozen_pit_mismatch_count": frozen_pit_mismatch,
             "missing_evidence_count": missing_evidence,
             "out_of_scope_evidence_count": out_of_scope_evidence,
-            "future_evidence_count": future_evidence,
             "critical_grade_mismatch_count": critical_grade_mismatch,
             "metadata_count_mismatch_count": metadata_count_mismatch,
             "artifact_registry_mismatch_count": artifact_registry_mismatch,
@@ -511,10 +422,7 @@ class ResearchCoreService:
                     raise ValueError(f"unknown claim in evidence freeze: {claim_id}")
                 bundles.append(bundle)
         else:
-            bundles = self.evidence_repository.claim_bundles_for_subject(
-                request.company_id,
-                as_of=request.as_of,
-            )
+            bundles = self.evidence_repository.claim_bundles_for_subject(request.company_id)
         if not bundles:
             raise ValueError(f"no claims available to freeze for {request.company_id}")
         unique = {bundle.claim.claim_id: bundle for bundle in bundles}
@@ -526,8 +434,6 @@ class ResearchCoreService:
                 raise ValueError(
                     f"claim belongs to a different company: {bundle.claim.claim_id}"
                 )
-            if bundle.claim.as_of > request.as_of:
-                raise ValueError(f"future claim cannot be frozen: {bundle.claim.claim_id}")
             if bundle.claim.status is ClaimStatus.REJECTED:
                 raise ValueError(f"rejected claim cannot be frozen: {bundle.claim.claim_id}")
             if not bundle.links:
@@ -545,15 +451,6 @@ class ResearchCoreService:
                 evidence = self.evidence_repository.get_evidence(link.evidence_id)
                 if evidence is None:
                     raise ValueError(f"claim references unknown evidence: {link.evidence_id}")
-                if evidence.available_to_system_at > request.as_of:
-                    raise ValueError(f"future evidence cannot be frozen: {evidence.evidence_id}")
-                if evidence.valid_from is not None and evidence.valid_from > request.as_of:
-                    raise ValueError(
-                        "not-yet-valid evidence cannot be frozen: "
-                        f"{evidence.evidence_id}"
-                    )
-                if evidence.valid_to is not None and evidence.valid_to < request.as_of:
-                    raise ValueError(f"expired evidence cannot be frozen: {evidence.evidence_id}")
                 evidence_by_id[evidence.evidence_id] = evidence
         return dict(sorted(evidence_by_id.items()))
 

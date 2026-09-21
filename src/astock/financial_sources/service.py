@@ -39,7 +39,6 @@ from astock.financial_sources.repository import (
     _release_identity,
 )
 from astock.financial_sources.storage import FinancialSourceParquetStore
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.providers import ProviderFactory, load_provider_registry, load_transport_profiles
 from astock.providers.dialects import load_provider_dialects
 from astock.providers.financial_base import (
@@ -207,6 +206,7 @@ class FinancialSourceService:
         cross_check: bool,
         explicit_as_of: bool,
     ) -> FinancialSourceSyncReport:
+        _ = explicit_as_of
         binding = self.instruments.resolve(company_id, market, as_of=as_of)
         official_coverage = self.config.official_market_coverage.get(market, "UNAVAILABLE")
         if live and official_coverage == "UNAVAILABLE":
@@ -263,7 +263,7 @@ class FinancialSourceService:
                     period_end,
                     period_type,
                     binding,
-                    as_of=as_of if explicit_as_of else None,
+                    as_of=None,
                 )
                 reasons.extend(parsed_reasons)
                 if _critical_missing(parsed):
@@ -317,13 +317,13 @@ class FinancialSourceService:
                 period_end,
                 period_type,
                 binding,
-                as_of=as_of if explicit_as_of else None,
+                as_of=None,
             )
             observations.extend(parsed)
             reasons.extend(parsed_reasons)
         if cross_check and len(payloads) > 1:
             reasons.extend(_cross_provider_conflicts(observations))
-        if live and not explicit_as_of:
+        if live:
             as_of = max(
                 as_of,
                 datetime.now(UTC),
@@ -342,7 +342,6 @@ class FinancialSourceService:
             period_type,
             as_of=as_of,
             live=live,
-            allow_live_capture_after_cutoff=live and not explicit_as_of,
         )
         if official is None:
             if not observations:
@@ -466,8 +465,6 @@ class FinancialSourceService:
             *(item.available_to_system_at for item in observations),
             *(fact.created_at for fact in facts),
         )
-        if explicit_as_of and available > as_of:
-            raise ValueError("Financial release input is late for explicit as_of")
         _, certified_hash, certified_descriptor = self.parquet.write_facts(
             company_id, period_end, available, facts
         )
@@ -484,7 +481,6 @@ class FinancialSourceService:
             company_id,
             period_end.isoformat(),
             period_type.value,
-            as_of=available,
         )
         historical = self._verified_manifest(historical_row) if historical_row is not None else None
         if historical is not None and _release_matches(
@@ -558,7 +554,6 @@ class FinancialSourceService:
             official_lineage_snapshot_ids=official.lineage_snapshot_ids,
             official_exhaustive_proof_allowed=(official.exhaustive_proof_allowed),
             official_snapshot_id=official.snapshot.snapshot_id,
-            official_pit_id=official.pit.pit_id,
             source_files=[source_descriptor],
             certified_files=[certified_descriptor],
             source_content_hash=source_hash,
@@ -626,36 +621,17 @@ class FinancialSourceService:
             company_id,
             period_end.isoformat(),
             period_type.value,
-            as_of=as_of,
         )
         facts: list[FinancialFact] = []
         if row is not None:
             manifest = self._verified_manifest(row)
-            loaded = self.parquet.read_facts(manifest.certified_files[0])
-            pit_repository = PointInTimeRepository(self.state)
-            usable = []
-            for fact in loaded:
-                if fact.pit_id is None:
-                    raise ValueError("Financial fact PIT reference is missing")
-                metadata = pit_repository.get(fact.pit_id)
-                if metadata is None:
-                    raise ValueError("Financial fact PIT metadata is missing")
-                PointInTimeService.assert_usable(
-                    metadata,
-                    as_of,
-                    formal_historical=True,
-                    allow_approximated=False,
-                )
-                usable.append(fact)
-            facts = usable
+            facts = self.parquet.read_facts(manifest.certified_files[0])
         return FinancialAuditRequest(
             company_id=company_id,
             as_of=as_of,
             industry_profile=industry_profile,
             facts=facts,
             requested_rule_ids=requested_rule_ids or [],
-            formal_historical=True,
-            allow_approximated_pit=False,
         )
 
     def run_audit(
@@ -803,9 +779,6 @@ class FinancialSourceService:
                 available_at=manifest.available_to_system_at,
             ):
                 raise ValueError("Financial fact Parquet is invalid")
-        pit = PointInTimeRepository(self.state).get(manifest.official_pit_id)
-        if pit is None or pit.source_snapshot_id != manifest.official_snapshot_id:
-            raise ValueError("Financial release PIT chain is invalid")
         evidence_repository = EvidenceRepository(self.state)
         facts = [
             fact
@@ -817,7 +790,6 @@ class FinancialSourceService:
         for fact in facts:
             if (
                 fact.source_snapshot_id != manifest.official_snapshot_id
-                or fact.pit_id != manifest.official_pit_id
                 or not fact.evidence_ids
             ):
                 raise ValueError("Financial fact lineage mismatch")
@@ -974,9 +946,6 @@ def _parse_provider(
         request_hash = payload.request_hashes_by_statement.get(statement.value)
         if rows is None or snapshot is None or request_hash is None:
             reasons.append(f"PROVIDER_TABLE_MISSING:{statement.value}")
-            continue
-        if as_of is not None and snapshot.available_to_system_at > as_of:
-            reasons.append(f"PROVIDER_SNAPSHOT_LATE:{statement.value}")
             continue
         matching = [
             row
@@ -1250,7 +1219,6 @@ def _verify_release_row(row: dict[str, Any], manifest: FinancialSourceReleaseMan
         "official_document_id": manifest.official_document_id,
         "official_index_snapshot_id": manifest.official_index_snapshot_id,
         "official_snapshot_id": manifest.official_snapshot_id,
-        "official_pit_id": manifest.official_pit_id,
         "source_files_json": canonical_json_bytes(manifest.source_files).decode(),
         "certified_files_json": canonical_json_bytes(manifest.certified_files).decode(),
         "source_content_hash": manifest.source_content_hash,

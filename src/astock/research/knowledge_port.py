@@ -10,6 +10,7 @@ from typing import Protocol
 
 from astock.schemas.knowledge_completion import (
     KnowledgeProviderStatus,
+    KnowledgeSkillInventorySnapshot,
     KnowledgeSkillQuery,
     KnowledgeSkillSelection,
 )
@@ -20,6 +21,10 @@ class KnowledgeSkillProvider(Protocol):
 
     def status(self, run_id: str) -> KnowledgeProviderStatus:
         """Return whether an immutable admitted registry is usable."""
+        ...
+
+    def inventory(self, run_id: str) -> KnowledgeSkillInventorySnapshot:
+        """Return every effective admitted Skill as immutable read-only metadata."""
         ...
 
     def select(self, run_id: str, query: KnowledgeSkillQuery) -> KnowledgeSkillSelection:

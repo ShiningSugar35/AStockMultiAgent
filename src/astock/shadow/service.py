@@ -28,7 +28,6 @@ from astock.schemas import (
     MarketRegimeSnapshot,
     Phase8AdmissionReport,
     Phase8AdmissionStatus,
-    PointInTimeStatus,
     ReplayQuality,
     ResearchMemoArtifact,
     ResearchSkillStatus,
@@ -231,7 +230,6 @@ class ShadowEvaluationService:
                 "study_id": study_id,
                 "status": "NOT_RUN",
                 "online_weight_changes_allowed": False,
-                "broker_execution_allowed": False,
             }
         summary = self.repository.latest_admission_summary(study_id)
         if summary is None:
@@ -239,7 +237,6 @@ class ShadowEvaluationService:
                 "study_id": study_id,
                 "status": "NOT_EVALUATED",
                 "online_weight_changes_allowed": False,
-                "broker_execution_allowed": False,
             }
         report = self.repository.get_admission(str(summary["admission_id"]))
         if report is None:
@@ -248,7 +245,6 @@ class ShadowEvaluationService:
                 "status": "PARTIAL",
                 "finding_codes": ["PHASE8_ADMISSION_OBJECT_UNAVAILABLE"],
                 "online_weight_changes_allowed": False,
-                "broker_execution_allowed": False,
             }
         return report.model_dump(mode="json")
 
@@ -853,8 +849,6 @@ class ShadowEvaluationService:
             exclusions.add("RETROSPECTIVE_EXPLORATORY_ONLY")
         if not forward_data_eligible:
             exclusions.add("NOT_LIVE_FORWARD_MARKET_DATA")
-        if set(draft.pit_statuses) - set(policy.formal_pit_statuses):
-            exclusions.add("FORMAL_PIT_STATUS_FAILED")
         if regime.regime is MarketRegime.UNCLASSIFIED:
             exclusions.add("MARKET_REGIME_UNCLASSIFIED")
         if draft.replay_quality is ReplayQuality.UNREPLAYABLE:
@@ -863,8 +857,6 @@ class ShadowEvaluationService:
             exclusions.add("ARM_NOT_COMPARABLE")
         if arm.research_status is ShadowArmResearchStatus.RESEARCH_ISOLATED:
             exclusions.add("RESEARCH_ISOLATED_ARM")
-        if not draft.candidate_membership_pit_safe:
-            exclusions.add("CANDIDATE_MEMBERSHIP_NOT_PIT_SAFE")
         if not draft.corporate_action_coverage_complete:
             exclusions.add("CORPORATE_ACTION_COVERAGE_INCOMPLETE")
         if not draft.delisting_coverage_complete:
@@ -1045,9 +1037,6 @@ class ShadowEvaluationService:
             regime = self.repository.get_regime(item.regime_id)
             if regime is not None:
                 regime_counts[regime.regime] += 1
-        pit_counts: Counter[PointInTimeStatus] = Counter()
-        for item in unique_assignment_observation.values():
-            pit_counts.update(item.pit_statuses)
         exclusion_counts: Counter[str] = Counter()
         for item in final_observations:
             exclusion_counts.update(item.exclusion_codes)
@@ -1106,9 +1095,6 @@ class ShadowEvaluationService:
             ),
             "market_regime_counts": {
                 key: regime_counts[key] for key in sorted(regime_counts, key=str)
-            },
-            "pit_status_counts": {
-                key: pit_counts[key] for key in sorted(pit_counts, key=str)
             },
             "exclusion_counts": {
                 key: exclusion_counts[key] for key in sorted(exclusion_counts)
@@ -1705,9 +1691,6 @@ class ShadowEvaluationService:
             regime = self.repository.get_regime(item.regime_id)
             if regime is not None:
                 regime_counts[regime.regime] += 1
-        pit_counts: Counter[PointInTimeStatus] = Counter()
-        for item in unique_assignment_observation.values():
-            pit_counts.update(item.pit_statuses)
         exclusion_counts: Counter[str] = Counter()
         for item in final_observations:
             exclusion_counts.update(item.exclusion_codes)
@@ -1747,9 +1730,6 @@ class ShadowEvaluationService:
             ),
             "market_regime_counts": {
                 key: regime_counts[key] for key in sorted(regime_counts, key=str)
-            },
-            "pit_status_counts": {
-                key: pit_counts[key] for key in sorted(pit_counts, key=str)
             },
             "exclusion_counts": {
                 key: exclusion_counts[key] for key in sorted(exclusion_counts)
@@ -3163,8 +3143,6 @@ class ShadowEvaluationService:
                 or classified.as_of != request.signal_time
             ):
                 raise ValueError("shadow ClassifiedTradeProtocol identity mismatch")
-            if classified.broker_execution_allowed:
-                raise ValueError("shadow classified protocol cannot authorize broker execution")
             committee_artifact = classified.committee_protocol_artifact_id
             committee_row = registry.get(committee_artifact)
             if (
@@ -3747,10 +3725,8 @@ class ShadowEvaluationService:
             features.volatility_percentile,
             features.index_drawdown,
         )
-        if any(value is None for value in core) or set(features.pit_statuses) - set(
-            policy.formal_pit_statuses
-        ):
-            return MarketRegime.UNCLASSIFIED, ["REGIME_INPUT_INCOMPLETE_OR_NOT_PIT_SAFE"]
+        if any(value is None for value in core):
+            return MarketRegime.UNCLASSIFIED, ["REGIME_INPUT_INCOMPLETE"]
         daily = features.daily_trend_score
         hourly = features.hourly_trend_score
         breadth = features.market_breadth

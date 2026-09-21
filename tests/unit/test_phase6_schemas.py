@@ -57,7 +57,6 @@ def _protocol(verdict: CommitteeVerdict) -> TradeProtocol:
         evidence_snapshot_id="evidence-pack:test",
         evidence_ids=["evidence:test"],
         effective_from=_NOW + timedelta(minutes=1),
-        broker_execution_allowed=False,
         paper_simulation_allowed=executable,
         ledger_write_allowed=executable,
     )
@@ -81,15 +80,10 @@ def test_trade_protocol_exposes_only_public_phase6_outcomes(
 ) -> None:
     protocol = _protocol(verdict)
     assert protocol.outcome is outcome
-    assert not protocol.broker_execution_allowed
 
 
-def test_trade_protocol_rejects_broker_or_mismatched_paper_gates() -> None:
+def test_trade_protocol_rejects_mismatched_paper_gates() -> None:
     eligible = _protocol(CommitteeVerdict.PAPER_ELIGIBLE)
-    with pytest.raises(ValidationError, match="Input should be False"):
-        TradeProtocol.model_validate(
-            {**eligible.model_dump(mode="python"), "broker_execution_allowed": True}
-        )
     with pytest.raises(ValidationError, match="simulation gate"):
         TradeProtocol.model_validate(
             {**eligible.model_dump(mode="python"), "paper_simulation_allowed": False}

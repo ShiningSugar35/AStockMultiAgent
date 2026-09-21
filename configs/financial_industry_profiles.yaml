@@ -26,6 +26,11 @@ profiles:
     description: Property developers with project inventory and prepayment semantics.
     excluded_rule_ids: []
     notes: [PROJECT_ACCOUNTING_CAN_EXPLAIN_HIGH_INVENTORY_OR_PREPAYMENTS, ADVANCED_SCORES_CALCULATION_ONLY_NO_GENERIC_FLAG]
+  - profile_id: RESOURCE_MINING
+    profile_version: "2.0.0"
+    description: Mining and resource producers with production, realized-price, reserve and unit-cost economics.
+    excluded_rule_ids: []
+    notes: [USE_RESOURCE_PRODUCTION_AND_UNIT_COST_DRIVERS, DO_NOT_INFER_RESERVES_FROM_ACCOUNTING_ASSETS]
   - profile_id: EARLY_BIOTECH
     profile_version: "2.0.0"
     description: Pre-commercial or early-commercial biotechnology companies.

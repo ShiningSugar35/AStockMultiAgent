@@ -685,8 +685,19 @@ class ScheduledResearchService:
         investor_request: InvestorRequestEnvelope,
         request: ScheduledRunRequest,
     ) -> Any:
+        if investor_request.request_id != f"scheduled:{request.run_id}":
+            raise ValueError("scheduled preflight request identity mismatch")
         semantic_receipt_id = request.semantic_capability_receipt_id
         if semantic_receipt_id is None:
+            # The checkpoint fingerprint, consent and bucket ownership were checked
+            # by _run_owned. Resume that request's immutable prepared context rather
+            # than minting a different CURRENT timestamp on every retry. A new
+            # scheduled run obtains a new context through its distinct request id.
+            existing = self.store.get_preflight_for_request(investor_request.request_id)
+            if existing is not None:
+                if existing.normalized_intent != investor_request.normalized_intent:
+                    raise ValueError("scheduled preflight intent mismatch")
+                return existing
             return self.preflight_service.build(investor_request)
         with self.store.connect() as connection:
             row = connection.execute(

@@ -10,7 +10,6 @@ from pydantic import AwareDatetime, Field, model_validator
 from astock.schemas.base import AStockModel
 from astock.schemas.documents import DocumentType, PageExtractionMethod
 from astock.schemas.knowledge import CoverageStatus
-from astock.schemas.pit import PointInTimeMetadata
 
 
 class BookProcessingStatus(StrEnum):
@@ -130,7 +129,6 @@ class BookSourceManifest(AStockModel):
     author_source_id: str
     document_id: str
     snapshot_id: str
-    pit_id: str
     document_type: DocumentType
     file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     raw_object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -144,6 +142,14 @@ class BookSourceManifest(AStockModel):
     external_republication_policy: str = "PROHIBITED"
     raw_retention_policy: str = "PERMANENT"
     cleaning_reconstructable: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_id(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_id", None)
+        return value
 
     @model_validator(mode="after")
     def validate_private_source_policy(self) -> BookSourceManifest:
@@ -436,11 +442,25 @@ class HumanReviewDecision(AStockModel):
 
 class PrivatePdfIngestResult(AStockModel):
     manifest: BookSourceManifest
-    pit_metadata: PointInTimeMetadata
     parse_report: BookParseReport | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_metadata(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_metadata", None)
+        return value
 
 
 class PrivateDocxIngestResult(AStockModel):
     manifest: BookSourceManifest
-    pit_metadata: PointInTimeMetadata
     parse_report: PrivateDocxParseReport
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_metadata(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_metadata", None)
+        return value

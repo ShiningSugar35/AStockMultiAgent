@@ -32,7 +32,6 @@ def test_adaptive_edge_diagnostic_cli_is_read_only_and_policy_driven(
     assert capability_payload["lookback_days"] == 120
     assert capability_payload["automatic_resolution_budget_seconds"] == 1800
     assert capability_payload["paper_ledger_write_allowed"] is False
-    assert capability_payload["broker_execution_allowed"] is False
 
     dialect = runner.invoke(app, ["provider-dialect-status"])
     assert dialect.exit_code == 0, dialect.output
@@ -50,7 +49,6 @@ def test_adaptive_edge_diagnostic_cli_is_read_only_and_policy_driven(
     assert adaptive_payload["specialist_default_budget"] == 3
     assert adaptive_payload["specialist_maximum_budget"] == 8
     assert adaptive_payload["paper_ledger_write_allowed"] is False
-    assert adaptive_payload["broker_execution_allowed"] is False
     assert adaptive_payload["manual_last"] is True
 
     schemas = runner.invoke(app, ["adaptive-edge-schema"])

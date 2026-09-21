@@ -25,7 +25,6 @@ mandatory_dag:
   degraded_allowed: []
   nodes:
     - REQUEST_CONTRACT
-    - POINT_IN_TIME_SNAPSHOT
     - MACRO
     - MARKET_REGIME
     - INDUSTRY
@@ -51,14 +50,6 @@ critical_source_families:
   - OFFICIAL_FILING
   - MACRO_RELEASE
   - NEWS_EVENT
-
-point_in_time:
-  require_object_hash: true
-  require_provider: true
-  require_source_identity: true
-  require_ingestion_version: true
-  require_parser_version: true
-  conflict_policy: BLOCK
 
 news_windows_days: [7, 30, 90]
 news_categories:
@@ -144,12 +135,10 @@ execution:
 publication:
   mandatory_coverage_required: 1.0
   critical_source_lineage_required: 1.0
-  point_in_time_leakage_allowed: 0
   publication_gate_bypass_allowed: 0
   critical_veto_leak_allowed: 0
   source_failure_buy_allowed: 0
   stale_quote_instant_execution_allowed: 0
-  broker_execution_allowed: false
 
 tracking:
   triggers:

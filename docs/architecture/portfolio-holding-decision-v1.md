@@ -219,7 +219,7 @@ Broad stock complements 仍从证明过的 A-share Universe/Research Team 中发
 ## 11. 永久安全边界
 
 - no real broker connector/order；
-- `broker_execution_allowed=false`；
+- 当前活动合同没有真实券商执行能力；
 - portfolio/hedge/holding report 不直接写 paper ledger；
 - Candidate/ResearchSeed 不能直接产生 portfolio weight；
 - Web/Search 不证明 Universe、连续行情、negative proof 或 hedge effectiveness；正式 ETF 产品/机制 capture 还必须满足 `observed_at <= as_of`；

@@ -359,7 +359,6 @@ class PortfolioVNextService:
             "finding_codes": sorted(findings),
             "allocation_override_allowed": False,
             "paper_ledger_write_allowed": False,
-            "broker_execution_allowed": False,
         }
 
     def _analysis_report(self, artifact_id: str) -> tuple[PortfolioAnalysisReport, str]:

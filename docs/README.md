@@ -31,7 +31,7 @@ Markdown 适合第 1、2、部分第 5 类；第 3、4 类必须由代码、Sche
 | 5 | 架构决策 | `docs/adr/`、当前 `docs/architecture/` | 活跃任务清单、运行事实 |
 | 6 | 跨能力流程 | `docs/workflows/` | 重复 Schema 或业务实现 |
 | 7 | Agent 方法合同 | `.agents/skills/*/SKILL.md` | 建立第二套路由、账本或证据模型 |
-| 8 | 当前待实施路线 | `planning/work_packages_v1.yaml`（机器索引）+ `开发计划.md`（可读计划） | 已完成历史、长期运行样本门 |
+| 8 | 当前开发状态 / 新任务入口 | `planning/work_packages_v1.yaml`（机器索引）+ `开发计划.md`（可读计划） | 已完成历史、长期运行样本门 |
 | 9 | 最近验证快照 | `进度验收.md` | 累积所有历史验收流水 |
 | 10 | 历史与背景 | Git、tag/release、冻结设计文档、`docs/scouting/` | 作为当前实现依据 |
 
@@ -47,17 +47,17 @@ Markdown 适合第 1、2、部分第 5 类；第 3、4 类必须由代码、Sche
 
 ### 3.2 `AGENTS.md`
 
-只维护所有 Agent 都必须遵守的仓库级规则：真相层级、证据/PIT、写入边界、开发工作流、投资者输出边界和永久禁止事项。稳定规则才进入该文件，单个任务的临时步骤不得写入。
+只维护所有 Agent 都必须遵守的仓库级规则：真相层级、证据与 current-only 事实边界、写入边界、开发工作流、投资者输出边界和永久禁止事项。稳定规则才进入该文件，单个任务的临时步骤不得写入。
 
 ### 3.3 `docs/adr/`
 
-一个 ADR 只记录一项重要决策，包含状态、上下文、决策、后果、替代方案、合规检查与替代关系。旧 ADR 不删除；后续决策使用 `Superseded by` 连接。
+一个 ADR 只记录一项重要决策，包含状态、上下文、决策、后果、替代方案、合规检查与替代关系。ADR 属于专门历史决策层，旧 ADR 不删除；后续决策使用 `Superseded by` 连接。这个 ADR 例外不得扩展到普通审计、故障分析、实施方案或同主题当前设计。
 
 ### 3.4 `docs/architecture/`
 
-记录当前架构边界和版本化领域设计。每份文档必须声明：
+记录当前架构边界和版本化领域设计。普通当前架构文档采用原位更新；同主题新设计完全取代旧稿时删除旧稿或覆盖唯一现行文件，不通过额外 `SUPERSEDED` 文档保留重复正文。每份现行文档必须声明：
 
-- `状态`：CURRENT / PROPOSED / HISTORICAL / SUPERSEDED；
+- `状态`：CURRENT / PROPOSED / HISTORICAL；
 - `是否已经实现`；
 - 对应机器合同、配置、migration、CLI 与测试；
 - 不属于本设计的能力。
@@ -84,7 +84,7 @@ Skill 是单个专业角色的方法与工具合同，不是自由人格提示�
 
 ### 3.8 `进度验收.md`
 
-只回答三个问题：当前仓库最近验证到什么程度；本次变更实际交付了什么、通过了哪些检查；哪些关键能力仍未实现或未验证。
+只回答三个问题：当前仓库最近验证到什么程度；本次变更实际交付了什么、通过了哪些检查；哪些关键能力仍未实现或未验证。新的验收/审计结论直接覆盖更新当前快照；被新结论完全替代的独立审计文件应删除，不保留一串 `SUPERSEDED` 审计正文。
 
 不保存跨版本长篇流水，不重复整个架构，也不把未完成计划写成验收结果。
 
@@ -110,6 +110,7 @@ Skill 是单个专业角色的方法与工具合同，不是自由人格提示�
 - [全市场研究团队](architecture/full-market-research-team-v1.md)
 - [推荐广度、入场质量与企业事件情报](architecture/recommendation-breadth-entry-event-intelligence-v1.md)
 - [Serenity 方法层](architecture/serenity-method-layer-v1.md)
+- [技能驱动候选发现](architecture/skill-driven-candidate-discovery-v1.md)
 - [公共回复合同](architecture/public-response-contract-v1.md)
 - [投资请求统一编排蓝图](architecture/investment-request-orchestration-v1.md)
 - [市场状态与风险预算总控蓝图](architecture/market-regime-control-v1.md)

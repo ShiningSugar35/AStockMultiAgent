@@ -1,4 +1,5 @@
 """Optional-source contracts, origins, nonblocking setup and safe capture."""
+
 from __future__ import annotations
 
 import json
@@ -6,6 +7,7 @@ import subprocess
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any, Literal, cast
 
 import httpx
 import pytest
@@ -25,24 +27,44 @@ from astock.schemas import SourceSnapshot
 from tests.unit.test_current_research_continuation import PROJECT_ROOT, _runtime
 
 
-def request(capability="market.reference.hint"):
+def request(
+    capability: Literal[
+        "market.reference.hint", "news.discovery.lead", "news.global.lead"
+    ] = "market.reference.hint",
+) -> SupplementalRequest:
     return SupplementalRequest(
-        capability=capability, symbol="600519",
-        start=date(2026, 9, 1), end=date(2026, 9, 2),
+        capability=capability,
+        symbol="600519",
+        start=date(2026, 9, 1),
+        end=date(2026, 9, 2),
     )
 
 
 def ak_row(**overrides):
     return {
-        "日期": "2026-09-01", "股票代码": "600519", "开盘": "10", "最高": "12",
-        "最低": "9", "收盘": "11", "成交量": "2", "成交额": "2100", **overrides,
+        "日期": "2026-09-01",
+        "股票代码": "600519",
+        "开盘": "10",
+        "最高": "12",
+        "最低": "9",
+        "收盘": "11",
+        "成交量": "2",
+        "成交额": "2100",
+        **overrides,
     }
 
 
 def ts_row(**overrides):
     return {
-        "trade_date": "20260901", "ts_code": "600519.SH", "open": "10", "high": "12",
-        "low": "9", "close": "11", "vol": "2", "amount": "2.1", **overrides,
+        "trade_date": "20260901",
+        "ts_code": "600519.SH",
+        "open": "10",
+        "high": "12",
+        "low": "9",
+        "close": "11",
+        "vol": "2",
+        "amount": "2.1",
+        **overrides,
     }
 
 
@@ -59,10 +81,18 @@ def test_source_units_and_extra_columns():
     assert a["adjustment"] == t["adjustment"] == "UNADJUSTED"
 
 
-@pytest.mark.parametrize("override", [
-    {"股票代码": "000001"}, {"日期": "2025-01-01"}, {"收盘": "NaN"},
-    {"成交量": "-1"}, {"最高": "8"}, {"最低": "11"}, {"开盘": "0"},
-])
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"股票代码": "000001"},
+        {"日期": "2025-01-01"},
+        {"收盘": "NaN"},
+        {"成交量": "-1"},
+        {"最高": "8"},
+        {"最低": "11"},
+        {"开盘": "0"},
+    ],
+)
 def test_invalid_reference_is_not_accepted(override):
     with pytest.raises(ProviderError) as caught:
         normalize_daily([ak_row(**override)], request(), kind="akshare")
@@ -91,8 +121,11 @@ def test_old_network_probe_can_recover_but_access_denial_cannot(tmp_path, denied
         raise httpx.ConnectError("synthetic transport failure")
 
     report = ProviderProbeService(
-        project_root=PROJECT_ROOT, registry=service.factory.registry,
-        state=state, objects=objects, live_transport=transport,
+        project_root=PROJECT_ROOT,
+        registry=service.factory.registry,
+        state=state,
+        objects=objects,
+        live_transport=transport,
     ).probe("sina-reference", live=True, probe_key="temporary-network-probe")
     factory = service.factory
     original = state.get_provider_probe_health_snapshot("sina-reference")
@@ -103,8 +136,11 @@ def test_old_network_probe_can_recover_but_access_denial_cannot(tmp_path, denied
         factory.capability_health_status("sina-reference", "instrument.identity")
         is ProviderHealthStatus.UNAVAILABLE
     )
-    factory.clock = lambda: observed + timedelta(
-        seconds=factory.source_breaker.policy.cooldown_seconds + 1,
+    factory.clock = lambda: (
+        observed
+        + timedelta(
+            seconds=factory.source_breaker.policy.cooldown_seconds + 1,
+        )
     )
     expected = ProviderHealthStatus.UNAVAILABLE if denied else ProviderHealthStatus.NOT_PROBED
     assert factory.capability_health_status("sina-reference", "instrument.identity") is expected
@@ -123,7 +159,8 @@ def test_missing_credentials_are_not_need_info(tmp_path, monkeypatch):
         lambda *args, **kwargs: False,
     )
     result = SupplementalEvidenceService(PROJECT_ROOT, state, objects).collect(
-        request("news.global.lead"), live=True,
+        request("news.global.lead"),
+        live=True,
     )
     assert result["status"] == "PUBLIC_DATA_UNAVAILABLE"
     assert result["attempts"] == []
@@ -199,10 +236,17 @@ def test_finnhub_header_and_news_scope(tmp_path, monkeypatch):
 
     def transport(incoming):
         seen.append(incoming)
-        return httpx.Response(200, json=[{
-            "headline": "Example news", "url": "https://example.org/news",
-            "datetime": 1788220800, "source": "Example",
-        }])
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "headline": "Example news",
+                    "url": "https://example.org/news",
+                    "datetime": 1788220800,
+                    "source": "Example",
+                }
+            ],
+        )
 
     with httpx.Client(transport=httpx.MockTransport(transport)) as client:
         provider = FinnhubNewsHintProvider(objects, state, client=client)
@@ -226,10 +270,17 @@ def test_finnhub_rotates_comma_separated_keys_on_access_failure(tmp_path, monkey
         seen.append(token)
         if token in {"synthetic-key-a", "synthetic-key-b"}:
             return httpx.Response(403, json={"error": "denied"})
-        return httpx.Response(200, json=[{
-            "headline": "Recovered news", "url": "https://example.org/recovered",
-            "datetime": 1788220800, "source": "Example",
-        }])
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "headline": "Recovered news",
+                    "url": "https://example.org/recovered",
+                    "datetime": 1788220800,
+                    "source": "Example",
+                }
+            ],
+        )
 
     with httpx.Client(transport=httpx.MockTransport(transport)) as client:
         rows, snapshot = FinnhubNewsHintProvider(objects, state, client=client).fetch_hints(
@@ -263,12 +314,17 @@ def test_news_discovery_collects_all_independent_live_sources(tmp_path, monkeypa
                 byte_size=ref.byte_size,
             )
             state.register_snapshot(snapshot)
-            return ([{
-                "title": f"{provider_id} lead",
-                "url": f"https://example.org/{provider_id}/lead",
-                "published_at": now.isoformat(),
-                "publisher": provider_id,
-            }], snapshot)
+            return (
+                [
+                    {
+                        "title": f"{provider_id} lead",
+                        "url": f"https://example.org/{provider_id}/lead",
+                        "published_at": now.isoformat(),
+                        "publisher": provider_id,
+                    }
+                ],
+                snapshot,
+            )
 
         return SimpleNamespace(fetch_hints=fetch_hints)
 
@@ -301,14 +357,23 @@ def test_worker_timeout_and_error_privacy(tmp_path, monkeypatch):
 def test_sdk_capture_is_not_a_fabricated_http_snapshot(tmp_path, monkeypatch):
     _, state, objects = _runtime(tmp_path)
     payload = {
-        "rows": [ak_row()], "sdk_version": "1.18.94", "upstream": "EASTMONEY",
-        "operation": "stock_zh_a_hist", "adjust": "",
+        "rows": [ak_row()],
+        "sdk_version": "1.18.94",
+        "upstream": "EASTMONEY",
+        "operation": "stock_zh_a_hist",
+        "adjust": "",
     }
-    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
-        returncode=0, stdout=json.dumps(payload),
-    ))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(payload),
+        ),
+    )
     rows, snapshot = AKShareHintProvider(objects, state).fetch_hints(request())
     assert rows[0]["symbol"] == "600519"
+    assert snapshot.source_url is not None
     assert snapshot.source_url.startswith("akshare://")
     assert objects.verify(snapshot.object_sha256)
 
@@ -337,6 +402,7 @@ def test_recorded_exact_request_and_no_formal_rights(tmp_path, monkeypatch):
 
 def test_cli_schema_registration():
     from astock.cli import app
+
     result = CliRunner().invoke(app, ["research-supplemental-schema"])
     assert result.exit_code == 0, result.output
     assert "market.reference.hint" in result.output
@@ -344,31 +410,48 @@ def test_cli_schema_registration():
 
 def test_sdk_network_failure_is_not_a_missing_capability(tmp_path, monkeypatch):
     _, state, objects = _runtime(tmp_path)
-    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
-        returncode=1, stdout=json.dumps({"failure_class": "NETWORK", "error_type": "ProxyError"}),
-    ))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps({"failure_class": "NETWORK", "error_type": "ProxyError"}),
+        ),
+    )
     with pytest.raises(ProviderError) as caught:
         AKShareHintProvider(objects, state).fetch_hints(request())
     assert caught.value.failure_class is FailureClass.NETWORK
 
 
-@pytest.mark.parametrize("strategy,expected_lanes", [
-    ("ENV_THEN_DIRECT", [True, False]), ("ENV_ONLY", [True, True]),
-    ("DIRECT_ONLY", [False, False]),
-])
+@pytest.mark.parametrize(
+    "strategy,expected_lanes",
+    [
+        ("ENV_THEN_DIRECT", [True, False]),
+        ("ENV_ONLY", [True, True]),
+        ("DIRECT_ONLY", [False, False]),
+    ],
+)
 def test_sdk_obeys_transport_profile_and_bounded_fallback(
-    tmp_path, monkeypatch, strategy, expected_lanes,
+    tmp_path,
+    monkeypatch,
+    strategy,
+    expected_lanes,
 ):
     from dataclasses import replace
 
     _, state, objects = _runtime(tmp_path)
     service = SupplementalEvidenceService(PROJECT_ROOT, state, objects)
-    definition = next(d for d in service.factory.registry.providers
-                      if d.provider_id == "akshare-reference-hints")
+    definition = next(
+        d for d in service.factory.registry.providers if d.provider_id == "akshare-reference-hints"
+    )
+    assert definition.transport_profile is not None
     profile = service.factory.profiles[definition.transport_profile]
     service.factory.profiles[definition.transport_profile] = replace(
-        profile, proxy_strategy=strategy, max_attempts=2,
-        backoff_seconds=0, jitter_seconds=0,
+        profile,
+        proxy_strategy=strategy,
+        max_attempts=2,
+        backoff_seconds=0,
+        jitter_seconds=0,
     )
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
     seen = []
@@ -376,16 +459,30 @@ def test_sdk_obeys_transport_profile_and_bounded_fallback(
     def worker(*args, **kwargs):
         seen.append(kwargs)
         if len(seen) == 1:
-            return SimpleNamespace(returncode=1, stdout=json.dumps({
-                "failure_class": "NETWORK", "error_type": "ProxyError",
-            }))
-        return SimpleNamespace(returncode=0, stdout=json.dumps({
-            "rows": [ak_row()], "sdk_version": "test-only", "upstream": "EASTMONEY",
-            "operation": "stock_zh_a_hist", "adjust": "",
-        }))
+            return SimpleNamespace(
+                returncode=1,
+                stdout=json.dumps(
+                    {
+                        "failure_class": "NETWORK",
+                        "error_type": "ProxyError",
+                    }
+                ),
+            )
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "rows": [ak_row()],
+                    "sdk_version": "test-only",
+                    "upstream": "EASTMONEY",
+                    "operation": "stock_zh_a_hist",
+                    "adjust": "",
+                }
+            ),
+        )
 
     monkeypatch.setattr(subprocess, "run", worker)
-    rows, _ = service.factory.create(definition.provider_id).fetch_hints(request())
+    rows, _ = cast(Any, service.factory.create(definition.provider_id)).fetch_hints(request())
     assert rows[0]["symbol"] == "600519"
     assert [("HTTPS_PROXY" in call["env"]) for call in seen] == expected_lanes
     assert all(0 < call["timeout"] <= definition.timeout_seconds for call in seen)
@@ -407,13 +504,15 @@ def test_sdk_does_not_route_around_access_or_invalid_data(tmp_path, monkeypatch,
 
     monkeypatch.setattr(subprocess, "run", worker)
     with pytest.raises(ProviderError):
-        service.factory.create("akshare-reference-hints").fetch_hints(request())
+        cast(Any, service.factory.create("akshare-reference-hints")).fetch_hints(request())
     assert len(seen) == 1
 
 
 def test_global_news_does_not_require_an_unrelated_stock_code():
     news = SupplementalRequest(
-        capability="news.global.lead", start=date(2026, 9, 1), end=date(2026, 9, 2),
+        capability="news.global.lead",
+        start=date(2026, 9, 1),
+        end=date(2026, 9, 2),
     )
     assert news.symbol == ""
     with pytest.raises(ValueError, match="reference hints require"):
@@ -421,16 +520,22 @@ def test_global_news_does_not_require_an_unrelated_stock_code():
 
 
 def test_live_provider_fallback_consumes_verified_capture_without_private_request(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from astock.providers.supplemental import _HintPersistence
 
     _, state, objects = _runtime(tmp_path)
     service = SupplementalEvidenceService(PROJECT_ROOT, state, objects)
-    definitions = [item for item in service.factory.registry.providers
-                   if item.provider_id in {"akshare-reference-hints", "tushare-reference-hints"}]
+    definitions = [
+        item
+        for item in service.factory.registry.providers
+        if item.provider_id in {"akshare-reference-hints", "tushare-reference-hints"}
+    ]
     monkeypatch.setattr(
-        service.factory, "definitions_for_capability", lambda capability: definitions,
+        service.factory,
+        "definitions_for_capability",
+        lambda capability: definitions,
     )
     persist = _HintPersistence()
     persist.provider_id = "tushare-reference-hints"
@@ -442,8 +547,10 @@ def test_live_provider_fallback_consumes_verified_capture_without_private_reques
     def create(provider_id):
         seen.append(provider_id)
         if provider_id == "akshare-reference-hints":
+
             def unavailable(_request):
                 raise ProviderError("network unavailable", failure_class=FailureClass.NETWORK)
+
             return SimpleNamespace(fetch_hints=unavailable)
         return SimpleNamespace(fetch_hints=lambda _request: (records, snapshot))
 
@@ -462,8 +569,11 @@ def test_optional_self_probe_checks_its_public_capture_contract(tmp_path, monkey
 
     _, state, objects = _runtime(tmp_path)
     service = SupplementalEvidenceService(PROJECT_ROOT, state, objects)
-    definition = next(item for item in service.factory.registry.providers
-                      if item.provider_id == "akshare-reference-hints")
+    definition = next(
+        item
+        for item in service.factory.registry.providers
+        if item.provider_id == "akshare-reference-hints"
+    )
     persist = _HintPersistence()
     persist.provider_id = definition.provider_id
     persist.object_store, persist.state = objects, state

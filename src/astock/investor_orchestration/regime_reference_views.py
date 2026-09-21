@@ -3,7 +3,7 @@
 Locators are NOT new artifacts or facts. They identify an observation inside an
 existing, verified release and bind its source hash. Reading never copies rows
 back to SQLite/ObjectStore and never calls a provider. Availability includes the
-parent release, so freshly imported history cannot masquerade as a past capture.
+parent release, so callers can reason about freshness and provenance without a second fact store.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from astock.schemas.reference_data import (
     DatasetReleaseManifest,
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
-    ReferencePitStatus,
 )
 
 _REFERENCE_PREFIX = "reference-observation:"
@@ -86,8 +85,6 @@ class CanonicalRegimeReferenceViews:
             raise ValueError("regime daily view requires a canonical daily-price release")
         if manifest.coverage.status is not ReferenceCoverageStatus.COMPLETE:
             raise ValueError("regime daily history is incomplete or conflicted")
-        if manifest.pit_status is ReferencePitStatus.UNVERIFIED:
-            raise ValueError("regime daily history lacks verified availability")
         result: dict[str, DailyBarObservation] = {}
         sources = {
             identity: self.state.get_snapshot(identity) for identity in manifest.raw_snapshot_ids

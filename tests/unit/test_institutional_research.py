@@ -65,7 +65,6 @@ from astock.schemas.institutional_research import (
     ValuationPack,
     ValuationScenarioAssumption,
 )
-from astock.schemas.pit import PointInTimeStatus
 from astock.schemas.research import FrozenEvidencePack, ResearchCoverageStatus
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -198,23 +197,17 @@ def _register_frozen_pack(
     claim_ids: list[str],
     evidence_ids: list[str],
     grades: dict[str, EvidenceGrade] | None = None,
-    pit_status: PointInTimeStatus = PointInTimeStatus.CERTIFIED,
 ) -> str:
     grades = grades or {evidence_id: EvidenceGrade.PRIMARY_OFFICIAL for evidence_id in evidence_ids}
     pack = FrozenEvidencePack(
         pack_id="frozen:test:" + content_hash({"claims": claim_ids, "evidence": evidence_ids}),
         company_id=COMPANY,
         as_of=NOW,
-        formal_historical=True,
-        allow_approximated=False,
         claim_ids=claim_ids,
         evidence_ids=evidence_ids,
         conflict_ids=[],
         open_conflict_ids=[],
         evidence_grade_by_id=grades,
-        pit_id_by_evidence_id={evidence_id: f"pit:{evidence_id}" for evidence_id in evidence_ids},
-        pit_status_by_evidence_id={evidence_id: pit_status for evidence_id in evidence_ids},
-        missing_pit_evidence_ids=[],
         coverage_status=ResearchCoverageStatus.COMPLETE,
         degradation_codes=[],
         frozen_input_sha256="1" * 64,
@@ -546,7 +539,7 @@ def test_community_evidence_cannot_be_upgraded_to_statutory_authority(tmp_path: 
         )
 
 
-def test_non_pit_safe_evidence_never_supports_material_claim(tmp_path: Path) -> None:
+def test_legacy_non_pit_safe_marker_no_longer_blocks_current_material_claim(tmp_path: Path) -> None:
     state, objects, service = _runtime(tmp_path)
     evidence_id, _ = _register_claim_with_evidence(
         state,
@@ -560,7 +553,6 @@ def test_non_pit_safe_evidence_never_supports_material_claim(tmp_path: Path) -> 
         objects,
         claim_ids=["claim:not-pit"],
         evidence_ids=[evidence_id],
-        pit_status=PointInTimeStatus.NOT_PIT_SAFE,
     )
     report = service.run_evidence_sufficiency(
         EvidenceSufficiencyRequest(
@@ -569,7 +561,7 @@ def test_non_pit_safe_evidence_never_supports_material_claim(tmp_path: Path) -> 
             created_at=NOW,
         )
     )
-    assert report.assessments[0].state is EvidenceSufficiencyState.INSUFFICIENT
+    assert report.assessments[0].state is EvidenceSufficiencyState.SUPPORTED
 
 
 def test_driver_tree_rejects_cycle() -> None:

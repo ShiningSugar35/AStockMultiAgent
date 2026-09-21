@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from math import log1p
 from pathlib import Path
 from threading import Lock
@@ -16,6 +17,14 @@ from typing import Any, Protocol, cast
 import yaml
 from pydantic import ValidationError
 
+from astock.candidates.discovery_bridge import (
+    VERIFIED_DISCOVERY_MARKER,
+    merge_discovery_seed_tranche,
+)
+from astock.candidates.discovery_runtime import (
+    VerifiedDiscoverySeedRepository,
+    active_discovery_registry_binding,
+)
 from astock.candidates.repository import CandidateRepository
 from astock.core.errors import AStockError
 from astock.core.hashing import content_hash
@@ -27,6 +36,7 @@ from astock.core.source_resilience import (
     scoped_source_capability,
 )
 from astock.core.state import StateStore
+from astock.data_standardization import normalize_provider_snapshot
 from astock.knowledge.visual_skill_repository import VisualSkillRepository
 from astock.providers.config import load_provider_registry
 from astock.schemas.evidence import FetchStatus, SourceSnapshot
@@ -1271,6 +1281,7 @@ class ResearchSeedService:
         )
         self.candidates = CandidateRepository(state)
         self.visual_skills = VisualSkillRepository(state)
+        self.verified_discovery = VerifiedDiscoverySeedRepository(state, objects)
         self.alias_groups = self._load_alias_groups(
             project_root / "configs" / "research_seed_domains.yaml"
         )
@@ -1296,6 +1307,11 @@ class ResearchSeedService:
         warnings: set[str] = set()
         source_snapshots: dict[str, str] = {}
         source_hashes: set[str] = set()
+        registry_binding = active_discovery_registry_binding(self.state, self.objects)
+        if registry_binding is None:
+            warnings.add("AUDITED_DISCOVERY_REGISTRY_UNAVAILABLE")
+        else:
+            source_hashes.add(registry_binding.object_hash)
         cutoff = request.as_of
         market_rows: dict[str, _MarketRow] = {}
         activity_proxy_markets: set[Market] = set()
@@ -1448,20 +1464,15 @@ class ResearchSeedService:
                 if self.objects.verify(record_hash):
                     source_hashes.add(record_hash)
 
-        release = self.visual_skills.latest_release_any()
+        # The historical visual-composite registry is intentionally excluded from
+        # production Seed generation. WP38+ discovery must enter through reviewed,
+        # evidence-bound thesis results rather than author/keyword domain matching.
+        release = None
         profiles: list[ExpertDomainProfile] = []
-        if release is None:
-            warnings.add("EXPERT_SKILL_REGISTRY_UNAVAILABLE")
-        else:
-            release_hash = str(release["release_object_hash"])
-            if not self.objects.verify(release_hash):
-                warnings.add("EXPERT_SKILL_REGISTRY_OBJECT_UNAVAILABLE")
-                release = None
-            else:
-                source_hashes.add(release_hash)
+        warnings.add("LEGACY_EXPERT_DOMAIN_OVERLAY_RETIRED")
 
         boards: list[tuple[str, str]] = []
-        needs_taxonomy = request.max_breadth_challenger_seeds > 0 or release is not None
+        needs_taxonomy = request.max_breadth_challenger_seeds > 0
         if needs_taxonomy:
             try:
                 board_payload, raw_board_snapshot = self.provider.fetch_industry_boards(
@@ -1494,26 +1505,6 @@ class ResearchSeedService:
                     warnings.add("BREADTH_DOMAIN_MAPPING_UNAVAILABLE")
             except (AStockError, OSError, RuntimeError, ValueError):
                 warnings.add("BREADTH_CHALLENGER_RESEARCH_UNAVAILABLE")
-
-        if release is not None and boards:
-            release_id = str(release["release_id"])
-            try:
-                profiles = self._expert_profiles(
-                    release_id=release_id,
-                    rows=self.visual_skills.overlay_skill_rows(release_id),
-                    boards=boards,
-                    request=request,
-                )
-                self._apply_expert_seeds(
-                    profiles=profiles,
-                    market_rows=market_rows,
-                    accumulators=accumulators,
-                    request=request,
-                    source_snapshots=source_snapshots,
-                    source_hashes=source_hashes,
-                )
-            except (AStockError, OSError, RuntimeError, ValueError):
-                warnings.add("EXPERT_DOMAIN_MARKET_TAXONOMY_UNAVAILABLE")
 
         all_seeds = [self._finalize_seed(item, request.as_of) for item in accumulators.values()]
         all_seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
@@ -1566,6 +1557,30 @@ class ResearchSeedService:
             ],
         ]
         seeds.sort(key=lambda item: (-item.research_priority_score, item.company_id))
+        verified_release_hash: str | None = None
+        if registry_binding is not None:
+            verified_release_row = self.verified_discovery.latest_for(
+                as_of=request.as_of,
+                binding=registry_binding,
+            )
+            if verified_release_row is None:
+                warnings.add("VERIFIED_DISCOVERY_SEED_RELEASE_UNAVAILABLE")
+            else:
+                verified_release, verified_release_hash = verified_release_row
+                merged = merge_discovery_seed_tranche(
+                    tuple(seeds),
+                    tuple(verified_release.seeds),
+                    max_total=request.max_total_seeds,
+                    max_market=request.max_market_seeds,
+                    max_long_horizon_value=request.max_long_horizon_value_seeds,
+                    max_breadth=request.max_breadth_challenger_seeds,
+                    max_verified_discovery=request.max_verified_discovery_seeds,
+                    max_existing_candidate=request.max_existing_candidate_seeds,
+                )
+                seeds = list(merged.seeds)
+                source_hashes.update(verified_release.source_object_hashes)
+                source_hashes.add(verified_release_hash)
+                cutoff = max(cutoff, verified_release.as_of)
         selected_breadth_domain_counts: dict[str, int] = defaultdict(int)
         selected_industry_counts: dict[str, int] = defaultdict(int)
         for seed in seeds:
@@ -1610,7 +1625,7 @@ class ResearchSeedService:
             {
                 "request": request.model_dump(mode="json", exclude={"created_at"}),
                 "data_cutoff_at": cutoff.isoformat(),
-                "registry_release_id": str(release["release_id"]) if release else None,
+                "registry_release_id": registry_binding.release_id if registry_binding else None,
                 "source_hashes": sorted(source_hashes),
                 "market_coverage_ratios": {
                     market.value: market_coverage_ratios[market]
@@ -1628,8 +1643,8 @@ class ResearchSeedService:
             as_of=request.as_of,
             data_cutoff_at=cutoff,
             status=status,
-            registry_release_id=str(release["release_id"]) if release else None,
-            registry_release_object_hash=(str(release["release_object_hash"]) if release else None),
+            registry_release_id=registry_binding.release_id if registry_binding else None,
+            registry_release_object_hash=registry_binding.object_hash if registry_binding else None,
             profiles=profiles,
             seeds=seeds,
             source_snapshot_ids=sorted(source_snapshots),
@@ -1722,12 +1737,23 @@ class ResearchSeedService:
                 ):
                     findings.add("RESEARCH_SEED_SOURCE_SNAPSHOT_DRIFT")
             if report.registry_release_id is not None:
-                release = self.visual_skills.release(report.registry_release_id)
-                if (
-                    release is None
-                    or str(release["release_object_hash"]) != report.registry_release_object_hash
-                ):
-                    findings.add("RESEARCH_SEED_REGISTRY_RELEASE_DRIFT")
+                binding = active_discovery_registry_binding(self.state, self.objects)
+                current_registry_matches = (
+                    binding is not None
+                    and binding.release_id == report.registry_release_id
+                    and binding.object_hash == report.registry_release_object_hash
+                )
+                if not current_registry_matches:
+                    # Historical reports may still bind the retired visual-composite
+                    # registry. Audit them as history without re-enabling that source
+                    # for new Seed generation.
+                    legacy_release = self.visual_skills.release(report.registry_release_id)
+                    if (
+                        legacy_release is None
+                        or str(legacy_release["release_object_hash"])
+                        != report.registry_release_object_hash
+                    ):
+                        findings.add("RESEARCH_SEED_REGISTRY_RELEASE_DRIFT")
             profile_authors = {item.author_source_id for item in report.profiles}
             profile_domains = {
                 domain.board_name for profile in report.profiles for domain in profile.domains
@@ -1743,12 +1769,21 @@ class ResearchSeedService:
                 if not set(seed.source_snapshot_ids).issubset(report_snapshot_ids):
                     findings.add("RESEARCH_SEED_SNAPSHOT_LINEAGE_DRIFT")
                 if ResearchSeedOrigin.EXPERT_SKILL in seed.origins:
-                    if not set(seed.expert_author_source_ids).issubset(profile_authors):
-                        findings.add("RESEARCH_SEED_EXPERT_AUTHOR_DRIFT")
-                    if not set(seed.expert_domain_names).issubset(profile_domains):
-                        findings.add("RESEARCH_SEED_EXPERT_DOMAIN_DRIFT")
-                    if not set(seed.expert_domain_support_skill_ids).issubset(profile_skill_ids):
-                        findings.add("RESEARCH_SEED_EXPERT_SKILL_DRIFT")
+                    if VERIFIED_DISCOVERY_MARKER in seed.reason_codes:
+                        if not self.verified_discovery.seed_is_bound_to_report_inputs(
+                            seed,
+                            report.source_object_hashes,
+                        ):
+                            findings.add("RESEARCH_SEED_VERIFIED_DISCOVERY_RELEASE_DRIFT")
+                    else:
+                        if not set(seed.expert_author_source_ids).issubset(profile_authors):
+                            findings.add("RESEARCH_SEED_EXPERT_AUTHOR_DRIFT")
+                        if not set(seed.expert_domain_names).issubset(profile_domains):
+                            findings.add("RESEARCH_SEED_EXPERT_DOMAIN_DRIFT")
+                        if not set(seed.expert_domain_support_skill_ids).issubset(
+                            profile_skill_ids
+                        ):
+                            findings.add("RESEARCH_SEED_EXPERT_SKILL_DRIFT")
                 if ResearchSeedOrigin.EXISTING_CANDIDATE in seed.origins:
                     if seed.candidate_version_id is None:
                         findings.add("RESEARCH_SEED_CANDIDATE_LINEAGE_MISSING")
@@ -1774,7 +1809,6 @@ class ResearchSeedService:
             "finding_codes": sorted(findings),
             "recommendation_allowed": False,
             "paper_ledger_write_allowed": False,
-            "broker_execution_allowed": False,
         }
 
     def _apply_breadth_challengers(
@@ -2108,27 +2142,69 @@ class ResearchSeedService:
             if normalized_rows:
                 company_id = str(row.get("code") or "")
                 name = str(row.get("name") or "").strip()
-                trade_price = self._number(row.get("trade"))
-                settlement_price = self._number(row.get("settlement"))
-                price = trade_price if trade_price > 0 else settlement_price
-                amount = self._number(row.get("amount"))
-                turnover = self._number(row.get("turnoverratio"))
                 if normalized_source == "TENCENT_QUOTE_BATCH":
-                    float_cap = self._number(row.get("float_market_cap_cny"))
+                    aliases = {
+                        "price": ("trade", "settlement"),
+                        "pe_ttm": ("pe_ttm",),
+                        "pb_mrq": ("pb_mrq",),
+                        "market_cap_cny": ("float_market_cap_cny",),
+                        "turnover_cny": ("amount",),
+                    }
+                    scales: dict[str, Decimal] = {}
                 else:
-                    raw_float_cap = self._number(row.get("nmc"))
-                    float_cap = raw_float_cap * 10_000 if raw_float_cap >= 0 else -1.0
-                pe_ttm = self._optional_positive_number(row.get("pe_ttm"))
-                pb_mrq = self._optional_positive_number(row.get("pb_mrq"))
+                    aliases = {
+                        "price": ("trade", "settlement"),
+                        "pe_ttm": ("per",),
+                        "pb_mrq": ("pb",),
+                        "market_cap_cny": ("nmc",),
+                        "turnover_cny": ("amount",),
+                    }
+                    scales = {"market_cap_cny": Decimal("10000")}
+                normalized = normalize_provider_snapshot(
+                    provider_id=str(normalized_source),
+                    instrument_id=f"{market.value}:{company_id}",
+                    payload=row,
+                    aliases=aliases,
+                    scales=scales,
+                )
+                turnover = self._number(row.get("turnoverratio"))
             else:
                 company_id = str(row.get("f12") or "")
                 name = str(row.get("f14") or "").strip()
-                price = self._number(row.get("f2"))
-                amount = self._number(row.get("f6"))
+                normalized = normalize_provider_snapshot(
+                    provider_id=str(normalized_source or "EASTMONEY_MARKET_CENTER"),
+                    instrument_id=f"{market.value}:{company_id}",
+                    payload=row,
+                    aliases={
+                        "price": ("f2",),
+                        "pe_ttm": ("f9",),
+                        "pb_mrq": ("f23",),
+                        "market_cap_cny": ("f21",),
+                        "turnover_cny": ("f6",),
+                    },
+                )
                 turnover = self._number(row.get("f8"))
-                float_cap = self._number(row.get("f21"))
-                pe_ttm = self._optional_positive_number(row.get("f9"))
-                pb_mrq = self._optional_positive_number(row.get("f23"))
+            price = float(normalized.price) if normalized.price is not None else 0.0
+            amount = (
+                float(normalized.turnover_cny)
+                if normalized.turnover_cny is not None
+                else -1.0
+            )
+            float_cap = (
+                float(normalized.market_cap_cny)
+                if normalized.market_cap_cny is not None
+                else -1.0
+            )
+            pe_ttm = (
+                float(normalized.pe_ttm)
+                if normalized.pe_ttm is not None and normalized.pe_ttm > 0
+                else None
+            )
+            pb_mrq = (
+                float(normalized.pb_mrq)
+                if normalized.pb_mrq is not None and normalized.pb_mrq > 0
+                else None
+            )
             if len(company_id) != 6 or not company_id.isdigit() or not name:
                 continue
             if self._excluded_name(name):

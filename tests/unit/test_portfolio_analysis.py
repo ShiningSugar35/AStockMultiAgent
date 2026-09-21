@@ -94,7 +94,6 @@ def test_missing_paper_account_returns_structured_needs_info(tmp_path: Path) -> 
     assert report.assets == []
     assert report.metrics is None
     assert report.warning_codes == ["PORTFOLIO_ACCOUNT_REQUIRED"]
-    assert not report.broker_execution_allowed
 
 
 def test_portfolio_alignment_uses_common_sessions_and_returns() -> None:

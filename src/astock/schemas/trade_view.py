@@ -56,7 +56,6 @@ class TradePlanView(AStockModel):
     scenario_prices_are_targets: Literal[False] = False
     requires_user_confirmation: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
     warning_codes: list[str]
     source_artifact_ids: list[str]
     source_object_hashes: list[str]

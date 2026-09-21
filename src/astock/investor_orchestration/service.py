@@ -70,27 +70,23 @@ class InvestorOrchestrationService:
     def freeze_current_request(
         self, request: InvestorRequestEnvelope, *, artifact_ids: tuple[str, ...]
     ) -> InvestorRequestEnvelope:
-        """Freeze registered acquisition without rewriting the original question clock."""
+        """Freeze CURRENT registered inputs at one immutable post-acquisition decision clock."""
+
         from astock.investor_orchestration.decision_freeze import DecisionFreezeService
-        from astock.investor_orchestration.models import SideEffectClass
 
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
         if (
             request.research_mode != "CURRENT"
             or str(request.metadata.get("analysis_mode", "CURRENT")).upper() != "CURRENT"
         ):
-            raise ValueError("historical mode cannot opt into CURRENT acquisition freeze")
-        if request.side_effect not in {
-            SideEffectClass.READ,
-            SideEffectClass.META,
-            SideEffectClass.NONE,
-        }:
-            raise ValueError(
-                "current freeze is read-only; economic requests use their original confirmation"
-            )
+            raise ValueError("historical mode cannot use CURRENT post-acquisition freeze")
         self._freeze_investment_expectation(request)
+        decision = DecisionFreezeService(self.store).freeze(
+            request,
+            artifact_ids=artifact_ids,
+        )
         self._bind_original_request(request)
-        return DecisionFreezeService(self.store).freeze(request, artifact_ids=artifact_ids)
+        return decision
 
     def execute_registered(
         self,
@@ -107,13 +103,13 @@ class InvestorOrchestrationService:
         *,
         artifacts: Mapping[str, tuple[str, ...]],
     ) -> CurrentRegisteredExecution:
-        """Explicit current freeze followed by the same read-only registered executor."""
+        """Execute CURRENT registered inputs without a historical evidence-cutoff freeze."""
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
         if (
             request.research_mode != "CURRENT"
             or str(request.metadata.get("analysis_mode", "CURRENT")).upper() != "CURRENT"
         ):
-            raise ValueError("historical mode must retain its fixed evidence cutoff")
+            raise ValueError("historical mode cannot use CURRENT registered execution")
         if set(artifacts) & set(self._built_in_handlers()):
             raise ValueError("registered inputs cannot override a built-in safety boundary")
         input_ids = tuple(sorted({identifier for ids in artifacts.values() for identifier in ids}))
@@ -171,6 +167,10 @@ class InvestorOrchestrationService:
         from astock.investor_orchestration.utils import content_hash
 
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
+        if request.decision_time is not None:
+            from astock.investor_orchestration.decision_freeze import DecisionFreezeService
+
+            DecisionFreezeService(self.store).verify(request)
         validate_request_permissions(request)
         if request.side_effect not in {
             SideEffectClass.READ,
@@ -273,6 +273,10 @@ class InvestorOrchestrationService:
         scenario_requirements: Mapping[str, Any] | None = None,
     ) -> tuple[InvestorSessionPreflightReceipt, CapabilityExecutionPlan]:
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
+        if request.decision_time is not None:
+            from astock.investor_orchestration.decision_freeze import DecisionFreezeService
+
+            DecisionFreezeService(self.store).verify(request)
         self._freeze_investment_expectation(request)
         self._bind_original_request(request)
         preflight = self.preflight_service.build(request)

@@ -266,7 +266,6 @@ def test_portfolio_analysis_persists_risk_metrics_and_audits(tmp_path: Path) -> 
     assert report.metrics.annualized_downside_deviation >= 0
     artifact_id = f"PortfolioAnalysisReport:{report.report_id}"
     assert service.audit(artifact_id)["status"] == "PASS"
-    assert not report.broker_execution_allowed
 
 
 def test_portfolio_construction_requires_approved_lineage_and_emits_four_proposals(

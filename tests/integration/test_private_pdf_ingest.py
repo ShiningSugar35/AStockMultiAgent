@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pymupdf
@@ -10,8 +9,7 @@ from astock.books import PrivatePdfIngestService
 from astock.core.object_store import ObjectStore
 from astock.documents import DocumentPageRepository, DocumentRepository
 from astock.evidence import ClaimEvidenceService, EvidenceRepository
-from astock.pit import PointInTimeService
-from astock.schemas import DocumentType, EvidenceGrade, FactStatus, PointInTimeStatus
+from astock.schemas import DocumentType, EvidenceGrade, FactStatus
 
 
 def _private_pdf(path: Path) -> tuple[bytes, str]:
@@ -64,12 +62,8 @@ def test_private_book_is_content_addressed_idempotent_and_uses_shared_evidence(
     assert manifest.external_republication_policy == "PROHIBITED"
     assert manifest.raw_retention_policy == "PERMANENT"
     assert manifest.cleaning_reconstructable
-    assert first.pit_metadata.point_in_time_status is PointInTimeStatus.NOT_PIT_SAFE
-    with pytest.raises(ValueError, match="not allowed"):
-        PointInTimeService.assert_usable(
-            first.pit_metadata,
-            datetime.now(UTC),
-        )
+    assert "pit_metadata" not in first.model_dump(mode="python")
+    assert "pit_id" not in manifest.model_dump(mode="python")
 
     parse_report = first.parse_report
     assert parse_report is not None
@@ -112,7 +106,7 @@ def test_private_book_is_content_addressed_idempotent_and_uses_shared_evidence(
         assert connection.execute("SELECT COUNT(*) FROM book_source_manifest").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM book_parse_report").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM source_document").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM point_in_time_metadata").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM point_in_time_metadata").fetchone()[0] == 0
         stored_json = "\n".join(
             [
                 connection.execute(

@@ -29,7 +29,6 @@ def test_public_exhaustion_never_requests_private_material(tmp_path):
     assert service.status(result.continuation_id)["user_assistance_request_allowed"] is False
     assert acquisition.calls == 1
     assert not result.investor_view_allowed
-    assert not result.broker_execution_allowed
 
 
 def test_bounded_budget_remains_usable_after_start(tmp_path):
@@ -93,7 +92,9 @@ def test_resolver_cannot_return_a_different_existing_task(tmp_path):
             ),
             execute_team=lambda *_: pytest.fail("no evidence"),
         )
-    assert service.get(record.continuation_id).automatic_resolution_artifact_ids == []
+    stored = service.get(record.continuation_id)
+    assert stored is not None
+    assert stored.automatic_resolution_artifact_ids == []
 
 
 def test_programming_errors_are_not_hidden_as_network_recovery(tmp_path):

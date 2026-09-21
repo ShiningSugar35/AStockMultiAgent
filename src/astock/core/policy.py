@@ -18,7 +18,7 @@ class PolicyEngine:
         if draft.requested_commands:
             raise PolicyError(
                 "Codex imports artifacts only; state-changing commands require a dedicated "
-                "validated CLI and real brokerage orders are never supported.",
+                "validated CLI.",
                 failure_class=FailureClass.POLICY_REJECTED,
                 details={"requested_commands": draft.requested_commands},
             )

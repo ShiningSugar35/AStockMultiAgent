@@ -62,6 +62,9 @@ from astock.financial_integrity import (
 )
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
 from astock.knowledge import (
+    DEFAULT_SEMANTIC_MODEL_ID,
+    DEFAULT_SEMANTIC_PROVIDER,
+    DEFAULT_SEMANTIC_TRANSPORT_POLICY,
     DirectSourceDistillationService,
     DirectSourceRealRunService,
     DistillationRepository,
@@ -580,7 +583,6 @@ def operational_status() -> None:
             "current_research_budget_seconds": (current_policy.automatic_resolution_budget_seconds),
             "research_team_budget_seconds": team_policy.automatic_resolution_budget_seconds,
             "budget_consistent": budget_consistent,
-            "broker_execution_allowed": False,
         }
     )
 
@@ -684,7 +686,6 @@ def probe() -> None:
                     paths.root / "configs" / "candidate_scan.yaml"
                 ).rules_version,
                 "network_access": False,
-                "broker_execution": False,
                 "paper_ledger_write": False,
                 "committee_write": False,
             },
@@ -712,7 +713,6 @@ def probe() -> None:
                     shadow.configured_policy.phase8_observation_months
                 ),
                 "network_access": False,
-                "broker_execution": False,
                 "main_paper_ledger_write": False,
                 "online_weight_changes": False,
             },
@@ -724,7 +724,6 @@ def probe() -> None:
                 "adaptive_weights": adaptive.adaptive_weights_enabled,
                 "online_learning": adaptive.online_learning_allowed,
                 "main_paper_ledger_write": (adaptive.main_paper_ledger_write_allowed),
-                "broker_execution": adaptive.broker_execution_allowed,
                 "next_permitted_stage": adaptive.next_permitted_stage,
                 "reason_codes": adaptive.reason_codes,
                 "sample_gaps": {
@@ -1645,7 +1644,6 @@ def private_pdf_ingest(
                 "source_id": manifest.source_id,
                 "document_id": manifest.document_id,
                 "snapshot_id": manifest.snapshot_id,
-                "pit_id": manifest.pit_id,
                 "file_sha256": manifest.file_sha256,
                 "raw_object_sha256": manifest.raw_object_sha256,
                 "file_name_sha256": manifest.file_name_sha256,
@@ -1658,7 +1656,6 @@ def private_pdf_ingest(
                 "raw_retention_policy": manifest.raw_retention_policy,
                 "cleaning_reconstructable": manifest.cleaning_reconstructable,
             },
-            "pit_status": result.pit_metadata.point_in_time_status,
             "parse": (
                 {
                     "book_parse_report_id": parse.book_parse_report_id,
@@ -1734,7 +1731,6 @@ def private_docx_ingest(
                 "source_id": manifest.source_id,
                 "document_id": manifest.document_id,
                 "snapshot_id": manifest.snapshot_id,
-                "pit_id": manifest.pit_id,
                 "file_sha256": manifest.file_sha256,
                 "raw_object_sha256": manifest.raw_object_sha256,
                 "file_name_sha256": manifest.file_name_sha256,
@@ -1746,7 +1742,6 @@ def private_docx_ingest(
                 "raw_retention_policy": manifest.raw_retention_policy,
                 "cleaning_reconstructable": manifest.cleaning_reconstructable,
             },
-            "pit_status": result.pit_metadata.point_in_time_status,
             "parse": {
                 "docx_parse_report_id": parse.docx_parse_report_id,
                 "processing_status": parse.processing_status,
@@ -2228,8 +2223,6 @@ def _validate_committee_execution(
         raise ValueError("trade protocol is not active")
     if protocol.outcome is not TradeProtocolOutcome.APPROVE_SIMULATION:
         raise ValueError("trade protocol does not approve simulation")
-    if protocol.broker_execution_allowed:
-        raise ValueError("broker execution must remain disabled")
     if not protocol.paper_simulation_allowed:
         raise ValueError("trade protocol paper simulation gate is closed")
     if not protocol.ledger_write_allowed:
@@ -3654,8 +3647,6 @@ def shadow_schema() -> None:
             "policy": service.configured_policy,
             "hard_boundaries": {
                 "weights_frozen": True,
-                "future_inputs_allowed": False,
-                "not_pit_safe_formal_samples_allowed": False,
                 "historical_replay_can_count_as_forward": False,
                 "research_memo_decision_lineage_required": True,
                 "live_forward_snapshot_lineage_required": True,
@@ -3664,7 +3655,6 @@ def shadow_schema() -> None:
                 "reinforcement_learning_allowed": False,
                 "online_weight_changes_allowed": False,
                 "automatic_skill_modification_allowed": False,
-                "broker_execution_allowed": False,
                 "main_paper_ledger_write_allowed": False,
                 "independence_key_is_deterministic": True,
             },
@@ -4636,8 +4626,23 @@ def knowledge_semantic_embedding_run(
 @app.command("knowledge-semantic-packet-export")
 def knowledge_semantic_packet_export(
     run_id: Annotated[str, typer.Argument(help="Embedding-screened semantic run id.")],
+    provider: Annotated[
+        str,
+        typer.Option("--provider", help="Semantic LLM provider provenance for this batch."),
+    ] = DEFAULT_SEMANTIC_PROVIDER,
+    model_id: Annotated[
+        str,
+        typer.Option("--model-id", help="Semantic LLM model provenance for this batch."),
+    ] = DEFAULT_SEMANTIC_MODEL_ID,
+    transport_policy: Annotated[
+        str,
+        typer.Option(
+            "--transport-policy",
+            help="Validated semantic transport/fallback policy for this batch.",
+        ),
+    ] = DEFAULT_SEMANTIC_TRANSPORT_POLICY,
 ) -> None:
-    """Materialize complete ArgumentUnits for a manual OpenCode/DeepSeek run."""
+    """Materialize complete ArgumentUnits for an offline semantic-LLM run."""
 
     paths, state, objects = _services()
     execution = SemanticPacketService(
@@ -4645,8 +4650,13 @@ def knowledge_semantic_packet_export(
         objects,
         ParquetSemanticStore(paths.parquet),
         paths.runtime,
-        paths.root / "OPENCODE_DEEPSEEK_PROMPT.md",
-    ).export(run_id)
+        paths.root / "configs" / "knowledge_semantic_prompt.md",
+    ).export(
+        run_id,
+        provider=provider,
+        model_id=model_id,
+        transport_policy=transport_policy,
+    )
     relative_directory = (
         execution.batch_directory.relative_to(paths.root).as_posix()
         if execution.batch_directory.is_relative_to(paths.root)
@@ -4657,13 +4667,16 @@ def knowledge_semantic_packet_export(
             "status": execution.batch.status,
             "batch_id": execution.batch.batch_id,
             "run_id": run_id,
+            "provider": execution.batch.provider,
+            "model_id": execution.batch.model_id,
+            "transport_policy": transport_policy,
             "exported_argument_count": execution.batch.exported_argument_count,
             "held_back_calibration_count": execution.held_back_calibration_count,
             "held_back_structural_count": execution.held_back_structural_count,
             "held_back_oversize_count": execution.held_back_oversize_count,
             "batch_directory": relative_directory,
-            "prompt_file": "OPENCODE_DEEPSEEK_PROMPT.md",
-            "expected_result_file": "deepseek-results.jsonl",
+            "prompt_file": "configs/knowledge_semantic_prompt.md",
+            "expected_result_file": "semantic-results.jsonl",
             "external_request_sent": False,
         }
     )
@@ -4677,7 +4690,7 @@ def knowledge_semantic_result_stage(
         typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
     ],
 ) -> None:
-    """Validate and stage one complete OpenCode/DeepSeek JSONL response."""
+    """Validate and stage one complete semantic-LLM JSONL response."""
 
     paths, state, objects = _services()
     batch = SemanticPacketService(
@@ -4685,7 +4698,7 @@ def knowledge_semantic_result_stage(
         objects,
         ParquetSemanticStore(paths.parquet),
         paths.runtime,
-        paths.root / "OPENCODE_DEEPSEEK_PROMPT.md",
+        paths.root / "configs" / "knowledge_semantic_prompt.md",
     ).stage_results(batch_id, result_file)
     _emit(
         {
@@ -4709,7 +4722,7 @@ def knowledge_semantic_result_import(
         objects,
         ParquetSemanticStore(paths.parquet),
         paths.runtime,
-        paths.root / "OPENCODE_DEEPSEEK_PROMPT.md",
+        paths.root / "configs" / "knowledge_semantic_prompt.md",
     ).import_results(batch_id)
     _emit(
         {

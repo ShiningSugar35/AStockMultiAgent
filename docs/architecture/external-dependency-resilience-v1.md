@@ -30,7 +30,7 @@
 - Python deterministic core 决定 capability 是否匹配、来源权威性、PIT、完整性、provenance、冲突和 formal eligibility；
 - 单 Provider / 单 endpoint / 单代理链故障不得扩散成整个投研任务故障；
 - Search/Web 不能替代全市场 Universe、连续 OHLCV 或公告 negative proof 的完整性证明；
-- `broker_execution_allowed=false` 永久不变。
+- 活动研究合同不包含真实券商执行权限字段；外部依赖接入不得自行引入真实券商执行能力。
 
 ## 3. 架构师关键裁决
 
@@ -414,7 +414,7 @@ Search 结果在未冻结/验源前不能直接成为正式数据库事实。
 9. CNINFO `search` 与 `search_all`/enumeration 已分离；重复页、截断、`hasMore` 异常 fail closed。命名单票官方财报恢复必须穷举分页后才能形成 negative proof，首页 miss 不再等价于“官方报告不存在”。
 10. 财务 secondary providers 全挂时可从精确官方报告恢复有限关键字段；strict research-safe PARTIAL pack 只能继续候选研究，不能升级 COMPLETE、精确估值或正式推荐。
 11. live 日线主链在最新关键交易日做独立源 shadow validation；规范化 OHLCV 值冲突进入 `CONFLICTED`，不发布 canonical release、不 silent overwrite。第二源不可用只形成验证缺口，不反向否定已取得的主链事实。
-12. Search/Web proposal 必须经 `SourcePolicyGate`；普通 Search 永远不能证明 Universe、连续 OHLCV 或公告 negative proof 的 completeness。PIT、不可变 SourceSnapshot/provenance、paper ledger、`broker_execution_allowed=false` 均未放宽。
+12. Search/Web proposal 必须经 `SourcePolicyGate`；普通 Search 永远不能证明 Universe、连续 OHLCV 或公告 negative proof 的 completeness。不可变 SourceSnapshot/provenance 与 paper ledger 边界均未放宽；当前研究不恢复已退役的 PIT/真实券商权限门。
 13. Provider probe health 只接受 pointer → event → artifact → object → typed report 全链校验通过的结果；任一层损坏或身份矛盾均 fail closed。HALF_OPEN stale claim 可恢复，且 health/breaker 按 capability 隔离。
 14. 正式官方财务 release 持久化 typed lineage；CNINFO 全分页与 Official Web exact-item 的 authority 明确分离。CNINFO `ProviderError` 后不会在同一恢复链重复撞击，已冻结 exact-item 只能恢复有限字段。
 15. `ResearchSeedReport` 与 `FinancialIntegrityEvidencePack` 已成为 Universe/Financial readiness 的 typed member artifact；Role 文本或布尔值不能自证 FULL/COMPLETE。财务 PARTIAL 强制 `VALUATION=false`，正式推荐保持 observation-only。
@@ -426,6 +426,7 @@ Search 结果在未冻结/验源前不能直接成为正式数据库事实。
 21. v0.3.0 E-02 已对 Arelle、Docling、Playwright MCP、AKShare、Crawl4AI、changedetection.io 与三个 Repo Skills 固定版本并执行 M-06 资格裁决。当前九项候选**全部保持 `SHADOW`**：外部候选缺 endpoint-specific rights / recorded-live / SBOM 等资格证据；`source-qualification-auditor` 虽通过 recorded contract、observability、revocation 与 uninstall 回归，但没有冻结真实 controlled-live Skill 的任务输入、命令/输出 trace、不可变结果与延迟证据，因此也不能获得 `PRODUCTION_BACKUP`。治理 Skill 的结果始终不能提升底层数据源的官方性、完整性或推荐资格。
 22. AKShare 的包级许可证/可安装性不能替代 endpoint-specific 上游数据权利、PIT、provenance、recorded/live、SBOM 与退出证据；缺任一 M-06 门时不得为了满足数量目标硬升生产级。资格证据的 ObjectStore freeze 对 validated model 做 canonical JSON（`exclude_unset=true`），因此 CRLF/LF checkout 差异和未显式提供的嵌套默认时间不会改变 report identity。
 23. `SHADOW` 是外部资格证据不足时的安全稳定终态，不等于“软件还没开发完”。M-06 权利/授权或 controlled-live 证据只有在用户明确重新开启相应资格任务并具备合法输入时才继续收集；在此之前不得把 AKShare 或其他候选的 `PRODUCTION_BACKUP` 资格长期挂在《开发计划》作为发布/完工 blocker。资格缺口只保持 Router fail-closed，不得用包 License、安装成功、fixture 或治理 Skill 替代上游 endpoint 权利。
+24. WP-26 已在真实 CNINFO 发行人 PDF 上验证确定性财务表兼容层：标准数字章节前缀、仅人民币计价单位而省略冗余币种字样、资产负债表“期末余额/期初余额”相对期间列均可在 typed 公司/期间绑定下认证；现金流量表补充资料只在 native text、唯一表段、单位/币种/当前上期列头和科目值均唯一时恢复。secondary provider 缺字段提示时，仅在同公司期间仍有结构化来源且官方值唯一时允许 official-only recovery。显式非人民币、单位歧义、错误期间、母公司表冒充合并表、多值歧义继续 fail closed。真实 002636 2025 年报最终形成 17 个官方认证数值并使财务完整性包达到 `SUCCEEDED / COMPLETE`、无 evidence gap/manual task；该实现已通过冻结树 L3，发布身份由后续 release baseline 固化。
 
 Code Review 实际发生多轮打回返工，包括：CNINFO 财报首页误作 negative proof、elapsed budget 只解析未消费、完整扫描 0 candidates 与 Universe unavailable 混淆、OHLCV 多源冲突 silent-first-win、generic local cache 误把不相关快照算作 capability cache、EastMoney/Sina 日线 fallback 永久 `complete=false` 造成 BaoStock 隐性单点、Provider 排序把 EastMoney bulk fallback 提前到 Sina exact 之前、live probe 对 ProviderError/raw schema drift 异常穿透、官方 Web 稳定 source id 未进入财务白名单、财务 PARTIAL 可自报精确估值、migration 0060 缺少升级/checksum 专项门，以及 legacy intraday sync 继续写 provider-wide health。上述问题均已修复并增加回归/故障注入测试；最终独立 Review 对 capability 隔离、完整性、lineage、PIT/ObjectStore/Evidence/Paper/broker 边界、migration 与文档职责逐项复核后通过。
 

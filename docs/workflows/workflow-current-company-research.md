@@ -100,7 +100,7 @@ The current-company workflow is one durable request, not a sequence of user prom
 - `NEEDS_USER_INPUT`: only genuinely private source material or authorization may trigger a user request. Public-channel exhaustion uses `PUBLIC_DATA_UNAVAILABLE` without manual actions. User-supplied private material resumes the same continuation.
 
 Every internal continuation status must preserve `investment_conclusion_blocked=true`,
-`same_request_continuation_required=true`, and `broker_execution_allowed=false`; normal investor answers must not expose those backend fields. Public-source
+`same_request_continuation_required=true`; normal investor answers must not expose those backend fields. The active research contract has no real-broker execution permission field. Public-source
 work must never be delegated back to the user merely because one provider or page failed.
 
 ## Required specialist Skills

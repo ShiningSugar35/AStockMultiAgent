@@ -80,7 +80,7 @@ def test_financial_pack_cannot_create_trading_hard_blocks() -> None:
             periods=[],
             input_fact_ids=[],
             source_snapshot_ids=[],
-            pit_ids=[],
+
             verified_numbers=[],
             recalculated_metrics=[],
             rule_findings=[],

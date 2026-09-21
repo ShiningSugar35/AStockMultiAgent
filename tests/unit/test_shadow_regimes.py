@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from astock.schemas import MarketRegime, MarketRegimeFeatures, PointInTimeStatus
+from astock.schemas import MarketRegime, MarketRegimeFeatures
 from astock.shadow import ShadowEvaluationService, load_shadow_evaluation_policy
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +27,6 @@ def _features(**updates: object) -> MarketRegimeFeatures:
         "style_relative_performance": Decimal("0"),
         "strategy_performance": Decimal("0"),
         "evidence_ids": ["evidence:market"],
-        "pit_statuses": [PointInTimeStatus.CERTIFIED],
         "created_at": AS_OF,
     }
     payload.update(updates)
@@ -44,8 +43,10 @@ def test_all_market_regime_precedence_and_boundaries_are_fixed() -> None:
             MarketRegime.UNCLASSIFIED,
         ),
         (
-            _features(pit_statuses=[PointInTimeStatus.NOT_PIT_SAFE]),
-            MarketRegime.UNCLASSIFIED,
+            # Legacy payloads may still contain the retired field; current
+            # classification ignores it rather than turning it into a gate.
+            _features(pit_statuses=["NOT_PIT_SAFE"]),
+            MarketRegime.RANGE,
         ),
         (
             _features(

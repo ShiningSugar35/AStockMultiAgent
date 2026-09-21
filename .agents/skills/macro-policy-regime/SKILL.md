@@ -37,7 +37,7 @@ Abstain and leave the formal check false when release vintage is unclear, policy
 
 - Re-run `uv run astock research-team-status <plan_id>` and verify the task is COMPLETE, the expected typed artifact is registered, and the corresponding readiness check is true only when supported.
 - Verify no later vintage entered a historical decision and no macro/policy fact was inferred from search snippets.
-- Preserve `broker_execution_allowed=false`; this Skill never creates recommendation, portfolio, or order authority.
+- This Skill produces macro/policy research and does not write the paper ledger.
 
 ## Workflows
 

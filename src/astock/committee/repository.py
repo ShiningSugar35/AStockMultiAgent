@@ -335,8 +335,8 @@ class CommitteeRepository:
     def protocol_summary(self, protocol_id: str) -> dict[str, object] | None:
         return self._one(
             "SELECT protocol_id,decision_id,company_id,verdict,protocol_status,strategy_id,"
-            "effective_from,requires_user_confirmation,broker_execution_allowed,"
-            "paper_simulation_allowed,ledger_write_allowed,object_hash,input_hash,created_at "
+            "effective_from,requires_user_confirmation,paper_simulation_allowed,"
+            "ledger_write_allowed,object_hash,input_hash,created_at "
             "FROM committee_trade_protocol_index WHERE protocol_id=?",
             (protocol_id,),
         )
@@ -344,8 +344,8 @@ class CommitteeRepository:
     def protocol_for_decision(self, decision_id: str) -> dict[str, object] | None:
         return self._one(
             "SELECT protocol_id,decision_id,company_id,verdict,protocol_status,strategy_id,"
-            "effective_from,requires_user_confirmation,broker_execution_allowed,"
-            "paper_simulation_allowed,ledger_write_allowed,object_hash,input_hash,created_at "
+            "effective_from,requires_user_confirmation,paper_simulation_allowed,"
+            "ledger_write_allowed,object_hash,input_hash,created_at "
             "FROM committee_trade_protocol_index WHERE decision_id=?",
             (decision_id,),
         )
@@ -386,7 +386,6 @@ class CommitteeRepository:
                 protocol.strategy_id,
                 protocol.effective_from.astimezone(UTC).isoformat(),
                 int(protocol.requires_user_confirmation),
-                int(protocol.broker_execution_allowed),
                 int(protocol.paper_simulation_allowed),
                 int(protocol.ledger_write_allowed),
                 object_hash,
@@ -396,9 +395,9 @@ class CommitteeRepository:
             sql = (
                 "INSERT INTO committee_trade_protocol_index("
                 "protocol_id,decision_id,company_id,verdict,protocol_status,strategy_id,"
-                "effective_from,requires_user_confirmation,broker_execution_allowed,"
-                "paper_simulation_allowed,ledger_write_allowed,object_hash,input_hash,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                "effective_from,requires_user_confirmation,paper_simulation_allowed,"
+                "ledger_write_allowed,object_hash,input_hash,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
             )
             connection.execute(sql, params)
         return protocol

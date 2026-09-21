@@ -9,7 +9,6 @@ import pytest
 
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.pit import PointInTimeRepository
 from astock.providers.macro_authority import (
     MacroAuthorityReleaseError,
     MofFiscalPolicyReleaseProvider,
@@ -40,7 +39,7 @@ def test_nbs_gdp_recorded_fixture_is_valid(
     assert object_store.verify(snapshot.object_sha256)
 
 
-def test_macro_revision_chain_is_pit_linked(
+def test_macro_revision_chain_preserves_snapshot_and_revision_metadata(
     state: StateStore,
     object_store: ObjectStore,
     tmp_path: Path,
@@ -61,16 +60,10 @@ def test_macro_revision_chain_is_pit_linked(
     fixture.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     _, second_snapshot = provider.fetch_indicator("gdp")
 
-    repository = PointInTimeRepository(state)
-    first = repository.get_by_source("macro:nbs-statistical-release:gdp:2026-Q2:v1")
-    second = repository.get_by_source("macro:nbs-statistical-release:gdp:2026-Q2:v2")
-    assert first is not None
-    assert second is not None
-    assert first.source_snapshot_id == first_snapshot.snapshot_id
-    assert second.source_snapshot_id == second_snapshot.snapshot_id
-    assert second.supersedes_source_id == first.source_id
-    assert second.revised_at == second_snapshot.available_to_system_at
-    assert first.available_to_system_at < second.available_to_system_at
+    assert first_snapshot.snapshot_id != second_snapshot.snapshot_id
+    assert first_snapshot.available_to_system_at < second_snapshot.available_to_system_at
+    assert payload["revision_version"] == 2
+    assert payload["revision_history"][-1]["version"] == 2
 
 
 def test_pboc_m2_recorded_fixture_is_valid(

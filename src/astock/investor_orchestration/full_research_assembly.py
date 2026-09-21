@@ -39,6 +39,7 @@ from astock.schemas.full_research import (
     CandidateRankingEntry,
     ChallengerAssessment,
     CompanyFundamentalSnapshot,
+    CurrentSourceSnapshot,
     EvidenceConflict,
     FactorSnapshot,
     FinancialQualityAssessment,
@@ -51,7 +52,6 @@ from astock.schemas.full_research import (
     NewsEvent,
     NewsEventCoverage,
     NewsEventResearchPack,
-    PointInTimeSnapshot,
     QuantFactorResearchPack,
     RecommendationResearchReceipt,
     RecommendationValuationSnapshot,
@@ -162,7 +162,7 @@ class FullResearchReceiptAssembler:
             preflight,
         )
 
-        regime, regime_available_at = self._regime(request.evidence_cutoff)
+        regime, regime_available_at = self._regime(request.analysis_as_of)
         seed_report = self._seed_report(readiness)
         seeds_by_company = {item.company_id: item for item in seed_report.seeds}
 
@@ -237,18 +237,20 @@ class FullResearchReceiptAssembler:
             extra_evidence_ids=typed_evidence_ids,
         )
         conflicts = self._conflicts(financial_packs, sources)
-        pit = self.research.point_in_time_snapshot(request, sources, conflicts=conflicts)
+        source_snapshot = self.research.current_source_snapshot(
+            request, sources, conflicts=conflicts
+        )
 
         horizon_contexts: dict[str, tuple[Decimal, str, str]] = {}
         for item in company_contexts:
-            if item.draft.decision_horizon_end <= request.evidence_cutoff.date():
+            if item.draft.decision_horizon_end <= request.analysis_as_of.date():
                 continue
             artifact_id = f"InstitutionalDecisionContext:{item.context_id}"
             record = self.state.artifact_record(artifact_id)
             if record is None or not self.objects.verify(str(record["object_hash"])):
                 continue
             months = (
-                Decimal((item.draft.decision_horizon_end - request.evidence_cutoff.date()).days)
+                Decimal((item.draft.decision_horizon_end - request.analysis_as_of.date()).days)
                 * Decimal("12")
                 / Decimal("365")
             )
@@ -285,7 +287,7 @@ class FullResearchReceiptAssembler:
             seeds_by_company=seeds_by_company,
             valuation_invalidations=valuation_invalidations,
             regime=regime,
-            pit=pit,
+            source_snapshot=source_snapshot,
         )
 
         candidates = self.research.apply_candidate_vetoes(
@@ -308,7 +310,7 @@ class FullResearchReceiptAssembler:
         }
         narratives_by_company = {item.instrument_id: item for item in narratives}
         execution_plans = self.research.execution_plans(
-            request.evidence_cutoff,
+            request.analysis_as_of,
             portfolio,
             valuations,
             quote_sources,
@@ -319,7 +321,7 @@ class FullResearchReceiptAssembler:
         )
 
         news_events, news_coverage, event_research_complete = self._news_from_packs(
-            request.evidence_cutoff,
+            request.analysis_as_of,
             event_packs,
             conflicts,
         )
@@ -328,9 +330,6 @@ class FullResearchReceiptAssembler:
             node: FullResearchNodeStatus.PASS for node in FullResearchNode
         }
         reasons: dict[FullResearchNode | str, str] = {}
-        if pit.status is not FullResearchNodeStatus.PASS:
-            statuses[FullResearchNode.POINT_IN_TIME_SNAPSHOT] = pit.status
-            reasons[FullResearchNode.POINT_IN_TIME_SNAPSHOT] = "PIT source audit did not pass"
         if risk_audit.status is not FullResearchNodeStatus.PASS:
             statuses[FullResearchNode.RISK_AUDIT] = risk_audit.status
             reasons[FullResearchNode.RISK_AUDIT] = "portfolio risk audit did not pass"
@@ -361,18 +360,18 @@ class FullResearchReceiptAssembler:
             statuses,
             artifact_ids=node_artifacts,
             reasons=reasons,
-            at=request.evidence_cutoff,
+            at=request.analysis_as_of,
         )
         publication = self.research.publication_decision(
-            dag, pit, portfolio, risk_audit, execution_plans, candidates
+            dag, source_snapshot, portfolio, risk_audit, execution_plans, candidates
         )
         receipt_payload = self._freeze_projection_created_at(
             {
                 "request_id": request.request_id,
-                "as_of": request.evidence_cutoff,
+                "as_of": request.analysis_as_of,
                 "request_contract": contract,
                 "holding_reviews": holding_reviews,
-                "pit_snapshot": pit,
+                "source_snapshot": source_snapshot,
                 "dag": dag,
                 "source_manifest": sources,
                 "skill_executions": {item.node.value: item.status for item in dag.executions},
@@ -403,7 +402,11 @@ class FullResearchReceiptAssembler:
                     "position_count": len(portfolio.positions),
                     "cash_weight_bps": int(portfolio.cash_weight * Decimal("10000")),
                     "objective_status": portfolio.objective_status,
-                    "target_horizon_profit": portfolio.target_horizon_profit,
+                    **(
+                        {"target_horizon_profit": portfolio.target_horizon_profit}
+                        if portfolio.target_horizon_profit is not None
+                        else {}
+                    ),
                     "expected_research_profit": portfolio.expected_research_profit,
                     "modeled_downside_loss": portfolio.modeled_downside_loss,
                 },
@@ -417,7 +420,7 @@ class FullResearchReceiptAssembler:
                 "config_versions": {"full_research": self.research.policy.policy_id},
                 "input_artifact_hashes": input_hashes,
             },
-            request.evidence_cutoff,
+            request.analysis_as_of,
         )
         receipt = self.research.seal_receipt(receipt_payload)
         self.research.verify_receipt(receipt)
@@ -1110,6 +1113,7 @@ class FullResearchReceiptAssembler:
             load_entry_quality_policy,
             persist_entry_quality_snapshot,
         )
+
         anchor = pack.market_price_anchor
         if anchor is None:
             return None
@@ -1249,9 +1253,7 @@ class FullResearchReceiptAssembler:
             source_bindings[entry_artifact_id] = entry_object_hash
         return_horizon_months = None
         if return_horizon_context is not None:
-            return_horizon_months, horizon_artifact_id, horizon_object_hash = (
-                return_horizon_context
-            )
+            return_horizon_months, horizon_artifact_id, horizon_object_hash = return_horizon_context
             existing_hash = source_bindings.get(horizon_artifact_id)
             if existing_hash is not None and existing_hash != horizon_object_hash:
                 raise ValueError("decision-horizon source conflicts with valuation lineage")
@@ -1349,7 +1351,7 @@ class FullResearchReceiptAssembler:
         seeds_by_company: dict[str, ResearchSeed],
         valuation_invalidations: dict[str, tuple[str, ...]],
         regime: Any,
-        pit: Any,
+        source_snapshot: CurrentSourceSnapshot,
     ) -> tuple[
         list[CandidateRankingEntry],
         list[CandidateDecisionNarrative],
@@ -1437,7 +1439,7 @@ class FullResearchReceiptAssembler:
                     factor=factor,
                     rejection_reasons=rejection_reasons,
                     regime=regime,
-                    pit=pit,
+                    source_snapshot=source_snapshot,
                     has_event_roles=bool(event_pack.events),
                 )
             )
@@ -1540,7 +1542,7 @@ class FullResearchReceiptAssembler:
         factor: FactorSnapshot,
         rejection_reasons: list[str],
         regime: Any,
-        pit: PointInTimeSnapshot,
+        source_snapshot: CurrentSourceSnapshot,
         has_event_roles: bool,
     ) -> CandidateRankingEntry:
         quality = financial.accounting_quality_score / Decimal("100")
@@ -1576,7 +1578,9 @@ class FullResearchReceiptAssembler:
             accounting_risk=Decimal("1") - quality,
             governance_risk=governance_risk,
             evidence_confidence=(
-                Decimal("1") if pit.status is FullResearchNodeStatus.PASS else pit.lineage_coverage
+                Decimal("1")
+                if source_snapshot.status is FullResearchNodeStatus.PASS
+                else source_snapshot.lineage_coverage
             ),
             eligible=not rejection_reasons,
             rejection_reasons=tuple(dict.fromkeys(rejection_reasons)),
@@ -1872,7 +1876,6 @@ class FullResearchReceiptAssembler:
             FullResearchNode.BEAR_CASE_CHALLENGER: "RED_TEAM",
             FullResearchNode.PORTFOLIO_CONSTRUCTION: "PORTFOLIO",
             FullResearchNode.REQUEST_CONTRACT: "FULL_MARKET",
-            FullResearchNode.POINT_IN_TIME_SNAPSHOT: "FULL_MARKET",
             FullResearchNode.QUANT_FACTOR: "PORTFOLIO",
             FullResearchNode.CANDIDATE_RANKING: "COMMITTEE",
             FullResearchNode.EXECUTION_PLANNING: "CURRENT_MARKET",

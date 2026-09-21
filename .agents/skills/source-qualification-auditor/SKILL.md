@@ -24,7 +24,7 @@ Return the capability id and fixed version, immutable evidence hashes, per-gate 
 - Do not admit `PRODUCTION_BACKUP` when any M-06 check, recorded validation, controlled-live validation, or disable/uninstall regression is missing or failed.
 - Do not let a Skill, parser, crawler, MCP, or secondary Provider upgrade the authority of the underlying source material.
 - Do not create a second Router, Provider registry, Evidence store, ObjectStore, qualification index, or mutable copy of qualification history.
-- Do not enable broker order execution. `broker_execution_allowed=false` and the M-06 permanent rejection of execution-capable broker MCPs remain unchanged.
+- Source qualification does not create paper orders or fills; execution-capable integrations are outside this research-source audit.
 
 ## Workflows
 

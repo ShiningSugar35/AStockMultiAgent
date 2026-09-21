@@ -197,8 +197,6 @@ class KnowledgeSkillAuditService:
             raise ValueError("knowledge Skill audit policy cannot grant committee weight")
         if policy_raw.get("paper_ledger_write_allowed") is not False:
             raise ValueError("knowledge Skill audit policy cannot write paper ledger")
-        if policy_raw.get("broker_execution_allowed") is not False:
-            raise ValueError("knowledge Skill audit policy cannot enable broker execution")
 
         evidence_payload = evidence_raw.get("sources")
         if not isinstance(evidence_payload, dict) or not evidence_payload:

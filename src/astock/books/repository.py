@@ -45,14 +45,13 @@ class BookRepository:
                 return BookSourceManifest.model_validate_json(existing["manifest_json"])
             connection.execute(
                 "INSERT INTO book_source_manifest(manifest_id,source_id,document_id,snapshot_id,"
-                "pit_id,file_sha256,file_version,source_page_count,manifest_json,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "file_sha256,file_version,source_page_count,manifest_json,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (
                     manifest.manifest_id,
                     manifest.source_id,
                     manifest.document_id,
                     manifest.snapshot_id,
-                    manifest.pit_id,
                     manifest.file_sha256,
                     manifest.file_version,
                     manifest.source_page_count,

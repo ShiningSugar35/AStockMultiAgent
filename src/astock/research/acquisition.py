@@ -17,7 +17,6 @@ from astock.core.state import StateStore
 from astock.documents.repository import DocumentRepository
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
-from astock.pit.repository import PointInTimeRepository
 from astock.research.policy import (
     CapabilityGraph,
     load_default_current_research_policy,
@@ -699,7 +698,6 @@ class CurrentResearchAcquisitionService:
             Market.BJSE: "bse-official-web",
         }[market]
         documents = DocumentRepository(self.state)
-        pits = PointInTimeRepository(self.state)
         now = self.clock()
         freshness_floor = now - timedelta(days=180)
         for capture_id in capture_ids:
@@ -716,10 +714,12 @@ class CurrentResearchAcquisitionService:
             ):
                 continue
             try:
-                capture = OfficialWebDocumentCapture.model_validate_json(
+                capture_payload = json.loads(
                     self.objects.get_bytes(str(artifact["object_hash"]))
                 )
-            except ValueError:
+                capture_payload.pop("pit_id", None)
+                capture = OfficialWebDocumentCapture.model_validate(capture_payload)
+            except (json.JSONDecodeError, TypeError, ValueError):
                 continue
             if (
                 capture.source_id != expected_source
@@ -731,7 +731,6 @@ class CurrentResearchAcquisitionService:
             document = documents.get_model(capture.document_id)
             snapshot = self.state.get_snapshot(capture.snapshot_id)
             admission = self.state.get_snapshot(capture.admission_snapshot_id)
-            pit = pits.get(capture.pit_id)
             if (
                 document is None
                 or company_id not in document.company_ids
@@ -742,7 +741,6 @@ class CurrentResearchAcquisitionService:
                 or capture.observed_at > now
                 or snapshot is None
                 or admission is None
-                or pit is None
                 or snapshot.source_id != expected_source
                 or admission.source_id != f"{expected_source}:admission"
                 or snapshot.source_url != document.source_url
@@ -750,9 +748,6 @@ class CurrentResearchAcquisitionService:
                 or snapshot.available_to_system_at > now
                 or admission.available_to_system_at > now
                 or snapshot.object_sha256 != capture.object_sha256
-                or pit.source_document_id != document.document_id
-                or pit.source_snapshot_id != snapshot.snapshot_id
-                or pit.available_to_system_at != snapshot.available_to_system_at
                 or artifact.get("input_hashes") != [snapshot.object_sha256, admission.object_sha256]
                 or not self.objects.verify(snapshot.object_sha256)
                 or not self.objects.verify(admission.object_sha256)

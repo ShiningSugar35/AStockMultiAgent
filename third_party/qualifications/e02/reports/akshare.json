@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "49e0ee413732641973e87044a592a13612074c8bf35215024a49a95a4d377e2a",
+  "report_id": "af573959dc82d2cc05f893f85e4c732d844cd611a3170da358a93f7d5d8974d0",
   "capability_id": "akshare",
   "candidate_version": "1.18.94",
   "requested_stage": "SHADOW",
@@ -9,7 +9,6 @@
     "license": "PASS",
     "terms_of_service": "FAIL",
     "data_rights": "FAIL",
-    "pit": "FAIL",
     "provenance": "FAIL",
     "credential_handling": "PASS",
     "sbom": "FAIL",
@@ -27,7 +26,7 @@
   "source_class_ceiling": "SECONDARY_STRUCTURED",
   "completeness_ceiling": "EXACT_ITEM",
   "evidence_object_hashes": [
-    "4a570a71aafdf8834631ec5c32d0666e9ce0783998fe312530d7d795d9c0da5a"
+    "ecf8ed081e1351a2f34e8651065ab75c2aad5ff96ef14ffebdb493c2807ff081"
   ],
   "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",

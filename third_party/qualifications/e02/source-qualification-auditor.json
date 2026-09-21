@@ -1,6 +1,6 @@
 {
   "admitted_stage": "SHADOW",
-  "candidate_version": "sha256:b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
+  "candidate_version": "sha256:ab426fb009b8e7d4ab974c0d39ed863c9c536e1c12a86b668d74b6dc0a6fe879",
   "capability_id": "source-qualification-auditor",
   "checks": {
     "cache_behavior": "NOT_APPLICABLE",
@@ -21,9 +21,9 @@
   },
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
-  "created_at": "2026-09-09T04:05:13Z",
+  "created_at": "2026-09-21T10:48:00Z",
   "evidence_version": "e02-qualification-evidence-v1",
-  "expires_at": "2026-12-08T04:05:13Z",
+  "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
     "CONTROLLED_LIVE_SKILL_EXECUTION_NOT_FROZEN"
   ],
@@ -34,26 +34,26 @@
   "sources": [
     {
       "assertion": "Tracked Repo Skill contract used by the qualification pilot.",
-      "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "b69e5c7a16571112c4b78aa4965cd2ec22e4fc1614c78c48fbe7666d42c0b1b1",
+      "observed_at": "2026-09-21T10:48:00Z",
+      "sha256": "ab426fb009b8e7d4ab974c0d39ed863c9c536e1c12a86b668d74b6dc0a6fe879",
       "source_ref": "repo:.agents/skills/source-qualification-auditor/SKILL.md"
     },
     {
       "assertion": "The project is proprietary; these Repo Skills are project-owned and introduce no third-party runtime license or service ToS.",
-      "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "38dfdf04e4b9123b757e6fb0172c1ac33b070f130305bbd384b8e9c6bc80c0fe",
+      "observed_at": "2026-09-21T10:48:00Z",
+      "sha256": "1be2a7aee6d7b87ddd42b5d68a19c52373389b38489cab6f60492a32e3d96c72",
       "source_ref": "repo:pyproject.toml"
     },
     {
       "assertion": "The Repo Skill integration adds no runtime package dependency; the existing locked dependency graph is unchanged.",
-      "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "7be1b927daf59176ce26fe34bd33de6b9ef0b8e098c80baa447c108a7ecd9ba7",
+      "observed_at": "2026-09-21T10:48:00Z",
+      "sha256": "13ea4af85b82754a54a3cf60d0ad24f26fad103dfaddb29005983f11459b7d42",
       "source_ref": "repo:uv.lock"
     },
     {
       "assertion": "Recorded contract, observability, revocation and uninstall checks are covered by the repository test; they do not substitute for a frozen controlled-live Skill run.",
-      "observed_at": "2026-09-09T04:05:13Z",
-      "sha256": "7c0eb6a5dd905f5a6382bdda4f7d5e2af9145b80343c8168a778ccf084febec5",
+      "observed_at": "2026-09-21T10:48:00Z",
+      "sha256": "70c753ba50f91bc18abad1de27843a40f1b80b22f6e6e12a670471e401dd5d19",
       "source_ref": "contract:tests/unit/test_e02_external_qualification.py"
     },
     {
@@ -62,5 +62,5 @@
       "source_ref": "gap:source-qualification-auditor-controlled-live"
     }
   ],
-  "valid_from": "2026-09-09T04:05:13Z"
+  "valid_from": "2026-09-21T10:48:00Z"
 }

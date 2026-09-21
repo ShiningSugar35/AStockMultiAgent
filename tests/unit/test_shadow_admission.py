@@ -13,7 +13,6 @@ from astock.schemas import (
     FrozenWeightProfile,
     MarketRegime,
     Phase8AdmissionStatus,
-    PointInTimeStatus,
     ReplayQuality,
     ResearchSkillStatus,
     ShadowArmDefinition,
@@ -100,9 +99,7 @@ def _definition(
         study_id="study:ready",
         arm_key="b-specialist" if specialist else "a-base",
         arm_type=(
-            ShadowArmType.BASE_CASE_PLUS_SPECIALIST
-            if specialist
-            else ShadowArmType.BASE_CASE_ONLY
+            ShadowArmType.BASE_CASE_PLUS_SPECIALIST if specialist else ShadowArmType.BASE_CASE_ONLY
         ),
         weight_profile=FrozenWeightProfile(
             profile_id=f"weight:{arm_id}",
@@ -121,9 +118,7 @@ def _definition(
         corporate_action_version="shadow-corporate-actions-v1",
         specialist_skill_id="industry-bottleneck" if specialist else None,
         specialist_skill_version="v1" if specialist else None,
-        specialist_skill_status=(
-            ResearchSkillStatus.ENABLED_CONTRACT if specialist else None
-        ),
+        specialist_skill_status=(ResearchSkillStatus.ENABLED_CONTRACT if specialist else None),
         arm_sha256=("b" if specialist else "a") * 64,
         created_at=AS_OF,
     )
@@ -217,7 +212,6 @@ def _report(comparison: ShadowComparisonResult) -> ShadowEvaluationReport:
             MarketRegime.PANIC: 30,
             MarketRegime.RANGE: 40,
         },
-        pit_status_counts={PointInTimeStatus.CERTIFIED: 100},
         exclusion_counts={},
         replay_quality_counts={ReplayQuality.DUAL_SOURCE_5M_VERIFIED: 600},
         input_assignment_sha256s=["a" * 64],
@@ -233,9 +227,7 @@ def _report(comparison: ShadowComparisonResult) -> ShadowEvaluationReport:
 
 
 def test_phase8_admission_requires_ci_stability_and_all_hard_gates(tmp_path: Path) -> None:
-    policy = load_shadow_evaluation_policy(
-        PROJECT_ROOT / "configs" / "shadow_evaluation.yaml"
-    )
+    policy = load_shadow_evaluation_policy(PROJECT_ROOT / "configs" / "shadow_evaluation.yaml")
     service = ShadowEvaluationService(
         StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations"),
         ObjectStore(tmp_path / "objects"),
@@ -249,11 +241,8 @@ def test_phase8_admission_requires_ci_stability_and_all_hard_gates(tmp_path: Pat
     )
     assert ready.status is Phase8AdmissionStatus.ELIGIBLE_RULE_STATE_MACHINE_RESEARCH
     assert ready.eligible_experimental_arm_ids == ["arm:specialist"]
-    assert all(
-        ready.experimental_arm_gate_results["arm:specialist"].values()
-    )
+    assert all(ready.experimental_arm_gate_results["arm:specialist"].values())
     assert not ready.online_weight_changes_allowed
-    assert not ready.broker_execution_allowed
 
     uncertain = service._admission(  # noqa: SLF001 - direct deterministic gate test
         _report(_comparison(lower="0")),

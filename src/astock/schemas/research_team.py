@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
@@ -64,6 +65,104 @@ class ResearchTeamTaskState(StrEnum):
 class FullResearchInputReadinessStatus(StrEnum):
     READY = "READY"
     OBSERVATION_ONLY = "OBSERVATION_ONLY"
+
+
+class ResearchIntent(AStockModel):
+    schema_version: str = "research-intent-v1"
+    as_of: AwareDatetime
+    scope: Literal["FULL_MARKET"] = "FULL_MARKET"
+    objective: str = Field(min_length=1)
+
+
+class CompanyResearchIntent(AStockModel):
+    schema_version: str = "company-research-intent-v1"
+    as_of: AwareDatetime
+    company_id: str = Field(pattern=r"^\d{6}$")
+    horizon: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+
+
+class PolicyRegimeProfile(AStockModel):
+    schema_version: str = "policy-regime-profile-v1"
+    as_of: AwareDatetime
+    company_id: str = Field(pattern=r"^\d{6}$")
+    evidence_ids: list[str] = Field(min_length=1)
+    summary: str = Field(min_length=1)
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def validate_policy_evidence_ids(cls, value: list[str]) -> list[str]:
+        if value != sorted(set(value)):
+            raise ValueError("policy evidence ids must be sorted and unique")
+        return value
+
+
+class MarketRiskProfile(AStockModel):
+    schema_version: str = "market-risk-profile-v1"
+    as_of: AwareDatetime
+    summary: str = Field(min_length=1)
+
+
+class BlindCandidateShortlist(AStockModel):
+    schema_version: str = "blind-candidate-shortlist-v1"
+    as_of: AwareDatetime
+    candidate_scan_artifact_id: str = Field(min_length=1)
+    candidate_scan_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    advanced_company_ids: list[str] = Field(default_factory=list)
+    manual_candidate_fallback_allowed: Literal[False] = False
+
+    @field_validator("advanced_company_ids")
+    @classmethod
+    def validate_advanced_company_ids(cls, value: list[str]) -> list[str]:
+        if value != sorted(set(value)) or any(
+            len(item) != 6 or not item.isascii() or not item.isdigit() for item in value
+        ):
+            raise ValueError("advanced company ids must be sorted unique six-digit codes")
+        return value
+
+
+class MarketContextPack(AStockModel):
+    schema_version: str = "market-context-pack-v1"
+    as_of: AwareDatetime
+    company_id: str = Field(pattern=r"^\d{6}$")
+    current_close: Decimal = Field(gt=0)
+    daily_release_artifact_id: str = Field(min_length=1)
+    daily_release_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    market_anchor_artifact_id: str = Field(min_length=1)
+    market_anchor_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class IndependentBullCase(AStockModel):
+    schema_version: str = "independent-bull-case-v1"
+    as_of: AwareDatetime
+    company_id: str = Field(pattern=r"^\d{6}$")
+    independent_context_id: str = Field(min_length=1)
+    case: str = Field(min_length=1)
+    valuation_per_share: Decimal = Field(gt=0)
+
+
+class IndependentBearCase(AStockModel):
+    schema_version: str = "independent-bear-case-v1"
+    as_of: AwareDatetime
+    company_id: str = Field(pattern=r"^\d{6}$")
+    independent_context_id: str = Field(min_length=1)
+    case: str = Field(min_length=1)
+    valuation_per_share: Decimal = Field(gt=0)
+
+
+class ModelRiskValidationReport(AStockModel):
+    schema_version: str = "model-risk-validation-report-v1"
+    as_of: AwareDatetime
+    company_id: str = Field(pattern=r"^\d{6}$")
+    checks: dict[str, bool] = Field(min_length=1)
+    status: Literal["PASS", "PASS_WITH_CONSERVATIVE_BOUNDARIES"]
+    summary: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_model_risk_checks(self) -> ModelRiskValidationReport:
+        if not all(self.checks.values()):
+            raise ValueError("model-risk PASS requires every declared check to pass")
+        return self
 
 
 class HardwareBudget(AStockModel):
@@ -194,7 +293,6 @@ class FullResearchInputReadinessReport(AStockModel):
     missing_or_failed_checks: list[str]
     full_research_input_ready: bool
     manual_candidate_fallback_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @field_validator("required_checks", "passed_checks", "missing_or_failed_checks")
     @classmethod

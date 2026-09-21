@@ -243,7 +243,6 @@ class ResponseGateway:
             locale=self.policy.locale,
             diagnostic_intent_detected=diagnostic,
             system_error_present=system_error_present,
-            broker_execution_allowed=False,
         )
 
     def render(

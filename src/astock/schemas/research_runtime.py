@@ -97,7 +97,6 @@ class TradingClassificationCorporateActionBaseline(AStockModel):
     reason_codes: list[str]
     absence_is_officially_certified: bool = False
     ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_baseline(self) -> TradingClassificationCorporateActionBaseline:
@@ -141,7 +140,6 @@ class TradingClassificationDraft(AStockModel):
     source_artifact_ids: list[str] = Field(min_length=1)
     status: TradingClassificationStatus = TradingClassificationStatus.READY
     reason_codes: list[str] = Field(default_factory=list)
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_draft(self) -> TradingClassificationDraft:
@@ -213,7 +211,6 @@ class TradingClassificationRelease(AStockModel):
     source_object_hashes: list[str] = Field(min_length=1)
     status: TradingClassificationStatus
     reason_codes: list[str]
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_release(self) -> TradingClassificationRelease:
@@ -271,7 +268,6 @@ class TradingClassificationResolution(AStockModel):
     source_artifact_ids: list[str] = Field(default_factory=list)
     reason_codes: list[str] = Field(default_factory=list)
     live_sync_attempted: bool = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_resolution(self) -> TradingClassificationResolution:
@@ -312,7 +308,6 @@ class ClassifiedTradeProtocol(AStockModel):
     requires_user_confirmation: Literal[True] = True
     paper_simulation_allowed: bool = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_protocol(self) -> ClassifiedTradeProtocol:
@@ -349,7 +344,6 @@ class ResearchPaperDecision(AStockModel):
     paper_simulation_eligible: bool
     requires_user_confirmation: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_decision(self) -> ResearchPaperDecision:
@@ -445,8 +439,6 @@ class ResearchRunRequest(AStockModel):
     evidence_pack_artifact_id: str | None = None
     financial_audit_run_id: str | None = None
     claim_ids: list[str] = Field(default_factory=list)
-    formal_historical: bool = False
-    allow_approximated: bool = False
     base_case_draft: BaseCaseDraft | None = None
     route_draft: ResearchRunRouteDraft | None = None
     specialist_delta_drafts: list[ResearchRunSpecialistDeltaDraft] = Field(default_factory=list)
@@ -460,7 +452,6 @@ class ResearchRunRequest(AStockModel):
     auto_resolve_inputs: bool = True
     sync_reference_inputs: bool = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_request(self) -> ResearchRunRequest:
@@ -486,7 +477,6 @@ class ResearchRunInputManifest(AStockModel):
     auto_resolution_enabled: bool
     reference_sync_enabled: bool
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_manifest(self) -> ResearchRunInputManifest:
@@ -515,7 +505,6 @@ class KnowledgeSkillDelta(AStockModel):
     provider_latency_ms: int = Field(ge=0)
     provider_cache_hit: bool
     formal_committee_weight_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_delta(self) -> KnowledgeSkillDelta:
@@ -574,7 +563,6 @@ class ResearchRunPlan(AStockModel):
     missing_codes: list[str]
     reusable_artifact_ids: list[str]
     ledger_write_planned: Literal[False] = False
-    broker_execution_planned: Literal[False] = False
 
 
 class ResearchRunReport(AStockModel):
@@ -596,7 +584,6 @@ class ResearchRunReport(AStockModel):
     trade_protocol_outcome: str | None = None
     performance: ResearchRunPerformanceSummary
     paper_ledger_write_count: Literal[0] = 0
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_report(self) -> ResearchRunReport:
@@ -618,7 +605,6 @@ class ResearchRunAudit(AStockModel):
     latest_report_artifact_id: str | None = None
     finding_codes: list[str]
     paper_ledger_write_count: Literal[0] = 0
-    broker_execution_allowed: Literal[False] = False
 
 
 class ResearchRunBenchmark(AStockModel):

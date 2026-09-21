@@ -38,7 +38,7 @@ Abstain and leave `MODEL_RISK_VALIDATION=false` when code/data lineage is unavai
 
 - Re-run `uv run astock research-team-status <plan_id>` and verify the typed artifact, COMPLETE checkpoint and readiness evidence.
 - Confirm test-family size, multiple-comparison treatment, baseline comparison, failure modes and monitoring/fallback boundary are explicit.
-- Preserve `broker_execution_allowed=false`; proposed model or weight changes remain prospective/shadow-gated and cannot mutate paper/production ledgers here.
+- Proposed model or weight changes remain research-only and cannot mutate the paper ledger here.
 
 ## Workflows
 

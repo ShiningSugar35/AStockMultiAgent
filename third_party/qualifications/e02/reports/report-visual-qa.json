@@ -1,15 +1,14 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "6baf1228eed2fd81652046143da3a9a07ae28b35b7ee09c2940e9178e686d1b1",
+  "report_id": "7e141428a7c52c9c918367cc2f42991ef723f59e54c4876a69a4a723b084fcfa",
   "capability_id": "report-visual-qa",
-  "candidate_version": "sha256:191aa0f2d527ccca5dc574d26daee51b6e49d83cbad7d5ccae9774a0930d8202",
+  "candidate_version": "sha256:3708ad6e357f4b14551ecc4fae40586b699b5803ecb108924d73e9889ad0ea2c",
   "requested_stage": "SHADOW",
   "admitted_stage": "SHADOW",
   "checks": {
     "license": "PASS",
     "terms_of_service": "PASS",
     "data_rights": "PASS",
-    "pit": "PASS",
     "provenance": "PASS",
     "credential_handling": "PASS",
     "sbom": "PASS",
@@ -27,10 +26,10 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "2093fe3fdfacd17beb7b03d661970eab533e810108849db439b5071e38bb07ca"
+    "2c97f46a2059fda8153ee6c4eb2372bd1420fa0651be2926533b0e8fc860d1cf"
   ],
-  "valid_from": "2026-09-09T04:05:13Z",
-  "expires_at": "2026-12-08T04:05:13Z",
+  "valid_from": "2026-09-21T10:48:00Z",
+  "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
     "RENDERED_PAGE_CONTROLLED_LIVE_NOT_RUN",
     "VISUAL_LATENCY_AND_FAILURE_BEHAVIOR_NOT_VALIDATED"

@@ -28,7 +28,6 @@ from astock.schemas import (
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
     ReferenceFileDescriptor,
-    ReferencePitStatus,
     ReferenceSyncReport,
     SourceClass,
 )
@@ -417,7 +416,6 @@ def test_migrated_v1_head_is_unverified_but_allows_v2_forward_recovery(
         raw_snapshot_ids=raw_snapshot_ids,
         records=records,
         coverage=coverage,
-        pit_status=ReferencePitStatus.RECONSTRUCTED,
         available_to_system_at=snapshot.available_to_system_at,
     )
     observation_path = parquet.write_observation(batch)
@@ -446,7 +444,8 @@ def test_migrated_v1_head_is_unverified_but_allows_v2_forward_recovery(
         "observation_files": [parquet.relative(observation_path)],
         "canonical_files": [parquet.relative(canonical_path)],
         "coverage": coverage.model_dump(mode="json"),
-        "pit_status": ReferencePitStatus.RECONSTRUCTED.value,
+        # Historical v1 payload fixture for the 0038 on-disk contract only.
+        "pit_status": "UNVERIFIED",
         "available_to_system_at": snapshot.available_to_system_at.isoformat(),
     }
     manifest_object = objects.put_bytes(canonical_json_bytes(legacy_manifest))
@@ -476,7 +475,7 @@ def test_migrated_v1_head_is_unverified_but_allows_v2_forward_recovery(
                 manifest_object.sha256,
                 snapshot.available_to_system_at.isoformat(),
                 coverage.status.value,
-                ReferencePitStatus.RECONSTRUCTED.value,
+                "UNVERIFIED",
                 snapshot.available_to_system_at.isoformat(),
             ),
         )
@@ -507,6 +506,14 @@ def test_migrated_v1_head_is_unverified_but_allows_v2_forward_recovery(
     assert service.status(
         ReferenceDatasetKind.DAILY_UNADJUSTED, "XSHG:600519"
     )["status"] == "UNVERIFIED_LEGACY"
+
+    # Historical rows remain readable; current writes start only after the
+    # dedicated PIT-column removal migration is applied.
+    shutil.copy2(
+        PROJECT_ROOT / "migrations" / "0075_drop_reference_pit_status.sql",
+        migrations / "0075_drop_reference_pit_status.sql",
+    )
+    assert state.migrate() == ["0075"]
 
     fixture = fixtures / "baostock" / "market_daily_unadjusted.json"
     payload = json.loads(fixture.read_text(encoding="utf-8"))
@@ -766,7 +773,6 @@ def test_reference_cli_failed_report_exits_nonzero(
             status=ReferenceCoverageStatus.FAILED,
             reason_codes=["BAOSTOCK_INCOMPLETE", "EASTMONEY_FALLBACK_FAILED"],
         ),
-        pit_status=ReferencePitStatus.UNVERIFIED,
         reason_codes=["BAOSTOCK_INCOMPLETE", "EASTMONEY_FALLBACK_FAILED"],
     )
     monkeypatch.setattr(

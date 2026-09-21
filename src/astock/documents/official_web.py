@@ -9,14 +9,11 @@ from astock.core.object_store import ObjectStore
 from astock.core.source_policy_gate import SourcePolicyGate
 from astock.core.state import StateStore
 from astock.documents.repository import DocumentRepository
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.schemas import (
     AgentSourceProposal,
-    AvailabilityBasis,
     DocumentType,
     FetchStatus,
     OfficialWebDocumentCapture,
-    PointInTimeStatus,
     SourceAdmissionStatus,
     SourceDocument,
     SourceSnapshot,
@@ -45,7 +42,6 @@ class OfficialWebDocumentCaptureService:
         self.objects = objects
         self.gate = gate or SourcePolicyGate()
         self.documents = DocumentRepository(state)
-        self.pit = PointInTimeService(PointInTimeRepository(state), state, objects)
 
     def capture(
         self,
@@ -181,18 +177,6 @@ class OfficialWebDocumentCaptureService:
         canonical_snapshot = self.documents.snapshot(snapshot.snapshot_id)
         if canonical_snapshot is None or not self.objects.verify(canonical_snapshot.object_sha256):
             raise ValueError("Official Web snapshot registration is incomplete")
-        pit = self.pit.create(
-            source_id=f"{document.document_id}:{snapshot.snapshot_id}",
-            source_document_id=document.document_id,
-            source_snapshot_id=snapshot.snapshot_id,
-            period_end=period_end,
-            published_at=document.published_at,
-            effective_at=document.effective_at,
-            ingested_at=snapshot.fetched_at,
-            available_to_system_at=snapshot.available_to_system_at,
-            point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-            availability_basis=AvailabilityBasis.FETCH_OBSERVED,
-        )
         capture_id = "official-web-capture:" + content_hash(
             {
                 "proposal": proposal.model_dump(mode="json"),
@@ -200,7 +184,6 @@ class OfficialWebDocumentCaptureService:
                 "document_id": document.document_id,
                 "snapshot_id": snapshot.snapshot_id,
                 "admission_snapshot_id": admission_snapshot.snapshot_id,
-                "pit_id": pit.pit_id,
                 "object_sha256": object_ref.sha256,
             }
         )
@@ -212,7 +195,6 @@ class OfficialWebDocumentCaptureService:
             document_id=document.document_id,
             snapshot_id=snapshot.snapshot_id,
             admission_snapshot_id=admission_snapshot.snapshot_id,
-            pit_id=pit.pit_id,
             source_url=proposal.candidate_url,
             object_sha256=object_ref.sha256,
             observed_at=observed,

@@ -52,7 +52,7 @@ def _number(field_code: FinancialFieldCode) -> VerifiedFinancialNumber:
         reporting_quantum_cny=Decimal("0.01"),
         fact_ids=[f"fact:{field_code.value}"],
         source_snapshot_ids=["snapshot:official"],
-        pit_ids=["pit:official"],
+
         evidence_ids=[f"evidence:{field_code.value}"],
     )
 
@@ -90,7 +90,7 @@ def _pack(
         periods=[PERIOD_END],
         input_fact_ids=[item.fact_ids[0] for item in numbers],
         source_snapshot_ids=["snapshot:official"],
-        pit_ids=["pit:official"],
+
         verified_numbers=numbers,
         recalculated_metrics=[],
         rule_findings=[],

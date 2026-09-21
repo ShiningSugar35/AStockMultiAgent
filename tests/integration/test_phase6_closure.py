@@ -92,7 +92,6 @@ def test_recorded_300750_research_committee_protocol_confirmation_and_paper_orde
     assert analysis["TradeProtocol"]["outcome"] == "APPROVE_SIMULATION"
     protocol = analysis["TradeProtocol"]["artifact"]
     assert protocol["requires_user_confirmation"]
-    assert not protocol["broker_execution_allowed"]
     assert protocol["paper_simulation_allowed"]
 
     repeated_analysis = _invoke("analyze", "300750")

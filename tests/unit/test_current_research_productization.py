@@ -740,7 +740,6 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
     assert report.decision_as_of == NOW + timedelta(seconds=2)
     assert report.question_time_anchor_used is False
     assert report.decision_snapshot_frozen_after_acquisition is True
-    assert report.historical_and_prospective_pit_preserved is True
     assert report.automatic_resolution_budget_seconds == 1800
     assert report.manual_escalation_after_automatic_exhaustion is True
     assert report.parallel_acquisition_used is True

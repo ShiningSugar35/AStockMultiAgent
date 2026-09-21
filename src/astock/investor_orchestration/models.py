@@ -279,26 +279,25 @@ class InvestorRequestEnvelope(StrictModel):
         return value
 
     @model_validator(mode="after")
-    def validate_decision_clock(self) -> InvestorRequestEnvelope:
-        if self.decision_time is None:
-            if self.parent_request_id is not None or self.decision_freeze_artifact_id is not None:
-                raise ValueError("decision freeze identity requires a frozen decision time")
-            return self
-        if self.research_mode != "CURRENT":
-            raise ValueError("historical requests cannot advance their frozen evidence cutoff")
-        if self.decision_time.tzinfo is None or self.decision_time.utcoffset() is None:
-            raise ValueError("decision_time must be timezone-aware")
-        if self.decision_time < self.question_time:
-            raise ValueError("current decision time cannot precede its original question")
-        if not self.parent_request_id or not self.decision_freeze_artifact_id:
-            raise ValueError("current decision time requires its registered freeze lineage")
+    def validate_analysis_clock(self) -> InvestorRequestEnvelope:
+        if self.decision_time is not None:
+            if self.decision_time.tzinfo is None or self.decision_time.utcoffset() is None:
+                raise ValueError("decision_time must be timezone-aware")
+            if self.decision_time < self.question_time:
+                raise ValueError("analysis time cannot precede the original question")
         if self.parent_request_id == self.request_id:
-            raise ValueError("decision freeze cannot overwrite its parent request")
+            raise ValueError("derived request cannot overwrite its parent request")
         return self
 
     @property
-    def evidence_cutoff(self) -> datetime:
+    def analysis_as_of(self) -> datetime:
+        """Stable analysis clock; never an evidence-admission cutoff for CURRENT research."""
         return self.decision_time or self.question_time
+
+    @property
+    def evidence_cutoff(self) -> datetime:
+        """Legacy compatibility alias. Active CURRENT gates use analysis_as_of/freshness."""
+        return self.analysis_as_of
 
 
 class PositionView(StrictModel):

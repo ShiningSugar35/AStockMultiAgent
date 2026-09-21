@@ -217,6 +217,60 @@ def test_all_secondary_financial_sources_can_recover_from_official_report(
     assert len(pack.verified_numbers) == 18
 
 
+def test_corrupt_historical_official_capture_does_not_block_valid_financial_recovery(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    bad_ref = service.objects.put_bytes(b"{not-json")
+    service.state.register_artifact(
+        artifact_id="OfficialWebDocumentCapture:corrupt-history",
+        artifact_type="OfficialWebDocumentCapture",
+        schema_version="1.0",
+        object_hash=bad_ref.sha256,
+        input_hashes=[],
+    )
+
+    fixture = json.loads(
+        (
+            PROJECT_ROOT / "tests" / "fixtures" / "financial_sources" / "cninfo_reports_000001.json"
+        ).read_text(encoding="utf-8")
+    )
+    pdf = base64.b64decode(fixture["reports"][0]["pdf_base64"], validate=True)
+    observed = datetime(2026, 8, 27, 8, 0, tzinfo=UTC)
+    proposal = AgentSourceProposal.model_validate(
+        {
+            "requested_capability": "financial.official_document",
+            "query": "recover exact annual report from the exchange",
+            "candidate_url": "https://www.szse.cn/disclosure/listedinfo/valid-annual.pdf",
+            "expected_fact": "official 2025 annual-report values",
+            "preferred_source_class": SourceClass.PRIMARY_OFFICIAL_WEB,
+            "formal_use": True,
+            "require_complete": False,
+            "reason": "exercise local official capture recovery",
+        }
+    )
+    capture = OfficialWebDocumentCaptureService(service.state, service.objects).capture(
+        proposal,
+        pdf,
+        title="平安银行股份有限公司2025年年度报告",
+        company_ids=["000001"],
+        published_at=observed - timedelta(days=1),
+        period_end=PERIOD_END,
+        document_type=DocumentType.ANNUAL_REPORT,
+        disclosure_id="szse-valid-annual-000001-2025",
+        observed_at=observed,
+    )
+
+    candidates = service.official._captured_candidates(
+        "000001",
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].document.document_id == capture.document_id
+
+
 def test_cninfo_and_secondary_outage_recovers_limited_frozen_exchange_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -379,68 +433,35 @@ def test_recorded_financial_source_reaches_existing_audit_contract(tmp_path: Pat
     assert len(pack.verified_numbers) == 18
     assert not pack.evidence_gaps
     assert len(pack.source_snapshot_ids) == 1
-    assert len(pack.pit_ids) == 1
+    assert pack.input_fact_ids
 
 
-def test_as_of_excludes_late_pdf_and_preserves_revision_chain(tmp_path: Path) -> None:
+def test_explicit_as_of_does_not_hide_current_official_report(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    unavailable = service.sync(
+    first = service.sync(
         "000001",
         Market.XSHE,
         PERIOD_END,
         FinancialPeriodType.ANNUAL,
         as_of=datetime(2026, 7, 22, 9, 5, tzinfo=UTC),
     )
-    assert unavailable.status is FinancialSourceReleaseStatus.NEEDS_INFO
-    assert "OFFICIAL_REPORT_NOT_AVAILABLE_AT_AS_OF" in unavailable.reason_codes
-
-    original = service.sync(
+    assert first.status is FinancialSourceReleaseStatus.CERTIFIED
+    assert "OFFICIAL_REPORT_NOT_AVAILABLE_AT_AS_OF" not in first.reason_codes
+    repeated = service.sync(
         "000001",
         Market.XSHE,
         PERIOD_END,
         FinancialPeriodType.ANNUAL,
         as_of=ORIGINAL_AS_OF,
     )
-    corrected = service.sync(
-        "000001",
-        Market.XSHE,
-        PERIOD_END,
-        FinancialPeriodType.ANNUAL,
-        as_of=CORRECTION_AS_OF,
-    )
-    assert original.release_id != corrected.release_id
+    assert repeated.release_id == first.release_id
     current = service.repository.get(
         "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
     )
     assert current is not None
-    manifest = service._verified_manifest(current)
-    assert manifest.previous_release_id == original.release_id
-    assert manifest.supersedes_release_id == original.release_id
-    historical = service.repository.get(
-        "000001",
-        PERIOD_END.isoformat(),
-        FinancialPeriodType.ANNUAL.value,
-        as_of=ORIGINAL_AS_OF,
-    )
-    assert historical is not None
-    assert historical["release_id"] == original.release_id
-    head_before = current["release_id"]
-    repeated_original = service.sync(
-        "000001",
-        Market.XSHE,
-        PERIOD_END,
-        FinancialPeriodType.ANNUAL,
-        as_of=ORIGINAL_AS_OF,
-    )
-    assert repeated_original.release_id == original.release_id
-    head_after = service.repository.get(
-        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
-    )
-    assert head_after is not None
-    assert head_after["release_id"] == head_before
+    assert current["release_id"] == first.release_id
 
-
-def test_explicit_as_of_filters_late_primary_provider(tmp_path: Path, monkeypatch) -> None:
+def test_explicit_as_of_accepts_current_primary_provider(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     primary = service.providers["sina-financial"].fetch("000001", Market.XSHE, PERIOD_END)
     late = _payload_at(service, primary, CORRECTION_AS_OF)
@@ -453,9 +474,9 @@ def test_explicit_as_of_filters_late_primary_provider(tmp_path: Path, monkeypatc
         as_of=ORIGINAL_AS_OF,
     )
     assert report.status is FinancialSourceReleaseStatus.CERTIFIED
-    assert report.provider_ids == ["eastmoney-financial"]
-    assert "PROVIDER_SNAPSHOT_LATE:BALANCE_SHEET" in report.reason_codes
-    assert late.snapshots[0].snapshot_id not in report.raw_snapshot_ids
+    assert report.provider_ids == ["sina-financial"]
+    assert not any(code.startswith("PROVIDER_SNAPSHOT_LATE:") for code in report.reason_codes)
+    assert late.snapshots[0].snapshot_id in report.raw_snapshot_ids
 
 
 def test_live_default_cutoff_includes_completed_capture(tmp_path: Path, monkeypatch) -> None:
@@ -473,9 +494,7 @@ def test_live_default_cutoff_includes_completed_capture(tmp_path: Path, monkeypa
 
     def recorded_official(*args, **kwargs):
         observed_cutoffs.append(kwargs["as_of"])
-        assert kwargs["allow_live_capture_after_cutoff"] is True
         kwargs["live"] = False
-        kwargs["allow_live_capture_after_cutoff"] = False
         return original_get(*args, **kwargs)
 
     monkeypatch.setattr(service.official, "get", recorded_official)
@@ -715,8 +734,7 @@ def test_captured_exchange_financial_report_recovers_when_cninfo_is_unavailable(
     assert report.lineage_kind is OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION
     assert report.lineage_snapshot_ids == [capture.admission_snapshot_id]
     assert report.exhaustive_proof_allowed is False
-    assert report.pit.period_end == PERIOD_END
-    assert report.pit.source_snapshot_id == capture.snapshot_id
+    assert report.snapshot.snapshot_id == capture.snapshot_id
 
 
 def test_bjse_exact_item_financial_report_uses_formal_exchange_capture(
@@ -793,8 +811,20 @@ def test_bjse_exact_item_financial_report_uses_formal_exchange_capture(
     assert report.lineage_kind is OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION
     assert report.lineage_snapshot_ids == [capture.admission_snapshot_id]
     assert report.exhaustive_proof_allowed is False
-    assert report.pit.period_end == PERIOD_END
-    assert report.pit.source_snapshot_id == capture.snapshot_id
+    assert report.snapshot.snapshot_id == capture.snapshot_id
+
+
+def test_official_annual_financial_report_title_is_recognized() -> None:
+    assert _exact_report_title(
+        "示例股份2025年年度财务报告",
+        date(2025, 12, 31),
+        FinancialPeriodType.ANNUAL,
+    )
+    assert _exact_report_title(
+        "示例股份2025年年度报告",
+        date(2025, 12, 31),
+        FinancialPeriodType.ANNUAL,
+    )
 
 
 def test_common_first_and_third_quarter_titles_are_exactly_recognized() -> None:
@@ -836,6 +866,138 @@ def test_pdf_evidence_covers_table_period_unit_subject_and_value(tmp_path: Path)
     assert "2025年12月31日" in excerpt
     assert "币种：人民币" in excerpt and "单位：万元" in excerpt
     assert "期末普通股股份总数（股） 19405918198" in excerpt
+
+
+def test_numbered_statement_headings_and_implicit_rmb_are_certified(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    official = service.official.get(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+        live=False,
+    )
+    assert official is not None
+    page = official.pages[0]
+    text = service.objects.get_bytes(page.text_object_sha256).decode("utf-8")
+    changed_text = text.replace("合并资产负债表", "1、合并资产负债表", 1)
+    changed_text = changed_text.replace("合并利润表", "3、合并利润表", 1)
+    changed_text = changed_text.replace("合并现金流量表", "5、合并现金流量表", 1)
+    changed_text = changed_text.replace("币种：人民币\n", "")
+    _replace_page_text(service, page, changed_text)
+
+    report = service.sync(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+    )
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    assert report.coverage.certified_fact_count == 18
+
+
+def test_balance_relative_period_headers_certify_current_column(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    official = service.official.get(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+        live=False,
+    )
+    assert official is not None
+    page = official.pages[0]
+    text = service.objects.get_bytes(page.text_object_sha256).decode("utf-8")
+    changed_text = text.replace("2025年12月31日", "项目 期末余额 期初余额", 1)
+    _replace_page_text(service, page, changed_text)
+
+    report = service.sync(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+    )
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
+    assert row is not None
+    manifest = service._verified_manifest(row)
+    facts = service.parquet.read_facts(manifest.certified_files[0])
+    total_assets = next(
+        fact for fact in facts if fact.field_code is FinancialFieldCode.TOTAL_ASSETS
+    )
+    assert total_assets.reported_value == Decimal("1000")
+
+
+def test_missing_secondary_hint_can_recover_unique_official_value(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    payload = service.providers["sina-financial"].fetch("000001", Market.XSHE, PERIOD_END)
+    binding = service.instruments.resolve("000001", Market.XSHE, as_of=ORIGINAL_AS_OF)
+    observations, _ = _parse_provider(
+        payload,
+        service.mappings,
+        "000001",
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        binding,
+        as_of=ORIGINAL_AS_OF,
+    )
+    observations = [
+        item
+        for item in observations
+        if item.field_code is not FinancialFieldCode.NET_PROFIT_CASH_FLOW
+    ]
+    official = service.official.get(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+        live=False,
+    )
+    assert official is not None
+    facts, reasons = FinancialPdfCertifier(service.state, service.objects).certify(
+        official,
+        observations,
+        service.mappings,
+    )
+    recovered = [
+        fact for fact in facts if fact.field_code is FinancialFieldCode.NET_PROFIT_CASH_FLOW
+    ]
+    assert len(recovered) == 1
+    assert recovered[0].reported_value == Decimal("100")
+    assert "OFFICIAL_ONLY_FIELD_RECOVERY:NET_PROFIT_CASH_FLOW" in reasons
+    assert "SECONDARY_FIELD_MISSING:NET_PROFIT_CASH_FLOW" not in reasons
+
+
+def test_explicit_non_rmb_currency_still_blocks_certification(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    official = service.official.get(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+        live=False,
+    )
+    assert official is not None
+    page = official.pages[0]
+    text = service.objects.get_bytes(page.text_object_sha256).decode("utf-8")
+    changed_text = text.replace("币种：人民币", "币种：美元", 1)
+    _replace_page_text(service, page, changed_text)
+
+    report = service.sync(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+    )
+    assert "OFFICIAL_VALUE_NOT_FOUND:TOTAL_ASSETS" in report.reason_codes
+    assert report.coverage.certified_fact_count < 18
 
 
 def test_pdf_unit_ambiguity_blocks_affected_statement(tmp_path: Path) -> None:
@@ -1168,33 +1330,6 @@ def test_parquet_tamper_is_reported_as_corrupt(tmp_path: Path) -> None:
     assert status["status"] == "CORRUPT"
     assert service.audit()["status"] == "FAIL"
     with pytest.raises((OSError, ValueError)):
-        service.run_audit(
-            "000001",
-            PERIOD_END,
-            FinancialPeriodType.ANNUAL,
-            as_of=ORIGINAL_AS_OF,
-            industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
-        )
-
-
-def test_pit_corruption_is_not_downgraded_to_needs_info(tmp_path: Path) -> None:
-    service = _service(tmp_path)
-    service.sync(
-        "000001",
-        Market.XSHE,
-        PERIOD_END,
-        FinancialPeriodType.ANNUAL,
-        as_of=ORIGINAL_AS_OF,
-    )
-    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
-    assert row is not None
-    manifest = service._verified_manifest(row)
-    with service.state.transaction() as connection:
-        connection.execute(
-            "UPDATE point_in_time_metadata SET pit_json='not-json' WHERE pit_id=?",
-            (manifest.official_pit_id,),
-        )
-    with pytest.raises(ValueError):
         service.run_audit(
             "000001",
             PERIOD_END,

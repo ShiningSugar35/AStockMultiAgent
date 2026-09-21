@@ -14,16 +14,13 @@ from astock.core.state import StateStore
 from astock.documents.page_repository import DocumentPageRepository
 from astock.documents.pdf_parser import PdfParseService
 from astock.documents.repository import DocumentRepository
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.schemas import (
-    AvailabilityBasis,
     BookPageReference,
     BookParseReport,
     BookParseScope,
     BookProcessingStatus,
     BookSourceManifest,
     DocumentType,
-    PointInTimeStatus,
     PrivatePdfIngestResult,
     SourceDocument,
     SourceSnapshot,
@@ -42,7 +39,6 @@ class PrivatePdfIngestService:
         pages: DocumentPageRepository | None = None,
         books: BookRepository | None = None,
         parser: PdfParseService | None = None,
-        pit_service: PointInTimeService | None = None,
         maximum_pdf_bytes: int = 500 * 1024 * 1024,
         maximum_sample_pages: int = 12,
     ) -> None:
@@ -52,9 +48,6 @@ class PrivatePdfIngestService:
         self.pages = pages or DocumentPageRepository(state)
         self.books = books or BookRepository(state)
         self.parser = parser or PdfParseService(object_store, state, self.pages)
-        self.pit_service = pit_service or PointInTimeService(
-            PointInTimeRepository(state), state, object_store
-        )
         self.maximum_pdf_bytes = maximum_pdf_bytes
         self.maximum_sample_pages = maximum_sample_pages
 
@@ -124,25 +117,12 @@ class PrivatePdfIngestService:
                 rights_status="LOCAL_PRIVATE_RESEARCH",
             )
         self.documents.register(document, snapshot)
-        pit = self.pit_service.create(
-            source_id=document_id,
-            source_document_id=document_id,
-            source_snapshot_id=snapshot_id,
-            published_at=document.published_at,
-            effective_at=document.effective_at,
-            ingested_at=snapshot.fetched_at,
-            available_to_system_at=snapshot.available_to_system_at,
-            point_in_time_status=PointInTimeStatus.NOT_PIT_SAFE,
-            availability_basis=AvailabilityBasis.FETCH_OBSERVED,
-        )
-
         manifest_fields = {
             "source_id": source_id,
             "display_name": display_name,
             "author_source_id": author_source_id,
             "document_id": document_id,
             "snapshot_id": snapshot_id,
-            "pit_id": pit.pit_id,
             "document_type": document_type,
             "file_sha256": raw_ref.sha256,
             "file_name_sha256": sha256_bytes(path.name.encode("utf-8")),
@@ -174,7 +154,6 @@ class PrivatePdfIngestService:
         )
         return PrivatePdfIngestResult(
             manifest=stored_manifest,
-            pit_metadata=pit,
             parse_report=parse_report,
             created_at=stored_manifest.created_at,
         )
@@ -309,7 +288,7 @@ class PrivatePdfIngestService:
             artifact_type="BookSourceManifest",
             schema_version=manifest.schema_version,
             object_hash=artifact.sha256,
-            input_hashes=[manifest.raw_object_sha256, manifest.pit_id],
+            input_hashes=[manifest.raw_object_sha256, manifest.snapshot_id],
         )
 
     def _register_parse_artifact(self, report: BookParseReport) -> None:

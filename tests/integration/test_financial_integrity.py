@@ -199,17 +199,24 @@ def test_bank_profile_explicitly_excludes_industrial_scores(state, object_store)
     findings = {finding.rule_id: finding for finding in pack.rule_findings}
     assert findings["beneish_m_score"].status is FinancialFindingStatus.NOT_APPLICABLE
     assert findings["altman_z_score"].status is FinancialFindingStatus.NOT_APPLICABLE
-    assert not pack.evidence_gaps
-    assert pack.status is RunStatus.SUCCEEDED
+    assert pack.status is RunStatus.NEEDS_INFO
+    assert {
+        gap.detail_code for gap in pack.evidence_gaps
+    } == {
+        "INDUSTRY_CRITICAL_METRIC_MISSING:NET_INTEREST_MARGIN",
+        "INDUSTRY_CRITICAL_METRIC_MISSING:NON_PERFORMING_LOAN_RATIO",
+        "INDUSTRY_CRITICAL_METRIC_MISSING:PROVISION_COVERAGE_RATIO",
+    }
+    assert pack.capability_status["industry_metric_standardization"].startswith("MISSING_CRITICAL:")
 
 
-def test_future_snapshot_pit_and_evidence_are_excluded(state, object_store) -> None:
-    future = datetime(2026, 4, 20, tzinfo=UTC)
+def test_current_research_accepts_source_acquired_after_old_as_of(state, object_store) -> None:
+    acquired_later = datetime(2026, 4, 20, tzinfo=UTC)
     facts = make_financial_facts(
         state,
         object_store,
-        source_suffix="future",
-        published_at=future,
+        source_suffix="current-later-source",
+        published_at=acquired_later,
     )
     request = FinancialAuditRequest(
         company_id="000001",
@@ -218,16 +225,11 @@ def test_future_snapshot_pit_and_evidence_are_excluded(state, object_store) -> N
         facts=facts,
     )
     pack = _service(state, object_store).run(request).pack
-    assert pack.status is RunStatus.NEEDS_INFO
-    assert pack.coverage_status is FinancialCoverageStatus.BLOCKED
-    assert not pack.verified_numbers
-    assert not pack.source_snapshot_ids
-    assert not pack.pit_ids
-    gap_types = {gap.gap_type for gap in pack.evidence_gaps}
-    assert FinancialGapType.SNAPSHOT_NOT_AVAILABLE in gap_types
-    assert FinancialGapType.PIT_NOT_USABLE in gap_types
-    assert FinancialGapType.EVIDENCE_NOT_USABLE in gap_types
-    assert all(not finding.evidence_ids for finding in pack.rule_findings)
+    assert pack.status is RunStatus.SUCCEEDED
+    assert pack.coverage_status is not FinancialCoverageStatus.BLOCKED
+    assert pack.verified_numbers
+    assert pack.source_snapshot_ids
+    assert not pack.evidence_gaps
 
 
 def test_community_lead_cannot_be_used_as_a_reported_financial_fact(

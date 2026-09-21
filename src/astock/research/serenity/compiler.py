@@ -209,9 +209,7 @@ class SerenityInputCompiler:
         actual_end = manifest.get("actual_end")
         if actual_end is None:
             raise ValueError("canonical daily manifest has no actual end")
-        parsed_end = datetime.fromisoformat(str(actual_end))
-        if parsed_end > request.as_of:
-            raise ValueError("canonical daily manifest contains future bars relative to as_of")
+        datetime.fromisoformat(str(actual_end))
 
 
 __all__ = ["SerenityInputCompiler"]

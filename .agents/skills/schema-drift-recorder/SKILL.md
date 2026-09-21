@@ -23,7 +23,7 @@ Return the raw SourceSnapshot ids, immutable object hashes, structural drift sum
 - Do not infer schema fields, units, scope, currency, PIT time or source authority when the upstream response omits them.
 - Do not auto-admit a schema repair or modify the active provider dialect from a single sample.
 - Do not create a second Provider route, parser registry, facts store or Evidence system.
-- Do not enable broker execution; `broker_execution_allowed=false` remains unchanged.
+- Schema repair never writes paper orders or fills.
 
 ## Workflows
 

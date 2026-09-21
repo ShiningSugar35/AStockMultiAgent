@@ -215,7 +215,6 @@ def test_no_study_status_is_stable_fail_closed_and_has_no_database_writes(
     assert not first.adaptive_weights_enabled
     assert not first.online_learning_allowed
     assert not first.main_paper_ledger_write_allowed
-    assert not first.broker_execution_allowed
     assert first.status_sha256 == second.status_sha256
     assert first.status_sha256 == content_hash(
         first.model_dump(
@@ -277,7 +276,6 @@ def test_eligible_admission_still_requires_explicit_versioned_approval() -> None
     assert not result.adaptive_weights_enabled
     assert not result.online_learning_allowed
     assert not result.main_paper_ledger_write_allowed
-    assert not result.broker_execution_allowed
 
 
 def test_audit_or_object_failure_blocks_an_otherwise_eligible_admission() -> None:

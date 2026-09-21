@@ -373,7 +373,6 @@ class AdaptiveResearchStatusService:
             "adaptive_weights_enabled": False,
             "online_learning_allowed": False,
             "main_paper_ledger_write_allowed": False,
-            "broker_execution_allowed": False,
             "next_permitted_stage": next_permitted_stage,
         }
         return AdaptiveResearchStatusReport(
@@ -412,7 +411,6 @@ class AdaptiveResearchStatusService:
             adaptive_weights_enabled=False,
             online_learning_allowed=False,
             main_paper_ledger_write_allowed=False,
-            broker_execution_allowed=False,
             next_permitted_stage=next_permitted_stage,
             status_sha256=content_hash(identity),
             created_at=self._now(),

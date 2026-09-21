@@ -87,7 +87,6 @@ class CurrentResearchSchedule(AStockModel):
     steps: list[CapabilityScheduleStep] = Field(min_length=1)
     manual_last: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_schedule(self) -> CurrentResearchSchedule:
@@ -139,12 +138,19 @@ class CurrentResearchAcquisitionReport(AStockModel):
     manual_actions: list[ManualResearchAction] = Field(default_factory=list)
     question_time_anchor_used: Literal[False] = False
     decision_snapshot_frozen_after_acquisition: Literal[True] = True
-    historical_and_prospective_pit_preserved: Literal[True] = True
     automatic_resolution_budget_seconds: int = Field(default=1800, ge=60, le=7200)
     manual_escalation_after_automatic_exhaustion: Literal[True] = True
     parallel_acquisition_used: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_current_gates(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("historical_and_prospective_pit_preserved", None)
+            value.pop("broker_execution_allowed", None)
+        return value
 
     @model_validator(mode="after")
     def validate_report(self) -> CurrentResearchAcquisitionReport:
@@ -193,7 +199,6 @@ class InvestorResearchView(AStockModel):
     internal_codes_exposed: Literal[False] = False
     artifact_ids_exposed: Literal[False] = False
     paper_ledger_write_count: Literal[0] = 0
-    broker_execution_allowed: Literal[False] = False
 
 
 class InvestorAnswerAudit(AStockModel):

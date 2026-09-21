@@ -12,6 +12,7 @@ from typing import Any
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.data_standardization import standardize_financial_facts
 from astock.evidence import EvidenceRepository
 from astock.financial_integrity.advanced_calculations import (
     altman_z_score,
@@ -39,7 +40,6 @@ from astock.financial_integrity.config import (
     validate_financial_config,
 )
 from astock.financial_integrity.repository import FinancialIntegrityRepository
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.schemas import (
     EvidenceGrade,
     FactStatus,
@@ -59,6 +59,7 @@ from astock.schemas import (
     FinancialFindingStatus,
     FinancialGapType,
     FinancialImplementationStatus,
+    FinancialIndustryProfile,
     FinancialIndustryProfileDefinition,
     FinancialIntegrityEvidencePack,
     FinancialManualTask,
@@ -136,7 +137,6 @@ class _ValidationResult:
     verified_numbers: list[VerifiedFinancialNumber]
     conflicts: list[FinancialDocumentConflict]
     safe_snapshot_ids: list[str]
-    safe_pit_ids: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +208,6 @@ class FinancialIntegrityService:
         self.object_store = object_store
         self.repository = FinancialIntegrityRepository(state, object_store)
         self.evidence_repository = EvidenceRepository(state)
-        self.pit_repository = PointInTimeRepository(state)
         self.rule_registry = load_financial_rule_registry(rule_config_path)
         self.profile_registry = load_financial_industry_profiles(industry_profile_path)
         validate_financial_config(self.rule_registry, self.profile_registry)
@@ -218,9 +217,7 @@ class FinancialIntegrityService:
                 f"{self.rule_registry.compatible_engine_version} != {self.ENGINE_VERSION}"
             )
         self._rules = {rule.rule_id: rule for rule in self.rule_registry.rules}
-        self._profiles = {
-            profile.profile_id: profile for profile in self.profile_registry.profiles
-        }
+        self._profiles = {profile.profile_id: profile for profile in self.profile_registry.profiles}
 
     def run(self, request: FinancialAuditRequest) -> FinancialAuditExecution:
         request = FinancialAuditRequest.model_validate(request.model_dump(mode="python"))
@@ -249,6 +246,20 @@ class FinancialIntegrityService:
 
         attempt_id = self.repository.start_attempt(audit_run_id)
         gaps = _GapCollector(request.company_id, record.created_at)
+        industry_metrics = standardize_financial_facts(
+            company_id=request.company_id,
+            industry_profile=request.industry_profile,
+            facts=request.facts,
+        )
+        if request.industry_profile in {
+            FinancialIndustryProfile.BANK,
+            FinancialIndustryProfile.RESOURCE_MINING,
+        }:
+            for metric in industry_metrics.missing_critical_metrics:
+                gaps.add(
+                    FinancialGapType.MISSING_FACT,
+                    f"INDUSTRY_CRITICAL_METRIC_MISSING:{metric}",
+                )
         try:
             validation = self._validate_and_reconcile_facts(request, gaps, record.created_at)
             self.repository.checkpoint(audit_run_id, "LINEAGE_VALIDATED")
@@ -292,9 +303,7 @@ class FinancialIntegrityService:
                 anomaly_execution.evaluations if anomaly_execution is not None else []
             )
             benign_explanations = (
-                anomaly_execution.benign_explanations
-                if anomaly_execution is not None
-                else []
+                anomaly_execution.benign_explanations if anomaly_execution is not None else []
             )
             evidence_gaps = gaps.values()
             status = RunStatus.NEEDS_INFO if evidence_gaps else RunStatus.SUCCEEDED
@@ -302,16 +311,13 @@ class FinancialIntegrityService:
                 audit_run_id=audit_run_id,
                 request_hash=request_hash,
                 status=status,
-                coverage_status=self._coverage_status(
-                    validation.verified_numbers, evidence_gaps
-                ),
+                coverage_status=self._coverage_status(validation.verified_numbers, evidence_gaps),
                 company_id=request.company_id,
                 as_of=request.as_of,
                 industry_profile=request.industry_profile,
                 periods=sorted({fact.period_end for fact in request.facts}),
                 input_fact_ids=sorted(fact.fact_id for fact in request.facts),
                 source_snapshot_ids=validation.safe_snapshot_ids,
-                pit_ids=validation.safe_pit_ids,
                 verified_numbers=validation.verified_numbers,
                 recalculated_metrics=metrics,
                 derived_metrics=derived_metrics,
@@ -349,6 +355,12 @@ class FinancialIntegrityService:
                     },
                 },
                 capability_status={
+                    "industry_metric_standardization": (
+                        "READY"
+                        if not industry_metrics.missing_critical_metrics
+                        else "MISSING_CRITICAL:"
+                        + ",".join(industry_metrics.missing_critical_metrics)
+                    ),
                     "deterministic_reconciliation": "AVAILABLE_M3_1",
                     "descriptive_ratios": "AVAILABLE_M3_1_NO_FLAG_THRESHOLDS",
                     "cross_period_metrics": "AVAILABLE_M3_2_EXPLICIT_REQUEST",
@@ -388,11 +400,7 @@ class FinancialIntegrityService:
                     for conflict in validation.conflicts
                     for evidence_id in conflict.evidence_ids
                 }
-                | {
-                    evidence_id
-                    for metric in derived_metrics
-                    for evidence_id in metric.evidence_ids
-                }
+                | {evidence_id for metric in derived_metrics for evidence_id in metric.evidence_ids}
                 | {
                     evidence_id
                     for percentile in peer_percentiles
@@ -420,7 +428,6 @@ class FinancialIntegrityService:
                             for sample in request.anomaly_dataset.samples
                             for source_id in [
                                 *sample.source_snapshot_ids,
-                                *sample.pit_ids,
                                 *sample.evidence_ids,
                             ]
                         }
@@ -451,25 +458,14 @@ class FinancialIntegrityService:
                 input_hashes=[
                     request_object.sha256,
                     *validation.safe_snapshot_ids,
-                    *validation.safe_pit_ids,
                     *evidence_ids,
                     *(
                         snapshot_id
                         for percentile in peer_percentiles
                         for snapshot_id in percentile.source_snapshot_ids
                     ),
-                    *(
-                        pit_id
-                        for percentile in peer_percentiles
-                        for pit_id in percentile.pit_ids
-                    ),
-                    *(
-                        artifact.dataset_object_hash for artifact in anomaly_artifacts
-                    ),
-                    *(
-                        artifact.serialized_model_object_hash
-                        for artifact in anomaly_artifacts
-                    ),
+                    *(artifact.dataset_object_hash for artifact in anomaly_artifacts),
+                    *(artifact.serialized_model_object_hash for artifact in anomaly_artifacts),
                 ],
             )
             self.repository.checkpoint(audit_run_id, "ARTIFACT_REGISTERED")
@@ -493,9 +489,7 @@ class FinancialIntegrityService:
         unknown = sorted(set(request.requested_rule_ids) - set(self._rules))
         if unknown:
             raise ValueError(f"unknown financial rules: {', '.join(unknown)}")
-        selected_ids = {
-            rule.rule_id for rule in self.rule_registry.rules if rule.default_enabled
-        }
+        selected_ids = {rule.rule_id for rule in self.rule_registry.rules if rule.default_enabled}
         selected_ids.update(request.requested_rule_ids)
         selected_ids.update(profile.excluded_rule_ids)
         return [rule for rule in self.rule_registry.rules if rule.rule_id in selected_ids]
@@ -534,12 +528,8 @@ class FinancialIntegrityService:
             ),
             "anomaly_model_specs": [
                 _drop_created_at(spec.model_dump(mode="json"))
-                for spec in sorted(
-                    request.anomaly_model_specs, key=lambda value: value.model_id
-                )
+                for spec in sorted(request.anomaly_model_specs, key=lambda value: value.model_id)
             ],
-            "formal_historical": request.formal_historical,
-            "allow_approximated_pit": request.allow_approximated_pit,
         }
 
     def _audit_run_id(self, request_hash: str) -> str:
@@ -609,15 +599,6 @@ class FinancialIntegrityService:
                     fact_ids=[fact.fact_id],
                 )
             else:
-                availability = datetime.fromisoformat(str(snapshot["availability_at"]))
-                if availability > request.as_of:
-                    gaps.add(
-                        FinancialGapType.SNAPSHOT_NOT_AVAILABLE,
-                        "SOURCE_SNAPSHOT_IS_FUTURE_AT_AS_OF",
-                        period_end=fact.period_end,
-                        field_codes=[fact.field_code],
-                        fact_ids=[fact.fact_id],
-                    )
                 if str(snapshot["fetch_status"]) != FetchStatus.SUCCEEDED.value:
                     gaps.add(
                         FinancialGapType.SNAPSHOT_FETCH_INCOMPLETE,
@@ -630,56 +611,6 @@ class FinancialIntegrityService:
                     gaps.add(
                         FinancialGapType.SNAPSHOT_OBJECT_MISSING,
                         "IMMUTABLE_SOURCE_OBJECT_NOT_VERIFIABLE",
-                        period_end=fact.period_end,
-                        field_codes=[fact.field_code],
-                        fact_ids=[fact.fact_id],
-                    )
-
-            pit = self.pit_repository.get(fact.pit_id) if fact.pit_id else None
-            if fact.pit_id is None:
-                gaps.add(
-                    FinancialGapType.MISSING_PIT_REFERENCE,
-                    "FACT_HAS_NO_PIT_ID",
-                    period_end=fact.period_end,
-                    field_codes=[fact.field_code],
-                    fact_ids=[fact.fact_id],
-                )
-            elif pit is None:
-                gaps.add(
-                    FinancialGapType.UNKNOWN_PIT,
-                    "PIT_ID_NOT_REGISTERED",
-                    period_end=fact.period_end,
-                    field_codes=[fact.field_code],
-                    fact_ids=[fact.fact_id],
-                )
-            else:
-                try:
-                    PointInTimeService.assert_usable(
-                        pit,
-                        request.as_of,
-                        formal_historical=request.formal_historical,
-                        allow_approximated=request.allow_approximated_pit,
-                    )
-                except ValueError:
-                    gaps.add(
-                        FinancialGapType.PIT_NOT_USABLE,
-                        "PIT_SOURCE_NOT_USABLE_AT_AS_OF",
-                        period_end=fact.period_end,
-                        field_codes=[fact.field_code],
-                        fact_ids=[fact.fact_id],
-                    )
-                if pit.source_snapshot_id != fact.source_snapshot_id:
-                    gaps.add(
-                        FinancialGapType.LINEAGE_MISMATCH,
-                        "PIT_SNAPSHOT_DOES_NOT_MATCH_FACT_SNAPSHOT",
-                        period_end=fact.period_end,
-                        field_codes=[fact.field_code],
-                        fact_ids=[fact.fact_id],
-                    )
-                if pit.period_end is not None and pit.period_end != fact.period_end:
-                    gaps.add(
-                        FinancialGapType.LINEAGE_MISMATCH,
-                        "PIT_PERIOD_DOES_NOT_MATCH_FACT_PERIOD",
                         period_end=fact.period_end,
                         field_codes=[fact.field_code],
                         fact_ids=[fact.fact_id],
@@ -704,18 +635,6 @@ class FinancialIntegrityService:
                         fact_ids=[fact.fact_id],
                     )
                     continue
-                if (
-                    evidence.available_to_system_at > request.as_of
-                    or (evidence.valid_from is not None and evidence.valid_from > request.as_of)
-                    or (evidence.valid_to is not None and evidence.valid_to < request.as_of)
-                ):
-                    gaps.add(
-                        FinancialGapType.EVIDENCE_NOT_USABLE,
-                        "EVIDENCE_IS_NOT_VALID_AT_AS_OF",
-                        period_end=fact.period_end,
-                        field_codes=[fact.field_code],
-                        fact_ids=[fact.fact_id],
-                    )
                 if evidence.evidence_grade is not EvidenceGrade.PRIMARY_OFFICIAL:
                     gaps.add(
                         FinancialGapType.UNSUITABLE_EVIDENCE_GRADE,
@@ -749,17 +668,6 @@ class FinancialIntegrityService:
                         field_codes=[fact.field_code],
                         fact_ids=[fact.fact_id],
                     )
-                if pit is not None and (
-                    pit.source_document_id is not None
-                    and evidence.document_id != pit.source_document_id
-                ):
-                    gaps.add(
-                        FinancialGapType.LINEAGE_MISMATCH,
-                        "EVIDENCE_DOCUMENT_DOES_NOT_MATCH_PIT_DOCUMENT",
-                        period_end=fact.period_end,
-                        field_codes=[fact.field_code],
-                        fact_ids=[fact.fact_id],
-                    )
             if len(gaps.values()) == issue_count and multiplier is not None:
                 exponent = fact.reported_value.as_tuple().exponent
                 if not isinstance(exponent, int):  # guarded by the finite Decimal schema
@@ -768,10 +676,7 @@ class FinancialIntegrityService:
                     _ValidatedFact(
                         fact=fact,
                         value_cny=fact.reported_value * multiplier,
-                        reporting_quantum_cny=(
-                            multiplier
-                            * Decimal(1).scaleb(exponent)
-                        ),
+                        reporting_quantum_cny=(multiplier * Decimal(1).scaleb(exponent)),
                     )
                 )
 
@@ -832,9 +737,7 @@ class FinancialIntegrityService:
                     period_type=first.fact.period_type,
                     duration_semantics=first.fact.duration_semantics,
                     value_cny=first.value_cny,
-                    reporting_quantum_cny=max(
-                        item.reporting_quantum_cny for item in items
-                    ),
+                    reporting_quantum_cny=max(item.reporting_quantum_cny for item in items),
                     fact_ids=sorted(item.fact.fact_id for item in items),
                     source_snapshot_ids=sorted(
                         {
@@ -842,9 +745,6 @@ class FinancialIntegrityService:
                             for item in items
                             if item.fact.source_snapshot_id is not None
                         }
-                    ),
-                    pit_ids=sorted(
-                        {item.fact.pit_id for item in items if item.fact.pit_id is not None}
                     ),
                     evidence_ids=sorted(
                         {evidence_id for item in items for evidence_id in item.fact.evidence_ids}
@@ -861,9 +761,6 @@ class FinancialIntegrityService:
                     for item in usable
                     if item.fact.source_snapshot_id is not None
                 }
-            ),
-            safe_pit_ids=sorted(
-                {item.fact.pit_id for item in usable if item.fact.pit_id is not None}
             ),
         )
 
@@ -984,9 +881,7 @@ class FinancialIntegrityService:
                     continue
                 if period_end is None:  # pragma: no cover - nonempty required_fields imply missing
                     raise RuntimeError("financial rule period unexpectedly missing")
-                metric, finding = self._calculate_rule(
-                    rule, period_end, values, gaps, created_at
-                )
+                metric, finding = self._calculate_rule(rule, period_end, values, gaps, created_at)
                 if metric is not None:
                     metrics.append(metric)
                 findings.append(finding)
@@ -999,9 +894,7 @@ class FinancialIntegrityService:
         self,
         request: FinancialAuditRequest,
         rule: FinancialRuleDefinition,
-        index: dict[
-            tuple[date, FinancialPeriodType, FinancialFieldCode], VerifiedFinancialNumber
-        ],
+        index: dict[tuple[date, FinancialPeriodType, FinancialFieldCode], VerifiedFinancialNumber],
         periods: list[tuple[date, FinancialPeriodType]],
         gaps: _GapCollector,
         created_at: datetime,
@@ -1341,9 +1234,7 @@ class FinancialIntegrityService:
                         for number in numbers
                         if number.period_type is target_number.period_type
                         and number.period_end
-                        == target_number.period_end.replace(
-                            year=target_number.period_end.year - 1
-                        )
+                        == target_number.period_end.replace(year=target_number.period_end.year - 1)
                     ),
                     None,
                 )
@@ -1437,9 +1328,7 @@ class FinancialIntegrityService:
             "fact_ids": fact_ids,
         }
         return FinancialDerivedMetric(
-            derived_metric_id=(
-                f"financial-derived:{sha256_bytes(canonical_json_bytes(identity))}"
-            ),
+            derived_metric_id=(f"financial-derived:{sha256_bytes(canonical_json_bytes(identity))}"),
             request_id=request.request_id,
             metric_key=f"{request.derivation_type.value}:{request.field_code.value}",
             derivation_type=request.derivation_type,
@@ -1496,9 +1385,7 @@ class FinancialIntegrityService:
                         period_end=period_end,
                         value=number.value_cny - previous.value_cny,
                         fact_ids=sorted(set(number.fact_ids + previous.fact_ids)),
-                        evidence_ids=sorted(
-                            set(number.evidence_ids + previous.evidence_ids)
-                        ),
+                        evidence_ids=sorted(set(number.evidence_ids + previous.evidence_ids)),
                     )
                 )
                 continue
@@ -1549,9 +1436,7 @@ class FinancialIntegrityService:
         return mapping.get((value.month, value.day))
 
     @classmethod
-    def _periods_are_contiguous(
-        cls, periods: list[date], period_type: FinancialPeriodType
-    ) -> bool:
+    def _periods_are_contiguous(cls, periods: list[date], period_type: FinancialPeriodType) -> bool:
         if len(periods) < 2:
             return True
         if period_type is FinancialPeriodType.ANNUAL:
@@ -1578,9 +1463,7 @@ class FinancialIntegrityService:
         gaps: _GapCollector,
         created_at: datetime,
     ) -> list[FinancialPeerPercentile]:
-        metric_index: dict[
-            str, tuple[date, Decimal, FinancialUnit, str, list[str]]
-        ] = {}
+        metric_index: dict[str, tuple[date, Decimal, FinancialUnit, str, list[str]]] = {}
         for metric in metrics:
             candidate = (
                 metric.period_end,
@@ -1663,9 +1546,6 @@ class FinancialIntegrityService:
                     for snapshot_id in observation.source_snapshot_ids
                 }
             )
-            pit_ids = sorted(
-                {pit_id for observation in usable for pit_id in observation.pit_ids}
-            )
             evidence_ids = sorted(
                 set(subject_evidence)
                 | {
@@ -1685,8 +1565,7 @@ class FinancialIntegrityService:
             output.append(
                 FinancialPeerPercentile(
                     percentile_id=(
-                        f"financial-peer-percentile:"
-                        f"{sha256_bytes(canonical_json_bytes(identity))}"
+                        f"financial-peer-percentile:{sha256_bytes(canonical_json_bytes(identity))}"
                     ),
                     cohort_id=cohort.cohort_id,
                     metric_id=cohort.metric_id,
@@ -1698,7 +1577,6 @@ class FinancialIntegrityService:
                     sample_size=len(usable),
                     peer_company_ids=sorted(observation.company_id for observation in usable),
                     source_snapshot_ids=source_snapshot_ids,
-                    pit_ids=pit_ids,
                     evidence_ids=evidence_ids,
                     created_at=created_at,
                 )
@@ -1720,30 +1598,13 @@ class FinancialIntegrityService:
         return sorted(output, key=lambda item: item.percentile_id)
 
     def _peer_observation_is_usable(self, request: FinancialAuditRequest, observation: Any) -> bool:
-        if observation.available_at > request.as_of:
-            return False
         for snapshot_id in observation.source_snapshot_ids:
             row = self._snapshot_row(snapshot_id)
             if row is None:
                 return False
-            if datetime.fromisoformat(str(row["availability_at"])) > request.as_of:
-                return False
             if str(row["fetch_status"]) != FetchStatus.SUCCEEDED.value:
                 return False
             if not self.object_store.verify(str(row["object_hash"])):
-                return False
-        for pit_id in observation.pit_ids:
-            pit = self.pit_repository.get(pit_id)
-            if pit is None:
-                return False
-            try:
-                PointInTimeService.assert_usable(
-                    pit,
-                    request.as_of,
-                    formal_historical=request.formal_historical,
-                    allow_approximated=request.allow_approximated_pit,
-                )
-            except ValueError:
                 return False
         accepted_entities = {observation.company_id, f"company:{observation.company_id}"}
         for evidence_id in observation.evidence_ids:
@@ -1780,10 +1641,7 @@ class FinancialIntegrityService:
                 )
                 valid = False
         for feature_name in dataset.feature_names:
-            versions = {
-                sample.feature_formula_versions[feature_name]
-                for sample in dataset.samples
-            }
+            versions = {sample.feature_formula_versions[feature_name] for sample in dataset.samples}
             if len(versions) != 1:
                 gaps.add(
                     FinancialGapType.MODEL_INPUT_INVALID,
@@ -1795,7 +1653,7 @@ class FinancialIntegrityService:
             if not self._anomaly_sample_is_usable(request, sample):
                 gaps.add(
                     FinancialGapType.MODEL_INPUT_INVALID,
-                    "ANOMALY_SAMPLE_LINEAGE_OR_PIT_INVALID",
+                    "ANOMALY_SAMPLE_LINEAGE_INVALID",
                     period_end=sample.period_end,
                     fact_ids=[sample.sample_id],
                     safe_evidence_ids=sample.evidence_ids,
@@ -1829,30 +1687,13 @@ class FinancialIntegrityService:
         request: FinancialAuditRequest,
         sample: FinancialAnomalySample,
     ) -> bool:
-        if sample.available_at > request.as_of:
-            return False
         for snapshot_id in sample.source_snapshot_ids:
             row = self._snapshot_row(snapshot_id)
             if row is None:
                 return False
-            if datetime.fromisoformat(str(row["availability_at"])) > request.as_of:
-                return False
             if str(row["fetch_status"]) != FetchStatus.SUCCEEDED.value:
                 return False
             if not self.object_store.verify(str(row["object_hash"])):
-                return False
-        for pit_id in sample.pit_ids:
-            pit = self.pit_repository.get(pit_id)
-            if pit is None:
-                return False
-            try:
-                PointInTimeService.assert_usable(
-                    pit,
-                    request.as_of,
-                    formal_historical=request.formal_historical,
-                    allow_approximated=request.allow_approximated_pit,
-                )
-            except ValueError:
                 return False
         accepted_entities = {sample.company_id, f"company:{sample.company_id}"}
         for evidence_id in [*sample.evidence_ids, *sample.benign_context_evidence_ids]:
@@ -2072,10 +1913,9 @@ class FinancialIntegrityService:
                 action = "RESOLVE_OFFICIAL_DOCUMENT_CONFLICT"
             elif gap.gap_type in {
                 FinancialGapType.SNAPSHOT_NOT_AVAILABLE,
-                FinancialGapType.PIT_NOT_USABLE,
                 FinancialGapType.EVIDENCE_NOT_USABLE,
             }:
-                action = "USE_AS_OF_COMPATIBLE_OFFICIAL_SOURCE"
+                action = "USE_CURRENT_COMPATIBLE_OFFICIAL_SOURCE"
             elif gap.gap_type is FinancialGapType.SNAPSHOT_OBJECT_MISSING:
                 action = "RESTORE_IMMUTABLE_SOURCE_OBJECT"
             elif gap.gap_type in {
@@ -2085,7 +1925,7 @@ class FinancialIntegrityService:
             }:
                 action = "CORRECT_FINANCIAL_FACT_METADATA"
             elif gap.gap_type is FinancialGapType.MODEL_SAMPLE_INSUFFICIENT:
-                action = "COLLECT_MORE_PIT_SAFE_FINANCIAL_FEATURE_SAMPLES"
+                action = "COLLECT_MORE_CURRENT_FINANCIAL_FEATURE_SAMPLES"
             elif gap.gap_type is FinancialGapType.MODEL_INPUT_INVALID:
                 action = "CORRECT_FROZEN_ANOMALY_DATASET"
             else:
@@ -2118,9 +1958,7 @@ class FinancialIntegrityService:
         findings: list[FinancialRuleFinding],
         anomalies: list[FinancialAnomaly] | None = None,
     ) -> FinancialRiskLevel:
-        flagged = [
-            finding for finding in findings if finding.status is FinancialFindingStatus.FLAG
-        ]
+        flagged = [finding for finding in findings if finding.status is FinancialFindingStatus.FLAG]
         if any(finding.severity is FinancialSeverity.HIGH for finding in flagged):
             return FinancialRiskLevel.HIGH
         if any(
@@ -2135,11 +1973,7 @@ class FinancialIntegrityService:
 
 def _drop_created_at(value: Any) -> Any:
     if isinstance(value, dict):
-        return {
-            key: _drop_created_at(item)
-            for key, item in value.items()
-            if key != "created_at"
-        }
+        return {key: _drop_created_at(item) for key, item in value.items() if key != "created_at"}
     if isinstance(value, list):
         return [_drop_created_at(item) for item in value]
     return value

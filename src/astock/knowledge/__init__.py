@@ -41,6 +41,7 @@ from astock.knowledge.direct_source_distillation_service import (
     DirectSourceDistillationService,
 )
 from astock.knowledge.direct_source_real_run_service import DirectSourceRealRunService
+from astock.knowledge.discovery_catalog import KnowledgeDiscoveryCatalogCompiler
 from astock.knowledge.distillation import (
     DistillationExecution,
     KnowledgeDistillationService,
@@ -94,6 +95,9 @@ from astock.knowledge.semantic_funnel import (
     paragraphize_zhihu_content,
 )
 from astock.knowledge.semantic_packets import (
+    DEFAULT_SEMANTIC_MODEL_ID,
+    DEFAULT_SEMANTIC_PROVIDER,
+    DEFAULT_SEMANTIC_TRANSPORT_POLICY,
     SemanticPacketExecution,
     SemanticPacketService,
 )
@@ -126,6 +130,9 @@ from astock.knowledge.visual_skill_service import VisualSkillService
 
 __all__ = [
     "ContentRegistration",
+    "DEFAULT_SEMANTIC_MODEL_ID",
+    "DEFAULT_SEMANTIC_PROVIDER",
+    "DEFAULT_SEMANTIC_TRANSPORT_POLICY",
     "DistillationExecution",
     "DistillationRepository",
     "KnowledgeCompletionRepository",
@@ -134,6 +141,7 @@ __all__ = [
     "KnowledgeDraftExecution",
     "KnowledgeDraftRepository",
     "KnowledgeDraftService",
+    "KnowledgeDiscoveryCatalogCompiler",
     "DirectSourceDistillationService",
     "DirectSourceRealRunService",
     "KnowledgeDistillationService",

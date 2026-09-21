@@ -94,7 +94,7 @@ The optimization intentionally does not relax:
 - independent Bull/Bear, Reviewer, model-risk and Committee tasks;
 - historical/prospective PIT and source-availability boundaries;
 - paper-order confirmation/fill separation; or
-- global `broker_execution_allowed=false`.
+- no real-broker execution permission field or real-broker execution implementation in the active research contract.
 
 A failed formal check ends in an explicit observation-only view after the complete team, not a fabricated formal recommendation.
 

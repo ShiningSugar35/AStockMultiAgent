@@ -1,4 +1,4 @@
-"""Deterministic, PIT-safe candidate scan and audit service."""
+"""Deterministic current candidate scan and audit service."""
 
 from __future__ import annotations
 
@@ -35,7 +35,6 @@ from astock.schemas.candidates import (
     CandidateInputArtifact,
     CandidateInputRelease,
     CandidateLifecycleStatus,
-    CandidatePitStatus,
     CandidateQualityStatus,
     CandidateRecord,
     CandidateScanReport,
@@ -107,7 +106,6 @@ class CandidateScanService:
                 "input_release_object_hash": request.input_release_object_hash,
                 "as_of": request.as_of,
                 "rules_version": request.rules_version,
-                "formal_historical": request.formal_historical,
                 "live": request.live,
             }
         )
@@ -125,7 +123,6 @@ class CandidateScanService:
             input_release_id=release.input_release_id,
             rules_version=request.rules_version,
             as_of=request.as_of,
-            formal_historical=request.formal_historical,
             live=request.live,
         )
         if terminal:
@@ -559,7 +556,6 @@ class CandidateScanService:
                             "input_release_object_hash": input_row["manifest_object_hash"],
                             "as_of": scan["as_of"],
                             "rules_version": scan["rules_version"],
-                            "formal_historical": bool(scan["formal_historical"]),
                             "live": bool(scan["live"]),
                         }
                     )
@@ -703,33 +699,6 @@ class CandidateScanService:
                     issues.append(
                         f"COVERAGE_{artifact.coverage_status.value}:{artifact.artifact_id}"
                     )
-            if request.formal_historical and artifact.available_to_system_at > request.as_of:
-                issues.append(f"FUTURE_INPUT:{artifact.artifact_id}")
-            if (
-                request.formal_historical
-                and artifact.pit_status not in self.config.formal_historical_pit_statuses
-            ):
-                issues.append(f"NOT_PIT_SAFE:{artifact.artifact_id}")
-        for company in release.companies:
-            nested = [
-                *company.daily_points,
-                *company.announcement_events,
-                *company.financial_flags,
-                *company.watchlist_intents,
-                *company.holding_observations,
-            ]
-            for item in nested:
-                if request.formal_historical and item.available_to_system_at > request.as_of:
-                    issues.append(
-                        f"FUTURE_INPUT:{item.source_artifact_id}:{type(item).__name__}"
-                    )
-                if (
-                    request.formal_historical
-                    and item.pit_status not in self.config.formal_historical_pit_statuses
-                ):
-                    issues.append(
-                        f"NOT_PIT_SAFE:{item.source_artifact_id}:{type(item).__name__}"
-                    )
         return sorted(set(issues))
 
     def _financial_partial_is_research_safe(self, artifact: CandidateInputArtifact) -> bool:
@@ -862,7 +831,7 @@ class CandidateScanService:
             CandidateQualityStatus.FAIL: CandidateSignalDisposition.GATE_FAIL,
         }[company.quality_status]
         quality_reason = f"QUALITY_{company.quality_status.value}"
-        safe_daily = self._safe_daily_points(request, company.daily_points, artifacts)
+        safe_daily = self._safe_daily_points(company.daily_points)
         liquidity_pass, liquidity_reasons = self._liquidity_gate(company, safe_daily)
         tradability_pass = company.tradability is CandidateTradability.TRADABLE
         return [
@@ -924,10 +893,15 @@ class CandidateScanService:
     ) -> CandidateSignal | None:
         eligible_origins = {"BREADTH_CHALLENGER", "LONG_HORIZON_VALUE"}
         matched = sorted(eligible_origins.intersection(company.research_seed_origins))
-        if not matched:
+        verified_discovery = (
+            "VERIFIED_DISCOVERY_THESIS" in company.research_seed_reason_codes
+        )
+        if not matched and not verified_discovery:
             return None
         artifact = artifacts[company.instrument_artifact_id]
         reasons = ["RESEARCH_PRIORITY_ONLY", *[f"SEED_ORIGIN:{item}" for item in matched]]
+        if verified_discovery:
+            reasons.append("VERIFIED_DISCOVERY_THESIS")
         reasons.extend(company.research_seed_reason_codes)
         return self._make_signal(
             scan_id,
@@ -965,7 +939,6 @@ class CandidateScanService:
                     event.event_id,
                     event.observed_at,
                     event.available_to_system_at,
-                    event.pit_status,
                     event.severity,
                     event.evidence_ids,
                     [f"CANONICAL_EVENT:{event.event_type}"],
@@ -994,7 +967,6 @@ class CandidateScanService:
                     finding.finding_id,
                     finding.observed_at,
                     finding.available_to_system_at,
-                    finding.pit_status,
                     finding.severity,
                     finding.evidence_ids,
                     ["CLOSED_FINANCIAL_EVIDENCE"],
@@ -1044,7 +1016,6 @@ class CandidateScanService:
                     item.review_id,
                     item.observed_at,
                     item.available_to_system_at,
-                    item.pit_status,
                     CandidateEvidenceSeverity.MEDIUM,
                     item.evidence_ids,
                     [f"HOLDING_{item.change.value}"],
@@ -1061,7 +1032,7 @@ class CandidateScanService:
     ) -> CandidateSignal | None:
         if company.quality_status is CandidateQualityStatus.FAIL:
             return None
-        points = self._safe_daily_points(request, company.daily_points, artifacts)
+        points = self._safe_daily_points(company.daily_points)
         if len(points) < self.config.minimum_trading_days + 1:
             return None
         window = points[-(self.config.minimum_trading_days + 1) :]
@@ -1107,11 +1078,7 @@ class CandidateScanService:
         item: CandidateWatchlistIntent,
         reasons: list[str],
     ) -> CandidateSignal:
-        disposition = self._evidence_disposition(
-            request, item.available_to_system_at, item.pit_status
-        )
-        if disposition is CandidateSignalDisposition.SUPPORT:
-            disposition = CandidateSignalDisposition.WEAK_CLUE
+        disposition = CandidateSignalDisposition.WEAK_CLUE
         return self._make_signal(
             scan_id,
             request,
@@ -1124,7 +1091,6 @@ class CandidateScanService:
             disposition,
             reasons,
             item.evidence_ids,
-            pit_status=item.pit_status,
         )
 
     def _evidence_signal(
@@ -1137,7 +1103,6 @@ class CandidateScanService:
         unit_id: str,
         observed_at: datetime,
         available_at: datetime,
-        pit_status: CandidatePitStatus,
         severity: CandidateEvidenceSeverity,
         evidence_ids: list[str],
         reasons: list[str],
@@ -1151,10 +1116,9 @@ class CandidateScanService:
             unit_id,
             observed_at,
             available_at,
-            self._evidence_disposition(request, available_at, pit_status),
+            CandidateSignalDisposition.SUPPORT,
             reasons,
             evidence_ids,
-            pit_status=pit_status,
             severity=severity,
         )
 
@@ -1172,17 +1136,8 @@ class CandidateScanService:
         reasons: list[str],
         evidence_ids: list[str],
         *,
-        pit_status: CandidatePitStatus | None = None,
         severity: CandidateEvidenceSeverity | None = None,
     ) -> CandidateSignal:
-        resolved_pit = pit_status or artifact.pit_status
-        if request.formal_historical and available_at > request.as_of:
-            disposition = CandidateSignalDisposition.EXCLUDED_FUTURE
-        elif (
-            request.formal_historical
-            and resolved_pit not in self.config.formal_historical_pit_statuses
-        ):
-            disposition = CandidateSignalDisposition.EXCLUDED_NOT_PIT_SAFE
         identity = {
             "scan_id": scan_id,
             "company_id": company.company_id,
@@ -1206,49 +1161,17 @@ class CandidateScanService:
             source_family=artifact.source_family,
             observed_at=observed_at,
             available_to_system_at=available_at,
-            pit_status=resolved_pit,
             evidence_ids=sorted(set(evidence_ids)),
             disposition=disposition,
             severity=severity,
             reason_codes=reasons,
         )
 
-    def _evidence_disposition(
-        self,
-        request: CandidateScanRequest,
-        available_at: datetime,
-        pit_status: CandidatePitStatus,
-    ) -> CandidateSignalDisposition:
-        if request.formal_historical and available_at > request.as_of:
-            return CandidateSignalDisposition.EXCLUDED_FUTURE
-        if (
-            request.formal_historical
-            and pit_status not in self.config.formal_historical_pit_statuses
-        ):
-            return CandidateSignalDisposition.EXCLUDED_NOT_PIT_SAFE
-        return CandidateSignalDisposition.SUPPORT
-
     def _safe_daily_points(
         self,
-        request: CandidateScanRequest,
         points: list[CandidateDailyPoint],
-        artifacts: dict[str, CandidateInputArtifact],
     ) -> list[CandidateDailyPoint]:
-        safe = [
-            item
-            for item in points
-            if (
-                not request.formal_historical
-                or (
-                    item.available_to_system_at <= request.as_of
-                    and artifacts[item.source_artifact_id].available_to_system_at <= request.as_of
-                    and item.pit_status in self.config.formal_historical_pit_statuses
-                    and artifacts[item.source_artifact_id].pit_status
-                    in self.config.formal_historical_pit_statuses
-                )
-            )
-        ]
-        by_date = {item.session_date: item for item in safe}
+        by_date = {item.session_date: item for item in points}
         return sorted(by_date.values(), key=lambda item: item.session_date)
 
     def _liquidity_gate(

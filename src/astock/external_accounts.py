@@ -310,7 +310,6 @@ class ExternalAccountRepository:
             "inserted_event_ids": sorted(inserted),
             "duplicate_event_ids": sorted({*duplicate_event_ids, *duplicates}),
             "skipped_paper_fill_trade_count": skipped_paper,
-            "broker_execution_allowed": False,
             "paper_ledger_write_allowed": False,
         }
 

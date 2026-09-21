@@ -118,7 +118,6 @@ class MonitorTargetEnrollRequest(AStockModel):
     display_name: str = Field(min_length=1, max_length=120)
     reason: MonitorTargetReason
     aliases: list[str] = Field(default_factory=list, max_length=8)
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_aliases(self) -> MonitorTargetEnrollRequest:
@@ -147,7 +146,6 @@ class ContinuousMonitorTarget(AStockModel):
     high_watermark_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     last_market_at: AwareDatetime | None = None
     last_review_at: AwareDatetime | None = None
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_target(self) -> ContinuousMonitorTarget:
@@ -169,7 +167,6 @@ class MonitorRuleRequest(AStockModel):
     cooldown_seconds: int = Field(default=3600, ge=0, le=30 * 24 * 3600)
     affected_modules: list[ResearchModule] = Field(default_factory=list)
     natural_language_rule_execution_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_modules(self) -> MonitorRuleRequest:
@@ -205,7 +202,6 @@ class MonitorEvent(AStockModel):
     affected_modules: list[ResearchModule] = Field(default_factory=list)
     requires_research: bool = False
     news_lead_only: bool = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_event(self) -> MonitorEvent:
@@ -233,7 +229,6 @@ class MonitorResearchTask(AStockModel):
     available_at: AwareDatetime
     updated_at: AwareDatetime
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_modules(self) -> MonitorResearchTask:
@@ -258,7 +253,6 @@ class MonitorRunReport(AStockModel):
     source_success: dict[MonitorSource, int] = Field(default_factory=dict)
     source_failure: dict[MonitorSource, int] = Field(default_factory=dict)
     findings: list[str] = Field(default_factory=list)
-    broker_execution_allowed: Literal[False] = False
 
 
 class MonitorDaemonStatus(AStockModel):
@@ -272,7 +266,6 @@ class MonitorDaemonStatus(AStockModel):
     last_run_id: str | None = None
     details: dict[str, object] = Field(default_factory=dict)
     updated_at: AwareDatetime
-    broker_execution_allowed: Literal[False] = False
 
 
 __all__ = [

@@ -31,7 +31,6 @@ class RegimeShadowComparison(StrictModel):
     calibration_status: Literal["NOT_EVALUABLE_WITHOUT_OBSERVABLE_OUTCOME"] = (
         "NOT_EVALUABLE_WITHOUT_OBSERVABLE_OUTCOME"
     )
-    broker_execution_allowed: Literal[False] = False
 
 
 def read_registered_predictions(

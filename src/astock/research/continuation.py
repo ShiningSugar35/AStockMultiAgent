@@ -563,7 +563,6 @@ class CurrentResearchContinuationService:
             ),
             "investor_view_allowed": record.investor_view_allowed,
             "full_research_input_ready": record.full_research_input_ready,
-            "broker_execution_allowed": False,
         }
 
     def _require(self, continuation_id: str) -> CurrentResearchContinuation:

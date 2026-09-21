@@ -1,7 +1,7 @@
 schema_version: project-work-package-manifest-v1
 plan_id: investor-orchestration-and-regime-plan-v1
 status: CURRENT
-updated_on: 2026-09-17
+updated_on: 2026-09-21
 
 authority:
   machine_index: planning/work_packages_v1.yaml
@@ -16,60 +16,4 @@ rules:
   dependency_ids_must_exist: true
   markdown_consistency_check_required: true
 
-work_packages:
-  - id: WP-30
-    order: 30
-    title: 范围清单与端到端计时基线
-    status: PLANNED
-    priority: P0
-    owner_lane: sla-baseline
-    depends_on: []
-  - id: WP-31
-    order: 31
-    title: PIT与真实券商禁止合同退役
-    status: PLANNED
-    priority: P0
-    owner_lane: contract-retirement
-    depends_on: [WP-30]
-  - id: WP-32
-    order: 32
-    title: 确定性数据标准化与行业财务适配
-    status: PLANNED
-    priority: P0
-    owner_lane: data-standardization
-    depends_on: [WP-30]
-  - id: WP-33
-    order: 33
-    title: 单一研究图与一次性工件校验
-    status: PLANNED
-    priority: P0
-    owner_lane: research-core
-    depends_on: [WP-31, WP-32]
-  - id: WP-34
-    order: 34
-    title: 潜在目标池、观察池与增量失效图
-    status: PLANNED
-    priority: P1
-    owner_lane: target-pool
-    depends_on: [WP-32, WP-33]
-  - id: WP-35
-    order: 35
-    title: 40分钟预算内程序与LLM协同并发
-    status: PLANNED
-    priority: P0
-    owner_lane: scheduler
-    depends_on: [WP-33]
-  - id: WP-36
-    order: 36
-    title: LLM接管、解析修复与程序回归接续
-    status: PLANNED
-    priority: P1
-    owner_lane: agent-takeover
-    depends_on: [WP-32, WP-33, WP-35]
-  - id: WP-37
-    order: 37
-    title: 结果质量、性能验收与文档迁移
-    status: PLANNED
-    priority: P1
-    owner_lane: integration-qa
-    depends_on: [WP-34, WP-35, WP-36]
+work_packages: []

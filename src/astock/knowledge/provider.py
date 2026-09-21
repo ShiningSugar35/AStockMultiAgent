@@ -9,6 +9,7 @@ from time import perf_counter
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.knowledge.completion_repository import KnowledgeCompletionRepository
+from astock.knowledge.semantic_admission_repository import SemanticAdmissionRepository
 from astock.knowledge.visual_skill_repository import VisualSkillRepository
 from astock.schemas.direct_source_distillation import DirectSkillModule
 from astock.schemas.knowledge_completion import (
@@ -16,6 +17,8 @@ from astock.schemas.knowledge_completion import (
     KnowledgeProviderMode,
     KnowledgeProviderReadiness,
     KnowledgeProviderStatus,
+    KnowledgeSkillInventoryMember,
+    KnowledgeSkillInventorySnapshot,
     KnowledgeSkillQuery,
     KnowledgeSkillSelection,
     KnowledgeSkillSummary,
@@ -71,6 +74,7 @@ class RepositoryKnowledgeSkillProvider:
     ) -> None:
         self.repository = repository
         self.visual_repository = VisualSkillRepository(repository.state)
+        self.semantic_admission_repository = SemanticAdmissionRepository(repository.state)
         self.objects = objects
         self._cache: dict[str, KnowledgeSkillSelection] = {}
         self.call_count = 0
@@ -118,7 +122,7 @@ class RepositoryKnowledgeSkillProvider:
         if prefer_audited:
             compacted = self._compacted_audited_status(run_id)
             if compacted is not None:
-                return compacted
+                return self._semantic_admission_status(compacted)
         if release is None:
             return KnowledgeProviderStatus(
                 run_id=run_id,
@@ -400,6 +404,106 @@ class RepositoryKnowledgeSkillProvider:
             registry_object_hash=release_hash,
         )
 
+    def _semantic_admission_status(
+        self,
+        audited: KnowledgeProviderStatus,
+    ) -> KnowledgeProviderStatus:
+        """Layer one reviewed semantic release over the compacted audited registry."""
+
+        release = self.semantic_admission_repository.latest_release(audited.run_id)
+        if release is None:
+            return audited
+        if audited.reason_code != "AUDITED_REGISTRY_READY":
+            return self._blocked_composite_status(
+                audited,
+                "SEMANTIC_ADMISSION_PARENT_NOT_AUDITED",
+            )
+        if (
+            str(release["parent_audited_release_id"])
+            != str(audited.registry_release_id)
+            or str(release["parent_audited_object_hash"])
+            != str(audited.registry_object_hash)
+            or int(release["parent_active_skill_count"])
+            != audited.eligible_skill_count
+        ):
+            return self._blocked_composite_status(
+                audited,
+                "SEMANTIC_ADMISSION_PARENT_DRIFT",
+            )
+        release_hash = str(release["release_object_hash"])
+        artifact_id = str(release["release_artifact_id"])
+        if not self.objects.verify(release_hash):
+            return self._blocked_composite_status(
+                audited,
+                "SEMANTIC_ADMISSION_RELEASE_OBJECT_MISSING",
+            )
+        if self.repository.artifact_object_hash(artifact_id) != release_hash:
+            return self._blocked_composite_status(
+                audited,
+                "SEMANTIC_ADMISSION_RELEASE_ARTIFACT_DRIFT",
+            )
+        members = self.semantic_admission_repository.members(str(release["release_id"]))
+        approved = int(release["approved_skill_count"])
+        rejected = int(release["rejected_skill_count"])
+        active = int(release["active_skill_count"])
+        if (
+            len(members) != approved
+            or active != audited.eligible_skill_count + approved
+        ):
+            return self._blocked_composite_status(
+                audited,
+                "SEMANTIC_ADMISSION_RELEASE_COUNT_DRIFT",
+            )
+        for member in members:
+            skill_hash = str(member["skill_object_hash"])
+            if not self.objects.verify(skill_hash):
+                return self._blocked_composite_status(
+                    audited,
+                    "SEMANTIC_ADMISSION_MEMBER_OBJECT_MISSING",
+                )
+            if (
+                self.repository.artifact_object_hash(str(member["skill_artifact_id"]))
+                != skill_hash
+            ):
+                return self._blocked_composite_status(
+                    audited,
+                    "SEMANTIC_ADMISSION_MEMBER_ARTIFACT_DRIFT",
+                )
+            try:
+                source_hashes = json.loads(str(member["source_hashes_json"]))
+            except json.JSONDecodeError:
+                return self._blocked_composite_status(
+                    audited,
+                    "SEMANTIC_ADMISSION_SOURCE_HASHES_INVALID",
+                )
+            if (
+                not isinstance(source_hashes, list)
+                or not source_hashes
+                or not all(
+                    isinstance(value, str) and self.objects.verify(value)
+                    for value in source_hashes
+                )
+            ):
+                return self._blocked_composite_status(
+                    audited,
+                    "SEMANTIC_ADMISSION_SOURCE_OBJECT_MISSING",
+                )
+        return KnowledgeProviderStatus(
+            run_id=audited.run_id,
+            status=KnowledgeProviderReadiness.READY,
+            mode=KnowledgeProviderMode.REGISTRY_RELEASE,
+            reason_code="AUDITED_SEMANTIC_REGISTRY_READY",
+            total_skill_count=audited.total_skill_count + approved + rejected,
+            ready_skill_count=audited.ready_skill_count,
+            pending_review_count=0,
+            approved_count=audited.approved_count + approved,
+            rejected_count=audited.rejected_count + rejected,
+            eligible_skill_count=active,
+            registry_release_id=str(release["release_id"]),
+            registry_artifact_id=artifact_id,
+            registry_object_hash=release_hash,
+        )
+
     def _composite_status(
         self,
         baseline: KnowledgeProviderStatus,
@@ -562,6 +666,24 @@ class RepositoryKnowledgeSkillProvider:
         run_id: str,
         provider_status: KnowledgeProviderStatus,
     ) -> list[dict[str, object]]:
+        if provider_status.reason_code == "AUDITED_SEMANTIC_REGISTRY_READY":
+            from astock.knowledge.skill_audit import KnowledgeSkillAuditRepository
+
+            semantic_release = self.semantic_admission_repository.release(
+                str(provider_status.registry_release_id)
+            )
+            if semantic_release is None:
+                return []
+            audit_repository = KnowledgeSkillAuditRepository(self.repository.state)
+            parent_rows = audit_repository.selection_rows(
+                str(semantic_release["parent_audited_release_id"])
+            )
+            overlay_rows = self.semantic_admission_repository.overlay_skill_rows(
+                str(semantic_release["release_id"])
+            )
+            for row in overlay_rows:
+                row["skill_origin"] = "SEMANTIC_OVERLAY"
+            return [*parent_rows, *overlay_rows]
         if provider_status.reason_code == "AUDITED_REGISTRY_READY":
             from astock.knowledge.skill_audit import KnowledgeSkillAuditRepository
 
@@ -571,6 +693,114 @@ class RepositoryKnowledgeSkillProvider:
                 return []
             return audit_repository.selection_rows(str(provider_status.registry_release_id))
         return self.source_composite_rows(run_id, provider_status)
+
+    @staticmethod
+    def _inventory_snapshot(
+        *,
+        run_id: str,
+        provider_status: KnowledgeProviderStatus,
+        members: list[KnowledgeSkillInventoryMember],
+    ) -> KnowledgeSkillInventorySnapshot:
+        result_hash = sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "run_id": run_id,
+                    "registry_object_hash": provider_status.registry_object_hash,
+                    "reason_code": provider_status.reason_code,
+                    "members": [item.model_dump(mode="json") for item in members],
+                }
+            )
+        )
+        return KnowledgeSkillInventorySnapshot(
+            run_id=run_id,
+            provider_status=provider_status,
+            members=members,
+            member_count=len(members),
+            result_hash=result_hash,
+        )
+
+    def inventory(self, run_id: str) -> KnowledgeSkillInventorySnapshot:
+        """Return the complete effective registry as read-only typed metadata."""
+
+        provider_status = self.status(run_id)
+        if provider_status.status is not KnowledgeProviderReadiness.READY:
+            return self._inventory_snapshot(
+                run_id=run_id,
+                provider_status=provider_status,
+                members=[],
+            )
+
+        members: list[KnowledgeSkillInventoryMember] = []
+        for raw_row in self._eligible_rows(run_id, provider_status):
+            row = dict(raw_row)
+            skill_hash = str(row["skill_object_hash"])
+            skill_json = str(row["skill_json"])
+            if sha256_bytes(skill_json.encode("utf-8")) != skill_hash:
+                return self._inventory_snapshot(
+                    run_id=run_id,
+                    provider_status=self._blocked_composite_status(
+                        provider_status,
+                        "REGISTRY_SKILL_JSON_HASH_DRIFT",
+                    ),
+                    members=[],
+                )
+            try:
+                secondary_values = json.loads(str(row["secondary_modules_json"]))
+                source_hash_values = json.loads(str(row["source_hashes_json"]))
+                if not isinstance(secondary_values, list) or not all(
+                    isinstance(item, str) for item in secondary_values
+                ):
+                    raise ValueError("invalid secondary modules")
+                if not isinstance(source_hash_values, list) or not all(
+                    isinstance(item, str) for item in source_hash_values
+                ):
+                    raise ValueError("invalid source hashes")
+                member_ordinal = row.get("member_ordinal", 0)
+                if not isinstance(member_ordinal, int) or isinstance(member_ordinal, bool):
+                    raise ValueError("invalid member ordinal")
+                member = KnowledgeSkillInventoryMember(
+                    member_ordinal=member_ordinal,
+                    final_skill_id=str(row["final_skill_id"]),
+                    skill_name=str(row["skill_name"]),
+                    primary_module=DirectSkillModule(str(row["primary_module"])),
+                    secondary_modules=[
+                        DirectSkillModule(str(item)) for item in secondary_values
+                    ],
+                    decision_question=str(row["decision_question"]),
+                    core_principle=str(row["core_principle"]),
+                    source_hashes=sorted(set(source_hash_values)),
+                    artifact_id=str(row["skill_artifact_id"]),
+                    object_hash=skill_hash,
+                    admission_basis=KnowledgeAdmissionBasis(str(row["admission_basis"])),
+                    skill_origin=str(row.get("skill_origin", "DIRECT")),
+                    status=str(row["status"]),
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return self._inventory_snapshot(
+                    run_id=run_id,
+                    provider_status=self._blocked_composite_status(
+                        provider_status,
+                        "REGISTRY_SKILL_METADATA_INVALID",
+                    ),
+                    members=[],
+                )
+            members.append(member)
+
+        members.sort(key=lambda item: item.final_skill_id)
+        if len(members) != provider_status.eligible_skill_count:
+            return self._inventory_snapshot(
+                run_id=run_id,
+                provider_status=self._blocked_composite_status(
+                    provider_status,
+                    "REGISTRY_INVENTORY_COUNT_DRIFT",
+                ),
+                members=[],
+            )
+        return self._inventory_snapshot(
+            run_id=run_id,
+            provider_status=provider_status,
+            members=members,
+        )
 
     def select(self, run_id: str, query: KnowledgeSkillQuery) -> KnowledgeSkillSelection:
         started = perf_counter()
@@ -644,8 +874,21 @@ class RepositoryKnowledgeSkillProvider:
                 KnowledgeSkillOrigin.REVISED.value,
                 KnowledgeSkillOrigin.CURATED.value,
             }:
+                curated_payload = dict(skill_payload)
+                legacy_broker_execution = curated_payload.pop(
+                    "broker_execution_allowed",
+                    None,
+                )
+                if legacy_broker_execution not in {None, False}:
+                    return self._blocked_selection(
+                        query=query,
+                        provider_status=provider_status,
+                        cache_key=cache_key,
+                        reason_code="AUDITED_SKILL_SCHEMA_INVALID",
+                        started=started,
+                    )
                 try:
-                    curated = CuratedResearchSkill.model_validate(skill_payload)
+                    curated = CuratedResearchSkill.model_validate(curated_payload)
                 except ValueError:
                     return self._blocked_selection(
                         query=query,
@@ -675,14 +918,32 @@ class RepositoryKnowledgeSkillProvider:
                         and all(isinstance(item, str) for item in raw_payload_sources)
                         else []
                     )
+                    payload_status_valid = (
+                        skill_payload.get("status") == "READY_FOR_SHADOW"
+                    )
                     binding_valid = (
                         str(row["admission_basis"]) == KnowledgeAdmissionBasis.APPROVED.value
                         and str(row["status"]) == "READY_FOR_SHADOW"
-                        and skill_payload.get("status") == "READY_FOR_SHADOW"
                         and skill_payload.get("community_source_only") is True
                         and skill_payload.get("factual_use_requires_stronger_source") is True
                         and skill_payload.get("standalone_visual_distillation") is False
                         and skill_payload.get("merge_policy") == "MERGE_WITH_BOTH"
+                    )
+                elif origin == "SEMANTIC_OVERLAY":
+                    raw_payload_sources = skill_payload.get("source_hashes", [])
+                    payload_source_hashes = (
+                        sorted(set(raw_payload_sources))
+                        if isinstance(raw_payload_sources, list)
+                        and all(isinstance(item, str) for item in raw_payload_sources)
+                        else []
+                    )
+                    payload_status_valid = True
+                    binding_valid = (
+                        str(row["admission_basis"]) == KnowledgeAdmissionBasis.APPROVED.value
+                        and str(row["status"]) == "READY_FOR_SHADOW"
+                        and skill_payload.get("community_source_only") is True
+                        and skill_payload.get("factual_use_requires_stronger_source") is True
+                        and skill_payload.get("paper_ledger_write_allowed") is False
                     )
                 else:
                     payload_source_hashes = sorted(
@@ -697,10 +958,12 @@ class RepositoryKnowledgeSkillProvider:
                         if str(row["admission_basis"]) == KnowledgeAdmissionBasis.READY.value
                         else "NEEDS_USER_REVIEW"
                     )
+                    payload_status_valid = (
+                        skill_payload.get("status") == str(row["status"])
+                    )
                     binding_valid = str(row["status"]) == expected_status
-                binding_valid = binding_valid and not (
+                binding_valid = binding_valid and payload_status_valid and not (
                     skill_payload.get("final_skill_id") != str(row["final_skill_id"])
-                    or skill_payload.get("status") != str(row["status"])
                     or skill_payload.get("skill_name") != str(row["skill_name"])
                     or skill_payload.get("primary_module") != str(row["primary_module"])
                     or skill_payload.get("secondary_modules") != secondary_values

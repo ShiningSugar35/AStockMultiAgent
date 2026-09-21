@@ -33,7 +33,6 @@ from astock.schemas import (
     JuglarMigrationSignalV1,
     JuglarStage,
     JuglarStageProbabilityV1,
-    PointInTimeStatus,
     ProviderStatus,
     QualityStatus,
     ReplayQuality,
@@ -690,36 +689,26 @@ def test_serenity_v2_contracts_reject_scope_pit_and_false_precision(
 
 
 @pytest.mark.parametrize(
-    ("suffix", "pit_status", "conflict", "evidence_grade", "error"),
+    ("suffix", "conflict", "evidence_grade", "error"),
     [
         (
-            "serenity-v2-approximated",
-            PointInTimeStatus.APPROXIMATED,
-            False,
-            EvidenceGrade.PRIMARY_OFFICIAL,
-            "certified or reconstructed PIT",
-        ),
-        (
             "serenity-v2-open-conflict",
-            PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
             True,
             EvidenceGrade.PRIMARY_OFFICIAL,
             "open conflict",
         ),
         (
             "serenity-v2-weak-grade",
-            PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
             False,
             EvidenceGrade.SECONDARY,
             "requires PRIMARY_OFFICIAL",
         ),
     ],
 )
-def test_serenity_v2_rejects_node_evidence_that_fails_frozen_gates(
+def test_serenity_v2_rejects_node_evidence_that_fails_current_gates(
     tmp_path: Path,
     state,
     suffix: str,
-    pit_status: PointInTimeStatus,
     conflict: bool,
     evidence_grade: EvidenceGrade,
     error: str,
@@ -728,7 +717,6 @@ def test_serenity_v2_rejects_node_evidence_that_fails_frozen_gates(
         tmp_path,
         state,
         suffix=suffix,
-        pit_status=pit_status,
         conflict=conflict,
         evidence_grade=evidence_grade,
     )

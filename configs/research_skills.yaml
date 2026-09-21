@@ -2,7 +2,7 @@ registry_version: research-skills-v4
 open_source_audit_manifest_files:
   - third_party/audits/serenity/muxuuu-c2fe93de-v5.json
   - third_party/audits/serenity/haskaomni-dedcf8f9-v5.json
-open_source_local_adaptation_release_file: third_party/audits/serenity/local-adaptation-release-v1.json
+open_source_local_adaptation_release_file: third_party/audits/serenity/local-adaptation-release-v2.json
 max_specialists: 3
 source_family_limits:
   SERENITY: 2

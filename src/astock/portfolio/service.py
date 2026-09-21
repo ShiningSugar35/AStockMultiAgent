@@ -407,7 +407,6 @@ class PortfolioService:
             "object_hash": object_hash,
             "finding_codes": sorted(findings),
             "paper_ledger_write_allowed": False,
-            "broker_execution_allowed": False,
         }
 
     def _resolve_holdings(

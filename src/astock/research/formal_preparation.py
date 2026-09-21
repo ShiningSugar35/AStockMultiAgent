@@ -12,8 +12,6 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.evidence.repository import EvidenceRepository
 from astock.financial_integrity.repository import FinancialIntegrityRepository
-from astock.pit.repository import PointInTimeRepository
-from astock.pit.service import PointInTimeService
 from astock.research.service import ResearchCoreService
 from astock.schemas import (
     ClaimStatus,
@@ -69,7 +67,6 @@ class FormalResearchPreparationService:
         self.objects = objects
         self.financial_repository = FinancialIntegrityRepository(state, objects)
         self.evidence_repository = EvidenceRepository(state)
-        self.pit_repository = PointInTimeRepository(state)
         self.research_core = ResearchCoreService(state, objects, research_core_config)
 
     def prepare(
@@ -147,8 +144,6 @@ class FormalResearchPreparationService:
                 "financial_audit_object_hash": financial_object_hash,
                 "claim_ids": request.claim_ids,
                 "as_of": request.as_of,
-                "formal_historical": request.formal_historical,
-                "allow_approximated": request.allow_approximated,
             }
         )
         manifest_artifact_id = f"ResearchPreparationManifest:{identity}"
@@ -180,8 +175,6 @@ class FormalResearchPreparationService:
                     company_id=research_request.ticker,
                     as_of=request.as_of,
                     claim_ids=request.claim_ids,
-                    formal_historical=request.formal_historical,
-                    allow_approximated=request.allow_approximated,
                 )
             )
             frozen_pack_id = frozen.pack.pack_id
@@ -348,8 +341,6 @@ class FormalResearchPreparationService:
             raise ResearchPreparationRejectedError("financial audit run lineage mismatch")
         if pack.company_id != research_request.ticker or record.company_id != pack.company_id:
             raise ResearchPreparationRejectedError("financial audit company mismatch")
-        if pack.as_of > request.as_of:
-            raise ResearchPreparationRejectedError("financial audit is newer than requested as_of")
         return pack, artifact.object_hash
 
     def _validate_claim_readiness(
@@ -366,9 +357,6 @@ class FormalResearchPreparationService:
             if bundle.claim.subject_id != research_request.ticker:
                 blocking_codes.add("CLAIM_COMPANY_MISMATCH")
                 continue
-            if bundle.claim.as_of > request.as_of:
-                blocking_codes.add("PIT_METADATA_REQUIRED")
-                continue
             if (
                 bundle.conflict is not None
                 and bundle.conflict.resolution_status is ConflictResolutionStatus.OPEN
@@ -380,26 +368,10 @@ class FormalResearchPreparationService:
                     raise ResearchPreparationRejectedError(
                         "claim references unavailable evidence"
                     )
-                if (
-                    evidence.available_to_system_at > request.as_of
-                    or (evidence.valid_from is not None and evidence.valid_from > request.as_of)
-                    or (evidence.valid_to is not None and evidence.valid_to < request.as_of)
-                ):
-                    blocking_codes.add("PIT_METADATA_REQUIRED")
-                    continue
-                metadata = self.pit_repository.for_snapshot(evidence.snapshot_id)
-                if len(metadata) != 1:
-                    blocking_codes.add("PIT_METADATA_REQUIRED")
-                    continue
-                try:
-                    PointInTimeService.assert_usable(
-                        metadata[0],
-                        request.as_of,
-                        formal_historical=request.formal_historical,
-                        allow_approximated=request.allow_approximated,
+                if not self.objects.verify(evidence.excerpt_object_sha256):
+                    raise ResearchPreparationRejectedError(
+                        "claim evidence excerpt object is unavailable"
                     )
-                except ValueError:
-                    blocking_codes.add("PIT_METADATA_REQUIRED")
 
     def _existing_manifest(
         self,

@@ -5,13 +5,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
+import astock.candidates.seeds as seeds_module
+from astock.candidates.discovery_bridge import VERIFIED_DISCOVERY_MARKER
+from astock.candidates.discovery_runtime import ActiveDiscoveryRegistryBinding
 from astock.candidates.seeds import ResearchSeedProviderRouter, ResearchSeedService, _RawMarketRow
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.schemas.discovery_runtime import VerifiedDiscoverySeedRelease
 from astock.schemas.evidence import SourceSnapshot
 from astock.schemas.market import Market
 from astock.schemas.research_seeds import (
+    ResearchSeed,
     ResearchSeedOrigin,
     ResearchSeedRequest,
     ResearchSeedStatus,
@@ -297,10 +304,16 @@ def test_expert_domain_gate_uses_absolute_skill_count_not_author_share(tmp_path:
     assert profiles[0].domains[0].skill_share < 0.015
 
 
-def test_research_seed_report_merges_market_and_expert_sources_and_audits(
+def test_research_seed_report_excludes_legacy_visual_overlay_and_audits(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, state, _ = _service(tmp_path)
+    monkeypatch.setattr(
+        service.visual_skills,
+        "latest_release_any",
+        lambda: (_ for _ in ()).throw(AssertionError("production must not read visual release")),
+    )
     request = ResearchSeedRequest(
         as_of=NOW,
         max_total_seeds=10,
@@ -315,10 +328,11 @@ def test_research_seed_report_merges_market_and_expert_sources_and_audits(
     report = service.generate(request)
 
     assert report.status.value == "READY"
-    assert report.registry_release_id == "knowledge-registry-v2:test"
+    assert report.registry_release_id is None
     assert report.seeds
     assert report.market_seed_count > 0
-    assert report.expert_seed_count > 0
+    assert report.expert_seed_count == 0
+    assert "LEGACY_EXPERT_DOMAIN_OVERLAY_RETIRED" in report.warning_codes
     assert report.universe_coverage_status is ResearchUniverseCoverageStatus.FULL
     assert report.universe_coverage_level.value == "ENGINEERING_HIGH_COVERAGE"
     assert not report.formal_full_market_coverage_allowed
@@ -331,12 +345,11 @@ def test_research_seed_report_merges_market_and_expert_sources_and_audits(
     assert not report.recommendation_allowed
     assert not report.candidate_record_write_allowed
     assert not report.paper_ledger_write_allowed
-    assert not report.broker_execution_allowed
     semi = next(item for item in report.seeds if item.company_id == "600001")
     assert ResearchSeedOrigin.MARKET in semi.origins
-    assert ResearchSeedOrigin.EXPERT_SKILL in semi.origins
-    assert "zhihu:expert-a" in semi.expert_author_source_ids
-    assert "半导体" in semi.expert_domain_names
+    assert ResearchSeedOrigin.EXPERT_SKILL not in semi.origins
+    assert semi.expert_author_source_ids == []
+    assert semi.expert_domain_names == []
     assert semi.requires_candidate_evidence
     assert semi.requires_deep_research
     artifact_id = f"ResearchSeedReport:{report.report_id}"
@@ -438,7 +451,84 @@ def test_seed_id_depends_on_skill_support_and_snapshots(tmp_path: Path) -> None:
     assert seed.seed_id != "research-seed:" + content_hash(seed.company_id)
 
 
-def test_expert_overlay_priority_bonus_is_request_policy_driven(tmp_path: Path) -> None:
+def test_verified_discovery_release_enters_seed_funnel_without_generic_expert_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, state, objects = _service(tmp_path)
+    registry_ref = objects.put_json({"registry": "audited-semantic"})
+    binding = ActiveDiscoveryRegistryBinding(
+        run_id="run:test",
+        release_id="knowledge-semantic-admission:test",
+        object_hash=registry_ref.sha256,
+    )
+    monkeypatch.setattr(
+        seeds_module,
+        "active_discovery_registry_binding",
+        lambda _state, _objects: binding,
+    )
+    discovery_seed = ResearchSeed(
+        seed_id="research-seed:verified-test",
+        company_id="600001",
+        market=Market.XSHG,
+        name="芯片甲",
+        origins=[ResearchSeedOrigin.EXPERT_SKILL],
+        research_priority_score=0.95,
+        expert_domain_names=["DISCOVERY_EVENT"],
+        expert_domain_support_skill_ids=["EventToAlphaSkill"],
+        reason_codes=[
+            "DISCOVERY_CHANNEL:EVENT",
+            "DISCOVERY_METHOD:EventToAlphaSkill",
+            "DISCOVERY_THESIS:thesis:verified-test",
+            VERIFIED_DISCOVERY_MARKER,
+        ],
+    )
+    release = VerifiedDiscoverySeedRelease(
+        release_id="verified-discovery-seeds:test",
+        as_of=NOW,
+        active_registry_release_id=binding.release_id,
+        active_registry_object_hash=binding.object_hash,
+        discovery_method_catalog_hash="b" * 64,
+        seeds=[discovery_seed],
+        source_object_hashes=[binding.object_hash],
+        created_at=NOW,
+    )
+    release_ref = objects.put_json(release.model_dump(mode="json"))
+    state.register_artifact(
+        artifact_id=f"VerifiedDiscoverySeedRelease:{release.release_id}",
+        artifact_type="VerifiedDiscoverySeedRelease",
+        schema_version=release.schema_version,
+        object_hash=release_ref.sha256,
+        input_hashes=release.source_object_hashes,
+    )
+
+    report = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=10,
+            max_market_seeds=3,
+            max_expert_seeds_per_author=10,
+            created_at=NOW,
+        )
+    )
+
+    merged = next(item for item in report.seeds if item.company_id == "600001")
+    assert ResearchSeedOrigin.MARKET in merged.origins
+    assert ResearchSeedOrigin.EXPERT_SKILL in merged.origins
+    assert VERIFIED_DISCOVERY_MARKER in merged.reason_codes
+    assert "DISCOVERY_THESIS:thesis:verified-test" in merged.reason_codes
+    assert report.registry_release_id == binding.release_id
+    assert report.registry_release_object_hash == binding.object_hash
+    assert release_ref.sha256 in report.source_object_hashes
+    assert report.expert_seed_count == 1
+    assert "VERIFIED_DISCOVERY_SEED_RELEASE_UNAVAILABLE" not in report.warning_codes
+    artifact_id = f"ResearchSeedReport:{report.report_id}"
+    assert service.audit(artifact_id)["status"] == "PASS"
+
+
+def test_retired_expert_overlay_priority_bonus_no_longer_changes_seed_priority(
+    tmp_path: Path,
+) -> None:
     service, _, _ = _service(tmp_path)
 
     def request(bonus: float) -> ResearchSeedRequest:
@@ -457,7 +547,8 @@ def test_expert_overlay_priority_bonus_is_request_policy_driven(tmp_path: Path) 
 
     low = next(item for item in without_overlay.seeds if item.company_id == "600001")
     high = next(item for item in with_overlay.seeds if item.company_id == "600001")
-    assert high.research_priority_score > low.research_priority_score
+    assert high.research_priority_score == low.research_priority_score
+    assert "LEGACY_EXPERT_DOMAIN_OVERLAY_RETIRED" in with_overlay.warning_codes
 
 
 def test_long_horizon_value_challenger_adds_cheap_nonblind_company(tmp_path: Path) -> None:

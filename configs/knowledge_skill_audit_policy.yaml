@@ -5,7 +5,6 @@ default_direct_verdict: KEEP_SCOPED
 default_visual_verdict: RETIRE
 formal_committee_weight_allowed: false
 paper_ledger_write_allowed: false
-broker_execution_allowed: false
 module_evidence:
   SOURCING_SCREENING: [RFS_MULTIPLE_TESTING_HLZ, RFS_REPLICATING_ANOMALIES_HXZ, CSRC_DISCLOSURE_RULES]
   FUNDAMENTAL_RESEARCH: [CSRC_DISCLOSURE_RULES, DAMODARAN_VALUATION_INTRO, CNINFO_DISCLOSURE_PLATFORM]

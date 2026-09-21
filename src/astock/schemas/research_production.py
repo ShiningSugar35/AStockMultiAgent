@@ -169,7 +169,6 @@ class ResearchProductionRouteNeedsInfo(AStockModel):
     required_action_codes: list[str] = Field(min_length=1)
     automatic_skill_modification_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_needs_info(self) -> ResearchProductionRouteNeedsInfo:
@@ -217,7 +216,6 @@ class ResearchProductionRoutePlan(AStockModel):
     finding_codes: list[str]
     automatic_skill_modification_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_route(self) -> ResearchProductionRoutePlan:
@@ -401,7 +399,6 @@ class CatalystMonitorReport(AStockModel):
     rerun_modules: list[ResearchModule]
     no_full_research_rerun: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 __all__ = [

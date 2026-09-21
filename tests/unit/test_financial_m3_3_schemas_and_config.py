@@ -41,7 +41,7 @@ def test_frozen_dataset_rejects_target_leakage_into_training() -> None:
         feature_values={"ratio": Decimal("1")},
         feature_formula_versions={"ratio": "1.0"},
         source_snapshot_ids=["snapshot"],
-        pit_ids=["pit"],
+
         evidence_ids=["evidence"],
     )
     with pytest.raises(ValidationError, match="target sample cannot be part"):
@@ -67,7 +67,7 @@ def test_anomaly_sample_requires_formula_version_for_every_feature() -> None:
             feature_values={"ratio": Decimal("1")},
             feature_formula_versions={"other_ratio": "1.0"},
             source_snapshot_ids=["snapshot"],
-            pit_ids=["pit"],
+
             evidence_ids=["evidence"],
         )
 
@@ -82,6 +82,6 @@ def test_anomaly_sample_rejects_non_finite_features() -> None:
             feature_values={"ratio": Decimal("NaN")},
             feature_formula_versions={"ratio": "1.0"},
             source_snapshot_ids=["snapshot"],
-            pit_ids=["pit"],
+
             evidence_ids=["evidence"],
         )

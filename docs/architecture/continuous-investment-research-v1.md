@@ -3,7 +3,7 @@
 > 状态：RELEASED（migration 0059 与 Continuous Monitor 已进入 `main`；External Dependency Resilience v0.1.0 已完成正式集成发布）
 > 日期：2026-08-22；现行集成校正：2026-08-28
 > 适用范围：AStockMultiAgent 当前主线
-> 安全边界：仅自动化投研、监控、模拟账户与模拟调仓；`broker_execution_allowed=false` 永久保持，真实交易继续由用户在券商端人工执行。
+> 安全边界：仅自动化投研、监控、模拟账户与模拟调仓；活动合同不包含真实券商执行权限字段，也没有真实券商执行实现。
 
 ## 1. 问题定义
 
@@ -332,7 +332,7 @@ continuous-monitor-tasks [--pending-only]
 
 ### E. 安全与工程门（已验收）
 
-- [x] `broker_execution_allowed=false` 在新增 schema/服务/CLI 中无例外。
+- [x] 新增 schema/服务/CLI 不暴露真实券商执行权限字段；paper 写入仍使用既有模拟盘确认链。
 - [x] 新闻不能单源直接触发模拟买入/卖出。
 - [x] 对应历史发布的 pytest、Ruff、Pyright、diff check 与 state-integrity-audit 证据由 Git/Release 历史保留；《进度验收》只记录最近一次任务，历史数字不得冒充当前冻结树结果。
 - [x] unit/integration tests 覆盖 dedupe、lease、rule evaluator、source degradation、CNINFO/GDELT recorded fixture、restart recovery 与 CLI。
@@ -386,5 +386,5 @@ continuous-monitor-tasks [--pending-only]
 - Continuous Monitor 的 market/CNINFO/GDELT lane 复用现有 ProviderFactory、SourceAccessRouter、capability health/breaker、ObjectStore 与 Evidence；不得自建第二套 provider 状态或事件外证据库。GDELT 已注册为 `gdelt-news-leads`，仅具备 `news.discovery.lead / DISCOVERY_ONLY` 语义；其后续是否作为受控生产备用还必须通过统一 ExternalCapability 有效资格门，不能由监控配置自行提升。
 - 单 source/capability 故障只产生结构化 `DATA_SOURCE_DEGRADED` 与 bounded backoff，不阻塞其他 source/target。OPEN 或有效 HALF_OPEN claim 时不重复撞击同一失败 capability；stale claim 可恢复。
 - CNINFO known-item/disclosure discovery 可经正式官方 exact-item 路恢复；公告“没有发生”的 negative proof 仍必须依赖 exhaustive pagination，Search/Web 未命中没有该权限。
-- 5m 仅在 paper path ambiguity 时按需使用。单一备用源成功不能覆盖已有双源 canonical，也不能伪造成交；所有 Paper Ledger 与 `broker_execution_allowed=false` 边界保持不变。
+- 5m 仅在 paper path ambiguity 时按需使用。单一备用源成功不能覆盖已有双源 canonical，也不能伪造成交；Paper Ledger 的确认、幂等与账本边界保持不变。
 - External Dependency Resilience v0.1.0 已通过冻结树、实现提交 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc`、annotated tag 与 GitHub Release 远端门；本节集成校正随 release-state 文档提交进入 `main`，历史 Continuous Monitor 发布身份不变。

@@ -240,6 +240,44 @@ class KnowledgeSkillSummary(KnowledgeCompletionModel):
         return value
 
 
+class KnowledgeSkillInventoryMember(KnowledgeCompletionModel):
+    """Read-only metadata for one effective member of an admitted registry."""
+
+    member_ordinal: int = Field(ge=0)
+    final_skill_id: str = Field(min_length=1)
+    skill_name: str = Field(min_length=1)
+    primary_module: DirectSkillModule
+    secondary_modules: list[DirectSkillModule] = Field(default_factory=list)
+    decision_question: str = Field(min_length=1)
+    core_principle: str = Field(min_length=1)
+    source_hashes: list[str] = Field(min_length=1)
+    artifact_id: str = Field(min_length=1)
+    object_hash: str = Field(pattern=_SHA256_PATTERN)
+    admission_basis: KnowledgeAdmissionBasis
+    skill_origin: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    formal_committee_weight_allowed: Literal[False] = False
+
+    @field_validator("secondary_modules")
+    @classmethod
+    def validate_inventory_modules(
+        cls,
+        value: list[DirectSkillModule],
+    ) -> list[DirectSkillModule]:
+        if len(value) != len(set(value)):
+            raise ValueError("knowledge inventory secondary modules must be unique")
+        return value
+
+    @field_validator("source_hashes")
+    @classmethod
+    def validate_inventory_sources(cls, value: list[str]) -> list[str]:
+        if value != sorted(set(value)):
+            raise ValueError("knowledge inventory source hashes must be sorted and unique")
+        if any(re.fullmatch(_SHA256_PATTERN, item) is None for item in value):
+            raise ValueError("knowledge inventory source hashes must be SHA-256")
+        return value
+
+
 class KnowledgeProviderStatus(KnowledgeCompletionModel):
     schema_version: Literal["knowledge-provider-status-v1"] = (
         "knowledge-provider-status-v1"
@@ -281,6 +319,189 @@ class KnowledgeProviderStatus(KnowledgeCompletionModel):
         elif self.status is not KnowledgeProviderReadiness.READY:
             raise ValueError("usable knowledge provider modes must report READY")
         return self
+
+
+class KnowledgeSkillInventorySnapshot(KnowledgeCompletionModel):
+    """Deterministic read-only snapshot of every effective admitted Skill."""
+
+    schema_version: Literal["knowledge-skill-inventory-snapshot-v1"] = (
+        "knowledge-skill-inventory-snapshot-v1"
+    )
+    run_id: str = Field(min_length=1)
+    provider_status: KnowledgeProviderStatus
+    members: list[KnowledgeSkillInventoryMember]
+    member_count: int = Field(ge=0)
+    result_hash: str = Field(pattern=_SHA256_PATTERN)
+    formal_committee_weight_allowed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_inventory_snapshot(self) -> KnowledgeSkillInventorySnapshot:
+        if self.member_count != len(self.members):
+            raise ValueError("knowledge inventory member_count does not match members")
+        member_ids = [item.final_skill_id for item in self.members]
+        if len(member_ids) != len(set(member_ids)):
+            raise ValueError("knowledge inventory member IDs must be unique")
+        if self.provider_status.status is KnowledgeProviderReadiness.READY:
+            if self.member_count != self.provider_status.eligible_skill_count:
+                raise ValueError("knowledge inventory does not cover every eligible Skill")
+        elif self.member_count != 0:
+            raise ValueError("blocked knowledge inventory cannot expose members")
+        return self
+
+
+class KnowledgeDiscoveryDisposition(StrEnum):
+    COMPUTABLE_SCREEN = "COMPUTABLE_SCREEN"
+    SEMANTIC_DISCOVERY = "SEMANTIC_DISCOVERY"
+    DEEP_RESEARCH_REVIEW = "DEEP_RESEARCH_REVIEW"
+    TIMING_CONTEXT = "TIMING_CONTEXT"
+    PORTFOLIO_REPORT_GOVERNANCE = "PORTFOLIO_REPORT_GOVERNANCE"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class KnowledgeDiscoveryConditionKind(StrEnum):
+    COMPUTABLE_RULE = "COMPUTABLE_RULE"
+    SEMANTIC_QUESTION = "SEMANTIC_QUESTION"
+
+
+class KnowledgeConditionState(StrEnum):
+    SATISFIED = "SATISFIED"
+    NOT_SATISFIED = "NOT_SATISFIED"
+    UNKNOWN = "UNKNOWN"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class KnowledgeDiscoveryConditionSpec(KnowledgeCompletionModel):
+    condition_id: str = Field(min_length=1)
+    condition_family: str = Field(min_length=1)
+    condition_kind: KnowledgeDiscoveryConditionKind
+    applicability: list[str] = Field(min_length=1)
+    prerequisites: list[str] = Field(default_factory=list)
+    required_fact_keys: list[str] = Field(default_factory=list)
+    expression: str | None = None
+    semantic_question: str | None = None
+    proxy_note: str | None = None
+    counterevidence: list[str] = Field(default_factory=list)
+    invalidation_dependencies: list[str] = Field(default_factory=list)
+    conflict_group: str | None = None
+    missing_state: Literal[KnowledgeConditionState.UNKNOWN] = KnowledgeConditionState.UNKNOWN
+
+    @model_validator(mode="after")
+    def validate_condition_contract(self) -> KnowledgeDiscoveryConditionSpec:
+        if self.condition_kind is KnowledgeDiscoveryConditionKind.COMPUTABLE_RULE:
+            if not self.expression or self.semantic_question is not None:
+                raise ValueError("computable discovery condition requires expression only")
+        elif not self.semantic_question or self.expression is not None:
+            raise ValueError("semantic discovery condition requires semantic_question only")
+        return self
+
+
+class KnowledgeDiscoveryDispositionSpec(KnowledgeCompletionModel):
+    final_skill_id: str = Field(min_length=1)
+    disposition: KnowledgeDiscoveryDisposition
+    reason_codes: list[str] = Field(min_length=1)
+    conditions: list[KnowledgeDiscoveryConditionSpec] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_disposition_conditions(self) -> KnowledgeDiscoveryDispositionSpec:
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("knowledge discovery disposition reason_codes must be unique")
+        condition_ids = [item.condition_id for item in self.conditions]
+        if len(condition_ids) != len(set(condition_ids)):
+            raise ValueError("knowledge discovery condition IDs must be unique per Skill")
+        if self.disposition in {
+            KnowledgeDiscoveryDisposition.COMPUTABLE_SCREEN,
+            KnowledgeDiscoveryDisposition.SEMANTIC_DISCOVERY,
+        }:
+            if not self.conditions:
+                raise ValueError("discovery dispositions require at least one condition")
+        elif self.conditions:
+            raise ValueError("non-discovery dispositions cannot carry discovery conditions")
+        if (
+            self.disposition is KnowledgeDiscoveryDisposition.COMPUTABLE_SCREEN
+            and any(
+                item.condition_kind is not KnowledgeDiscoveryConditionKind.COMPUTABLE_RULE
+                for item in self.conditions
+            )
+        ):
+            raise ValueError("computable screen can contain only computable conditions")
+        return self
+
+
+class KnowledgeDiscoveryDispositionBatch(KnowledgeCompletionModel):
+    schema_version: Literal["knowledge-discovery-disposition-batch-v1"] = (
+        "knowledge-discovery-disposition-batch-v1"
+    )
+    run_id: str = Field(min_length=1)
+    registry_object_hash: str = Field(pattern=_SHA256_PATTERN)
+    compiler_version: str = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+    reviewed_at: AwareDatetime
+    specs: list[KnowledgeDiscoveryDispositionSpec] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_exact_order(self) -> KnowledgeDiscoveryDispositionBatch:
+        ids = [item.final_skill_id for item in self.specs]
+        if ids != sorted(set(ids)):
+            raise ValueError("knowledge discovery disposition specs must be sorted and unique")
+        return self
+
+
+class KnowledgeDiscoveryCatalogEntry(KnowledgeCompletionModel):
+    final_skill_id: str = Field(min_length=1)
+    skill_name: str = Field(min_length=1)
+    primary_module: DirectSkillModule
+    source_hashes: list[str] = Field(min_length=1)
+    skill_object_hash: str = Field(pattern=_SHA256_PATTERN)
+    skill_origin: str = Field(min_length=1)
+    disposition: KnowledgeDiscoveryDisposition
+    reason_codes: list[str] = Field(min_length=1)
+    conditions: list[KnowledgeDiscoveryConditionSpec] = Field(default_factory=list)
+
+
+class KnowledgeDiscoveryCatalog(KnowledgeCompletionModel):
+    schema_version: Literal["knowledge-discovery-catalog-v1"] = (
+        "knowledge-discovery-catalog-v1"
+    )
+    run_id: str = Field(min_length=1)
+    registry_release_id: str = Field(min_length=1)
+    registry_object_hash: str = Field(pattern=_SHA256_PATTERN)
+    compiler_version: str = Field(min_length=1)
+    disposition_batch_hash: str = Field(pattern=_SHA256_PATTERN)
+    entries: list[KnowledgeDiscoveryCatalogEntry]
+    member_count: int = Field(ge=0)
+    result_hash: str = Field(pattern=_SHA256_PATTERN)
+    formal_committee_weight_allowed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_catalog_entries(self) -> KnowledgeDiscoveryCatalog:
+        if self.member_count != len(self.entries):
+            raise ValueError("knowledge discovery catalog member_count does not match entries")
+        ids = [item.final_skill_id for item in self.entries]
+        if ids != sorted(set(ids)):
+            raise ValueError("knowledge discovery catalog entries must be sorted and unique")
+        return self
+
+
+class KnowledgeConditionEvaluation(KnowledgeCompletionModel):
+    condition_id: str = Field(min_length=1)
+    state: KnowledgeConditionState
+    evidence_refs: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(min_length=1)
+
+    @field_validator("evidence_refs", "reason_codes")
+    @classmethod
+    def validate_unique_values(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("knowledge condition evaluation values must be unique")
+        return value
+
+
+class KnowledgeDiscoveryCatalogRecord(KnowledgeCompletionModel):
+    catalog: KnowledgeDiscoveryCatalog
+    artifact_id: str = Field(min_length=1)
+    object_hash: str = Field(pattern=_SHA256_PATTERN)
+    disposition_batch_artifact_id: str = Field(min_length=1)
+    disposition_batch_object_hash: str = Field(pattern=_SHA256_PATTERN)
 
 
 class KnowledgeSkillSelection(KnowledgeCompletionModel):
@@ -524,10 +745,22 @@ __all__ = [
     "DirectKnowledgeSkillReviewSpec",
     "KnowledgeAdmissionBasis",
     "KnowledgeCompletionStatus",
+    "KnowledgeConditionEvaluation",
+    "KnowledgeConditionState",
+    "KnowledgeDiscoveryCatalog",
+    "KnowledgeDiscoveryCatalogEntry",
+    "KnowledgeDiscoveryCatalogRecord",
+    "KnowledgeDiscoveryConditionKind",
+    "KnowledgeDiscoveryConditionSpec",
+    "KnowledgeDiscoveryDisposition",
+    "KnowledgeDiscoveryDispositionBatch",
+    "KnowledgeDiscoveryDispositionSpec",
     "KnowledgeProviderMode",
     "KnowledgeProviderReadiness",
     "KnowledgeProviderStatus",
     "KnowledgeReviewDecision",
+    "KnowledgeSkillInventoryMember",
+    "KnowledgeSkillInventorySnapshot",
     "KnowledgeSkillQuery",
     "KnowledgeSkillRegistryMember",
     "KnowledgeSkillRegistryRelease",

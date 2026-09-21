@@ -80,7 +80,6 @@ def register_report_commands(
                     "ReportPublishResult": ReportPublishResult.model_json_schema(),
                     "PresentationPreferences": PresentationPreferences.model_json_schema(),
                 },
-                "broker_execution_allowed": False,
             }
         )
 
@@ -167,7 +166,6 @@ def register_report_commands(
                     "pdf_enabled": policy.pdf.enabled,
                     "pdf_converter_kind": policy.pdf.converter,
                     "unknown_asset_rights": policy.assets.unknown_rights.value,
-                    "broker_execution_allowed": False,
                 }
             )
         except Exception as exc:

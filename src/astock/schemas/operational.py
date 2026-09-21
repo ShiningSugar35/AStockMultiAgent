@@ -49,7 +49,6 @@ class PublicErrorSummary(AStockModel):
     developer_summary: str = Field(min_length=1, max_length=1000)
     safe_to_send: Literal[True] = True
     raw_error_exposed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 __all__ = [

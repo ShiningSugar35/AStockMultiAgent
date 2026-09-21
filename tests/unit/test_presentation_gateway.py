@@ -637,7 +637,6 @@ def test_stable_machine_view_schema_has_not_been_replaced() -> None:
         "internal_codes_exposed",
         "artifact_ids_exposed",
         "paper_ledger_write_count",
-        "broker_execution_allowed",
     }
 
 

@@ -10,7 +10,6 @@ import pytest
 from astock.core.object_store import ObjectStore
 from astock.documents import DocumentPageRepository, DocumentRepository, PdfParseService
 from astock.evidence import ClaimEvidenceService, EvidenceRepository
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.research import (
     ResearchCoreService,
     ResearchSkillService,
@@ -22,7 +21,6 @@ from astock.schemas import (
     BASE_CASE_SECTIONS,
     AdjustmentDirection,
     AdjustmentMode,
-    AvailabilityBasis,
     BarRequest,
     BaseCaseBuildRequest,
     BaseCaseDraft,
@@ -38,7 +36,6 @@ from astock.schemas import (
     Frequency,
     Market,
     MarketBar,
-    PointInTimeStatus,
     QualityStatus,
     ResearchCoverageStatus,
     ResearchFindingInput,
@@ -80,7 +77,6 @@ def _fixture(
     *,
     suffix: str,
     evidence_grade: EvidenceGrade = EvidenceGrade.PRIMARY_OFFICIAL,
-    pit_status: PointInTimeStatus = PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
     conflict: bool = False,
     available_at: datetime | None = None,
     additional_evidence_grade: EvidenceGrade | None = None,
@@ -186,22 +182,6 @@ def _fixture(
         status=ClaimStatus.VALIDATED,
         attachments=attachments,
     )
-    basis = (
-        AvailabilityBasis.PROVIDER_CURRENT_VALUE
-        if pit_status is PointInTimeStatus.NOT_PIT_SAFE
-        else AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP
-    )
-    PointInTimeService(PointInTimeRepository(state), state, objects).create(
-        source_id=f"pit-source:research:{suffix}",
-        source_document_id=document.document_id,
-        source_snapshot_id=snapshot.snapshot_id,
-        published_at=available,
-        effective_at=available,
-        ingested_at=available,
-        available_to_system_at=available,
-        point_in_time_status=pit_status,
-        availability_basis=basis,
-    )
     service = ResearchCoreService(
         state,
         objects,
@@ -238,7 +218,6 @@ def _specialist_fixture(
     *,
     suffix: str,
     evidence_grade: EvidenceGrade = EvidenceGrade.PRIMARY_OFFICIAL,
-    pit_status: PointInTimeStatus = PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
     conflict: bool = False,
     additional_evidence_grade: EvidenceGrade | None = None,
 ):
@@ -247,7 +226,6 @@ def _specialist_fixture(
         state,
         suffix=suffix,
         evidence_grade=evidence_grade,
-        pit_status=pit_status,
         conflict=conflict,
         additional_evidence_grade=additional_evidence_grade,
     )
@@ -257,7 +235,6 @@ def _specialist_fixture(
             company_id="company:000001",
             as_of=as_of,
             claim_ids=[bundle.claim.claim_id],
-            allow_approximated=pit_status is PointInTimeStatus.APPROXIMATED,
         )
     )
     base = core.build_base_case(
@@ -383,23 +360,22 @@ def test_serenity_compiler_rejects_short_future_or_nonpassing_daily_inputs(
     request = request.model_copy(update={"requested_start": full_bars[0].timestamp})
     full_store.manifest["actual_end"] = (base_case.as_of + timedelta(days=1)).isoformat()
     compiler = SerenityInputCompiler(state, skills.object_store, full_store)
-    with pytest.raises(ValueError, match="future bars"):
-        compiler.compile_daily_trend(request, evidence_pack=evidence_pack)
+    current_contract = compiler.compile_daily_trend(request, evidence_pack=evidence_pack)
+    assert current_contract.daily_series.dataset_version == "a" * 64
 
-    full_store.manifest["actual_end"] = base_case.as_of.isoformat()
     full_store.manifest["quality_status"] = QualityStatus.FAIL.value
     with pytest.raises(ValueError, match="quality gate"):
         compiler.compile_daily_trend(request, evidence_pack=evidence_pack)
 
 
-def test_serenity_compiler_reuses_the_same_pit_evidence_gate(
+def test_serenity_compiler_uses_current_evidence_without_historical_visibility_gate(
     tmp_path: Path,
     state,
 ) -> None:
     skills, base_case, evidence = _specialist_fixture(
         tmp_path,
         state,
-        suffix="serenity-compiler-pit",
+        suffix="serenity-compiler-current",
     )
     evidence_pack = skills.repository.get_evidence_pack(base_case.evidence_pack_id)
     assert evidence_pack is not None
@@ -412,19 +388,47 @@ def test_serenity_compiler_reuses_the_same_pit_evidence_gate(
         requested_start=bars[0].timestamp,
         daily_evidence_ids=[evidence.evidence_id],
     )
-    invalid_pack = evidence_pack.model_copy(
-        update={
-            "pit_status_by_evidence_id": {
-                evidence.evidence_id: PointInTimeStatus.APPROXIMATED,
-            }
-        }
+    contract = SerenityInputCompiler(state, skills.object_store, store).compile_daily_trend(
+        request,
+        evidence_pack=evidence_pack,
     )
+    assert contract.evidence_ids == [evidence.evidence_id]
 
-    with pytest.raises(ValueError, match="certified or reconstructed PIT"):
-        SerenityInputCompiler(state, skills.object_store, store).compile_daily_trend(
-            request,
-            evidence_pack=invalid_pack,
+
+def test_current_freeze_requires_no_historical_visibility_witness(tmp_path: Path, state) -> None:
+    service, _, bundle, support, available = _fixture(
+        tmp_path,
+        state,
+        suffix="current-no-visibility-witness",
+    )
+    frozen = service.freeze_evidence(
+        EvidenceFreezeRequest(
+            company_id="company:000001",
+            as_of=available + timedelta(seconds=2),
+            claim_ids=[bundle.claim.claim_id],
         )
+    )
+    assert frozen.pack.coverage_status is ResearchCoverageStatus.COMPLETE
+    assert frozen.pack.evidence_ids == [support.evidence_id]
+
+
+def test_current_freeze_preserves_evidence_conflict_as_degradation(tmp_path: Path, state) -> None:
+    service, _, bundle, _, available = _fixture(
+        tmp_path,
+        state,
+        suffix="current-conflict",
+        conflict=True,
+    )
+    frozen = service.freeze_evidence(
+        EvidenceFreezeRequest(
+            company_id="company:000001",
+            as_of=available + timedelta(seconds=2),
+            claim_ids=[bundle.claim.claim_id],
+        )
+    )
+    assert frozen.pack.coverage_status is ResearchCoverageStatus.PARTIAL
+    assert frozen.pack.open_conflict_ids
+    assert "OPEN_EVIDENCE_CONFLICT" in frozen.pack.degradation_codes
 
 
 def test_frozen_evidence_and_base_case_are_idempotent_cited_and_private(
@@ -441,7 +445,6 @@ def test_frozen_evidence_and_base_case_are_idempotent_cited_and_private(
         company_id="company:000001",
         as_of=as_of,
         claim_ids=[bundle.claim.claim_id],
-        formal_historical=True,
     )
     frozen = service.freeze_evidence(freeze_request)
     repeated_frozen = service.freeze_evidence(freeze_request)
@@ -539,34 +542,25 @@ def test_critical_finding_cannot_rely_only_on_community_evidence(
         )
 
 
-def test_formal_freeze_rejects_not_pit_safe_and_future_claims(
+def test_current_freeze_accepts_evidence_acquired_during_the_request(
     tmp_path: Path,
     state,
 ) -> None:
-    service, _, bundle, _, available = _fixture(
+    service, _, bundle, evidence, available = _fixture(
         tmp_path,
         state,
-        suffix="not-pit-safe",
-        pit_status=PointInTimeStatus.NOT_PIT_SAFE,
+        suffix="current-only-freeze",
     )
-    with pytest.raises(ValueError, match="not allowed"):
-        service.freeze_evidence(
-            EvidenceFreezeRequest(
-                company_id="company:000001",
-                as_of=available + timedelta(seconds=2),
-                claim_ids=[bundle.claim.claim_id],
-                formal_historical=True,
-            )
+    frozen = service.freeze_evidence(
+        EvidenceFreezeRequest(
+            company_id="company:000001",
+            as_of=available,
+            claim_ids=[bundle.claim.claim_id],
         )
-    with pytest.raises(ValueError, match="future claim"):
-        service.freeze_evidence(
-            EvidenceFreezeRequest(
-                company_id="company:000001",
-                as_of=available,
-                claim_ids=[bundle.claim.claim_id],
-                formal_historical=False,
-            )
-        )
+    )
+    assert frozen.pack.coverage_status is ResearchCoverageStatus.COMPLETE
+    assert frozen.pack.claim_ids == [bundle.claim.claim_id]
+    assert frozen.pack.evidence_ids == [evidence.evidence_id]
 
 
 def test_base_case_rejects_evidence_outside_frozen_scope(tmp_path: Path, state) -> None:

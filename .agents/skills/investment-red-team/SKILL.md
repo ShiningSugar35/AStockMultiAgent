@@ -37,7 +37,7 @@ Abstain and leave `INDEPENDENT_REVIEW=false` when Bull/Bear independence cannot 
 
 - Re-run `uv run astock research-team-status <plan_id>` and verify the typed Reviewer artifact, COMPLETE checkpoint and readiness evidence.
 - Confirm the Reviewer used neither Bull nor Bear context, performed no browsing, and did not overwrite upstream artifacts.
-- Preserve `broker_execution_allowed=false`; the Reviewer cannot override Committee or create recommendation/order authority.
+- The Reviewer cannot override the Committee or write the paper ledger.
 
 ## Workflows
 

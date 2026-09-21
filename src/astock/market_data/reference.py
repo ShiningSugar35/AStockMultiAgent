@@ -40,7 +40,6 @@ from astock.market_data.reference_config import (
     load_market_reference_config,
 )
 from astock.market_data.reference_storage import ReferenceParquetStore
-from astock.pit import PointInTimeRepository
 from astock.providers.baostock import BaoStockCaptureError, BaoStockReferenceProvider
 from astock.providers.bse_official_reference import BseOfficialReferenceProvider
 from astock.providers.config import load_provider_registry
@@ -55,7 +54,6 @@ from astock.providers.symbols import market_from_baostock_code
 from astock.schemas import (
     AdjustmentMode,
     AmountUnit,
-    AvailabilityBasis,
     CompletenessSemantics,
     CorporateActionObservation,
     CorporateActionStatus,
@@ -70,12 +68,10 @@ from astock.schemas import (
     Market,
     MarketCoverageReconciliation,
     OfficialWebDocumentCapture,
-    PointInTimeStatus,
     ReferenceBatch,
     ReferenceCoverage,
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
-    ReferencePitStatus,
     ReferenceSyncReport,
     SourceClass,
     SourceSnapshot,
@@ -1623,7 +1619,6 @@ class MarketReferenceService:
         if market is not Market.BJSE:
             raise ValueError("exact-item official capture path is currently scoped to BJSE")
         documents = DocumentRepository(self.state)
-        pit_repository = PointInTimeRepository(self.state)
         with self.state.connect() as connection:
             rows = connection.execute(
                 "SELECT artifact_id,schema_version,object_hash,input_hashes_json "
@@ -1658,12 +1653,10 @@ class MarketReferenceService:
             document = documents.get_model(capture.document_id)
             snapshot = documents.snapshot(capture.snapshot_id)
             admission_snapshot = self.state.get_snapshot(capture.admission_snapshot_id)
-            pit = pit_repository.get(capture.pit_id)
             if (
                 document is None
                 or snapshot is None
                 or admission_snapshot is None
-                or pit is None
                 or snapshot.object_sha256 != capture.object_sha256
                 or not self.objects.verify(snapshot.object_sha256)
                 or not self.objects.verify(admission_snapshot.object_sha256)
@@ -1703,12 +1696,6 @@ class MarketReferenceService:
                 or document.publisher != capture.source_id
                 or snapshot.source_id != capture.source_id
                 or admission_snapshot.source_id != f"{capture.source_id}:admission"
-                or pit.source_document_id != document.document_id
-                or pit.source_snapshot_id != snapshot.snapshot_id
-                or pit.point_in_time_status
-                is not PointInTimeStatus.DOCUMENT_RECONSTRUCTED
-                or pit.availability_basis is not AvailabilityBasis.FETCH_OBSERVED
-                or pit.available_to_system_at != snapshot.available_to_system_at
                 or symbol not in document.company_ids
                 or document.source_url != str(capture.source_url)
                 or snapshot.source_url != document.source_url
@@ -1894,7 +1881,6 @@ class MarketReferenceService:
                     "scope_key": scope_key,
                     "status": "UNVERIFIED_LEGACY",
                     "release_id": row["release_id"],
-                    "pit_status": ReferencePitStatus.UNVERIFIED.value,
                 }
             manifest = self._verified_manifest(row)
         except (OSError, StorageError, ValueError, ValidationError):
@@ -2079,7 +2065,6 @@ class MarketReferenceService:
         legacy_marker = json.loads(str(row["coverage_json"]))
         if (
             legacy_marker.get("legacy_0038") is not True
-            or row["pit_status"] != ReferencePitStatus.UNVERIFIED.value
             or row["artifact_type"] != "DatasetReleaseManifest"
             or row["manifest_object_hash"] != row["artifact_object_hash"]
             or row["manifest_schema_version"] != row["artifact_schema_version"]
@@ -2357,7 +2342,6 @@ class MarketReferenceService:
             status=status,
             reason_codes=list(dict.fromkeys(reasons)),
         )
-        pit = ReferencePitStatus.RECONSTRUCTED
         if not records or conflicted:
             return ReferenceSyncReport(
                 schema_version="reference-sync-report-v2",
@@ -2369,7 +2353,6 @@ class MarketReferenceService:
                 provider_id=provider_id,
                 raw_snapshot_ids=raw_snapshot_ids,
                 coverage=coverage,
-                pit_status=ReferencePitStatus.UNVERIFIED,
                 reason_codes=coverage.reason_codes,
             )
         record_payloads = [item.model_dump(mode="json", exclude={"created_at"}) for item in records]
@@ -2391,7 +2374,6 @@ class MarketReferenceService:
             raw_snapshot_ids=raw_snapshot_ids,
             records=records,
             coverage=coverage,
-            pit_status=pit,
             available_to_system_at=available_at,
         )
         observation_path = self.parquet.write_observation(batch)
@@ -2443,7 +2425,6 @@ class MarketReferenceService:
                     and current_manifest.available_to_system_at == available_at
                     and current_manifest.coverage == coverage
                     and current_manifest.market_coverage_reconciliations == market_reconciliations
-                    and current_manifest.pit_status is pit
                     and current_manifest.observation_files == [observation_descriptor]
                     and current_manifest.canonical_files == [canonical_descriptor]
                 ):
@@ -2462,7 +2443,6 @@ class MarketReferenceService:
                         market_coverage_reconciliations=(
                             current_manifest.market_coverage_reconciliations
                         ),
-                        pit_status=current_manifest.pit_status,
                         reason_codes=[
                             *current_manifest.coverage.reason_codes,
                             "IDEMPOTENT_EXISTING_RELEASE",
@@ -2494,7 +2474,6 @@ class MarketReferenceService:
             canonical_files=[canonical_descriptor],
             coverage=coverage,
             market_coverage_reconciliations=market_reconciliations,
-            pit_status=pit,
             available_to_system_at=available_at,
         )
         object_ref = self.objects.put_bytes(canonical_json_bytes(manifest))
@@ -2514,7 +2493,6 @@ class MarketReferenceService:
             raw_snapshot_ids=raw_snapshot_ids,
             coverage=coverage,
             market_coverage_reconciliations=market_reconciliations,
-            pit_status=pit,
             reason_codes=coverage.reason_codes,
         )
 
@@ -3341,7 +3319,6 @@ def _verify_release_row(row: dict[str, Any], manifest: DatasetReleaseManifest) -
         or row["coverage_json"] != canonical_json_bytes(manifest.coverage).decode("utf-8")
         or row["available_to_system_at"] != manifest.available_to_system_at.isoformat()
         or row["coverage_status"] != manifest.coverage.status.value
-        or row["pit_status"] != manifest.pit_status.value
     ):
         raise ValueError("market-reference release chain mismatch")
 
@@ -3354,7 +3331,6 @@ def _is_legacy_release_row(row: dict[str, Any]) -> bool:
     return (
         isinstance(marker, dict)
         and marker.get("legacy_0038") is True
-        and row.get("pit_status") == ReferencePitStatus.UNVERIFIED.value
         and row.get("manifest_schema_version")
         != DatasetReleaseManifest.model_fields["schema_version"].default
     )

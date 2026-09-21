@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC
 
 from astock.core.object_store import ObjectStore
@@ -30,9 +31,28 @@ class ResearchRepository:
             ).fetchone()
         if row is None:
             return None
-        return FrozenEvidencePack.model_validate_json(
-            self.object_store.get_bytes(str(row["object_hash"]))
-        )
+        return self._load_frozen_evidence_pack(str(row["object_hash"]))
+
+    def _load_frozen_evidence_pack(self, object_hash: str) -> FrozenEvidencePack:
+        """Project immutable PIT-era packs into the current-only research contract."""
+        payload = json.loads(self.object_store.get_bytes(object_hash))
+        for field in (
+            "formal_historical",
+            "allow_approximated",
+            "pit_id_by_evidence_id",
+            "pit_status_by_evidence_id",
+            "missing_pit_evidence_ids",
+        ):
+            payload.pop(field, None)
+        codes = [
+            str(code)
+            for code in payload.get("degradation_codes", [])
+            if "PIT" not in str(code).upper() and "POINT_IN_TIME" not in str(code).upper()
+        ]
+        payload["degradation_codes"] = codes
+        if payload.get("coverage_status") == "PARTIAL" and not codes:
+            payload["coverage_status"] = "COMPLETE"
+        return FrozenEvidencePack.model_validate(payload)
 
     def evidence_pack_object_hash(self, pack_id: str) -> str | None:
         with self.state.connect() as connection:
@@ -51,27 +71,22 @@ class ResearchRepository:
     ) -> FrozenEvidencePack:
         with self.state.transaction() as connection:
             row = connection.execute(
-                "SELECT object_hash,request_hash FROM frozen_evidence_pack_index "
-                "WHERE pack_id=?",
+                "SELECT object_hash,request_hash FROM frozen_evidence_pack_index WHERE pack_id=?",
                 (pack.pack_id,),
             ).fetchone()
             if row is not None:
                 if str(row["request_hash"]) != request_hash:
                     raise ValueError(f"frozen evidence pack collision: {pack.pack_id}")
-                return FrozenEvidencePack.model_validate_json(
-                    self.object_store.get_bytes(str(row["object_hash"]))
-                )
+                return self._load_frozen_evidence_pack(str(row["object_hash"]))
             connection.execute(
                 "INSERT INTO frozen_evidence_pack_index("
-                "pack_id,company_id,as_of,formal_historical,allow_approximated,"
-                "coverage_status,claim_count,evidence_count,open_conflict_count,object_hash,"
-                "request_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "pack_id,company_id,as_of,coverage_status,claim_count,evidence_count,"
+                "open_conflict_count,object_hash,request_hash,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
                     pack.pack_id,
                     pack.company_id,
                     pack.as_of.astimezone(UTC).isoformat(),
-                    int(pack.formal_historical),
-                    int(pack.allow_approximated),
                     pack.coverage_status.value,
                     len(pack.claim_ids),
                     len(pack.evidence_ids),
@@ -86,8 +101,8 @@ class ResearchRepository:
     def latest_evidence_pack_summary(self, company_id: str) -> dict[str, object] | None:
         with self.state.connect() as connection:
             row = connection.execute(
-                "SELECT pack_id,company_id,as_of,formal_historical,allow_approximated,"
-                "coverage_status,claim_count,evidence_count,open_conflict_count,object_hash,"
+                "SELECT pack_id,company_id,as_of,coverage_status,claim_count,evidence_count,"
+                "open_conflict_count,object_hash,"
                 "created_at FROM frozen_evidence_pack_index WHERE company_id=? "
                 "ORDER BY as_of DESC,created_at DESC,pack_id DESC LIMIT 1",
                 (company_id,),
@@ -431,9 +446,7 @@ class ResearchRepository:
                     raise ValueError(
                         "research diagnostic configuration changed without a version bump"
                     )
-                raise ValueError(
-                    "research diagnostic output changed without a rule version bump"
-                )
+                raise ValueError("research diagnostic output changed without a rule version bump")
             connection.execute(
                 "INSERT INTO specialist_diagnostic_index("
                 "diagnostic_id,base_case_id,route_plan_id,delta_id,skill_id,skill_version,"

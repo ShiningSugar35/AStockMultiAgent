@@ -201,7 +201,7 @@ def _register_official_capture(
         document_id=f"document:{suffix}",
         snapshot_id=f"snapshot:{suffix}",
         admission_snapshot_id=f"admission:{suffix}",
-        pit_id=f"pit:{suffix}",
+
         source_url=HttpUrl("https://www.sse.com.cn/assortment/fund/etf/question/"),
         object_sha256=raw_ref.sha256,
         observed_at=observed,
@@ -903,7 +903,6 @@ def test_portfolio_transition_generates_target_bands_and_keeps_no_trade_logic_de
     service, request = _transition_fixture(tmp_path)
     report = service.transition(request)
     assert report.paper_ledger_write_allowed is False
-    assert report.broker_execution_allowed is False
     assert report.current.weights == {"600000": 0.02, "600001": 0.02}
     assert report.target.weights == {"600000": 0.1, "600001": 0.1}
     assert report.anchor_only is not None

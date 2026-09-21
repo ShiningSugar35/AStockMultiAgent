@@ -48,6 +48,7 @@ class FinancialIndustryProfile(StrEnum):
     INSURANCE = "INSURANCE"
     SECURITIES = "SECURITIES"
     REAL_ESTATE = "REAL_ESTATE"
+    RESOURCE_MINING = "RESOURCE_MINING"
     EARLY_BIOTECH = "EARLY_BIOTECH"
     OTHER = "OTHER"
 
@@ -151,9 +152,6 @@ class FinancialGapType(StrEnum):
     SNAPSHOT_NOT_AVAILABLE = "SNAPSHOT_NOT_AVAILABLE"
     SNAPSHOT_OBJECT_MISSING = "SNAPSHOT_OBJECT_MISSING"
     SNAPSHOT_FETCH_INCOMPLETE = "SNAPSHOT_FETCH_INCOMPLETE"
-    MISSING_PIT_REFERENCE = "MISSING_PIT_REFERENCE"
-    UNKNOWN_PIT = "UNKNOWN_PIT"
-    PIT_NOT_USABLE = "PIT_NOT_USABLE"
     LINEAGE_MISMATCH = "LINEAGE_MISMATCH"
     MISSING_EVIDENCE = "MISSING_EVIDENCE"
     UNKNOWN_EVIDENCE = "UNKNOWN_EVIDENCE"
@@ -194,7 +192,7 @@ class FinancialImplementationStatus(StrEnum):
 
 
 class FinancialFact(AStockModel):
-    """One reported number with immutable source, PIT, and evidence lineage."""
+    """One reported number with immutable source and evidence lineage."""
 
     fact_id: str = Field(min_length=1)
     company_id: str = Field(min_length=1)
@@ -207,7 +205,6 @@ class FinancialFact(AStockModel):
     reported_value: Decimal = Field(allow_inf_nan=False)
     unit: FinancialUnit
     source_snapshot_id: str | None = None
-    pit_id: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -259,7 +256,6 @@ class FinancialPeerObservation(AStockModel):
     value: Decimal = Field(allow_inf_nan=False)
     unit: FinancialUnit
     source_snapshot_ids: list[str] = Field(min_length=1)
-    pit_ids: list[str] = Field(min_length=1)
     evidence_ids: list[str] = Field(min_length=1)
 
 
@@ -296,7 +292,6 @@ class FinancialAnomalySample(AStockModel):
     feature_values: dict[str, Decimal] = Field(min_length=1)
     feature_formula_versions: dict[str, str] = Field(min_length=1)
     source_snapshot_ids: list[str] = Field(min_length=1)
-    pit_ids: list[str] = Field(min_length=1)
     evidence_ids: list[str] = Field(min_length=1)
     expected_anomaly: bool | None = None
     benign_contexts: list[FinancialBenignContext] = Field(default_factory=list)
@@ -310,7 +305,6 @@ class FinancialAnomalySample(AStockModel):
             raise ValueError("anomaly features must contain only finite decimal values")
         for values, label in (
             (self.source_snapshot_ids, "source_snapshot_ids"),
-            (self.pit_ids, "pit_ids"),
             (self.evidence_ids, "evidence_ids"),
             (self.benign_context_evidence_ids, "benign_context_evidence_ids"),
         ):
@@ -415,8 +409,6 @@ class FinancialAuditRequest(AStockModel):
     peer_cohorts: list[FinancialPeerCohort] = Field(default_factory=list)
     anomaly_dataset: FinancialAnomalyDataset | None = None
     anomaly_model_specs: list[FinancialAnomalyModelSpec] = Field(default_factory=list)
-    formal_historical: bool = True
-    allow_approximated_pit: bool = False
 
     @model_validator(mode="after")
     def validate_request_identity(self) -> FinancialAuditRequest:
@@ -437,8 +429,6 @@ class FinancialAuditRequest(AStockModel):
         if len(cohort_ids) != len(set(cohort_ids)):
             raise ValueError("peer cohort ids must be unique")
         for cohort in self.peer_cohorts:
-            if cohort.as_of > self.as_of:
-                raise ValueError("peer cohort cannot use an as_of after the audit")
             if cohort.industry_profile is not self.industry_profile:
                 raise ValueError("peer cohort industry must match the audited company")
         model_ids = [spec.model_id for spec in self.anomaly_model_specs]
@@ -447,8 +437,6 @@ class FinancialAuditRequest(AStockModel):
         if (self.anomaly_dataset is None) != (not self.anomaly_model_specs):
             raise ValueError("anomaly dataset and model specs must be supplied together")
         if self.anomaly_dataset is not None:
-            if self.anomaly_dataset.as_of > self.as_of:
-                raise ValueError("anomaly dataset cannot use an as_of after the audit")
             if self.anomaly_dataset.industry_profile is not self.industry_profile:
                 raise ValueError("anomaly dataset industry must match the audited company")
             target = next(
@@ -461,8 +449,6 @@ class FinancialAuditRequest(AStockModel):
             for spec in self.anomaly_model_specs:
                 if spec.feature_names != self.anomaly_dataset.feature_names:
                     raise ValueError("model features must exactly match the frozen dataset")
-        if self.allow_approximated_pit and not self.formal_historical:
-            raise ValueError("allow_approximated_pit only applies to formal historical audits")
         return self
 
 
@@ -539,7 +525,6 @@ class VerifiedFinancialNumber(AStockModel):
     reporting_quantum_cny: Decimal = Field(gt=0)
     fact_ids: list[str] = Field(min_length=1)
     source_snapshot_ids: list[str] = Field(min_length=1)
-    pit_ids: list[str] = Field(min_length=1)
     evidence_ids: list[str] = Field(min_length=1)
 
 
@@ -586,13 +571,27 @@ class FinancialPeerPercentile(AStockModel):
     sample_size: int = Field(ge=3)
     peer_company_ids: list[str] = Field(min_length=3)
     source_snapshot_ids: list[str] = Field(min_length=1)
-    pit_ids: list[str] = Field(min_length=1)
     evidence_ids: list[str] = Field(min_length=1)
 
 
 class FinancialEvidenceGap(AStockModel):
     gap_id: str
     gap_type: FinancialGapType
+
+    @model_validator(mode="before")
+    @classmethod
+    def project_retired_gap_type(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            retired = {
+                "MISSING_PIT_REFERENCE": FinancialGapType.MISSING_SNAPSHOT_REFERENCE.value,
+                "UNKNOWN_PIT": FinancialGapType.UNKNOWN_SNAPSHOT.value,
+                "PIT_NOT_USABLE": FinancialGapType.EVIDENCE_NOT_USABLE.value,
+            }
+            raw = value.get("gap_type")
+            if raw in retired:
+                value["gap_type"] = retired[str(raw)]
+        return value
     detail_code: str
     period_end: date | None = None
     field_codes: list[FinancialFieldCode] = Field(default_factory=list)
@@ -728,7 +727,6 @@ class FinancialIntegrityEvidencePack(AStockModel):
     periods: list[date]
     input_fact_ids: list[str]
     source_snapshot_ids: list[str]
-    pit_ids: list[str]
     verified_numbers: list[VerifiedFinancialNumber]
     recalculated_metrics: list[RecalculatedFinancialMetric]
     derived_metrics: list[FinancialDerivedMetric] = Field(default_factory=list)

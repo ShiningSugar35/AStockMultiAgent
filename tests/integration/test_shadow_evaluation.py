@@ -32,7 +32,6 @@ from astock.schemas import (
     MarketRegimeFeatures,
     PaperTradingClassification,
     Phase8AdmissionStatus,
-    PointInTimeStatus,
     ReplayQuality,
     ResearchMemoArtifact,
     ResearchMemoSectionReference,
@@ -852,7 +851,6 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
         style_relative_performance=Decimal("-0.2"),
         strategy_performance=Decimal("-0.1"),
         evidence_ids=["evidence:market:1"],
-        pit_statuses=[PointInTimeStatus.CERTIFIED],
         created_at=SIGNAL,
     )
     clock.now = SIGNAL + timedelta(seconds=1)
@@ -1179,8 +1177,6 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
             market_snapshot_ids=market_snapshot_ids,
             market_observation_ids=["bar:entry", "bar:valuation"],
             thesis_status=ShadowThesisStatus.STILL_VALID,
-            pit_statuses=[PointInTimeStatus.CERTIFIED],
-            candidate_membership_pit_safe=True,
             corporate_action_coverage_complete=True,
             delisting_coverage_complete=True,
             t_plus_one_compliant=True,
@@ -1486,31 +1482,6 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
     assert corrected_observation.observation_id in {
         item.observation_id for item in after_correction
     }
-    excluded_draft = ShadowExecutionObservationDraft.model_validate(
-        {
-            **corrected_observation.model_dump(
-                mode="python",
-                exclude={
-                    "schema_version",
-                    "created_at",
-                    "registered_at",
-                    "observation_id",
-                    "status",
-                    "formal_eligible",
-                    "observation_sha256",
-                },
-            ),
-            "observation_version": "outcome-v3",
-            "supersedes_observation_id": corrected_observation.observation_id,
-            "candidate_membership_pit_safe": False,
-            "created_at": corrected_observation.created_at + timedelta(days=1),
-        }
-    )
-    clock.now = excluded_draft.created_at
-    excluded = service.record_observation(excluded_draft)
-    assert excluded.status is ShadowObservationStatus.EXCLUDED
-    assert not excluded.formal_eligible
-    assert "CANDIDATE_MEMBERSHIP_NOT_PIT_SAFE" in excluded.exclusion_codes
     for source, field, code in (
         (
             recorded_by_type[ShadowArmType.EQUAL_WEIGHT_CANDIDATE],
@@ -1565,14 +1536,6 @@ def test_shadow_study_regime_assignment_and_audit_are_frozen(tmp_path: Path) -> 
                 "delisting_coverage_complete": False,
             },
             "DELISTING_COVERAGE_INCOMPLETE",
-        ),
-        (
-            "outcome-v4",
-            {
-                "delisting_coverage_complete": True,
-                "pit_statuses": [PointInTimeStatus.APPROXIMATED],
-            },
-            "FORMAL_PIT_STATUS_FAILED",
         ),
     )
     for offset, (version, updates, code) in enumerate(benchmark_updates, start=1):

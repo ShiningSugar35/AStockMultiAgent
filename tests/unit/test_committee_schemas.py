@@ -40,7 +40,6 @@ def _assessment() -> CommitteeAssessment:
             data_coverage=Decimal("1"),
             evidence_coverage=Decimal("1"),
             specialist_coverage=Decimal("1"),
-            pit_coverage=Decimal("1"),
             liquidity_score=Decimal("1"),
             evidence_ids=evidence_ids,
         ),

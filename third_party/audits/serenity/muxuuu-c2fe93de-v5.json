@@ -94,5 +94,5 @@
   "normal_runtime_network_required": false,
   "source_vendored": false,
   "upgrade_policy": "A new upstream commit or local contract version requires a new audit_id and manifest; prior audit manifests and artifacts remain immutable.",
-  "local_adaptation_release_id": "serenity-local-adaptation-v1"
+  "local_adaptation_release_id": "serenity-local-adaptation-v2"
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime
 from importlib import import_module
 from typing import Any
@@ -25,11 +26,21 @@ from astock.investor_orchestration.models import (
 )
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
+from astock.research.validation_cache import ResearchValidationCache
 
 _SCHEMA_MODULES = {
     "MarketPriceAnchor": "astock.schemas.institutional_research",
     "ClassifiedTradeProtocol": "astock.schemas.research_runtime",
     "ResearchRoleOutput": "astock.schemas.research_team",
+    "ResearchIntent": "astock.schemas.research_team",
+    "CompanyResearchIntent": "astock.schemas.research_team",
+    "PolicyRegimeProfile": "astock.schemas.research_team",
+    "MarketRiskProfile": "astock.schemas.research_team",
+    "BlindCandidateShortlist": "astock.schemas.research_team",
+    "MarketContextPack": "astock.schemas.research_team",
+    "IndependentBullCase": "astock.schemas.research_team",
+    "IndependentBearCase": "astock.schemas.research_team",
+    "ModelRiskValidationReport": "astock.schemas.research_team",
     "FullResearchInputReadinessReport": "astock.schemas.research_team",
     "RecommendationResearchReceipt": "astock.schemas.full_research",
     "MacroResearchOutcome": "astock.schemas.full_research",
@@ -62,6 +73,10 @@ _LOCAL_OUTPUTS = frozenset(
         "RESPONSE_GATEWAY",
     }
 )
+# These outputs are created deterministically after the decision input set is frozen.
+# They must still pass their full canonical domain contract and lineage verification;
+# they simply cannot, by construction, already be members of the frozen input set.
+_POST_FREEZE_DERIVED_OUTPUTS = frozenset({"FULL_RESEARCH_GATE"})
 
 
 def output_model(name: str) -> type[BaseModel]:
@@ -81,6 +96,18 @@ class RegisteredOutputVerifier:
         self.store = store
         self.state = StateStore(store.path)
         self.objects = objects or ObjectStore(store.path.parent / "objects" / "sha256")
+        self.validation_cache = ResearchValidationCache(self.state, self.objects)
+        try:
+            self._validator_hash = content_hash(
+                {
+                    "registered_output_verifier": inspect.getsource(type(self)),
+                    "domain_contract_audit": inspect.getsource(DomainContractAudit),
+                }
+            )
+        except (OSError, TypeError):
+            self._validator_hash = content_hash(
+                {"contract": "registered-output-verifier-source-unavailable-v1"}
+            )
 
     def load(self, artifact_id: str, model: type[BaseModel]) -> BaseModel:
         record = self.state.artifact_record(artifact_id)
@@ -104,58 +131,77 @@ class RegisteredOutputVerifier:
             raise ValueError("required typed output is missing")
         if len(artifact_ids) != len(set(artifact_ids)):
             raise ValueError("duplicate output identifiers are not independent coverage")
-        allowed_inputs: set[str] | None = None
-        if request.decision_time is not None:
-            from astock.investor_orchestration.decision_freeze import DecisionFreezeService
-
-            freezes = DecisionFreezeService(self.store, self.objects)
-            freezes.verify(request)
-            frozen = freezes._load(request.decision_freeze_artifact_id or "")
-            if frozen is None:
-                raise ValueError("registered decision freeze is unavailable")
-            allowed_inputs = {binding.artifact_id for binding in frozen.input_bindings}
-            if preflight.as_of != request.evidence_cutoff:
-                raise ValueError("preflight does not use the authenticated decision cutoff")
         if self._verify_local(node.capability_id, artifact_ids, request, preflight):
             return
-        if allowed_inputs is not None and not set(artifact_ids) <= allowed_inputs:
-            raise ValueError("capability output is not bound to the frozen decision inputs")
         model = output_model(node.output_schema)
+        policy_hash = content_hash(node.model_dump(mode="json"))
+        identity_scope = content_hash(
+            {
+                "capability_id": node.capability_id,
+                "request_id": request.request_id,
+                "account_id": request.account_id,
+                "entity_ids": sorted(request.entity_ids),
+            }
+        )
+        fact_state_hash = content_hash(
+            {
+                "preflight": preflight.model_dump(mode="json"),
+                "analysis_as_of": request.analysis_as_of,
+            }
+        )
         for artifact_id in artifact_ids:
-            output = self.load(artifact_id, model)
-            payload = output.model_dump(mode="json")
-            self._check_time(payload, request.evidence_cutoff, node.freshness_seconds)
-            self._verify_linked_hashes(payload)
-            if payload.get("request_id") not in (None, request.request_id):
-                raise ValueError("output belongs to another request")
-            if request.account_id is not None and payload.get("account_id") not in (
-                None,
-                request.account_id,
-            ):
-                raise ValueError("output belongs to another account")
-            entity = payload.get("instrument_id", payload.get("company_id"))
-            if (
-                entity is not None
-                and request.entity_ids
-                and not any(
-                    self._same_identity(str(entity), target) for target in request.entity_ids
-                )
-            ):
-                raise ValueError("output belongs to another security")
-            status = str(payload.get("status", payload.get("coverage_status", "")))
-            safe_prepare_needs_info = (
-                node.output_schema == "PaperPreparationReceipt"
-                and request.normalized_intent is RequestIntent.PAPER_PREPARE
-                and status == "NEEDS_INFO"
+            self.validation_cache.verify_once(
+                artifact_id=artifact_id,
+                validator_hash=self._validator_hash,
+                policy_hash=policy_hash,
+                identity_scope=identity_scope,
+                fact_state_hash=fact_state_hash,
+                validate=lambda artifact_id=artifact_id: self._verify_registered_artifact(
+                    node=node,
+                    artifact_id=artifact_id,
+                    model=model,
+                    request=request,
+                ),
             )
-            if (
-                status in {"FAILED", "BLOCKED", "NEEDS_INFO", "DEGRADED", "INCOMPLETE"}
-                and not safe_prepare_needs_info
-            ):
-                raise ValueError("output did not pass its domain-specific completion gate")
-            if payload.get("broker_execution_allowed", False):
-                raise ValueError("research output cannot authorize broker execution")
-            DomainContractAudit(self).check(node, artifact_id, output, request)
+
+    def _verify_registered_artifact(
+        self,
+        *,
+        node: CapabilityNode,
+        artifact_id: str,
+        model: type[BaseModel],
+        request: InvestorRequestEnvelope,
+    ) -> None:
+        output = self.load(artifact_id, model)
+        payload = output.model_dump(mode="json")
+        self._check_time(payload, request.analysis_as_of, node.freshness_seconds)
+        self._verify_linked_hashes(payload)
+        if payload.get("request_id") not in (None, request.request_id):
+            raise ValueError("output belongs to another request")
+        if request.account_id is not None and payload.get("account_id") not in (
+            None,
+            request.account_id,
+        ):
+            raise ValueError("output belongs to another account")
+        entity = payload.get("instrument_id", payload.get("company_id"))
+        if (
+            entity is not None
+            and request.entity_ids
+            and not any(self._same_identity(str(entity), target) for target in request.entity_ids)
+        ):
+            raise ValueError("output belongs to another security")
+        status = str(payload.get("status", payload.get("coverage_status", "")))
+        safe_prepare_needs_info = (
+            node.output_schema == "PaperPreparationReceipt"
+            and request.normalized_intent is RequestIntent.PAPER_PREPARE
+            and status == "NEEDS_INFO"
+        )
+        if (
+            status in {"FAILED", "BLOCKED", "NEEDS_INFO", "DEGRADED", "INCOMPLETE"}
+            and not safe_prepare_needs_info
+        ):
+            raise ValueError("output did not pass its domain-specific completion gate")
+        DomainContractAudit(self).check(node, artifact_id, output, request)
 
     @staticmethod
     def _payload_mappings(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -249,11 +295,31 @@ class RegisteredOutputVerifier:
 
     @staticmethod
     def _check_time(
-        payload: dict[str, Any], cutoff: datetime, freshness_seconds: int | None = None
+        payload: dict[str, Any],
+        cutoff_or_freshness: datetime | int | None = None,
+        freshness_seconds: int | None = None,
     ) -> None:
-        now = utc_now()
-        if cutoff.tzinfo is None or cutoff.utcoffset() is None or cutoff > now:
-            raise ValueError("frozen decision time must be aware and not in the future")
+        """Validate immutable visibility and freshness without restoring legacy PIT gates.
+
+        CURRENT research may acquire evidence after the original question, but it first
+        freezes registered inputs at a post-acquisition decision clock. Historical
+        registered execution keeps the request clock. Actual observation/availability
+        timestamps may not postdate that immutable clock; modeled future windows are not
+        inspected here.
+        """
+
+        cutoff: datetime | None = None
+        if isinstance(cutoff_or_freshness, int):
+            if freshness_seconds is not None:
+                raise ValueError("freshness SLA was supplied twice")
+            freshness_seconds = cutoff_or_freshness
+        else:
+            cutoff = cutoff_or_freshness
+            if cutoff is not None and (
+                cutoff.tzinfo is None or cutoff.utcoffset() is None
+            ):
+                raise ValueError("output visibility cutoff must be timezone-aware")
+        reference_time = cutoff or utc_now()
         observed: datetime | None = None
         root_has_time = False
         fields = (
@@ -274,21 +340,20 @@ class RegisteredOutputVerifier:
                 timestamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
                 if timestamp.tzinfo is None or timestamp.utcoffset() is None:
                     raise ValueError("output has an ambiguous timestamp")
-                if timestamp > now or timestamp > cutoff:
-                    raise ValueError("output was not available at the frozen decision time")
+                if cutoff is not None and timestamp > cutoff:
+                    raise ValueError(
+                        "output contains data not available at its frozen analysis time"
+                    )
                 if part is payload:
                     root_has_time = True
                     if key in {"observed_at", "as_of", "data_as_of"}:
                         observed = timestamp
         if not root_has_time:
-            raise ValueError("output lacks a verifiable availability timestamp")
-        # Forecast years, effective dates and expiry windows describe the model's
-        # target, not when its input became available. They are intentionally not
-        # interpreted as observed evidence timestamps.
+            raise ValueError("output lacks a verifiable current-data timestamp")
         if freshness_seconds is not None and (
             observed is None
             or freshness_seconds < 0
-            or (cutoff - observed).total_seconds() > freshness_seconds
+            or (reference_time - observed).total_seconds() > freshness_seconds
         ):
             raise ValueError("output is stale under the capability freshness policy")
 
@@ -323,7 +388,7 @@ class RegisteredOutputVerifier:
                 raise ValueError("preflight is not the persisted request receipt")
             expected = (preflight.receipt_id,)
         elif capability_id == "MARKET_REGIME":
-            snapshot = self.store.latest_valid_regime(request.evidence_cutoff)
+            snapshot = self.store.latest_valid_regime(preflight.as_of)
             if snapshot is None or snapshot.snapshot_id != preflight.regime.snapshot_id:
                 raise ValueError("no valid persisted market regime for this request")
             expected = (snapshot.snapshot_id,)
@@ -346,7 +411,6 @@ class RegisteredOutputVerifier:
                         if (
                             event.event_id != artifact_id
                             or event.request_id != request.request_id
-                            or event.available_at > request.evidence_cutoff
                         ):
                             raise ValueError("research subject receipt belongs to another request")
                         instruments.add(event.instrument_id)

@@ -724,7 +724,13 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
     assert all(item["visual_evidence_ids"] == [] for item in lines[0]["paragraphs"])
     assert all(item["visual_chart_unit_ids"] == [] for item in lines[0]["paragraphs"])
     assert packet.batch.exported_argument_count == 1
-    assert packet.batch.local_only is True
+    assert packet.batch.local_only is False
+    manifest = json.loads(packet.manifest_file.read_text(encoding="utf-8"))
+    assert manifest["provider"] == "gemini-agent-bridge"
+    assert manifest["model_id"] == "gemini-flash-latest"
+    assert manifest["transport_policy"] == "GEMINI_AGENT_BRIDGE_AUTO"
+    assert manifest["expected_result_file"] == "semantic-results.jsonl"
+    assert manifest["external_request_sent_at_export"] is False
     assert packet.held_back_calibration_count == 0
     assert packet.held_back_structural_count == 1
     assert packet.held_back_oversize_count == 0
@@ -748,11 +754,38 @@ def test_semantic_embedding_writes_only_complete_au_and_method_prototype_vectors
     assert repeated_packet.batch.batch_id == packet.batch.batch_id
     assert repeated_packet.batch.packet_object_sha256 == packet.batch.packet_object_sha256
     assert repeated_packet.packet_file.read_bytes() == packet.packet_file.read_bytes()
+
+    fallback_packet = SemanticPacketService(
+        repository,
+        objects,
+        ParquetSemanticStore(tmp_path / "parquet"),
+        tmp_path / "runtime",
+        SEMANTIC_PACKET_PROMPT,
+    ).export(
+        argument_execution.run.run_id,
+        provider="gemini-agent-bridge+chatgpt-main-agent",
+        model_id="gemini-flash-latest+gpt-5.6-sol",
+        transport_policy="GEMINI_AGENT_BRIDGE_WITH_CHATGPT_FALLBACK",
+    )
+    assert fallback_packet.batch.batch_id != packet.batch.batch_id
+    assert fallback_packet.batch.packet_object_sha256 == packet.batch.packet_object_sha256
+    assert fallback_packet.packet_file.read_bytes() == packet.packet_file.read_bytes()
+    fallback_manifest = json.loads(
+        fallback_packet.manifest_file.read_text(encoding="utf-8")
+    )
+    assert fallback_manifest["provider"] == "gemini-agent-bridge+chatgpt-main-agent"
+    assert fallback_manifest["model_id"] == "gemini-flash-latest+gpt-5.6-sol"
+    assert (
+        fallback_manifest["transport_policy"]
+        == "GEMINI_AGENT_BRIDGE_WITH_CHATGPT_FALLBACK"
+    )
+    assert fallback_manifest["external_request_sent_at_export"] is False
+
     persisted = repository.get_run(argument_execution.run.run_id)
     assert persisted is not None
     assert persisted.stage is SemanticRunStage.DEEPSEEK_PACKET_READY
 
-    result_file = packet.batch_directory / "deepseek-results.jsonl"
+    result_file = packet.batch_directory / "semantic-results.jsonl"
     result_file.write_text(
         json.dumps(
             {

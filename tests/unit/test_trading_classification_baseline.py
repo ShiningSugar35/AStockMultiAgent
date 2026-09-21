@@ -101,7 +101,7 @@ def test_official_baseline_rejects_non_cninfo_or_future_snapshot(tmp_path: Path)
         objects,
         available_at=NOW,
     )
-    with pytest.raises(ValueError, match="future-visible"):
+    with pytest.raises(ValueError, match="postdates its baseline"):
         service._register_official_baseline(
             _baseline(future, baseline_id="future-baseline")
         )

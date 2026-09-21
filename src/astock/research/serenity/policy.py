@@ -11,7 +11,6 @@ from astock.schemas import (
     EvidenceGrade,
     FactStatus,
     FrozenEvidencePack,
-    PointInTimeStatus,
 )
 from astock.schemas.serenity_v2 import (
     DailyTrendHealthContractV2,
@@ -40,7 +39,7 @@ def validate_serenity_method_evidence(
     evidence_pack: FrozenEvidencePack,
     base_as_of: datetime,
 ) -> None:
-    """Apply the common frozen-scope, grade, PIT and conflict gates to one method contract."""
+    """Apply current evidence scope, source-grade and conflict checks to one method contract."""
 
     evidence_requirements = serenity_method_evidence_requirements(method_contract)
     if not evidence_requirements:
@@ -53,12 +52,6 @@ def validate_serenity_method_evidence(
         if unknown:
             raise ValueError("Serenity method evidence references evidence outside the frozen pack")
         for evidence_id in node_evidence:
-            pit_status = evidence_pack.pit_status_by_evidence_id.get(evidence_id)
-            if pit_status not in {
-                PointInTimeStatus.CERTIFIED,
-                PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-            }:
-                raise ValueError("Serenity method evidence requires certified or reconstructed PIT")
             grade = evidence_pack.evidence_grade_by_id.get(evidence_id)
             if grade is None:
                 raise ValueError("Serenity method evidence grade is unavailable")
@@ -69,12 +62,6 @@ def validate_serenity_method_evidence(
             evidence = evidence_repository.get_evidence(evidence_id)
             if evidence is None:
                 raise ValueError("Serenity method evidence record is unavailable")
-            if evidence.available_to_system_at > base_as_of:
-                raise ValueError("Serenity method evidence is future relative to the BaseCase")
-            if evidence.valid_from is not None and evidence.valid_from > base_as_of:
-                raise ValueError("Serenity method evidence is not yet valid at the BaseCase as_of")
-            if evidence.valid_to is not None and evidence.valid_to < base_as_of:
-                raise ValueError("Serenity method evidence is stale at the BaseCase as_of")
             if evidence.fact_status in {FactStatus.CONFLICTED, FactStatus.UNVERIFIED}:
                 raise ValueError("Serenity method evidence cannot be conflicted or unverified")
             if evidence_id in open_conflict_evidence:

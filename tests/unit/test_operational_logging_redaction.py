@@ -295,7 +295,6 @@ class TestPublicErrorMapper:
         assert summary.failure_class == "RATE_LIMITED"
         assert summary.safe_to_send is True
         assert summary.raw_error_exposed is False
-        assert summary.broker_execution_allowed is False
 
     def test_maps_timeout_exception(self) -> None:
         summary = PublicErrorMapper.summarize(TimeoutError("timed out"))

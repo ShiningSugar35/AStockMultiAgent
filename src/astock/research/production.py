@@ -814,7 +814,6 @@ class ResearchProductionService:
             "automatic_skill_modification_allowed": False,
             "online_weight_learning_allowed": False,
             "paper_ledger_write_allowed": False,
-            "broker_execution_allowed": False,
         }
 
     @staticmethod

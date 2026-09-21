@@ -89,21 +89,15 @@ class TradePlanViewService:
                     classification.symbol,
                     visible_at=protocol.as_of,
                 )
-                visible = [
-                    item
-                    for item in bars
-                    if item.available_to_system_at <= protocol.as_of
-                    and item.session_close_at <= protocol.as_of
-                ]
-                if visible:
-                    latest = max(visible, key=lambda item: item.session_date)
+                if bars:
+                    latest = max(bars, key=lambda item: item.session_date)
                     reference_price_fen = int(round(float(latest.close) * 100))
-                    price_source = "LATEST_PIT_DAILY_CLOSE"
+                    price_source = "LATEST_VERIFIED_DAILY_CLOSE"
                     price_artifact = f"market-reference:{release_id}"
                     record = self.state.artifact_record(price_artifact)
                     if record is not None:
                         price_hash = str(record["object_hash"])
-                    warnings.add("REFERENCE_PRICE_IS_LATEST_PIT_DAILY_CLOSE")
+                    warnings.add("REFERENCE_PRICE_IS_LATEST_VERIFIED_DAILY_CLOSE")
             except (OSError, ValueError):
                 warnings.add("REFERENCE_PRICE_UNAVAILABLE")
 

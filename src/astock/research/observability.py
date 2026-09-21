@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,6 +18,9 @@ from astock.schemas.agent_observability import (
     AgentTaskObservationRequest,
     AgentTaskPerformanceSummary,
     AgentTaskStatus,
+    ResearchRequestPerformanceSummary,
+    ResearchRequestSourceGroup,
+    ResearchRequestTrace,
 )
 from astock.schemas.research_runtime import ResearchRunReport, ResearchRunStatus
 
@@ -103,6 +107,137 @@ class AgentObservabilityService:
             input_hashes=[],
         )
         return observation
+
+    def register_request_trace(self, trace: ResearchRequestTrace) -> ResearchRequestTrace:
+        semantic = trace.model_dump(mode="json", exclude={"trace_id", "created_at"})
+        event_hash = content_hash(semantic)
+        expected_id = f"research-request-trace:{event_hash}"
+        if trace.trace_id not in {"AUTO", expected_id}:
+            raise ValueError("research request trace identity is not canonical")
+        trace = trace.model_copy(update={"trace_id": expected_id})
+        metrics = _trace_metrics(trace)
+        with self.state.connect() as connection:
+            existing = connection.execute(
+                "SELECT trace_id,event_hash,object_hash FROM research_request_trace_index "
+                "WHERE trace_id=? OR request_id=?",
+                (trace.trace_id, trace.request_id),
+            ).fetchone()
+        if existing is not None:
+            if (
+                str(existing["trace_id"]) != trace.trace_id
+                or str(existing["event_hash"]) != event_hash
+            ):
+                raise ValueError("research request already has a different trace")
+            return ResearchRequestTrace.model_validate_json(
+                self.objects.get_bytes(str(existing["object_hash"]))
+            )
+        object_ref = self.objects.put_json(trace.model_dump(mode="json"))
+        with self.state.transaction() as connection:
+            connection.execute(
+                "INSERT INTO research_request_trace_index("
+                "trace_id,request_id,status,source_group,cache_mode,started_at,answer_ready_at,"
+                "wall_time_ms,useful_output,provider_call_count,retry_count,cache_hit_count,"
+                "cache_miss_count,backend_busy_ms,llm_busy_ms,backend_llm_overlap_ms,"
+                "ready_scheduler_ms,ready_scheduler_idle_ms,object_hash,event_hash,created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    trace.trace_id,
+                    trace.request_id,
+                    trace.status.value,
+                    trace.source_group.value,
+                    trace.cache_mode.value,
+                    trace.started_at.astimezone(UTC).isoformat(),
+                    trace.answer_ready_at.astimezone(UTC).isoformat(),
+                    trace.wall_time_ms,
+                    int(trace.useful_output),
+                    metrics["provider_calls"],
+                    metrics["retries"],
+                    metrics["cache_hits"],
+                    metrics["cache_misses"],
+                    metrics["backend_busy_ms"],
+                    metrics["llm_busy_ms"],
+                    metrics["overlap_ms"],
+                    metrics["ready_ms"],
+                    metrics["ready_idle_ms"],
+                    object_ref.sha256,
+                    event_hash,
+                    trace.created_at.astimezone(UTC).isoformat(),
+                ),
+            )
+        self.state.register_artifact(
+            artifact_id=trace.trace_id,
+            artifact_type="ResearchRequestTrace",
+            schema_version=trace.schema_version,
+            object_hash=object_ref.sha256,
+            input_hashes=[],
+        )
+        return trace
+
+    def request_performance(self, *, lookback_days: int = 30) -> ResearchRequestPerformanceSummary:
+        if lookback_days < 0:
+            raise ValueError("lookback_days must be non-negative")
+        since = datetime.now(UTC) - timedelta(days=lookback_days) if lookback_days else None
+        query = "SELECT * FROM research_request_trace_index"
+        params: tuple[str, ...] = ()
+        if since is not None:
+            query += " WHERE answer_ready_at>=?"
+            params = (since.isoformat(),)
+        query += " ORDER BY answer_ready_at,request_id"
+        with self.state.connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        normal = [
+            row
+            for row in rows
+            if str(row["source_group"]) == ResearchRequestSourceGroup.NORMAL.value
+        ]
+        durations = [int(row["wall_time_ms"]) for row in normal]
+        p50 = _percentile_ms(durations, 0.50)
+        p75 = _percentile_ms(durations, 0.75)
+        p90 = _percentile_ms(durations, 0.90)
+        useful_count = sum(int(row["useful_output"]) for row in rows)
+        normal_ontime = sum(int(row["wall_time_ms"]) <= 2_700_000 for row in normal)
+        ready_ms = sum(int(row["ready_scheduler_ms"]) for row in rows)
+        ready_idle_ms = sum(int(row["ready_scheduler_idle_ms"]) for row in rows)
+        findings: list[str] = []
+        if not rows:
+            findings.append("NO_RESEARCH_REQUEST_TRACES")
+        if len(normal) < 30:
+            findings.append("INSUFFICIENT_SAMPLE_FOR_RELEASE_PERCENTILES")
+        threshold_pass = bool(
+            p50 is not None
+            and p75 is not None
+            and p90 is not None
+            and p50 <= 2_100_000
+            and p75 <= 2_400_000
+            and p90 <= 2_700_000
+        )
+        if durations and not threshold_pass:
+            findings.append("RESEARCH_SLA_PERCENTILE_EXCEEDED")
+        if ready_ms and ready_idle_ms / ready_ms > 0.05:
+            findings.append("AVOIDABLE_SCHEDULER_IDLE_EXCEEDED")
+        return ResearchRequestPerformanceSummary(
+            sample_count=len(rows),
+            normal_sample_count=len(normal),
+            failure_sample_count=len(rows) - len(normal),
+            useful_output_count=useful_count,
+            p50_wall_time_ms=p50,
+            p75_wall_time_ms=p75,
+            p90_wall_time_ms=p90,
+            useful_delivery_rate=useful_count / len(rows) if rows else 0.0,
+            on_time_rate_45m=normal_ontime / len(normal) if normal else 0.0,
+            provider_call_count=sum(int(row["provider_call_count"]) for row in rows),
+            retry_count=sum(int(row["retry_count"]) for row in rows),
+            cache_hit_count=sum(int(row["cache_hit_count"]) for row in rows),
+            cache_miss_count=sum(int(row["cache_miss_count"]) for row in rows),
+            backend_busy_ms=sum(int(row["backend_busy_ms"]) for row in rows),
+            llm_busy_ms=sum(int(row["llm_busy_ms"]) for row in rows),
+            backend_llm_overlap_ms=sum(int(row["backend_llm_overlap_ms"]) for row in rows),
+            ready_scheduler_ms=ready_ms,
+            ready_scheduler_idle_ms=ready_idle_ms,
+            avoidable_scheduler_idle_rate=(ready_idle_ms / ready_ms if ready_ms else None),
+            threshold_pass=threshold_pass,
+            finding_codes=sorted(findings),
+        )
 
     def report(self, *, lookback_days: int = 30) -> AgentObservabilityReport:
         if lookback_days < 0:
@@ -493,3 +628,73 @@ def _safe_float(value: object) -> float:
 
 
 __all__ = ["AgentObservabilityService"]
+
+
+def _merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    if not intervals:
+        return []
+    ordered = sorted(intervals, key=lambda item: (item[0], item[1]))
+    merged: list[tuple[datetime, datetime]] = [ordered[0]]
+    for start, end in ordered[1:]:
+        previous_start, previous_end = merged[-1]
+        if start <= previous_end:
+            merged[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _interval_ms(intervals: list[tuple[datetime, datetime]]) -> int:
+    return sum(
+        max(0, int((end - start).total_seconds() * 1000))
+        for start, end in _merge_intervals(intervals)
+    )
+
+
+def _intersection_ms(
+    left: list[tuple[datetime, datetime]], right: list[tuple[datetime, datetime]]
+) -> int:
+    a = _merge_intervals(left)
+    b = _merge_intervals(right)
+    i = j = total = 0
+    while i < len(a) and j < len(b):
+        start = max(a[i][0], b[j][0])
+        end = min(a[i][1], b[j][1])
+        if end > start:
+            total += int((end - start).total_seconds() * 1000)
+        if a[i][1] <= b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return total
+
+
+def _trace_metrics(trace: ResearchRequestTrace) -> dict[str, int]:
+    backend_categories = {"BACKEND", "NETWORK", "CPU", "WRITE"}
+    backend = [
+        (s.started_at, s.finished_at) for s in trace.spans if s.category in backend_categories
+    ]
+    llm = [(s.started_at, s.finished_at) for s in trace.spans if s.category == "LLM"]
+    ready = [(s.started_at, s.finished_at) for s in trace.spans if s.category == "SCHEDULER_READY"]
+    idle = [
+        (s.started_at, s.finished_at) for s in trace.spans if s.category == "SCHEDULER_IDLE_READY"
+    ]
+    return {
+        "provider_calls": sum(s.provider_calls for s in trace.spans),
+        "retries": sum(s.retries for s in trace.spans),
+        "cache_hits": sum(s.cache_hits for s in trace.spans),
+        "cache_misses": sum(s.cache_misses for s in trace.spans),
+        "backend_busy_ms": _interval_ms(backend),
+        "llm_busy_ms": _interval_ms(llm),
+        "overlap_ms": _intersection_ms(backend, llm),
+        "ready_ms": _interval_ms(ready),
+        "ready_idle_ms": _interval_ms(idle),
+    }
+
+
+def _percentile_ms(values: list[int], quantile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, math.ceil(quantile * len(ordered)) - 1)
+    return ordered[index]

@@ -107,7 +107,6 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
     assert not probe["committee"]["network_access"]
     assert probe["adaptive_research"] == {
         "adaptive_weights": False,
-        "broker_execution": False,
         "implementation_status": "IMPLEMENTED_DISABLED_BOUNDARY",
         "main_paper_ledger_write": False,
         "next_permitted_stage": "PHASE7_FORWARD_EVIDENCE_COLLECTION",
@@ -790,8 +789,6 @@ def test_research_formal_prepare_cli_recorded_vertical_slice_is_idempotent(
                 "financial_audit_run_id": financial_payload["pack"]["audit_run_id"],
                 "claim_ids": [claim.claim.claim_id],
                 "as_of": "2026-06-30T15:00:00+08:00",
-                "formal_historical": True,
-                "allow_approximated": False,
             },
             ensure_ascii=False,
         ),
@@ -846,8 +843,6 @@ def test_research_formal_prepare_cli_needs_info_uses_exit_code_three(
                 "financial_audit_run_id": "financial-audit:not-found",
                 "claim_ids": ["claim:not-found"],
                 "as_of": "2026-06-30T15:00:00+08:00",
-                "formal_historical": True,
-                "allow_approximated": False,
             }
         ),
         encoding="utf-8",
@@ -1076,15 +1071,12 @@ def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
     assert schema_payload["policy"]["policy_version"] == "shadow-evaluation-policy-v2"
     assert schema_payload["hard_boundaries"] == {
         "automatic_skill_modification_allowed": False,
-        "broker_execution_allowed": False,
-        "future_inputs_allowed": False,
         "frozen_5m_ohlcv_reconciliation_required": True,
         "historical_replay_can_count_as_forward": False,
         "independence_key_is_deterministic": True,
         "live_forward_snapshot_lineage_required": True,
         "main_paper_ledger_write_allowed": False,
         "memo_or_decision_reuse_can_count_as_new_event": False,
-        "not_pit_safe_formal_samples_allowed": False,
         "online_weight_changes_allowed": False,
         "reinforcement_learning_allowed": False,
         "research_memo_decision_lineage_required": True,
@@ -1111,7 +1103,6 @@ def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
     admission = runner.invoke(app, ["phase8-admission", "study:not-run"])
     assert admission.exit_code == 0, admission.output
     assert json.loads(admission.output) == {
-        "broker_execution_allowed": False,
         "online_weight_changes_allowed": False,
         "status": "NOT_RUN",
         "study_id": "study:not-run",
@@ -1132,7 +1123,6 @@ def test_shadow_cli_schema_status_admission_and_invalid_requests_fail_closed(
     assert not adaptive_payload["adaptive_weights_enabled"]
     assert not adaptive_payload["online_learning_allowed"]
     assert not adaptive_payload["main_paper_ledger_write_allowed"]
-    assert not adaptive_payload["broker_execution_allowed"]
     forced_adaptive = runner.invoke(
         app,
         ["adaptive-research-status", "--force-enable"],

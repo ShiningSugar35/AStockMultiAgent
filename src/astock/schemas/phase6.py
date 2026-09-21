@@ -35,7 +35,6 @@ class Phase6ClosureReport(AStockModel):
     paper_reference_pack_artifact_id: str = Field(min_length=1)
     trade_protocol_outcome: TradeProtocolOutcome
     requires_user_confirmation: Literal[True] = True
-    broker_execution_allowed: Literal[False] = False
     paper_order_id: str | None = None
     input_object_hashes: list[str] = Field(min_length=1)
     disclaimer: str = Field(min_length=1)

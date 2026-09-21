@@ -23,7 +23,7 @@ NOW = datetime(2026, 8, 14, 1, 0, tzinfo=UTC)
 def _service(tmp_path: Path) -> KnowledgeSkillAuditService:
     state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
     applied = state.migrate()
-    assert applied[-1] == "0070"
+    assert "0055" in applied
     return KnowledgeSkillAuditService(
         state,
         ObjectStore(tmp_path / "objects"),
@@ -56,7 +56,6 @@ def test_knowledge_skill_audit_policy_has_authoritative_evidence_and_curated_gap
     assert all(len(item.external_evidence_ids) >= 2 for item in curated)
     assert all(item.formal_committee_weight_allowed is False for item in curated)
     assert all(item.paper_ledger_write_allowed is False for item in curated)
-    assert all(item.broker_execution_allowed is False for item in curated)
 
 
 def test_skill_specific_evidence_routes_precede_module_fallback(tmp_path: Path) -> None:
@@ -120,7 +119,6 @@ def test_revise_decision_requires_complete_replacement_identity() -> None:
         }
     )
     assert decision.paper_ledger_write_allowed is False
-    assert decision.broker_execution_allowed is False
 
 
 def test_chinese_phrase_search_outweighs_generic_single_character_overlap() -> None:

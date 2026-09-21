@@ -13,7 +13,6 @@ from astock.schemas import (
     Market,
     Phase8AdmissionReport,
     Phase8AdmissionStatus,
-    PointInTimeStatus,
     ReplayQuality,
     ResearchSkillStatus,
     ShadowAction,
@@ -216,11 +215,6 @@ def test_shadow_observation_recalculates_execution_and_maturity(
         corporate_action_snapshot_sha256="d" * 64,
         delisting_snapshot_sha256="e" * 64,
         market_observation_ids=["bar:1", "bar:2"],
-        pit_statuses=[
-            PointInTimeStatus.CERTIFIED,
-            PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-        ],
-        candidate_membership_pit_safe=True,
         corporate_action_coverage_complete=True,
         delisting_coverage_complete=True,
         t_plus_one_compliant=True,
@@ -229,6 +223,15 @@ def test_shadow_observation_recalculates_execution_and_maturity(
         optimistic_net_pnl_fen=9_900,
         created_at=AS_OF,
     )
+    legacy = ShadowExecutionObservationDraft.model_validate(
+        {
+            **draft.model_dump(mode="python"),
+            "pit_statuses": ["CERTIFIED"],
+            "candidate_membership_pit_safe": False,
+        }
+    )
+    assert "pit_statuses" not in legacy.model_dump(mode="python")
+    assert "candidate_membership_pit_safe" not in legacy.model_dump(mode="python")
     with pytest.raises(ValidationError, match="market snapshots and availability"):
         ShadowExecutionObservationDraft.model_validate(
             {

@@ -66,7 +66,6 @@ class ResearchTeamPolicy:
     company_required_checks: tuple[str, ...]
     hardware: dict[ResearchResourceClass, dict[str, int]]
     manual_candidate_fallback_allowed: bool
-    broker_execution_allowed: bool
     skill_share_gate_enabled: bool
     reserve_blind_market_tranche: bool
     max_breadth_challenger_seeds: int
@@ -149,7 +148,6 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
         company_required_checks=company_required_checks,
         hardware=hardware,
         manual_candidate_fallback_allowed=bool(safety.get("manual_candidate_fallback_allowed")),
-        broker_execution_allowed=bool(safety.get("broker_execution_allowed")),
         skill_share_gate_enabled=bool(discovery.get("skill_share_gate_enabled")),
         reserve_blind_market_tranche=bool(discovery.get("reserve_blind_market_tranche")),
         max_breadth_challenger_seeds=int(discovery.get("max_breadth_challenger_seeds", 0)),
@@ -177,8 +175,6 @@ def load_research_team_policy(path: Path) -> ResearchTeamPolicy:
         raise ValueError("current research-team policy must be on-demand")
     if policy.manual_candidate_fallback_allowed:
         raise ValueError("manual candidate fallback must be disabled")
-    if policy.broker_execution_allowed:
-        raise ValueError("broker execution must remain disabled")
     if policy.skill_share_gate_enabled:
         raise ValueError("author-relative Skill share gate has been retired")
     if not policy.reserve_blind_market_tranche:
@@ -318,7 +314,6 @@ class ResearchTeamService:
             "hardware_budget": budget.model_dump(mode="json"),
             "manual_candidate_fallback_allowed": False,
             "skill_share_gate_enabled": False,
-            "broker_execution_allowed": False,
         }
 
     def create_full_market_plan(

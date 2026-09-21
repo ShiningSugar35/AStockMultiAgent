@@ -75,7 +75,6 @@ class ResponseContext(_PresentationModel):
     locale: str = "zh-CN"
     diagnostic_intent_detected: bool = False
     system_error_present: bool = False
-    broker_execution_allowed: bool = False
 
 
 class PublicCitation(_PresentationModel):

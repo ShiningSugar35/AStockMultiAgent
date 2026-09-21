@@ -110,8 +110,10 @@ def test_agents_file_discovers_every_repo_skill() -> None:
     agents = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     for name in EXPECTED:
         assert f"${name}" in agents
-    assert "禁止未来函数" in agents
-    assert "不自动向券商发单" in agents
+    assert "来源真实性" in agents
+    assert "证券身份" in agents
+    assert "账本平衡" in agents
+    assert "模拟盘人工确认" in agents
 
 
 def test_phase4_repo_skill_commands_exist_and_use_strict_codex_binding() -> None:
@@ -253,10 +255,6 @@ def test_agent_observability_and_tech_scout_commands_are_discoverable() -> None:
         "agent-observability-report",
         "agent-observability-audit",
         "market-canonical-gc",
-        "pit-temporal-schema",
-        "pit-temporal-audit",
-        "pit-knowledge-cutoff-diagnostic",
-        "pit-temporal-artifact-audit",
     } <= command_names
     scout = (SKILLS_ROOT / "research-tech-scout" / "SKILL.md").read_text(encoding="utf-8")
     assert "ADAPT_PATTERN" in scout
@@ -291,7 +289,6 @@ def test_continuous_monitor_skill_and_commands_are_discoverable() -> None:
     company = (SKILLS_ROOT / "company-deep-research" / "SKILL.md").read_text(encoding="utf-8")
     candidate = (SKILLS_ROOT / "candidate-scan" / "SKILL.md").read_text(encoding="utf-8")
     assert "continuous-monitor-task-claim" in monitor
-    assert "broker_execution_allowed=false" in monitor
     assert "$continuous-investment-monitor" in orchestrator
     assert "reason `RECOMMENDED`" in orchestrator
     assert "ANALYZED" in company

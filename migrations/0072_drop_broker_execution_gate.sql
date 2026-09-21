@@ -1,0 +1,2 @@
+ALTER TABLE committee_trade_protocol_index
+DROP COLUMN broker_execution_allowed;

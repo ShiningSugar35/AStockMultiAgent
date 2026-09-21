@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 class _UnusedKnowledgeProvider:
     call_count = 0
 
+    def inventory(self, run_id: str):  # pragma: no cover - plan must not call it
+        raise AssertionError(run_id)
+
     def status(self, run_id: str):  # pragma: no cover - plan does not call it
         raise AssertionError(run_id)
 
@@ -159,7 +162,6 @@ def test_classified_protocol_schema_binds_exact_classification_hash() -> None:
 
     assert "trading_classification_artifact_id" in contract
     assert "trading_classification_object_hash" in contract
-    assert "broker_execution_allowed: Literal[False]" in contract
     assert "paper_ledger_write_allowed: Literal[False]" in contract
 
 
@@ -190,7 +192,6 @@ def test_research_run_plan_fails_closed_from_company_and_as_of_only(
     assert "COMMITTEE_ASSESSMENT_REQUIRED" in plan.missing_codes
     assert "TRADING_CLASSIFICATION_REQUIRED" in plan.missing_codes
     assert plan.ledger_write_planned is False
-    assert plan.broker_execution_planned is False
 
 
 def test_trading_classification_is_pit_frozen_and_expires(

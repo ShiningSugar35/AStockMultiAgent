@@ -12,6 +12,3 @@ canonical_announcement_events:
   - CONTROLLER_CHANGE
   - DIVIDEND
   - SUSPENSION_RESUMPTION
-formal_historical_pit_statuses:
-  - CERTIFIED
-  - DOCUMENT_RECONSTRUCTED

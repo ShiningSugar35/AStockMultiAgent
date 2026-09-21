@@ -146,7 +146,6 @@ def test_phase12_missing_base_case_is_structured_needs_info_without_policy_write
     assert result.finding_codes == ["BASE_CASE_NOT_REGISTERED"]
     assert result.required_action_codes == ["REGISTER_MATCHING_BASE_CASE"]
     assert not result.paper_ledger_write_allowed
-    assert not result.broker_execution_allowed
     with state.connect() as connection:
         assert (
             connection.execute("SELECT COUNT(*) FROM research_production_policy_index").fetchone()[
@@ -256,7 +255,6 @@ def test_phase12_route_separates_fundamental_budget_from_support_roles(
     assert all(item.route_score >= 0 for item in plan.selected_fundamental_specialists)
     assert not plan.automatic_skill_modification_allowed
     assert not plan.paper_ledger_write_allowed
-    assert not plan.broker_execution_allowed
 
 
 def test_phase12_catalyst_monitor_reruns_only_affected_modules(tmp_path: Path) -> None:
@@ -320,7 +318,6 @@ def test_phase12_catalyst_monitor_reruns_only_affected_modules(tmp_path: Path) -
     ]
     assert report.no_full_research_rerun
     assert not report.paper_ledger_write_allowed
-    assert not report.broker_execution_allowed
     assert service.audit(report.monitor_id)["status"] == "PASS"
 
 

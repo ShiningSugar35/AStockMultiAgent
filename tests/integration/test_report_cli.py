@@ -30,7 +30,6 @@ def test_report_schema_preferences_publish_status_and_recover(
     assert schema_payload["schema_version"] == "formal-report-cli-schema-v1"
     assert "ReportRequest" in schema_payload["models"]
     assert "PresentationPreferences" in schema_payload["models"]
-    assert schema_payload["broker_execution_allowed"] is False
 
     base = runner.invoke(app, ["preference-set", "DEFAULT_REPORT_FORMAT", "DOCX"])
     assert base.exit_code == 0, base.output

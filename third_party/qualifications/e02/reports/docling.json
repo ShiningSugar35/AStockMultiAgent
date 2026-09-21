@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "c9b1988b15461a3143ec70261e45b52b1ee0b6fa6a15df42c114530b79a4fce0",
+  "report_id": "6352e1cf365806653cb77c2c18778c835b0cd3c9609f4b707bcacb5c2ed21d13",
   "capability_id": "docling",
   "candidate_version": "2.124.0",
   "requested_stage": "SHADOW",
@@ -9,7 +9,6 @@
     "license": "FAIL",
     "terms_of_service": "PASS",
     "data_rights": "PASS",
-    "pit": "PASS",
     "provenance": "PASS",
     "credential_handling": "PASS",
     "sbom": "FAIL",
@@ -27,7 +26,7 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "b2a0f1597f94fd1e79a4e2b36a97dfd54769e0d3731f40844bb9670c7d4a4013"
+    "cc802d3f216ac8961ae9aa27455e2a96ff26f703c967a2e7b7c5705f6db71b2b"
   ],
   "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",

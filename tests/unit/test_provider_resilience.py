@@ -48,7 +48,6 @@ from astock.schemas import (
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
     ReferenceFileDescriptor,
-    ReferencePitStatus,
     SourceSnapshot,
     VolumeUnit,
 )
@@ -1307,7 +1306,7 @@ def test_live_daily_ohlcv_conflict_is_typed_and_not_published(
     assert report.status is ReferenceCoverageStatus.CONFLICTED
     assert report.coverage.status is ReferenceCoverageStatus.CONFLICTED
     assert report.release_id is None
-    assert report.pit_status is ReferencePitStatus.UNVERIFIED
+    assert "pit_status" not in report.model_dump(mode="json")
     assert any(code.startswith("OHLCV_CONFLICTED:") for code in report.reason_codes)
     assert state.list_market_reference_releases() == []
 
@@ -1417,6 +1416,8 @@ def _premarket_sina_payload() -> dict[str, object]:
                 "amount": 0,
                 "turnoverratio": 0,
                 "nmc": 30_707_982.9126,
+                "per": "8.60",
+                "pb": "0.82",
             },
             {
                 "symbol": "sh600004",
@@ -1473,6 +1474,8 @@ def test_sina_seed_parser_uses_settlement_and_converts_market_cap(tmp_path: Path
     assert rows[0].price == 9.22
     assert rows[0].amount_cny == 0
     assert rows[0].float_market_cap_cny == pytest.approx(307_079_829_126.0)
+    assert rows[0].pe_ttm == pytest.approx(8.60)
+    assert rows[0].pb_mrq == pytest.approx(0.82)
 
 
 class _FailingSeedProvider(_PrimarySeedProvider):
@@ -1522,7 +1525,6 @@ def _cached_master_release(
             status=ReferenceCoverageStatus.COMPLETE,
             created_at=available,
         ),
-        pit_status=ReferencePitStatus.RECONSTRUCTED,
         available_to_system_at=available,
         created_at=available,
     )

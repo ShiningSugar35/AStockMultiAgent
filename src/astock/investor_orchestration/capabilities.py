@@ -290,12 +290,6 @@ _INTENT_REQUIREMENTS: dict[RequestIntent, set[str]] = {
 
 def validate_request_permissions(request: InvestorRequestEnvelope) -> None:
     """Intent cannot silently upgrade the explicitly declared side-effect lane."""
-    if request.decision_time is not None and request.side_effect not in {
-        SideEffectClass.READ,
-        SideEffectClass.META,
-        SideEffectClass.NONE,
-    }:
-        raise ValueError("current decision freezes are read-only and cannot replay economic writes")
     allowed = {
         RequestIntent.FULL_RESEARCH_RECOMMENDATION: {
             SideEffectClass.READ,

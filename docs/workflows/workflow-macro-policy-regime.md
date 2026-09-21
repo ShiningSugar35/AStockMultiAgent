@@ -20,4 +20,4 @@ Primary skill: `$macro-policy-regime`. It feeds `$industry-value-chain`, `$catal
 - Stop with abstention when vintage, effective date, authority or company transmission cannot be established.
 - Do not set `MACRO_REGIME` / `POLICY_REGIME=true` from commentary, headline sentiment or a point forecast alone.
 - Do not convert a regime state directly into a company recommendation, portfolio weight or order.
-- Preserve `broker_execution_allowed=false`.
+- Do not introduce real-broker execution capability; this workflow remains research-only.

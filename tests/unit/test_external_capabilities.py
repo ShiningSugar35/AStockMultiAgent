@@ -55,7 +55,6 @@ def _all_pass() -> CapabilityQualificationChecks:
         license=QualificationCheckStatus.PASS,
         terms_of_service=QualificationCheckStatus.PASS,
         data_rights=QualificationCheckStatus.PASS,
-        pit=QualificationCheckStatus.PASS,
         provenance=QualificationCheckStatus.PASS,
         credential_handling=QualificationCheckStatus.PASS,
         sbom=QualificationCheckStatus.PASS,
@@ -152,17 +151,17 @@ def test_registry_covers_supported_external_kinds_and_approved_candidates() -> N
     } <= ids
 
 
-def test_broker_execution_capability_cannot_be_admitted() -> None:
-    with pytest.raises(ValueError, match="permanently rejected"):
-        ExternalCapabilityDefinition(
-            capability_id="broker-mcp",
-            display_name="Broker MCP",
-            kind=ExternalCapabilityKind.MCP,
-            logical_capabilities=["broker.order.execute"],
-            default_stage=ExternalCapabilityStage.SHADOW,
-            maximum_stage=ExternalCapabilityStage.PRODUCTION_BACKUP,
-            exit_contract="Remove integration.",
-        )
+def test_external_capability_contract_has_no_real_broker_permission_gate() -> None:
+    definition = ExternalCapabilityDefinition(
+        capability_id="generic-mcp",
+        display_name="Generic MCP",
+        kind=ExternalCapabilityKind.MCP,
+        logical_capabilities=["research.lookup"],
+        default_stage=ExternalCapabilityStage.SHADOW,
+        maximum_stage=ExternalCapabilityStage.PRODUCTION_BACKUP,
+        exit_contract="Remove integration.",
+    )
+    assert "broker_execution_capable" not in definition.model_dump()
 
 
 def test_production_backup_requires_every_gate_and_both_smokes(tmp_path: Path) -> None:

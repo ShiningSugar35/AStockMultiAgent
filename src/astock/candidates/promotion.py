@@ -18,7 +18,6 @@ from astock.documents import DisclosureEnumerationProvider
 from astock.financial_integrity.repository import FinancialIntegrityRepository
 from astock.financial_sources.service import FinancialSourceService
 from astock.market_data.reference import MarketReferenceService
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.schemas.candidate_promotion import (
     SeedPromotionCompanyResult,
     SeedPromotionCompanyStatus,
@@ -39,7 +38,6 @@ from astock.schemas.candidates import (
     CandidateInputArtifact,
     CandidateInputRelease,
     CandidateInstrumentUniverseProof,
-    CandidatePitStatus,
     CandidateQualityStatus,
     CandidateScanRequest,
     CandidateSourceMode,
@@ -65,14 +63,12 @@ from astock.schemas.market import (
     TimestampSemantics,
     VolumeUnit,
 )
-from astock.schemas.pit import AvailabilityBasis, PointInTimeStatus
 from astock.schemas.reference_data import (
     DailyBarObservation,
     DatasetReleaseManifest,
     InstrumentRecord,
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
-    ReferencePitStatus,
     TradingSession,
 )
 from astock.schemas.research_seeds import ResearchSeed, ResearchSeedOrigin, ResearchSeedReport
@@ -127,7 +123,6 @@ class ResearchSeedPromotionService:
         self.financial = FinancialIntegrityRepository(state, objects)
         self.trading_classification = trading_classification
         self.cninfo = cninfo
-        self.pit = PointInTimeService(PointInTimeRepository(state), state, objects)
 
     @staticmethod
     def _recovery_task(
@@ -257,7 +252,6 @@ class ResearchSeedPromotionService:
                 input_release_id=input_release_id,
                 input_release_object_hash=input_release_hash,
                 as_of=release.as_of,
-                formal_historical=False,
                 live=request.live,
                 created_at=release.as_of,
             )
@@ -371,7 +365,6 @@ class ResearchSeedPromotionService:
             "finding_codes": sorted(findings),
             "recommendation_allowed": False,
             "paper_ledger_write_allowed": False,
-            "broker_execution_allowed": False,
         }
 
     def _promote_company(
@@ -527,7 +520,6 @@ class ResearchSeedPromotionService:
                 source_artifact_id=daily_artifact.artifact_id,
                 observed_at=item.session_close_at,
                 available_to_system_at=item.available_to_system_at,
-                pit_status=daily_artifact.pit_status,
                 created_at=effective_as_of,
             )
             for item in sorted(daily_records, key=lambda record: record.session_date)
@@ -637,22 +629,17 @@ class ResearchSeedPromotionService:
             ReferenceCoverageStatus.FAILED: CandidateCoverageStatus.FAILED,
             ReferenceCoverageStatus.EMPTY: CandidateCoverageStatus.NOT_AVAILABLE,
         }[manifest.coverage.status]
-        pit = {
-            ReferencePitStatus.CERTIFIED: CandidatePitStatus.CERTIFIED,
-            ReferencePitStatus.RECONSTRUCTED: CandidatePitStatus.DOCUMENT_RECONSTRUCTED,
-        }.get(manifest.pit_status, CandidatePitStatus.NOT_PIT_SAFE)
         artifact = CandidateInputArtifact(
             artifact_id=f"market-reference:{manifest.release_id}",
             role=role,
             artifact_type="DatasetReleaseManifest",
             artifact_schema_version=manifest.schema_version,
             dataset_kind=manifest.dataset_kind.value,
-            formal_status=pit.value,
+            formal_status=manifest.coverage.status.value,
             source_family=manifest.provider_id,
             object_hash=str(record["object_hash"]),
             coverage_status=coverage,
             available_to_system_at=manifest.available_to_system_at,
-            pit_status=pit,
             source_snapshot_ids=manifest.raw_snapshot_ids,
             created_at=manifest.available_to_system_at,
         )
@@ -695,19 +682,6 @@ class ResearchSeedPromotionService:
             raise _PromotionBlocked(
                 "INSTRUMENT_IDENTITY_REQUIRED",
                 ["INSTRUMENT_MASTER_NOT_COMPLETE"],
-                [parent_artifact.artifact_id],
-            )
-        if (
-            not live
-            and parent_artifact.pit_status
-            not in {
-                CandidatePitStatus.CERTIFIED,
-                CandidatePitStatus.DOCUMENT_RECONSTRUCTED,
-            }
-        ):
-            raise _PromotionBlocked(
-                "INSTRUMENT_IDENTITY_REQUIRED",
-                ["HISTORICAL_INSTRUMENT_MASTER_NOT_PIT_SAFE"],
                 [parent_artifact.artifact_id],
             )
         identity = {
@@ -755,12 +729,11 @@ class ResearchSeedPromotionService:
             artifact_type="CandidateInstrumentUniverseProof",
             artifact_schema_version=proof.schema_version,
             dataset_kind="INSTRUMENT_TRADABILITY_SUBSET",
-            formal_status=parent_artifact.pit_status.value,
+            formal_status=parent_artifact.formal_status,
             source_family="seed-promotion-instrument-subset",
             object_hash=ref.sha256,
             coverage_status=CandidateCoverageStatus.COMPLETE,
             available_to_system_at=as_of,
-            pit_status=parent_artifact.pit_status,
             source_snapshot_ids=proof.source_snapshot_ids,
             created_at=as_of,
         )
@@ -855,7 +828,6 @@ class ResearchSeedPromotionService:
                 else CandidateCoverageStatus.FAILED
             ),
             available_to_system_at=as_of,
-            pit_status=CandidatePitStatus.DOCUMENT_RECONSTRUCTED,
             source_snapshot_ids=sorted({item.source_snapshot_id for item in records}),
             created_at=as_of,
         )
@@ -898,7 +870,6 @@ class ResearchSeedPromotionService:
             object_hash=str(row["object_hash"]),
             coverage_status=CandidateCoverageStatus.COMPLETE,
             available_to_system_at=baseline.created_at,
-            pit_status=CandidatePitStatus.CERTIFIED,
             source_snapshot_ids=baseline.official_query_snapshot_ids,
             created_at=baseline.created_at,
         )
@@ -957,14 +928,6 @@ class ResearchSeedPromotionService:
                     "ANNOUNCEMENT_ENUMERATION_REQUIRED", ["CNINFO_SNAPSHOT_MISSING"], []
                 )
             snapshot_available_at[snapshot_id] = snapshot.available_to_system_at
-            self.pit.create(
-                source_id=f"candidate-announcement-enumeration:{seed.company_id}:{snapshot_id}",
-                source_snapshot_id=snapshot_id,
-                ingested_at=snapshot.fetched_at,
-                available_to_system_at=snapshot.available_to_system_at,
-                point_in_time_status=PointInTimeStatus.CERTIFIED,
-                availability_basis=AvailabilityBasis.FETCH_OBSERVED,
-            )
         created_at = max(snapshot_available_at.values())
         event_specs = [
             {
@@ -992,8 +955,7 @@ class ResearchSeedPromotionService:
                 source_artifact_id=artifact_id,
                 observed_at=announcement.published_at,
                 available_to_system_at=snapshot_available_at[snapshot_id],
-                pit_status=CandidatePitStatus.CERTIFIED,
-                evidence_ids=[],
+                    evidence_ids=[],
                 created_at=snapshot_available_at[snapshot_id],
             )
             for spec, (_, announcement, snapshot_id) in zip(event_specs, matched, strict=True)
@@ -1003,7 +965,6 @@ class ResearchSeedPromotionService:
             company_id=seed.company_id,
             as_of=as_of,
             coverage_status=CandidateCoverageStatus.COMPLETE,
-            pit_status=CandidatePitStatus.CERTIFIED,
             source_snapshot_ids=snapshot_ids,
             events=events,
             created_at=created_at,
@@ -1023,12 +984,11 @@ class ResearchSeedPromotionService:
             artifact_type="CandidateAnnouncementEventPack",
             artifact_schema_version=pack.schema_version,
             dataset_kind="ANNOUNCEMENT_EVENTS",
-            formal_status=pack.pit_status.value,
+            formal_status=pack.coverage_status.value,
             source_family="official-announcement-classifier",
             object_hash=ref.sha256,
             coverage_status=pack.coverage_status,
             available_to_system_at=pack.created_at,
-            pit_status=pack.pit_status,
             source_snapshot_ids=snapshot_ids,
             created_at=pack.created_at,
         )
@@ -1080,25 +1040,6 @@ class ResearchSeedPromotionService:
             FinancialCoverageStatus.PARTIAL: CandidateCoverageStatus.PARTIAL,
             FinancialCoverageStatus.BLOCKED: CandidateCoverageStatus.NOT_AVAILABLE,
         }[pack.coverage_status]
-        pit_rows = [PointInTimeRepository(self.state).get(item) for item in pack.pit_ids]
-        if not pit_rows or any(item is None for item in pit_rows):
-            if not live:
-                raise _PromotionBlocked(
-                    "FINANCIAL_INTEGRITY_REQUIRED",
-                    ["FINANCIAL_PIT_LINEAGE_MISSING"],
-                    [artifact_id],
-                )
-            pit = CandidatePitStatus.NOT_PIT_SAFE
-        else:
-            pit = (
-                CandidatePitStatus.CERTIFIED
-                if all(
-                    item.point_in_time_status is PointInTimeStatus.CERTIFIED
-                    for item in pit_rows
-                    if item
-                )
-                else CandidatePitStatus.DOCUMENT_RECONSTRUCTED
-            )
         evidence_ids: set[str] = set(pack.source_snapshot_ids)
         for item in [
             *pack.rule_findings,
@@ -1118,7 +1059,6 @@ class ResearchSeedPromotionService:
             object_hash=str(row["object_hash"]),
             coverage_status=coverage,
             available_to_system_at=pack.created_at,
-            pit_status=pit,
             source_snapshot_ids=pack.source_snapshot_ids,
             evidence_ids=sorted(evidence_ids),
             created_at=pack.created_at,
@@ -1158,7 +1098,6 @@ class ResearchSeedPromotionService:
                         source_artifact_id=artifact.artifact_id,
                         observed_at=pack.as_of,
                         available_to_system_at=pack.created_at,
-                        pit_status=artifact.pit_status,
                         evidence_ids=sorted(finding.evidence_ids),
                         created_at=pack.created_at,
                     )
@@ -1178,7 +1117,6 @@ class ResearchSeedPromotionService:
                         source_artifact_id=artifact.artifact_id,
                         observed_at=pack.as_of,
                         available_to_system_at=pack.created_at,
-                        pit_status=artifact.pit_status,
                         evidence_ids=sorted(anomaly.evidence_ids),
                         created_at=pack.created_at,
                     )

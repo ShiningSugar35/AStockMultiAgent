@@ -838,7 +838,6 @@ def register_local_portfolio_commands(
                     "compatibility_projection": compatibility,
                     "external_projection": projection,
                     "paper_ledger_write_allowed": False,
-                    "broker_execution_allowed": False,
                 },
                 allow_unicode=True,
                 sort_keys=False,

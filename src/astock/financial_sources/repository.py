@@ -58,7 +58,6 @@ class FinancialSourceReleaseRepository:
             manifest.official_document_id,
             manifest.official_index_snapshot_id,
             manifest.official_snapshot_id,
-            manifest.official_pit_id,
             serialized["source_files_json"],
             serialized["certified_files_json"],
             manifest.source_content_hash,
@@ -79,7 +78,6 @@ class FinancialSourceReleaseRepository:
                 "supersedes_release_id,manifest_artifact_id,manifest_object_hash,"
                 "manifest_schema_version,provider_ids_json,raw_snapshot_ids_json,"
                 "official_document_id,official_index_snapshot_id,official_snapshot_id,"
-                "official_pit_id,"
                 "source_files_json,certified_files_json,source_content_hash,"
                 "certified_content_hash,available_to_system_at,status,"
                 "source_observation_count,certified_fact_count,coverage_json "
@@ -114,11 +112,6 @@ class FinancialSourceReleaseRepository:
                 manifest.instrument_manifest_object_hash,
             ):
                 raise ValueError("Financial source instrument binding is invalid")
-            if connection.execute(
-                "SELECT 1 FROM point_in_time_metadata WHERE pit_id=?",
-                (manifest.official_pit_id,),
-            ).fetchone() is None:
-                raise ValueError("Financial source PIT is unknown")
             head = connection.execute(
                 "SELECT h.release_id,r.available_to_system_at FROM financial_source_head h "
                 "JOIN financial_source_release r ON r.company_id=h.company_id "
@@ -158,10 +151,10 @@ class FinancialSourceReleaseRepository:
                 "manifest_object_hash,manifest_schema_version,provider_ids_json,"
                 "raw_snapshot_ids_json,official_document_id,official_index_snapshot_id,"
                 "official_snapshot_id,"
-                "official_pit_id,source_files_json,certified_files_json,source_content_hash,"
+                "source_files_json,certified_files_json,source_content_hash,"
                 "certified_content_hash,available_to_system_at,status,"
                 "source_observation_count,certified_fact_count,coverage_json,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (manifest.release_id, *expected, now),
             )
             connection.execute(
@@ -276,7 +269,6 @@ def _release_identity(manifest: FinancialSourceReleaseManifest) -> dict[str, obj
         "official_document_id": manifest.official_document_id,
         "official_index_snapshot_id": manifest.official_index_snapshot_id,
         "official_snapshot_id": manifest.official_snapshot_id,
-        "official_pit_id": manifest.official_pit_id,
         "source_content_hash": manifest.source_content_hash,
         "certified_content_hash": manifest.certified_content_hash,
         "available_to_system_at": manifest.available_to_system_at,

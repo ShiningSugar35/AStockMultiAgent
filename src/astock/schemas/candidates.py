@@ -34,12 +34,6 @@ class CandidateCoverageStatus(StrEnum):
     NOT_AVAILABLE = "NOT_AVAILABLE"
 
 
-class CandidatePitStatus(StrEnum):
-    CERTIFIED = "CERTIFIED"
-    DOCUMENT_RECONSTRUCTED = "DOCUMENT_RECONSTRUCTED"
-    NOT_PIT_SAFE = "NOT_PIT_SAFE"
-
-
 class CandidateSourceMode(StrEnum):
     LOCAL = "LOCAL"
     RECORDED = "RECORDED"
@@ -89,8 +83,6 @@ class CandidateSignalDisposition(StrEnum):
     GATE_PASS = "GATE_PASS"
     GATE_DEGRADED = "GATE_DEGRADED"
     GATE_FAIL = "GATE_FAIL"
-    EXCLUDED_FUTURE = "EXCLUDED_FUTURE"
-    EXCLUDED_NOT_PIT_SAFE = "EXCLUDED_NOT_PIT_SAFE"
     EXCLUDED_DUPLICATE = "EXCLUDED_DUPLICATE"
 
 
@@ -144,7 +136,6 @@ class CandidateInputArtifact(AStockModel):
     object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     coverage_status: CandidateCoverageStatus
     available_to_system_at: AwareDatetime
-    pit_status: CandidatePitStatus
     source_snapshot_ids: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
 
@@ -174,7 +165,6 @@ class CandidateInstrumentUniverseProof(AStockModel):
     completeness_basis: Literal["RESEARCH_SEED_REPORT"] = "RESEARCH_SEED_REPORT"
     recommendation_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_proof(self) -> CandidateInstrumentUniverseProof:
@@ -194,13 +184,9 @@ class CandidateInstrumentUniverseProof(AStockModel):
         if self.company_ids != sorted(item.symbol for item in self.instruments):
             raise ValueError("candidate instrument proof company ids must match instrument symbols")
         if any(
-            item.available_to_system_at > self.as_of
-            or item.source_snapshot_id not in self.source_snapshot_ids
-            for item in self.instruments
+            item.source_snapshot_id not in self.source_snapshot_ids for item in self.instruments
         ):
-            raise ValueError(
-                "candidate instrument proof contains future or unbound instrument facts"
-            )
+            raise ValueError("candidate instrument proof contains unbound instrument facts")
         return self
 
 
@@ -212,7 +198,6 @@ class CandidateDailyPoint(AStockModel):
     source_artifact_id: str = Field(min_length=1)
     observed_at: AwareDatetime
     available_to_system_at: AwareDatetime
-    pit_status: CandidatePitStatus
 
     @model_validator(mode="after")
     def validate_availability(self) -> CandidateDailyPoint:
@@ -228,7 +213,6 @@ class CandidateAnnouncementEvent(AStockModel):
     source_artifact_id: str = Field(min_length=1)
     observed_at: AwareDatetime
     available_to_system_at: AwareDatetime
-    pit_status: CandidatePitStatus
     evidence_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -246,7 +230,6 @@ class CandidateAnnouncementEventPack(AStockModel):
     company_id: str = Field(min_length=1)
     as_of: AwareDatetime
     coverage_status: CandidateCoverageStatus
-    pit_status: CandidatePitStatus
     source_snapshot_ids: list[str] = Field(min_length=1)
     events: list[CandidateAnnouncementEvent] = Field(default_factory=list)
 
@@ -266,7 +249,6 @@ class CandidateFinancialFlag(AStockModel):
     source_artifact_id: str = Field(min_length=1)
     observed_at: AwareDatetime
     available_to_system_at: AwareDatetime
-    pit_status: CandidatePitStatus
     evidence_ids: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -281,7 +263,6 @@ class CandidateWatchlistIntent(AStockModel):
     source_artifact_id: str = Field(min_length=1)
     observed_at: AwareDatetime
     available_to_system_at: AwareDatetime
-    pit_status: CandidatePitStatus
     evidence_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -297,7 +278,6 @@ class CandidateHoldingObservation(AStockModel):
     source_artifact_id: str = Field(min_length=1)
     observed_at: AwareDatetime
     available_to_system_at: AwareDatetime
-    pit_status: CandidatePitStatus
     evidence_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -474,7 +454,6 @@ class CandidateScanRequest(AStockModel):
     input_release_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     as_of: AwareDatetime
     rules_version: str = Field(default="candidate-scan-v1", min_length=1)
-    formal_historical: bool = False
     live: bool = False
 
 
@@ -492,7 +471,6 @@ class CandidateSignal(AStockModel):
     source_family: str = Field(min_length=1)
     observed_at: AwareDatetime
     available_to_system_at: AwareDatetime
-    pit_status: CandidatePitStatus
     evidence_ids: list[str] = Field(default_factory=list)
     disposition: CandidateSignalDisposition
     severity: CandidateEvidenceSeverity | None = None
@@ -634,7 +612,6 @@ __all__ = [
     "CandidateInstrumentUniverseProof",
     "CandidateInputRelease",
     "CandidateLifecycleStatus",
-    "CandidatePitStatus",
     "CandidateQualityStatus",
     "CandidateRecord",
     "CandidateScanReport",

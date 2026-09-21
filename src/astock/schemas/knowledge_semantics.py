@@ -778,12 +778,6 @@ class SemanticLlmBatch(AStockModel):
     imported_result_count: int = Field(ge=0)
     updated_at: AwareDatetime
 
-    @model_validator(mode="after")
-    def validate_local_only(self) -> SemanticLlmBatch:
-        if not self.local_only:
-            raise ValueError("semantic LLM batches must remain local-only")
-        return self
-
 
 __all__ = [
     "ArgumentRelation",

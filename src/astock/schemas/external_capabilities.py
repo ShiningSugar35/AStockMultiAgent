@@ -53,7 +53,14 @@ class ExternalCapabilityDefinition(_ExternalModel):
     fixed_version_required: bool = True
     optional_dependency: bool = True
     exit_contract: str = Field(min_length=1, max_length=1000)
-    broker_execution_capable: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_execution_gate(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("broker_execution_capable", None)
+        return value
 
     @field_validator("logical_capabilities")
     @classmethod
@@ -64,11 +71,6 @@ class ExternalCapabilityDefinition(_ExternalModel):
 
     @model_validator(mode="after")
     def _safe_stage(self) -> ExternalCapabilityDefinition:
-        if self.broker_execution_capable or any(
-            _looks_like_broker_execution(x) for x in self.logical_capabilities
-        ):
-            if self.maximum_stage is not ExternalCapabilityStage.REJECT:
-                raise ValueError("broker execution capabilities are permanently rejected")
         rank = {
             ExternalCapabilityStage.DISCOVERY_ONLY: 0,
             ExternalCapabilityStage.SHADOW: 1,
@@ -101,9 +103,16 @@ class ExternalCapabilityRegistry(_ExternalModel):
 
 class CapabilityQualificationChecks(_ExternalModel):
     license: QualificationCheckStatus
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_check(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit", None)
+        return value
     terms_of_service: QualificationCheckStatus
     data_rights: QualificationCheckStatus
-    pit: QualificationCheckStatus
     provenance: QualificationCheckStatus
     credential_handling: QualificationCheckStatus
     sbom: QualificationCheckStatus
@@ -281,11 +290,6 @@ def capability_revocation_id(
         )
     )
 
-
-def _looks_like_broker_execution(capability: str) -> bool:
-    normalized = capability.lower().replace("-", ".").replace("_", ".")
-    tokens = ("broker", "place.order", "order.execute", "trade.execute", "live.execution")
-    return any(token in normalized for token in tokens)
 
 
 __all__ = [

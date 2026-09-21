@@ -1,7 +1,7 @@
 # Investment Request Orchestration v1
 
 > 状态：CURRENT
-> 实现状态：IMPLEMENTED_ENABLED（`full-research-recommendation-v1`，package v0.4.0 release candidate）。所有可直接形成证券选择、买卖判断、价格、数量或仓位的请求统一进入 `FULL_RESEARCH_RECOMMENDATION`；正式投资建议只允许由不可变 `RecommendationResearchReceipt + Publication Gate` 发布。`FullResearchInputReadinessReport` 仅证明上游输入完整，不具有正式荐股权。
+> 实现状态：IMPLEMENTED_ENABLED（`full-research-recommendation-v1`，package v0.4.1 release candidate）。所有可直接形成证券选择、买卖判断、价格、数量或仓位的请求统一进入 `FULL_RESEARCH_RECOMMENDATION`；正式投资建议只允许由不可变 `RecommendationResearchReceipt + Publication Gate` 发布。`FullResearchInputReadinessReport` 仅证明上游输入完整，不具有正式荐股权。
 > 当前恢复合同：账户读取只消费 canonical external-account 事件与 paper ledger；0068 revision 与同一只读事务冻结状态，禁止按表名推测事实。快照跨账户拒绝、变更失效、历史不可得阻断、并发复用及原子回滚继续由机器测试约束。生产启用状态不由“实现完成”自动改变。
 > 更新日期：2026-09-11
 > 关联 ADR：`docs/adr/0001-documentation-as-code-with-machine-contracts.md`、`docs/adr/0002-market-regime-as-risk-overlay.md`
@@ -76,7 +76,7 @@ User message
   → immutable RecommendationResearchReceipt
   → Publication Gate
        ├─ PUBLISH / CONDITIONAL_ONLY / BLOCKED
-       └─ broker_execution_allowed=false
+       └─ real-broker execution capability: absent from active product contract
   → ResponseGateway + public output audit
   → recommendation tracking / append-only reevaluation
 ```
@@ -368,7 +368,7 @@ preflight positions
 
 ## 10. 安全边界
 
-- `broker_execution_allowed=false` 永久不变；
+- 活动请求合同不含真实券商执行权限字段；系统当前没有真实券商执行实现；
 - 研究、组合和市场状态服务不得直接写模拟账本；
 - 模拟订单继续需要精确规则与人工确认，只有 fill 改变持仓；
 - Web/news 不证明全市场 Universe、连续行情、负面不存在或正式财务数字；

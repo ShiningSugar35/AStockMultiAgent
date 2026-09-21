@@ -94,8 +94,9 @@ def test_natural_language_skills_route_company_trade_and_portfolio_questions() -
     assert "HELD_POSITION_REBALANCE_REVIEW" in orchestrator
 
 
-def test_scheme_safety_boundary_disallows_model_risk_bypass_and_default_broker_orders() -> None:
+def test_scheme_safety_boundary_disallows_model_risk_bypass_and_broker_gate_restore() -> None:
     rules = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    assert "不自动向券商发单" in rules
-    assert "broker_execution_allowed=false" in rules
+    assert "彻底删除真实券商禁止字段、检查与规则" in rules
+    assert "不新增券商执行功能" in rules
+    assert "broker_execution_allowed" not in rules
     assert "AI 不得通过 prompt、proposal、Skill 或 fallback 绕过这些边界" in rules

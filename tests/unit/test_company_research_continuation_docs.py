@@ -35,7 +35,6 @@ def test_current_company_workflow_does_not_return_public_evidence_gaps_to_user()
         "typed automatic-resolution artifact",
         "same_request_continuation_required=true",
         "investment_conclusion_blocked=true",
-        "broker_execution_allowed=false",
         "genuinely private source material",
     ):
         assert required in workflow

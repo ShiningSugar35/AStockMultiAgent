@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
 
@@ -14,6 +14,108 @@ class AgentTaskStatus(StrEnum):
     COMPLETED = "COMPLETED"
     NEEDS_INFO = "NEEDS_INFO"
     FAILED = "FAILED"
+
+
+class ResearchRequestTraceStatus(StrEnum):
+    COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class ResearchRequestSourceGroup(StrEnum):
+    NORMAL = "NORMAL"
+    FAILURE = "FAILURE"
+
+
+class ResearchRequestCacheMode(StrEnum):
+    COLD = "COLD"
+    HOT = "HOT"
+    MIXED = "MIXED"
+
+
+class ResearchTraceSpan(AStockModel):
+    span_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+    started_at: AwareDatetime
+    finished_at: AwareDatetime
+    candidate_id: str | None = None
+    wait_reason: str | None = None
+    provider_calls: int = Field(default=0, ge=0)
+    retries: int = Field(default=0, ge=0)
+    cache_hits: int = Field(default=0, ge=0)
+    cache_misses: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_span(self) -> ResearchTraceSpan:
+        if self.finished_at < self.started_at:
+            raise ValueError("research trace span cannot finish before it starts")
+        return self
+
+    @property
+    def duration_ms(self) -> int:
+        return max(0, int((self.finished_at - self.started_at).total_seconds() * 1000))
+
+
+class ResearchRequestTrace(AStockModel):
+    schema_version: str = "research-request-trace-v1"
+    trace_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+    status: ResearchRequestTraceStatus
+    source_group: ResearchRequestSourceGroup = ResearchRequestSourceGroup.NORMAL
+    cache_mode: ResearchRequestCacheMode = ResearchRequestCacheMode.MIXED
+    started_at: AwareDatetime
+    answer_ready_at: AwareDatetime
+    useful_output: bool
+    spans: list[ResearchTraceSpan] = Field(default_factory=list)
+    finding_codes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_trace(self) -> ResearchRequestTrace:
+        if self.answer_ready_at < self.started_at:
+            raise ValueError("research request cannot be ready before it starts")
+        if self.finding_codes != sorted(set(self.finding_codes)):
+            raise ValueError("research trace finding codes must be sorted and unique")
+        span_ids = [item.span_id for item in self.spans]
+        if len(span_ids) != len(set(span_ids)):
+            raise ValueError("research trace span ids must be unique")
+        for span in self.spans:
+            if span.started_at < self.started_at or span.finished_at > self.answer_ready_at:
+                raise ValueError("research span must remain inside request wall-clock bounds")
+        return self
+
+    @property
+    def wall_time_ms(self) -> int:
+        return max(0, int((self.answer_ready_at - self.started_at).total_seconds() * 1000))
+
+
+class ResearchRequestPerformanceSummary(AStockModel):
+    schema_version: str = "research-request-performance-summary-v1"
+    sample_count: int = Field(ge=0)
+    normal_sample_count: int = Field(ge=0)
+    failure_sample_count: int = Field(ge=0)
+    useful_output_count: int = Field(ge=0)
+    p50_wall_time_ms: int | None = Field(default=None, ge=0)
+    p75_wall_time_ms: int | None = Field(default=None, ge=0)
+    p90_wall_time_ms: int | None = Field(default=None, ge=0)
+    useful_delivery_rate: float = Field(ge=0, le=1, allow_inf_nan=False)
+    on_time_rate_45m: float = Field(ge=0, le=1, allow_inf_nan=False)
+    provider_call_count: int = Field(ge=0)
+    retry_count: int = Field(ge=0)
+    cache_hit_count: int = Field(ge=0)
+    cache_miss_count: int = Field(ge=0)
+    backend_busy_ms: int = Field(ge=0)
+    llm_busy_ms: int = Field(ge=0)
+    backend_llm_overlap_ms: int = Field(ge=0)
+    ready_scheduler_ms: int = Field(ge=0)
+    ready_scheduler_idle_ms: int = Field(ge=0)
+    avoidable_scheduler_idle_rate: float | None = Field(default=None, ge=0, le=1)
+    threshold_p50_ms: int = 2_100_000
+    threshold_p75_ms: int = 2_400_000
+    threshold_p90_ms: int = 2_700_000
+    threshold_pass: bool
+    finding_codes: list[str] = Field(default_factory=list)
 
 
 class AgentTaskObservationRequest(AStockModel):
@@ -133,5 +235,11 @@ __all__ = [
     "AgentTaskObservation",
     "AgentTaskObservationRequest",
     "AgentTaskPerformanceSummary",
+    "ResearchRequestCacheMode",
+    "ResearchRequestPerformanceSummary",
+    "ResearchRequestSourceGroup",
+    "ResearchRequestTrace",
+    "ResearchRequestTraceStatus",
+    "ResearchTraceSpan",
     "AgentTaskStatus",
 ]

@@ -11,7 +11,7 @@ import typer
 from astock.research.config import load_research_skill_registry
 from astock.research.observability import AgentObservabilityService
 from astock.research.production import ResearchProductionService
-from astock.schemas.agent_observability import AgentTaskObservationRequest
+from astock.schemas.agent_observability import AgentTaskObservationRequest, ResearchRequestTrace
 from astock.schemas.research_production import (
     CatalystMonitorRequest,
     CatalystRecordRequest,
@@ -77,6 +77,17 @@ def register_research_production_commands(
         emit(result)
         if result["status"] != "PASS":
             raise typer.Exit(code=2)
+
+    @app.command("research-request-trace-register")
+    def research_request_trace_register(request_file: Annotated[Path, typer.Argument()]) -> None:
+        trace = ResearchRequestTrace.model_validate_json(request_file.read_text(encoding="utf-8"))
+        emit(observability().register_request_trace(trace))
+
+    @app.command("research-request-performance-report")
+    def research_request_performance_report(
+        lookback_days: Annotated[int, typer.Option("--lookback-days")] = 30,
+    ) -> None:
+        emit(observability().request_performance(lookback_days=lookback_days))
 
     @app.command("research-priority")
     def research_priority(request_file: Annotated[Path, typer.Argument()]) -> None:

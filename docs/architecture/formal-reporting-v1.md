@@ -53,4 +53,4 @@ Windows 使用 Known Folder API 解析桌面，不硬编码用户名；服务器
 
 ## 7. 回滚
 
-报告服务可退化为 MD-only，不影响研究工件、Evidence、推荐门和账本。删除/禁用 PDF 转换器不会影响 DOCX/MD；展示偏好可删除恢复默认值。`broker_execution_allowed=false` 不受报告层影响。
+报告服务可退化为 MD-only，不影响研究工件、Evidence、推荐门和账本。删除/禁用 PDF 转换器不会影响 DOCX/MD；展示偏好可删除恢复默认值。报告层既不新增真实券商执行能力，也不改变 paper ledger 的既有确认边界。

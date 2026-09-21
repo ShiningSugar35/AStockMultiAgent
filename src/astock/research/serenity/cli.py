@@ -44,7 +44,6 @@ def register_serenity_commands(
                     "expected_as_of": "ISO-8601 aware datetime",
                 },
                 "paper_ledger_write_allowed": False,
-                "broker_execution_allowed": False,
             }
         )
 

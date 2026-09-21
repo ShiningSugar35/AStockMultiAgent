@@ -39,7 +39,6 @@ class FullResearchComponentType(StrEnum):
 
 class FullResearchNode(StrEnum):
     REQUEST_CONTRACT = "REQUEST_CONTRACT"
-    POINT_IN_TIME_SNAPSHOT = "POINT_IN_TIME_SNAPSHOT"
     MACRO = "MACRO"
     MARKET_REGIME = "MARKET_REGIME"
     INDUSTRY = "INDUSTRY"
@@ -152,7 +151,6 @@ class FullResearchRequestContract(AStockModel):
     current_recommendation: bool = True
     decision_context: Literal["NEW_ALLOCATION", "EXISTING_HOLDING"] = "NEW_ALLOCATION"
     assumptions_explicitly_disclosed: bool = True
-    broker_execution_allowed: Literal[False] = False
 
 
 class SourceLineageEntry(AStockModel):
@@ -210,37 +208,29 @@ class EvidenceConflict(AStockModel):
         return self
 
 
-class PointInTimeSnapshot(AStockModel):
-    schema_version: str = "recommendation-pit-snapshot-v1"
+class CurrentSourceSnapshot(AStockModel):
+    schema_version: str = "recommendation-source-snapshot-v1"
     snapshot_id: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
-    as_of_timestamp: AwareDatetime
+    captured_at: AwareDatetime
     sources: tuple[SourceLineageEntry, ...]
     conflicts: tuple[EvidenceConflict, ...] = ()
     critical_source_families: tuple[SourceFamily, ...]
     lineage_coverage: Decimal = Field(ge=0, le=1)
-    point_in_time_leakage_count: int = Field(ge=0, default=0)
     status: FullResearchNodeStatus
 
     @model_validator(mode="after")
-    def validate_point_in_time(self) -> PointInTimeSnapshot:
+    def validate_source_snapshot(self) -> CurrentSourceSnapshot:
         ids = [item.source_id for item in self.sources]
         if len(ids) != len(set(ids)):
-            raise ValueError("PIT source identities must be unique")
-        if any(item.available_to_system_at > self.as_of_timestamp for item in self.sources):
-            raise ValueError("PIT snapshot includes future-visible source data")
+            raise ValueError("source snapshot identities must be unique")
         available_families = {item.family for item in self.sources}
         complete = set(self.critical_source_families) <= available_families
         open_conflict = any(item.status == "OPEN" for item in self.conflicts)
         if self.status == FullResearchNodeStatus.PASS and (
-            self.point_in_time_leakage_count != 0
-            or not complete
-            or open_conflict
-            or self.lineage_coverage != Decimal("1")
+            not complete or open_conflict or self.lineage_coverage != Decimal("1")
         ):
-            raise ValueError(
-                "PASS PIT snapshot requires complete, conflict-free, non-leaking lineage"
-            )
+            raise ValueError("PASS source snapshot requires complete, conflict-free lineage")
         return self
 
 
@@ -835,10 +825,15 @@ class PortfolioConstructionSnapshot(AStockModel):
     return_objective_gap: Decimal | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    objective_status: Literal[
-        "MEETS_HORIZON_TARGET", "BELOW_HORIZON_TARGET",
-        "NO_ELIGIBLE_POSITIONS", "HORIZON_NOT_COMPARABLE"
-    ] | None = Field(default=None, exclude_if=lambda value: value is None)
+    objective_status: (
+        Literal[
+            "MEETS_HORIZON_TARGET",
+            "BELOW_HORIZON_TARGET",
+            "NO_ELIGIBLE_POSITIONS",
+            "HORIZON_NOT_COMPARABLE",
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
     positions: tuple[PortfolioPositionPlan, ...]
     cash: Decimal = Field(ge=0)
     cash_weight: Decimal = Field(ge=0, le=1)
@@ -888,15 +883,13 @@ class PortfolioConstructionSnapshot(AStockModel):
         assert self.expected_research_return is not None
         assert self.expected_research_profit is not None
         assert self.objective_status is not None
-        if (
-            abs(self.annual_profit_target - self.capital * self.target_annual_return)
-            > Decimal("0.02")
+        if abs(self.annual_profit_target - self.capital * self.target_annual_return) > Decimal(
+            "0.02"
         ):
             raise ValueError("annual profit target must reconcile to capital and annual target")
-        if (
-            abs(self.expected_research_profit - self.capital * self.expected_research_return)
-            > Decimal("0.02")
-        ):
+        if abs(
+            self.expected_research_profit - self.capital * self.expected_research_return
+        ) > Decimal("0.02"):
             raise ValueError(
                 "expected research profit must reconcile to capital and expected return"
             )
@@ -915,20 +908,16 @@ class PortfolioConstructionSnapshot(AStockModel):
         assert self.target_horizon_return is not None
         assert self.target_horizon_profit is not None
         assert self.return_objective_gap is not None
-        if (
-            abs(self.target_horizon_profit - self.capital * self.target_horizon_return)
-            > Decimal("0.02")
+        if abs(self.target_horizon_profit - self.capital * self.target_horizon_return) > Decimal(
+            "0.02"
         ):
             raise ValueError("horizon profit target must reconcile to capital and horizon target")
         if abs(
-            self.return_objective_gap
-            - (self.target_horizon_return - self.expected_research_return)
+            self.return_objective_gap - (self.target_horizon_return - self.expected_research_return)
         ) > Decimal("0.000001"):
             raise ValueError("return objective gap must reconcile to target and expected return")
         expected_status = (
-            "MEETS_HORIZON_TARGET"
-            if self.return_objective_gap <= 0
-            else "BELOW_HORIZON_TARGET"
+            "MEETS_HORIZON_TARGET" if self.return_objective_gap <= 0 else "BELOW_HORIZON_TARGET"
         )
         if self.objective_status != expected_status:
             raise ValueError("return objective status conflicts with the portfolio objective gap")
@@ -1138,7 +1127,6 @@ class PublicationDecision(AStockModel):
     formal_recommendation_allowed: bool
     instant_trade_parameters_allowed: bool
     reasons: tuple[str, ...] = ()
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_publication(self) -> PublicationDecision:
@@ -1160,7 +1148,7 @@ class RecommendationResearchReceipt(AStockModel):
     as_of: AwareDatetime
     request_contract: FullResearchRequestContract
     holding_reviews: tuple[HoldingDecisionSnapshot, ...] = ()
-    pit_snapshot: PointInTimeSnapshot
+    source_snapshot: CurrentSourceSnapshot
     dag: FullResearchDAGReceipt
     source_manifest: tuple[SourceLineageEntry, ...]
     skill_executions: dict[str, FullResearchNodeStatus]
@@ -1189,7 +1177,6 @@ class RecommendationResearchReceipt(AStockModel):
     config_versions: dict[str, str]
     input_artifact_hashes: dict[str, str]
     receipt_hash: str = Field(pattern=_SHA256)
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_receipt(self) -> RecommendationResearchReceipt:
@@ -1198,19 +1185,16 @@ class RecommendationResearchReceipt(AStockModel):
             or self.dag.request_id != self.request_id
         ):
             raise ValueError("recommendation receipt request identities differ")
-        if (
-            self.request_contract.as_of_timestamp != self.as_of
-            or self.pit_snapshot.as_of_timestamp != self.as_of
-        ):
-            raise ValueError("recommendation receipt must use one as-of timestamp")
+        if self.request_contract.as_of_timestamp != self.as_of:
+            raise ValueError("recommendation receipt must use one decision timestamp")
         if (
             self.dag.as_of_timestamp != self.as_of
-            or self.pit_snapshot.request_id != self.request_id
+            or self.source_snapshot.request_id != self.request_id
         ):
-            raise ValueError("recommendation DAG/PIT identity differs from the receipt")
+            raise ValueError("recommendation DAG/source identity differs from the receipt")
         source_ids = {item.source_id for item in self.source_manifest}
-        if source_ids != {item.source_id for item in self.pit_snapshot.sources}:
-            raise ValueError("recommendation source manifest must equal PIT source lineage")
+        if source_ids != {item.source_id for item in self.source_snapshot.sources}:
+            raise ValueError("recommendation source manifest must equal source snapshot lineage")
         rankings = {item.instrument_id: item for item in self.candidate_rankings}
         if set(rankings) - set(self.candidate_universe):
             raise ValueError("ranked candidate is absent from the frozen candidate universe")
@@ -1309,9 +1293,9 @@ class RecommendationResearchReceipt(AStockModel):
             raise ValueError("publication execution permission exceeds the execution plan evidence")
         if (
             self.publication.formal_recommendation_allowed
-            and self.pit_snapshot.status != FullResearchNodeStatus.PASS
+            and self.source_snapshot.status != FullResearchNodeStatus.PASS
         ):
-            raise ValueError("formal recommendation requires PASS point-in-time evidence")
+            raise ValueError("formal recommendation requires complete current source evidence")
         return self
 
 

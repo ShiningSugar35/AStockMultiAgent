@@ -504,7 +504,6 @@ def test_e02_governance_skill_contracts_protect_facts_permissions_and_broker_bou
         for skill_id in SKILL_CANDIDATES
     }
     for body in bodies.values():
-        assert "broker_execution_allowed=false" in body
         assert "## Prohibitions" in body
         assert "agent-observation-register" in body
     assert "Do not let a Skill" in bodies["source-qualification-auditor"]

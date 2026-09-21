@@ -11,7 +11,6 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.market import Market, ReplayQuality
-from astock.schemas.pit import PointInTimeStatus
 from astock.schemas.research import ResearchSkillStatus
 
 
@@ -147,7 +146,6 @@ class ShadowEvaluationPolicy(AStockModel):
         ge=0,
         le=3600,
     )
-    formal_pit_statuses: list[PointInTimeStatus] = Field(min_length=1)
     panic_drawdown_threshold: Decimal = Field(ge=Decimal("-1"), le=0)
     panic_volatility_percentile: Decimal = Field(ge=0, le=1)
     panic_breadth_threshold: Decimal = Field(ge=0, le=1)
@@ -156,6 +154,14 @@ class ShadowEvaluationPolicy(AStockModel):
     bull_breadth_threshold: Decimal = Field(ge=0, le=1)
     bear_breadth_threshold: Decimal = Field(ge=0, le=1)
     high_volatility_percentile: Decimal = Field(ge=0, le=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_policy(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("formal_pit_statuses", None)
+        return value
 
     @model_validator(mode="after")
     def validate_policy(self) -> ShadowEvaluationPolicy:
@@ -172,12 +178,6 @@ class ShadowEvaluationPolicy(AStockModel):
             raise ValueError("walk-forward fold minimums cannot exceed the total minimum")
         if self.bear_breadth_threshold > self.bull_breadth_threshold:
             raise ValueError("bear breadth threshold cannot exceed bull breadth threshold")
-        _require_sorted_unique(self.formal_pit_statuses, "formal PIT statuses")
-        if set(self.formal_pit_statuses) != {
-            PointInTimeStatus.CERTIFIED,
-            PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-        }:
-            raise ValueError("formal shadow PIT statuses must be certified or reconstructed")
         return self
 
 
@@ -444,12 +444,18 @@ class MarketRegimeFeatures(AStockModel):
     style_relative_performance: Decimal | None = Field(default=None, ge=Decimal("-10"), le=10)
     strategy_performance: Decimal | None = Field(default=None, ge=Decimal("-10"), le=10)
     evidence_ids: list[str] = Field(min_length=1)
-    pit_statuses: list[PointInTimeStatus] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_statuses(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_statuses", None)
+        return value
 
     @model_validator(mode="after")
     def validate_features(self) -> MarketRegimeFeatures:
         _require_sorted_unique(self.evidence_ids, "market-regime evidence ids")
-        _require_sorted_unique(self.pit_statuses, "market-regime PIT statuses")
         return self
 
 
@@ -527,8 +533,6 @@ class ShadowExecutionObservationDraft(AStockModel):
     market_observation_ids: list[str] = Field(min_length=1)
     thesis_status: ShadowThesisStatus = ShadowThesisStatus.NOT_EVALUATED
     invalidation_reason_codes: list[str] = Field(default_factory=list)
-    pit_statuses: list[PointInTimeStatus] = Field(min_length=1)
-    candidate_membership_pit_safe: bool
     corporate_action_coverage_complete: bool
     delisting_coverage_complete: bool
     t_plus_one_compliant: bool
@@ -538,6 +542,15 @@ class ShadowExecutionObservationDraft(AStockModel):
     ambiguous_intrabar_path: bool = False
     optimistic_net_pnl_fen: int
     exclusion_codes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_observation_fields(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_statuses", None)
+            value.pop("candidate_membership_pit_safe", None)
+        return value
 
     @model_validator(mode="after")
     def validate_execution(self) -> ShadowExecutionObservationDraft:
@@ -549,7 +562,6 @@ class ShadowExecutionObservationDraft(AStockModel):
             self.invalidation_reason_codes,
             "shadow thesis invalidation reason codes",
         )
-        _require_sorted_unique(self.pit_statuses, "shadow observation PIT statuses")
         _require_sorted_unique(self.exclusion_codes, "shadow exclusion codes")
         if self.outcome_data_source is ShadowOutcomeDataSource.LIVE_FORWARD_MARKET:
             if not self.market_snapshot_ids or self.data_available_at is None:
@@ -795,11 +807,6 @@ class ShadowExecutionObservation(ShadowExecutionObservationDraft):
             raise ValueError("excluded shadow observations require exclusion codes")
         if self.formal_eligible and self.status is not ShadowObservationStatus.MATURE:
             raise ValueError("only mature shadow observations can be formally eligible")
-        if self.formal_eligible and set(self.pit_statuses) - {
-            PointInTimeStatus.CERTIFIED,
-            PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-        }:
-            raise ValueError("formal shadow observations require PIT-safe inputs")
         return self
 
 
@@ -1031,7 +1038,6 @@ class ShadowEvaluationReport(AStockModel):
     mature_observation_count: int = Field(ge=0)
     independent_decision_count: int = Field(ge=0)
     market_regime_counts: dict[MarketRegime, int]
-    pit_status_counts: dict[PointInTimeStatus, int]
     exclusion_counts: dict[str, int]
     replay_quality_counts: dict[ReplayQuality, int]
     input_assignment_sha256s: list[str]
@@ -1045,6 +1051,14 @@ class ShadowEvaluationReport(AStockModel):
     skill_performance: list[ShadowSkillPerformance] = Field(default_factory=list)
     committee_performance: ShadowCommitteePerformance | None = None
     research_quality: ShadowResearchQuality | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_counts(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_status_counts", None)
+        return value
 
     @model_validator(mode="after")
     def validate_report(self) -> ShadowEvaluationReport:
@@ -1134,7 +1148,6 @@ class Phase8AdmissionReport(AStockModel):
     online_weight_changes_allowed: Literal[False] = False
     reinforcement_learning_allowed: Literal[False] = False
     automatic_skill_modification_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
     admission_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -1186,7 +1199,6 @@ class ShadowStatusReport(AStockModel):
     reinforcement_learning_allowed: Literal[False] = False
     dynamic_weight_changes_allowed: Literal[False] = False
     automatic_skill_modification_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 def _require_sorted_unique(values: Sequence[object], label: str) -> None:

@@ -200,7 +200,6 @@ class ExternalAccountImportReceipt(AStockModel):
     normalized_object_hash: str = Field(pattern=_SHA256_PATTERN)
     inserted_event_ids: list[str]
     duplicate_event_ids: list[str]
-    broker_execution_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
 
     @field_validator("inserted_event_ids", "duplicate_event_ids")
@@ -256,7 +255,6 @@ class ExternalAccountOperationReceipt(AStockModel):
     )
     artifact_object_hashes: dict[str, str] = Field(default_factory=dict)
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_operation_receipt(self) -> ExternalAccountOperationReceipt:

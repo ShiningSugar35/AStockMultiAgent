@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "2da2442fb7444010e2a67ae6ff05f612591406907c5fb7a87d7e011470901e87",
+  "report_id": "708c234b6203dccf4179f6bb63b28a634136c1e2ae5aabed7482d2b181dafe10",
   "capability_id": "changedetection-io",
   "candidate_version": "0.55.8",
   "requested_stage": "SHADOW",
@@ -9,7 +9,6 @@
     "license": "PASS",
     "terms_of_service": "FAIL",
     "data_rights": "FAIL",
-    "pit": "FAIL",
     "provenance": "PASS",
     "credential_handling": "FAIL",
     "sbom": "FAIL",
@@ -27,7 +26,7 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "DISCOVERY_ONLY",
   "evidence_object_hashes": [
-    "d0d970b64f4b9005a493443b5881a285edd8671437d65bcdc8096089f2979503"
+    "a936cb24eabb206371568c06ace1a2e7300862f7e9ff84c89d25f8d2b4a60b58"
   ],
   "valid_from": "2026-09-02T06:28:47Z",
   "expires_at": "2026-10-02T06:28:47Z",

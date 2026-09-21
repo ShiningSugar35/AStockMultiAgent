@@ -13,11 +13,9 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import DocumentPageRepository, DocumentRepository, PdfParseService
 from astock.evidence import ClaimEvidenceService, EvidenceRepository
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.schemas import (
     AdjustmentMode,
     AmountUnit,
-    AvailabilityBasis,
     BarRequest,
     DocumentType,
     EvidenceGrade,
@@ -37,7 +35,6 @@ from astock.schemas import (
     Market,
     MarketBar,
     MarketDataBatch,
-    PointInTimeStatus,
     ProviderStatus,
     SourceDocument,
     SourceSnapshot,
@@ -171,18 +168,6 @@ def make_financial_facts(
         fact_status=FactStatus.DIRECT,
         entity_ids=[f"company:{company_id}"],
     )
-    pit = PointInTimeService(PointInTimeRepository(state), state, object_store).create(
-        source_id=source_id,
-        source_document_id=document.document_id,
-        source_snapshot_id=snapshot.snapshot_id,
-        period_end=period_end,
-        published_at=published_at,
-        effective_at=published_at,
-        ingested_at=published_at,
-        available_to_system_at=published_at,
-        point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-        availability_basis=AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP,
-    )
     facts: list[FinancialFact] = []
     for code, value in reported.items():
         statement = _FINANCIAL_STATEMENTS[code]
@@ -213,7 +198,6 @@ def make_financial_facts(
                     else unit
                 ),
                 source_snapshot_id=snapshot.snapshot_id,
-                pit_id=pit.pit_id,
                 evidence_ids=[evidence.evidence_id],
             )
         )
@@ -336,22 +320,6 @@ def make_financial_anomaly_dataset(
         fact_status=FactStatus.DIRECT,
         entity_ids=[f"company:{company_id}" for company_id in document.company_ids],
     )
-    pit_service = PointInTimeService(PointInTimeRepository(state), state, object_store)
-    pits = {
-        period_end: pit_service.create(
-            source_id=f"{source_id}:{period_end.isoformat()}",
-            source_document_id=document.document_id,
-            source_snapshot_id=snapshot.snapshot_id,
-            period_end=period_end,
-            published_at=available_at,
-            effective_at=available_at,
-            ingested_at=available_at,
-            available_to_system_at=available_at,
-            point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-            availability_basis=AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP,
-        )
-        for period_end in sorted({identity(item)[1] for item in items})
-    }
     samples: list[FinancialAnomalySample] = []
     for item in items:
         is_target = item["sample_id"] == payload["target_sample_id"]
@@ -370,7 +338,6 @@ def make_financial_anomaly_dataset(
                     name: "m3.2-feature-v1" for name in feature_names
                 },
                 source_snapshot_ids=[snapshot.snapshot_id],
-                pit_ids=[pits[period_end].pit_id],
                 evidence_ids=[evidence.evidence_id],
                 expected_anomaly=item.get("expected_anomaly"),
                 benign_contexts=[FinancialBenignContext.HIGH_GROWTH] if is_target else [],

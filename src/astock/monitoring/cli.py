@@ -57,7 +57,6 @@ def register_continuous_monitor_commands(
                 "target_reasons": [item.value for item in MonitorTargetReason],
                 "rule_request": MonitorRuleRequest.model_json_schema(),
                 "safety": {
-                    "broker_execution_allowed": False,
                     "news_can_directly_trade": False,
                     "natural_language_rule_execution_allowed": False,
                 },
@@ -217,7 +216,6 @@ def register_continuous_monitor_commands(
                 "pending_tasks": repo.list_tasks(pending_only=True, limit=100),
                 "unresolved_events": repo.list_events(unresolved_only=True, limit=100),
                 "recent_runs": repo.recent_runs(limit=5),
-                "broker_execution_allowed": False,
             }
         )
 

@@ -37,7 +37,7 @@ Abstain and leave `GOVERNANCE_QUALITY=false` when ownership/control lineage is i
 
 - Re-run `uv run astock research-team-status <plan_id>` and verify the typed artifact, COMPLETE task and readiness evidence.
 - Verify later enforcement outcomes did not leak into an earlier decision and each governance impact is counted only once.
-- Preserve `broker_execution_allowed=false`; this Skill creates no recommendation or execution authority.
+- This Skill produces governance research and does not write the paper ledger.
 
 ## Workflows
 

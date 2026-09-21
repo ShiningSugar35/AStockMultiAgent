@@ -738,6 +738,14 @@ def test_visual_skill_overlay_publishes_and_provider_reads_composite_registry(
     assert provider_status.status is KnowledgeProviderReadiness.READY
     assert provider_status.reason_code == "COMPOSITE_REGISTRY_READY"
     assert provider_status.eligible_skill_count == 5
+    inventory = provider.inventory(base_run_id)
+    assert inventory.member_count == 5
+    assert inventory.provider_status.registry_object_hash == provider_status.registry_object_hash
+    assert [item.final_skill_id for item in inventory.members] == sorted(
+        item.final_skill_id for item in inventory.members
+    )
+    assert {item.skill_origin for item in inventory.members} == {"DIRECT", "VISUAL_OVERLAY"}
+    assert all(item.source_hashes for item in inventory.members)
     query = KnowledgeSkillQuery(query="估值", top_k=5)
     selection = provider.select(base_run_id, query)
     assert selection.selected_count == 3

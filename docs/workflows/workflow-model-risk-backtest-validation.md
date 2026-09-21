@@ -20,4 +20,4 @@ Primary skill: `$model-risk-backtest-validation`; it is independent of model dev
 - Stop or abstain when code/data lineage or reproducibility is missing, future data is used, tuning contaminated the test set, or costs/liquidity are omitted for a trading claim.
 - Do not promote a model from one backtest, p-value, leaderboard or Sharpe ratio.
 - Do not let validator and developer share an “independent” context for the same formal check.
-- Preserve `broker_execution_allowed=false`.
+- Do not introduce real-broker execution capability; this workflow remains research-only.

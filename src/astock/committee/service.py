@@ -1058,7 +1058,6 @@ class CommitteeService:
             coverage.data_coverage < rules.min_data_coverage
             or coverage.evidence_coverage < rules.min_evidence_coverage
             or coverage.specialist_coverage < rules.min_specialist_coverage
-            or coverage.pit_coverage < rules.min_pit_coverage
         ):
             triggers.add(CounterCaseTriggerCode.LOW_COVERAGE_DOMAIN)
         if (
@@ -1175,7 +1174,6 @@ class CommitteeService:
                 rules.min_specialist_coverage,
                 "SPECIALIST_COVERAGE_INSUFFICIENT",
             ),
-            (coverage.pit_coverage, rules.min_pit_coverage, "PIT_COVERAGE_INSUFFICIENT"),
             (coverage.liquidity_score, rules.min_liquidity_score, "LIQUIDITY_INSUFFICIENT"),
         ):
             if value < threshold:
@@ -1425,7 +1423,6 @@ class CommitteeService:
             evidence_snapshot_id=draft.evidence_snapshot_id,
             evidence_ids=draft.evidence_ids,
             effective_from=draft.earliest_executable_time,
-            broker_execution_allowed=False,
             paper_simulation_allowed=execution_enabled,
             ledger_write_allowed=execution_enabled,
             created_at=assessment.as_of,

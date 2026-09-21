@@ -105,14 +105,12 @@ class CandidateRepository:
         input_release_id: str,
         rules_version: str,
         as_of: datetime,
-        formal_historical: bool,
         live: bool,
     ) -> tuple[str, list[str], bool]:
         interrupted: list[str] = []
         with self.state.transaction() as connection:
             row = connection.execute(
-                "SELECT status,request_hash,input_release_id,rules_version,as_of,"
-                "formal_historical,live "
+                "SELECT status,request_hash,input_release_id,rules_version,as_of,live "
                 "FROM candidate_scan_run WHERE scan_id=?",
                 (scan_id,),
             ).fetchone()
@@ -121,16 +119,15 @@ class CandidateRepository:
                 input_release_id,
                 rules_version,
                 as_of.astimezone(UTC).isoformat(),
-                int(formal_historical),
                 int(live),
             )
             if row is None:
                 now = utc_now_text()
                 connection.execute(
                     "INSERT INTO candidate_scan_run(scan_id,request_id,request_hash,"
-                    "input_release_id,rules_version,as_of,formal_historical,live,status,"
+                    "input_release_id,rules_version,as_of,live,status,"
                     "checkpoint_step,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,'RUNNING','INPUT_REGISTERED',?,?)",
+                    "VALUES(?,?,?,?,?,?,?,'RUNNING','INPUT_REGISTERED',?,?)",
                     (scan_id, request_id, *expected_identity, now, now),
                 )
             else:

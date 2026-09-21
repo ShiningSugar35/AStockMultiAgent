@@ -1,4 +1,4 @@
-"""Exact official-report selection, immutable PDF registration, parsing, and PIT."""
+"""Exact official-report selection, immutable PDF registration, and parsing."""
 
 from __future__ import annotations
 
@@ -19,10 +19,8 @@ from astock.documents import (
     DocumentRepository,
     PdfParseService,
 )
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.providers import ProviderFactory
 from astock.schemas import (
-    AvailabilityBasis,
     DisclosureCategory,
     DisclosureExchange,
     DisclosureSearchRequest,
@@ -33,8 +31,6 @@ from astock.schemas import (
     Market,
     OfficialFinancialLineageKind,
     OfficialWebDocumentCapture,
-    PointInTimeMetadata,
-    PointInTimeStatus,
     SourceClass,
     SourceDocument,
     SourceSnapshot,
@@ -49,7 +45,6 @@ class OfficialFinancialReport:
     lineage_snapshot_ids: list[str]
     exhaustive_proof_allowed: bool
     snapshot: SourceSnapshot
-    pit: PointInTimeMetadata
     pages: list[DocumentPage]
     supersedes_document_id: str | None
 
@@ -80,7 +75,6 @@ class OfficialFinancialReportService:
         self.documents = DocumentRepository(state)
         self.pages = DocumentPageRepository(state)
         self.parser = PdfParseService(objects, state, self.pages)
-        self.pit = PointInTimeService(PointInTimeRepository(state), state, objects)
 
     def get(
         self,
@@ -91,7 +85,6 @@ class OfficialFinancialReportService:
         *,
         as_of: datetime,
         live: bool,
-        allow_live_capture_after_cutoff: bool = False,
     ) -> OfficialFinancialReport | None:
         if live:
             local_candidates = self._captured_candidates(company_id, period_end, period_type)
@@ -109,28 +102,7 @@ class OfficialFinancialReportService:
             candidates = _deduplicate_candidates([*local_candidates, *remote_candidates])
         else:
             candidates = self._recorded_candidates(company_id, period_end, period_type)
-        selection_cutoff = as_of
-        if live and allow_live_capture_after_cutoff and candidates:
-            selection_cutoff = max(
-                as_of,
-                datetime.now(UTC),
-                *(item.snapshot.available_to_system_at for item in candidates),
-                *(
-                    snapshot.available_to_system_at
-                    for item in candidates
-                    for snapshot in item.lineage_snapshots
-                ),
-            )
-        eligible = [
-            item
-            for item in candidates
-            if item.document.published_at <= selection_cutoff
-            and item.snapshot.available_to_system_at <= selection_cutoff
-            and all(
-                snapshot.available_to_system_at <= selection_cutoff
-                for snapshot in item.lineage_snapshots
-            )
-        ]
+        eligible = candidates
         if not eligible:
             return None
         previous_source: str | None = None
@@ -150,20 +122,6 @@ class OfficialFinancialReportService:
             if canonical_snapshot is None:
                 raise ValueError("Official financial snapshot registration is incomplete")
             snapshot = canonical_snapshot
-            pit = self.pit.create(
-                source_id=document.document_id,
-                source_document_id=document.document_id,
-                source_snapshot_id=snapshot.snapshot_id,
-                period_end=period_end,
-                published_at=document.published_at,
-                effective_at=document.effective_at,
-                ingested_at=snapshot.fetched_at,
-                available_to_system_at=snapshot.available_to_system_at,
-                revised_at=document.published_at if supersedes else None,
-                supersedes_source_id=supersedes,
-                point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-                availability_basis=AvailabilityBasis.FETCH_OBSERVED,
-            )
             parse = self.parser.parse(document, snapshot, ocr_enabled=False)
             pages = [self.pages.get_page_by_id(page_id) for page_id in parse.page_ids]
             if any(page is None for page in pages):
@@ -178,7 +136,6 @@ class OfficialFinancialReportService:
                     ],
                     exhaustive_proof_allowed=candidate.exhaustive_proof_allowed,
                     snapshot=snapshot,
-                    pit=pit,
                     pages=[page for page in pages if page is not None],
                     supersedes_document_id=supersedes,
                 )
@@ -202,14 +159,23 @@ class OfficialFinancialReportService:
         for row in rows:
             object_hash = str(row["object_hash"])
             if not self.objects.verify(object_hash):
-                raise ValueError("Official Web capture artifact object is corrupt")
+                # Reject only this unusable capture; keep independent recovery paths alive.
+                continue
             try:
-                capture = OfficialWebDocumentCapture.model_validate_json(
-                    self.objects.get_bytes(object_hash)
+                capture_payload = json.loads(self.objects.get_bytes(object_hash))
+                capture_payload.pop("pit_id", None)
+                legacy_broker_execution = capture_payload.pop(
+                    "broker_execution_allowed",
+                    None,
                 )
+                if legacy_broker_execution not in {None, False}:
+                    raise ValueError(
+                        "Historical Official Web capture has invalid retired broker field"
+                    )
+                capture = OfficialWebDocumentCapture.model_validate(capture_payload)
                 input_hashes = json.loads(str(row["input_hashes_json"]))
-            except (AStockError, json.JSONDecodeError, TypeError, ValueError) as exc:
-                raise ValueError("Official Web capture artifact is invalid") from exc
+            except (AStockError, json.JSONDecodeError, TypeError, ValueError):
+                continue
             if (
                 str(row["artifact_id"])
                 != f"OfficialWebDocumentCapture:{capture.capture_id}"
@@ -222,25 +188,23 @@ class OfficialFinancialReportService:
             document = self.documents.get_model(capture.document_id)
             snapshot = self.documents.snapshot(capture.snapshot_id)
             admission_snapshot = self.state.get_snapshot(capture.admission_snapshot_id)
-            pit = self.pit.repository.get(capture.pit_id)
             if (
                 document is None
                 or snapshot is None
                 or admission_snapshot is None
-                or pit is None
                 or snapshot.object_sha256 != capture.object_sha256
                 or not self.objects.verify(snapshot.object_sha256)
                 or not self.objects.verify(admission_snapshot.object_sha256)
                 or input_hashes
                 != [snapshot.object_sha256, admission_snapshot.object_sha256]
             ):
-                raise ValueError("Official Web capture lineage is incomplete")
+                continue
             try:
                 admission = json.loads(
                     self.objects.get_bytes(admission_snapshot.object_sha256)
                 )
-            except (AStockError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-                raise ValueError("Official Web admission snapshot is invalid") from exc
+            except (AStockError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
             proposal_payload = admission.get("proposal") if isinstance(admission, dict) else None
             decision_payload = admission.get("decision") if isinstance(admission, dict) else None
             if (
@@ -268,12 +232,6 @@ class OfficialFinancialReportService:
                 or document.publisher != capture.source_id
                 or snapshot.source_id != capture.source_id
                 or admission_snapshot.source_id != f"{capture.source_id}:admission"
-                or pit.source_document_id != document.document_id
-                or pit.source_snapshot_id != snapshot.snapshot_id
-                or pit.period_end != period_end
-                or pit.point_in_time_status is not PointInTimeStatus.DOCUMENT_RECONSTRUCTED
-                or pit.availability_basis is not AvailabilityBasis.FETCH_OBSERVED
-                or pit.available_to_system_at != snapshot.available_to_system_at
                 or company_id not in document.company_ids
                 or document.document_type is not _document_type(period_type)
                 or not _exact_report_title(document.title, period_end, period_type)
@@ -508,6 +466,8 @@ def _exact_report_title(
     if period_type is FinancialPeriodType.QUARTERLY:
         quarter = "一|第一" if period_end.month == 3 else "三|第三"
         key = rf"{period_end.year}年(?:{quarter})季度报告"
+    elif period_type is FinancialPeriodType.ANNUAL:
+        key = rf"{period_end.year}年年度(?:财务)?报告"
     else:
         key = re.escape(_title_key(period_end, period_type))
     return re.fullmatch(rf".*{key}(?:[（(](?:更正|修订)(?:后)?[）)])?", title) is not None

@@ -16,7 +16,6 @@ from astock.documents import DocumentPageRepository, DocumentRepository
 from astock.evidence import ClaimEvidenceService, EvidenceRepository
 from astock.financial_integrity import FinancialIntegrityService
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.research import (
     EvidenceCollectionTaskService,
     EvidencePackService,
@@ -31,7 +30,6 @@ from astock.research import (
 )
 from astock.schemas import (
     BASE_CASE_SECTIONS,
-    AvailabilityBasis,
     BaseCaseBuildRequest,
     BaseCaseDraft,
     ClaimStatus,
@@ -74,7 +72,6 @@ from astock.schemas import (
     PaperTradingClassification,
     Phase6ClosureReport,
     Phase6RunStatus,
-    PointInTimeStatus,
     ResearchFindingInput,
     ResearchFindingType,
     ResearchMemoArtifact,
@@ -205,8 +202,6 @@ class Phase6RecordedService:
                 financial_audit_run_id=financial.audit_run_id,
                 claim_ids=[evidence.claim_id],
                 as_of=_AS_OF,
-                formal_historical=True,
-                allow_approximated=False,
                 created_at=_AS_OF,
             )
         )
@@ -595,22 +590,6 @@ class Phase6RecordedService:
                 )
             ],
         )
-        pit = PointInTimeService(
-            PointInTimeRepository(self.state),
-            self.state,
-            self.objects,
-        ).create(
-            source_id=source_id,
-            source_document_id=document.document_id,
-            source_snapshot_id=snapshot.snapshot_id,
-            period_end=date(2025, 12, 31),
-            published_at=_AVAILABLE_AT,
-            effective_at=_AVAILABLE_AT,
-            ingested_at=_AVAILABLE_AT,
-            available_to_system_at=_AVAILABLE_AT,
-            point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-            availability_basis=AvailabilityBasis.FETCH_OBSERVED,
-        )
         facts = [
             FinancialFact(
                 fact_id=f"fact:phase6:300750:{field.value}",
@@ -628,7 +607,6 @@ class Phase6RecordedService:
                 reported_value=value,
                 unit=FinancialUnit.TEN_THOUSAND_CNY,
                 source_snapshot_id=snapshot.snapshot_id,
-                pit_id=pit.pit_id,
                 evidence_ids=[evidence.evidence_id],
                 created_at=_AVAILABLE_AT,
             )
@@ -845,7 +823,6 @@ class Phase6RecordedService:
                 data_coverage=Decimal("1"),
                 evidence_coverage=Decimal("1"),
                 specialist_coverage=Decimal("1"),
-                pit_coverage=Decimal("1"),
                 liquidity_score=Decimal("1"),
                 evidence_ids=evidence_ids,
                 created_at=_AS_OF,

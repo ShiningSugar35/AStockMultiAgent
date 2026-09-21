@@ -37,7 +37,7 @@ Abstain and leave `INDUSTRY_PROFILE=false` when business segmentation is materia
 
 - Re-run `uv run astock research-team-status <plan_id>` and verify the typed output, COMPLETE checkpoint and readiness evidence.
 - Confirm peer rules were fixed before valuation, exclusions are retained, and downstream tasks reuse the frozen profile rather than rebuilding a preferred peer set.
-- Preserve `broker_execution_allowed=false`; this Skill creates no recommendation or order authority.
+- This Skill produces industry research and does not write the paper ledger.
 
 ## Workflows
 

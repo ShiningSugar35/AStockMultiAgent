@@ -16,13 +16,10 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import DocumentPageRepository, DocumentRepository, PdfParseService
 from astock.evidence import ClaimEvidenceService, EvidenceRepository
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.schemas import (
-    AvailabilityBasis,
     DocumentType,
     EvidenceGrade,
     FactStatus,
-    PointInTimeStatus,
     SourceDocument,
     SourceSnapshot,
 )
@@ -52,7 +49,6 @@ def run_controlled_document_benchmark(
         documents,
         EvidenceRepository(state),
     )
-    pit_service = PointInTimeService(PointInTimeRepository(state), state, objects)
 
     native_expected_characters = 0
     native_recalled_characters = 0
@@ -97,17 +93,6 @@ def run_controlled_document_benchmark(
             rights_status="CONTROLLED_ACCEPTANCE_FIXTURE",
         )
         documents.register(document, snapshot)
-        pit_service.create(
-            source_id=document_id,
-            source_document_id=document_id,
-            source_snapshot_id=snapshot.snapshot_id,
-            published_at=available,
-            effective_at=available,
-            ingested_at=available,
-            available_to_system_at=available,
-            point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-            availability_basis=AvailabilityBasis.FETCH_OBSERVED,
-        )
         first = parser.parse(document, snapshot)
         repeated = parser.parse(document, snapshot)
         if first == repeated:

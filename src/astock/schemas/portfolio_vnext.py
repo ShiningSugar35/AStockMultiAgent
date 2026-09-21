@@ -165,7 +165,6 @@ class PortfolioRiskExplanationReport(AStockModel):
     alpha_signal_allowed: Literal[False] = False
     allocation_override_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_report(self) -> PortfolioRiskExplanationReport:
@@ -256,7 +255,6 @@ class PortfolioStressReport(AStockModel):
     scenario_probabilities_assigned: Literal[False] = False
     alpha_signal_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 class AttributionComponent(StrEnum):
@@ -353,7 +351,6 @@ class PortfolioAttributionReport(AStockModel):
     causal_credit_claimed: Literal[False] = False
     automatic_skill_modification_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 __all__ = [

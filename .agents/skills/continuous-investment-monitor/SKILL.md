@@ -27,7 +27,7 @@ description: Keep analyzed, recommended, held, catalyst-bound, and open-paper-or
 
 ## Stable task commands
 
-Use `uv run astock continuous-monitor-task-claim --owner-id <owner>` before consuming a semantic task, then `uv run astock continuous-monitor-task-complete` or `continuous-monitor-task-fail`; update the review boundary with `continuous-monitor-reviewed`. `broker_execution_allowed=false` remains permanent.
+Use `uv run astock continuous-monitor-task-claim --owner-id <owner>` before consuming a semantic task, then `uv run astock continuous-monitor-task-complete` or `continuous-monitor-task-fail`; update the review boundary with `continuous-monitor-reviewed`. monitoring remains research-only; any paper action must use the existing paper confirmation path.
 
 ## Output
 

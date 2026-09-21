@@ -4,7 +4,6 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
@@ -112,7 +111,6 @@ def test_research_planner_adds_mandatory_gates_and_freezes_validated_plan(
     assert plan.specialist_budget == 4
     assert plan.ordered_modules == [
         ResearchModule.EVIDENCE,
-        ResearchModule.PIT,
         ResearchModule.FINANCIAL_INTEGRITY,
         ResearchModule.FUNDAMENTAL_MODEL,
         ResearchModule.BASE_CASE,
@@ -125,7 +123,6 @@ def test_research_planner_adds_mandatory_gates_and_freezes_validated_plan(
         AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
     }
     assert plan.paper_ledger_write_allowed is False
-    assert plan.broker_execution_allowed is False
     assert state.artifact_record(proposal.proposal_id) is not None
     plan_record = state.artifact_record(plan.plan_id)
     assert plan_record is not None
@@ -137,15 +134,6 @@ def test_research_planner_cannot_enable_execution_or_skip_optional_without_reaso
     tmp_path: Path,
 ) -> None:
     _state, _objects, service = _runtime(tmp_path)
-    with pytest.raises(ValidationError):
-        ResearchPlannerProposal(
-            created_at=NOW,
-            proposal_id="planner:unsafe",
-            company_id="600989",
-            market=Market.XSHG,
-            requested_modules=[],
-            broker_execution_allowed=True,  # type: ignore[arg-type]
-        )
     with pytest.raises(ValueError, match="explain every skipped optional module"):
         service.validate_research_plan(
             ResearchPlannerProposal(

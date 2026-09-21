@@ -74,7 +74,6 @@ from astock.schemas.institutional_research import (
     ValuationScenarioResult,
     ValuationSensitivityPoint,
 )
-from astock.schemas.pit import PointInTimeStatus
 from astock.schemas.research import FrozenEvidencePack
 
 T = TypeVar("T", bound=BaseModel)
@@ -140,8 +139,6 @@ class InstitutionalResearchService:
             bundle = self.evidence.get_claim_bundle(claim_id)
             if bundle is None:
                 raise ValueError(f"material claim is unavailable: {claim_id}")
-            if bundle.claim.as_of > pack.as_of:
-                raise ValueError("material claim was not available at the frozen as_of")
             links = [
                 link
                 for link in bundle.links
@@ -154,8 +151,6 @@ class InstitutionalResearchService:
                     raise ValueError(f"frozen evidence is unavailable: {link.evidence_id}")
                 if evidence.evidence_grade is not pack.evidence_grade_by_id[evidence.evidence_id]:
                     raise ValueError("frozen evidence grade drift")
-                if evidence.available_to_system_at > pack.as_of:
-                    raise ValueError("frozen evidence item is future-visible")
                 if not self.objects.verify(evidence.excerpt_object_sha256):
                     raise ValueError("frozen evidence excerpt object is unavailable")
                 snapshot = self.state.get_snapshot(evidence.snapshot_id)
@@ -163,15 +158,11 @@ class InstitutionalResearchService:
                     raise ValueError(
                         f"evidence source snapshot is unavailable: {evidence.snapshot_id}"
                     )
-                if snapshot.available_to_system_at > pack.as_of:
-                    raise ValueError("evidence source snapshot is future-visible")
                 snapshot_hashes.add(snapshot.object_sha256)
                 metadata = explicit_metadata.get(snapshot.snapshot_id) or self._derived_metadata(
                     snapshot,
                     evidence.evidence_grade,
                 )
-                if metadata.system_ingested_at > pack.as_of:
-                    raise ValueError("epistemic metadata is future-visible")
                 if metadata.snapshot_id != snapshot.snapshot_id:
                     raise ValueError("epistemic metadata snapshot identity mismatch")
                 self._validate_authority_compatibility(
@@ -189,7 +180,6 @@ class InstitutionalResearchService:
                     evidence,
                     snapshot,
                     metadata,
-                    pack.pit_status_by_evidence_id[link.evidence_id],
                     pack.as_of,
                 )
             assessment = self._assess_claim(
@@ -1005,7 +995,6 @@ class InstitutionalResearchService:
                 "company_id": company_id,
                 "status": "NOT_RUN",
                 "artifact_id": None,
-                "broker_execution_allowed": False,
             }
         artifact_id = str(checkpoint["cursor"].get("artifact_id", ""))
         return {
@@ -1013,7 +1002,6 @@ class InstitutionalResearchService:
             "status": checkpoint["status"],
             "artifact_id": artifact_id or None,
             "object_hash": checkpoint["object_hash"],
-            "broker_execution_allowed": False,
         }
 
     def audit(self, artifact_id: str) -> dict[str, Any]:
@@ -1024,7 +1012,6 @@ class InstitutionalResearchService:
                 "status": "FAIL",
                 "artifact_id": None,
                 "finding_codes": ["INSTITUTIONAL_ARTIFACT_NOT_FOUND"],
-                "broker_execution_allowed": False,
             }
         object_hash = str(record["object_hash"])
         if not self.objects.verify(object_hash):
@@ -1054,7 +1041,6 @@ class InstitutionalResearchService:
             "artifact_id": artifact_id,
             "object_hash": object_hash,
             "finding_codes": sorted(set(findings)),
-            "broker_execution_allowed": False,
         }
 
     def _audit_model(self, model: BaseModel, record: dict[str, Any]) -> list[str]:
@@ -1269,14 +1255,12 @@ class InstitutionalResearchService:
         evidence: Evidence,
         snapshot: SourceSnapshot,
         metadata: SourceEpistemicMetadata,
-        pit_status: PointInTimeStatus | None,
         as_of,
     ) -> EvidenceQualityVector:
         return EvidenceQualityVector(
             evidence_id=evidence.evidence_id,
             evidence_grade=evidence.evidence_grade,
             fact_status=evidence.fact_status,
-            pit_status=pit_status,
             authority_tier=metadata.authority_tier,
             directness=self._directness(claim_type),
             independence_group=metadata.source_independence_group,
@@ -1407,11 +1391,6 @@ class InstitutionalResearchService:
         for evidence_id in evidence_ids:
             quality = quality_by_evidence[evidence_id]
             if quality.authority_tier is EvidenceAuthorityTier.F_ALTERNATIVE_COMMUNITY:
-                continue
-            if quality.pit_status not in {
-                PointInTimeStatus.CERTIFIED,
-                PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-            }:
                 continue
             if quality.freshness is EvidenceFreshness.STALE:
                 continue

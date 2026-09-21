@@ -30,8 +30,9 @@ def test_bse_live_smoke_request_is_production_safe_and_schema_valid() -> None:
 
     request = _request_from_contract()
     assert isinstance(request, BseReferenceSmokeRequest)
+    assert "broker_execution_allowed" not in payload
+    assert "broker_execution_allowed" not in type(request).model_fields
     assert request.market.value == "BJSE"
     assert request.live is True
     assert request.read_only is True
-    assert request.broker_execution_allowed is False
     assert request.purpose == "INSTRUMENT_MASTER"

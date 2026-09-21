@@ -495,7 +495,7 @@ class SupplementalEvidenceService:
                     "source_snapshot_id": snapshot.snapshot_id,
                     "source_object_hash": snapshot.object_sha256,
                     "mode": "LIVE" if live else "RECORDED", "formal_use_allowed": False,
-                    "full_universe_proven": False, "broker_execution_allowed": False,
+                    "full_universe_proven": False,
                 }
                 ref = self.objects.put_json(envelope)
                 artifact_id = "SupplementalEvidenceCapture:" + ref.sha256
@@ -530,5 +530,5 @@ class SupplementalEvidenceService:
             ),
             "multi_source_news_attempted": collect_all_independent_news_sources,
             "automatic_recovery_next": "OFFICIAL_WEB_AND_CANONICAL_ACQUISITION_VALIDATION",
-            "formal_use_allowed": False, "broker_execution_allowed": False,
+            "formal_use_allowed": False,
         }

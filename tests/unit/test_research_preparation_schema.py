@@ -19,8 +19,6 @@ def _request_payload() -> dict[str, object]:
         "financial_audit_run_id": "financial-audit:recorded",
         "claim_ids": ["claim:b", "claim:a", "claim:a"],
         "as_of": "2026-06-30T15:00:00+08:00",
-        "formal_historical": True,
-        "allow_approximated": False,
     }
 
 
@@ -35,17 +33,11 @@ def test_research_preparation_request_normalizes_claims_and_requires_aware_as_of
         ResearchPreparationRequest.model_validate(naive)
 
 
-def test_research_preparation_request_rejects_empty_scope_and_invalid_pit_mode() -> None:
+def test_research_preparation_request_rejects_empty_scope() -> None:
     empty = _request_payload()
     empty["claim_ids"] = []
     with pytest.raises(ValidationError, match="at least 1 item"):
         ResearchPreparationRequest.model_validate(empty)
-
-    invalid_mode = _request_payload()
-    invalid_mode["formal_historical"] = False
-    invalid_mode["allow_approximated"] = True
-    with pytest.raises(ValidationError, match="formal historical"):
-        ResearchPreparationRequest.model_validate(invalid_mode)
 
 
 def test_research_preparation_manifest_enforces_frozen_pack_status_contract() -> None:

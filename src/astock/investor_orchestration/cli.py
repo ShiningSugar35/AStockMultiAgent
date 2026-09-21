@@ -167,7 +167,6 @@ def full_research_policy_status() -> None:
             "mandatory_nodes": [node.value for node in policy.mandatory_nodes],
             "degraded_allowed": [node.value for node in policy.degraded_allowed],
             "quote_freshness_sla_seconds": policy.quote_freshness_sla_seconds,
-            "broker_execution_allowed": False,
         }
     )
 

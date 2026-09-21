@@ -171,4 +171,4 @@ QCC MCP、QCC API、Tianyancha API 当前只登记为 `SHADOW` optional capabili
 - 商业源不能被提升为官方 source class；
 - Web/Search 未命中不能证明事件不存在；
 - 本层只服务 CURRENT 实时研究与实时模拟交易，不新增回测/历史重放能力或相关额外门禁；
-- `broker_execution_allowed=false` 永久不变。
+- 本层不会新增真实券商执行能力；活动合同不含对应权限字段。

@@ -56,6 +56,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _UnusedKnowledgeProvider:
+    def inventory(self, run_id: str):
+        raise AssertionError("inventory should not be called before NEEDS_INFO")
+
     def default_run_id(self) -> str | None:
         return None
 
@@ -67,6 +70,9 @@ class _UnusedKnowledgeProvider:
 
 
 class _RecordedKnowledgeProvider:
+    def inventory(self, run_id: str):
+        raise AssertionError("this recorded fixture only supports selection, not inventory")
+
     def __init__(self, status: KnowledgeProviderStatus) -> None:
         self._status = status
         self.call_count = 0
@@ -385,7 +391,6 @@ def test_recorded_inputs_drive_generic_runtime_to_classified_protocol(tmp_path: 
     assert result.status is ResearchRunStatus.COMPLETE
     assert result.current_stage.value == "COMPLETE"
     assert result.paper_ledger_write_count == 0
-    assert not result.broker_execution_allowed
     assert set(result.output_artifacts) >= {
         "knowledge_skill_delta",
         "committee_protocol_draft",
@@ -400,7 +405,6 @@ def test_recorded_inputs_drive_generic_runtime_to_classified_protocol(tmp_path: 
     assert final_protocol.trading_classification_artifact_id == classification_artifact
     assert final_protocol.final_outcome.value == "APPROVE_SIMULATION"
     assert final_protocol.paper_simulation_allowed
-    assert not final_protocol.broker_execution_allowed
     assert service.audit(result.run_id).status == "PASS"
 
     assert request.frozen_inputs is not None
@@ -452,7 +456,6 @@ def test_recorded_inputs_drive_generic_runtime_to_classified_protocol(tmp_path: 
     assert not trade_view.scenario_prices_are_targets
     assert not trade_view.exact_entry_zone_available
     assert not trade_view.exact_exit_target_available
-    assert not trade_view.broker_execution_allowed
     repeated_trade_view = TradePlanViewService(state, objects, service.reference).build(
         final_ref.artifact_id,
         reference_price_fen=20_000,
@@ -592,4 +595,3 @@ def test_runtime_accepts_multiple_frozen_serenity_deltas_before_knowledge(
     assert "KNOWLEDGE_PROVIDER_INPUT_REQUIRED" in result.needs_info_codes
     assert result.output_artifacts["serenity_delta"].artifact_id == serenity_artifact
     assert result.output_artifacts["serenity_delta_2"].artifact_id == second_artifact
-    assert not result.broker_execution_allowed

@@ -565,7 +565,6 @@ class ProspectiveGovernanceService:
             "formal_forward_count_mutation_allowed": False,
             "automatic_admission_allowed": False,
             "paper_ledger_write_allowed": False,
-            "broker_execution_allowed": False,
         }
 
     @staticmethod

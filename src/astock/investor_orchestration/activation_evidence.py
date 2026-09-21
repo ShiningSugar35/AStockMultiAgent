@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from astock.investor_orchestration.models import StrictModel
 from astock.investor_orchestration.output_validation import RegisteredOutputVerifier
@@ -22,7 +22,7 @@ _VARIANTS = frozenset(
     {
         "positive",
         "missing_or_conflict",
-        "stale_or_pit",
+        "stale_or_invalid",
         "actual_paper",
         "empty_holding",
         "side_effect_idempotency",
@@ -37,6 +37,18 @@ class AcceptedScenarioEvidence(StrictModel):
     variants: dict[str, str]
     status: Literal["PASS"]
 
+    @model_validator(mode="before")
+    @classmethod
+    def project_retired_variant_name(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            variants = value.get("variants")
+            if isinstance(variants, dict) and "stale_or_pit" in variants:
+                variants = dict(variants)
+                variants["stale_or_invalid"] = variants.pop("stale_or_pit")
+                value["variants"] = variants
+        return value
+
 
 class InvestorReleaseAcceptance(StrictModel):
     schema_version: Literal["investor-release-acceptance-v1"]
@@ -49,7 +61,6 @@ class InvestorReleaseAcceptance(StrictModel):
     scenarios: tuple[AcceptedScenarioEvidence, ...]
     quality_evidence: dict[str, str]
     ledger_economic_write_count: Literal[0]
-    broker_execution_allowed: Literal[False]
 
 
 class InvestorOwnerApproval(StrictModel):
@@ -61,7 +72,6 @@ class InvestorOwnerApproval(StrictModel):
     expires_at: datetime
     approved: Literal[True]
     authorization_scope: Literal["LOCAL_RESEARCH_FEATURE_ONLY"]
-    broker_execution_allowed: Literal[False]
 
 
 class ActivationEvidenceReader:

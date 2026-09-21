@@ -40,9 +40,6 @@ minimum_dual_source_rate: "0.90"
 maximum_single_profit_contribution: "0.20"
 maximum_regime_profit_contribution: "0.70"
 maximum_signal_registration_lag_seconds: 300
-formal_pit_statuses:
-  - CERTIFIED
-  - DOCUMENT_RECONSTRUCTED
 panic_drawdown_threshold: "-0.12"
 panic_volatility_percentile: "0.85"
 panic_breadth_threshold: "0.20"

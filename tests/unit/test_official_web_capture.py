@@ -11,12 +11,9 @@ from astock.cli import app
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import DocumentRepository, OfficialWebDocumentCaptureService
-from astock.pit import PointInTimeRepository
 from astock.schemas import (
     AgentSourceProposal,
-    AvailabilityBasis,
     DocumentType,
-    PointInTimeStatus,
     SourceClass,
 )
 
@@ -68,7 +65,6 @@ def test_official_exchange_pdf_capture_freezes_snapshot_pit_and_artifact(tmp_pat
     assert capture.source_class is SourceClass.PRIMARY_OFFICIAL_WEB
     assert capture.formal_eligible
     assert not capture.exhaustive_proof_allowed
-    assert not capture.broker_execution_allowed
     assert objects.verify(capture.object_sha256)
     document = DocumentRepository(state).get_model(capture.document_id)
     assert document is not None
@@ -76,10 +72,6 @@ def test_official_exchange_pdf_capture_freezes_snapshot_pit_and_artifact(tmp_pat
     snapshot = DocumentRepository(state).snapshot(capture.snapshot_id)
     assert snapshot is not None
     assert snapshot.source_url == str(capture.source_url)
-    pit = PointInTimeRepository(state).get(capture.pit_id)
-    assert pit is not None
-    assert pit.point_in_time_status is PointInTimeStatus.DOCUMENT_RECONSTRUCTED
-    assert pit.availability_basis is AvailabilityBasis.FETCH_OBSERVED
     artifact = state.artifact_record(f"OfficialWebDocumentCapture:{capture.capture_id}")
     assert artifact is not None
     assert objects.verify(str(artifact["object_hash"]))
@@ -145,7 +137,6 @@ def test_official_web_document_ingest_cli_is_local_and_auditable(
     assert payload["source_id"] == "sse-official-web"
     assert payload["formal_eligible"] is True
     assert payload["exhaustive_proof_allowed"] is False
-    assert payload["broker_execution_allowed"] is False
     state = StateStore(runtime / "state.sqlite", PROJECT_ROOT / "migrations")
     assert state.artifact_record(f"OfficialWebDocumentCapture:{payload['capture_id']}") is not None
 

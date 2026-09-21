@@ -252,7 +252,7 @@ def _register_financial_pack(
         periods=[],
         input_fact_ids=[],
         source_snapshot_ids=[],
-        pit_ids=[],
+
         verified_numbers=[],
         recalculated_metrics=[],
         rule_findings=[],
@@ -882,7 +882,6 @@ def test_policy_is_on_demand_fail_closed_and_retires_skill_share_gate() -> None:
     assert policy.on_demand_only
     assert not policy.background_service_required
     assert not policy.manual_candidate_fallback_allowed
-    assert not policy.broker_execution_allowed
     assert not policy.skill_share_gate_enabled
     assert policy.reserve_blind_market_tranche
     assert policy.expert_overlay_max_priority_bonus <= 0.15
@@ -1104,7 +1103,6 @@ def test_legacy_v1_full_boolean_cannot_uplift_universe_readiness(tmp_path: Path)
         "recommendation_allowed": False,
         "candidate_record_write_allowed": False,
         "paper_ledger_write_allowed": False,
-        "broker_execution_allowed": False,
     }
     ref = objects.put_json(legacy_payload)
     state.register_artifact(

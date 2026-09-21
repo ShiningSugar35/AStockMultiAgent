@@ -49,14 +49,12 @@ class OfficialWebDocumentCapture(AStockModel):
     document_id: str
     snapshot_id: str
     admission_snapshot_id: str
-    pit_id: str
     source_url: HttpUrl
     object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     observed_at: AwareDatetime
     policy_reason_codes: list[str] = Field(default_factory=list)
     formal_eligible: Literal[True] = True
     exhaustive_proof_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 __all__ = [

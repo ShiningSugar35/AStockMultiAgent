@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ import typer
 
 from astock.adaptive.service import AdaptiveResearchStatusService
 from astock.candidates.cli_ext import register_candidate_input_commands
+from astock.core.hashing import content_hash
 from astock.market_data.storage import CanonicalMarketStore
 from astock.monitoring.cli import register_continuous_monitor_commands
 from astock.portfolio.allocators import load_portfolio_allocator_policy
@@ -41,6 +43,7 @@ from astock.research.resource_policy import load_specialist_resource_policy
 from astock.research.runtime import ResearchRunService
 from astock.research.runtime_readiness import ResearchRuntimeReadinessService
 from astock.research.serenity.cli import register_serenity_commands
+from astock.research.sla_runtime import CurrentResearchSlaService
 from astock.research.team_cli import register_research_team_commands
 from astock.research.trade_view import TradePlanViewService
 from astock.research.trading_classification import TradingClassificationService
@@ -72,8 +75,16 @@ from astock.schemas.reference_data import Market
 from astock.schemas.research_runtime import (
     ResearchRunFrozenInputs,
     ResearchRunMode,
+    ResearchRunReport,
     ResearchRunRequest,
+    ResearchRunStatus,
     TradingClassificationDraft,
+)
+from astock.schemas.research_sla import (
+    LlmTakeoverResult,
+    ResearchSchedulerTaskStatus,
+    ResearchTargetState,
+    ResearchTaskCategory,
 )
 from astock.shadow.config import load_shadow_evaluation_policy
 from astock.shadow.formal_study import ensure_default_formal_study
@@ -118,6 +129,10 @@ def register_research_runtime_commands(
             reference_parquet_root=paths.parquet,
             knowledge_provider=knowledge_provider_factory(state, objects),
         )
+
+    def current_sla() -> CurrentResearchSlaService:
+        _, state, objects = services()
+        return CurrentResearchSlaService(state, objects)
 
     def current_acquisition() -> CurrentResearchAcquisitionService:
         paths, state, objects = services()
@@ -385,7 +400,6 @@ def register_research_runtime_commands(
                 "portfolio_allocator_policy": allocator_policy.policy_version,
                 "portfolio_default_method": allocator_policy.default_method,
                 "paper_ledger_write_allowed": False,
-                "broker_execution_allowed": False,
                 "manual_last": current_policy.manual_last,
             }
         )
@@ -613,6 +627,271 @@ def register_research_runtime_commands(
         ],
     ) -> None:
         emit(runtime().run(_load_request(request_file)))
+
+    @app.command("research-run-batch")
+    def research_run_batch(
+        request_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+        max_parallel_companies: Annotated[int, typer.Option("--max-parallel-companies")] = 3,
+    ) -> None:
+        payload = json.loads(request_file.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("batch request must be a JSON object")
+        raw_requests = payload.get("requests")
+        if not isinstance(raw_requests, list) or not raw_requests:
+            raise typer.BadParameter("batch request requires a non-empty requests list")
+        if not 1 <= max_parallel_companies <= 4:
+            raise typer.BadParameter("--max-parallel-companies must be between 1 and 4")
+        budget_seconds = payload.get("budget_seconds", 2700)
+        if type(budget_seconds) is not int or not 1 <= budget_seconds <= 2700:
+            raise typer.BadParameter("batch budget_seconds must be between 1 and 2700")
+
+        parsed: list[tuple[str, ResearchRunRequest]] = []
+        batch_identity: list[dict[str, object]] = []
+        for item in raw_requests:
+            if not isinstance(item, dict):
+                raise typer.BadParameter("every batch item must be an object")
+            instrument_id = str(item.get("instrument_id") or "")
+            request_payload = item.get("request")
+            if not isinstance(request_payload, dict):
+                raise typer.BadParameter("every batch item requires a request object")
+            request = ResearchRunRequest.model_validate(request_payload)
+            if instrument_id not in {
+                f"XSHG:{request.company_id}",
+                f"XSHE:{request.company_id}",
+                f"BJSE:{request.company_id}",
+            }:
+                raise typer.BadParameter("batch instrument_id must match the research company")
+            parsed.append((instrument_id, request))
+            batch_identity.append(
+                {
+                    "instrument_id": instrument_id,
+                    "request": request.model_dump(mode="json", exclude={"created_at"}),
+                }
+            )
+        if len({instrument_id for instrument_id, _ in parsed}) != len(parsed):
+            raise typer.BadParameter("batch instruments must be unique")
+
+        identity_hash = content_hash(
+            sorted(batch_identity, key=lambda item: str(item["instrument_id"]))
+        )
+        caller_request_id = payload.get("request_id")
+        explicit_request = caller_request_id is not None
+        if explicit_request and (
+            not isinstance(caller_request_id, str) or not caller_request_id.strip()
+        ):
+            raise typer.BadParameter("batch request_id must be a non-empty string")
+        scheduler_request_id = "current-research-batch:v2:" + content_hash(
+            {"caller_request_id": caller_request_id}
+            if explicit_request
+            else {"inputs": identity_hash, "budget_seconds": budget_seconds}
+        )
+        scheduler = current_sla()
+        task_specs = [
+            (
+                f"company-run-{instrument_id}",
+                instrument_id,
+                ResearchTaskCategory.NETWORK,
+                (),
+                content_hash(request.model_dump(mode="json", exclude={"created_at"})),
+            )
+            for instrument_id, request in sorted(parsed, key=lambda item: item[0])
+        ]
+        scheduler_run = scheduler.create_run(
+            request_id=scheduler_request_id,
+            task_specs=task_specs,
+            budget_seconds=budget_seconds,
+            legacy_batch_caller=(
+                str(caller_request_id) if explicit_request else "current-research-batch"
+            ),
+            legacy_batch_explicit=explicit_request,
+        )
+        request_by_instrument = dict(parsed)
+        request_by_node = {
+            task.node_id: request_by_instrument[str(task.candidate_id)]
+            for task in scheduler.tasks(scheduler_run.run_id)
+        }
+
+        from astock.research.process_worker import KillableResearchWorker, run_company_request
+
+        worker_paths, worker_state, _ = services()
+        handlers = {
+            node_id: KillableResearchWorker(
+                run_company_request,
+                (
+                    str(worker_paths.root), str(worker_state.path), str(worker_paths.objects),
+                    str(worker_paths.parquet), request.model_dump_json(),
+                ),
+                deadline_at=scheduler_run.deadline_at,
+                project_root=worker_paths.root,
+                scratch_root=worker_paths.runtime / "worker_tmp",
+            )
+            for node_id, request in request_by_node.items()
+        }
+        # Child processes return proposals; only scheduler-accepted registry artifacts
+        # enter the report and existing target pool below.
+        scheduler_run = scheduler.execute(
+            scheduler_run.run_id,
+            handlers,
+            resource_limits={ResearchTaskCategory.NETWORK: max_parallel_companies},
+        )
+        tasks = scheduler.tasks(scheduler_run.run_id)
+        task_by_instrument = {task.candidate_id: task for task in tasks if task.candidate_id}
+        _, batch_state, batch_objects = services()
+        reports: dict[str, ResearchRunReport] = {}
+        for task in tasks:
+            if (
+                task.status is not ResearchSchedulerTaskStatus.COMPLETED
+                or task.result_artifact_id is None
+                or task.candidate_id is None
+            ):
+                continue
+            record = batch_state.artifact_record(task.result_artifact_id)
+            if (
+                record is None
+                or str(record["type"]) != "ResearchRunReport"
+                or not batch_objects.verify(str(record["object_hash"]))
+            ):
+                raise ValueError("accepted batch report is unavailable or failed integrity")
+            report = ResearchRunReport.model_validate_json(
+                batch_objects.get_bytes(str(record["object_hash"]))
+            )
+            expected_request = request_by_instrument[task.candidate_id]
+            if (
+                task.result_artifact_id != f"ResearchRunReport:{report.report_id}"
+                or report.company_id != expected_request.company_id
+                or report.as_of != expected_request.as_of
+                or report.mode is not expected_request.mode
+            ):
+                raise ValueError("accepted batch report does not match its company request")
+            request_record = batch_state.artifact_record(report.request_artifact_id)
+            if (
+                request_record is None
+                or str(request_record["type"]) != "ResearchRunRequest"
+                or str(request_record["object_hash"]) != report.request_object_hash
+                or not batch_objects.verify(report.request_object_hash)
+            ):
+                raise ValueError("accepted batch report has invalid request provenance")
+            stored_request = ResearchRunRequest.model_validate_json(
+                batch_objects.get_bytes(report.request_object_hash)
+            )
+            if content_hash(
+                stored_request.model_dump(mode="json", exclude={"created_at"})
+            ) != task.input_fingerprint:
+                raise ValueError("accepted batch report input contract differs from its task")
+            reports[task.candidate_id] = report
+        targets = []
+        for instrument_id, request in parsed:
+            report = reports.get(instrument_id)
+            task = task_by_instrument.get(instrument_id)
+            if report is not None:
+                report_artifact_id = f"ResearchRunReport:{report.report_id}"
+                module_versions = {
+                    name: reference.object_hash
+                    for name, reference in report.output_artifacts.items()
+                }
+                target_state = (
+                    ResearchTargetState.RESEARCHED
+                    if report.status is ResearchRunStatus.COMPLETE
+                    else ResearchTargetState.REVIEW_DUE
+                )
+                targets.append(
+                    scheduler.upsert_target(
+                        instrument_id=instrument_id,
+                        company_id=request.company_id,
+                        state=target_state,
+                        source_reason="bounded current-research batch",
+                        dependency_fingerprint=content_hash(
+                            module_versions or {"request": identity_hash}
+                        ),
+                        module_versions=module_versions,
+                        triggers=("FINANCIAL_REPORT", "GOVERNANCE_EVENT", "PRICE_TRIGGER"),
+                        latest_result_artifact_id=report_artifact_id,
+                        priority=20 if target_state is ResearchTargetState.REVIEW_DUE else 10,
+                        last_review_at=report.as_of,
+                    )
+                )
+            elif task is not None:
+                targets.append(
+                    scheduler.upsert_target(
+                        instrument_id=instrument_id,
+                        company_id=request.company_id,
+                        state=ResearchTargetState.SUSPENDED,
+                        source_reason="bounded current-research batch failure",
+                        dependency_fingerprint=task.input_fingerprint,
+                        module_versions={},
+                        triggers=("PROGRAM_RETRY",),
+                        priority=30,
+                        invalidation_reason=task.error_code or "PROGRAM_PATH_UNAVAILABLE",
+                    )
+                )
+        emit(
+            {
+                "scheduler_run": scheduler_run,
+                "tasks": tasks,
+                "reports": reports,
+                "targets": targets,
+            }
+        )
+
+    @app.command("research-sla-status")
+    def research_sla_status(run_id: Annotated[str, typer.Argument()]) -> None:
+        scheduler = current_sla()
+        emit({"tasks": scheduler.tasks(run_id), "targets": scheduler.active_targets()})
+
+    @app.command("research-sla-takeover-packet")
+    def research_sla_takeover_packet(
+        request_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        payload = json.loads(request_file.read_text(encoding="utf-8"))
+        emit(
+            current_sla().takeover_packet(
+                request_id=str(payload["request_id"]),
+                task_id=str(payload["task_id"]),
+                trusted_artifact_ids=list(payload.get("trusted_artifact_ids", [])),
+                attempted_actions=list(payload.get("attempted_actions", [])),
+                missing_requirement=str(payload["missing_requirement"]),
+                allowed_write_paths=list(payload.get("allowed_write_paths", [])),
+                expected_output_schema=str(payload["expected_output_schema"]),
+                dependency_fingerprint=str(payload["dependency_fingerprint"]),
+            )
+        )
+
+    @app.command("research-sla-takeover-apply")
+    def research_sla_takeover_apply(
+        result_file: Annotated[
+            Path,
+            typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
+        ],
+    ) -> None:
+        result = LlmTakeoverResult.model_validate_json(result_file.read_text(encoding="utf-8"))
+        from astock.research.takeover_validation import validate_research_run_takeover
+
+        scheduler = current_sla()
+        task = next(
+            (item for item in scheduler.tasks(result.run_id) if item.task_id == result.task_id),
+            None,
+        )
+        if task is None:
+            raise typer.BadParameter("takeover task is unavailable for this run")
+        _, state, objects = services()
+        emit(
+            scheduler.apply_takeover_result(
+                result,
+                validate_result=lambda artifact_id: validate_research_run_takeover(
+                    artifact_id,
+                    task=task,
+                    state=state,
+                    objects=objects,
+                    audit_run=runtime().audit,
+                ),
+            )
+        )
 
     @app.command("research-run-status")
     def research_run_status(run_id: Annotated[str, typer.Argument()]) -> None:

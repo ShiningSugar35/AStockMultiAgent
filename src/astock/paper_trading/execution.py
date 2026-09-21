@@ -415,7 +415,6 @@ class PaperExecutionService:
             if (
                 binding.authorization_object_hash != execution.trade_protocol_object_sha256
                 or binding.committee_protocol.outcome is not TradeProtocolOutcome.APPROVE_SIMULATION
-                or binding.committee_protocol.broker_execution_allowed
             ):
                 findings.add("TRADE_PROTOCOL_BINDING_MISMATCH")
             if binding.classified_protocol is not None and (
@@ -573,7 +572,6 @@ class PaperExecutionService:
                 classified.final_outcome is not TradeProtocolOutcome.APPROVE_SIMULATION
                 or not classified.paper_simulation_allowed
                 or classified.blocking_codes
-                or classified.broker_execution_allowed
             ):
                 raise ValueError("classified trade protocol does not approve paper simulation")
             committee_artifact = classified.committee_protocol_artifact_id
@@ -675,7 +673,6 @@ class PaperExecutionService:
         if (
             not protocol.paper_simulation_allowed
             or not protocol.ledger_write_allowed
-            or protocol.broker_execution_allowed
         ):
             raise ValueError("trade protocol execution gates are not paper-only")
         if protocol.company_id != reference_pack.symbol:

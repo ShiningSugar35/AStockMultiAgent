@@ -49,7 +49,6 @@ from astock.schemas import (
     PaperUserConfirmation,
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
-    ReferencePitStatus,
     ReplayFeeSchedule,
     TradingSession,
 )
@@ -300,7 +299,6 @@ class MarketReferencePaperVerifier:
                     ReferenceDatasetKind.INSTRUMENT_MASTER,
                     scope,
                     visible_at=visible_at,
-                    require_certified=False,
                 )
                 records = self._records(
                     ReferenceDatasetKind.INSTRUMENT_MASTER,
@@ -308,7 +306,6 @@ class MarketReferencePaperVerifier:
                     manifest.release_id,
                     visible_at,
                     InstrumentRecord,
-                    require_certified=False,
                 )
             except PolicyError:
                 continue
@@ -352,16 +349,14 @@ class MarketReferencePaperVerifier:
         symbol: str,
         *,
         visible_at: datetime,
-        require_certified: bool = False,
     ) -> tuple[list[DailyBarObservation], str]:
-        """Load the latest immutable daily release visible at one point in time."""
+        """Load the latest immutable daily release for the requested operational time."""
 
         scope = f"{market.value}:{symbol}"
         manifest = self._visible_manifest(
             ReferenceDatasetKind.DAILY_UNADJUSTED,
             scope,
             visible_at=visible_at,
-            require_certified=require_certified,
         )
         records = self._records(
             ReferenceDatasetKind.DAILY_UNADJUSTED,
@@ -369,7 +364,6 @@ class MarketReferencePaperVerifier:
             manifest.release_id,
             visible_at,
             DailyBarObservation,
-            require_certified=require_certified,
         )
         instrument_id = f"{market.value}:{symbol}"
         if any(
@@ -439,7 +433,6 @@ class MarketReferencePaperVerifier:
             ReferenceDatasetKind.TRADING_CALENDAR,
             instrument.market.value,
             visible_at=visible_at,
-            require_certified=False,
         )
         sessions = self._records(
             ReferenceDatasetKind.TRADING_CALENDAR,
@@ -447,7 +440,6 @@ class MarketReferencePaperVerifier:
             calendar_manifest.release_id,
             visible_at,
             TradingSession,
-            require_certified=False,
         )
         open_dates = sorted(item.session_date for item in sessions if item.is_open)
         completed_open_dates = [item for item in open_dates if item <= trade_date]
@@ -463,7 +455,6 @@ class MarketReferencePaperVerifier:
             ReferenceDatasetKind.DAILY_UNADJUSTED,
             f"{instrument.market.value}:{instrument.symbol}",
             visible_at=visible_at,
-            require_certified=False,
         )
         daily = self._records(
             ReferenceDatasetKind.DAILY_UNADJUSTED,
@@ -471,7 +462,6 @@ class MarketReferencePaperVerifier:
             daily_manifest.release_id,
             visible_at,
             DailyBarObservation,
-            require_certified=False,
         )
         target_rows = [item for item in daily if item.session_date == target_session]
         if len(target_rows) != 1:
@@ -560,7 +550,6 @@ class MarketReferencePaperVerifier:
                     ReferenceDatasetKind.INSTRUMENT_MASTER,
                     scope,
                     visible_at=visible_at,
-                    require_certified=False,
                 )
                 records = self._records(
                     ReferenceDatasetKind.INSTRUMENT_MASTER,
@@ -568,13 +557,12 @@ class MarketReferencePaperVerifier:
                     manifest.release_id,
                     visible_at,
                     InstrumentRecord,
-                    require_certified=False,
                 )
             except PolicyError:
                 continue
             if any(item == instrument for item in records):
                 return manifest
-        raise _needs_info("Instrument is not bound to one visible reference release")
+        raise _needs_info("Instrument is not bound to one current complete reference release")
 
     def _visible_manifest(
         self,
@@ -582,9 +570,9 @@ class MarketReferencePaperVerifier:
         scope: str,
         *,
         visible_at: datetime,
-        require_certified: bool,
     ) -> DatasetReleaseManifest:
-        status = self.reference.status(kind, scope, as_of=visible_at)
+        _ = visible_at  # compatibility only; current research ignores historical cutoff
+        status = self.reference.status(kind, scope)
         if status.get("status") != "AVAILABLE":
             raise _needs_info(f"Verified {kind.value} release is unavailable")
         try:
@@ -593,10 +581,6 @@ class MarketReferencePaperVerifier:
             raise _needs_info("Reference release manifest is invalid") from exc
         if manifest.coverage.status is not ReferenceCoverageStatus.COMPLETE:
             raise _needs_info("Reference release coverage is not COMPLETE")
-        if require_certified and manifest.pit_status is not ReferencePitStatus.CERTIFIED:
-            raise _needs_info("Operational reference requires COMPLETE/CERTIFIED coverage")
-        if not require_certified and manifest.pit_status is ReferencePitStatus.UNVERIFIED:
-            raise _needs_info("Research classification requires PIT-visible reference coverage")
         return manifest
 
     def _records(
@@ -606,17 +590,14 @@ class MarketReferencePaperVerifier:
         release_id: str,
         visible_at: datetime,
         model: type[_RecordT],
-        *,
-        require_certified: bool = True,
     ) -> list[_RecordT]:
         manifest = self._visible_manifest(
             kind,
             scope,
             visible_at=visible_at,
-            require_certified=require_certified,
         )
         if manifest.release_id != release_id:
-            raise _needs_info("Requested release is not the point-in-time visible head")
+            raise _needs_info("Requested release is not the current reference head")
         records: list[_RecordT] = []
         for descriptor in manifest.canonical_files:
             path = (self.reference.parquet.root / descriptor.path).resolve()
@@ -631,8 +612,6 @@ class MarketReferencePaperVerifier:
                 raise _needs_info("Verified reference records cannot be decoded") from exc
         if len(records) != manifest.coverage.record_count:
             raise _needs_info("Verified reference row count changed")
-        if any(item.available_to_system_at > visible_at for item in records):
-            raise _needs_info("Reference release contains a future-visible record")
         return records
 
 

@@ -1,4 +1,4 @@
-"""Scheduled prices must replay canonical identity/value/PIT, not just registry hashes."""
+"""Scheduled prices must replay canonical identity and values, not just registry hashes."""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -63,17 +63,24 @@ def test_source_identity_anchor_cannot_cover_another_security(context):
     assert _market_check(context, identity, scope=scope).status == "INVALID"
 
 
-@pytest.mark.parametrize("mutation", ["price", "observation_time", "created_at", "availability"])
+@pytest.mark.parametrize("mutation", ["price", "observation_time", "availability"])
 def test_source_identity_rehashed_anchor_cannot_change_canonical_facts(context, mutation):
     _, request = context
     changes = {
         "price": {"price": Decimal("123.45")},
         "observation_time": {"observed_at": request.as_of - timedelta(seconds=1)},
-        "created_at": {"created_at": request.as_of + timedelta(days=1)},
         "availability": {"available_to_system_at": request.interval_start},
     }
     identity, _ = _canonical_anchor(context, **changes[mutation])
     assert _market_check(context, identity).status == "INVALID"
+
+
+def test_current_anchor_creation_after_request_time_is_not_a_historical_gate(context):
+    _, request = context
+    identity, anchor = _canonical_anchor(context, created_at=request.as_of + timedelta(days=1))
+    check = _market_check(context, identity)
+    assert check.status == "CHECKED"
+    assert check.checked_through == anchor.observed_at
 
 
 def test_source_identity_anchor_requires_registered_parent_lineage(context):

@@ -292,7 +292,7 @@ def _register_financial_pack(
         periods=[],
         input_fact_ids=[],
         source_snapshot_ids=[],
-        pit_ids=[],
+
         verified_numbers=[],
         recalculated_metrics=[],
         rule_findings=[],
@@ -420,7 +420,6 @@ def test_same_request_automatically_continues_from_evidence_to_team_and_gate(
     assert ready.status is CurrentResearchContinuationStatus.READY_FOR_INVESTOR_VIEW
     assert ready.investor_view_allowed
     assert ready.readiness_report_artifact_id is not None
-    assert not ready.broker_execution_allowed
     persisted = service.get(ready.continuation_id)
     assert persisted == ready
 
@@ -577,7 +576,6 @@ def test_run_to_terminal_drives_evidence_team_and_gate_in_one_call(
     report = service.status(final.continuation_id)
     assert report["same_request_continuation_required"] is False
     assert report["investment_conclusion_blocked"] is False
-    assert report["broker_execution_allowed"] is False
 
 
 def test_run_to_terminal_consumes_bound_evidence_after_restart_without_recalling_resolver(
@@ -742,7 +740,6 @@ def test_run_to_terminal_requests_private_material_without_exhausting_budget(
     assert not final.automatic_budget_exhausted
     assert len(final.manual_actions) == 1
     assert not final.investor_view_allowed
-    assert not final.broker_execution_allowed
 
 
 def test_automatic_resolution_rejects_unregistered_capture_before_lineage_write(

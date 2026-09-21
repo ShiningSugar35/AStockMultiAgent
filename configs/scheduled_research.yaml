@@ -30,7 +30,6 @@ max_external_calls: 100
 max_catchup_buckets: 3
 no_change_notification: false
 economic_write_count_limit: 0
-broker_execution_allowed: false
 
 windows:
   - {window: PRE_OPEN, local_time: "09:10:00", timezone: Asia/Shanghai, trading_days_only: true, max_delay_minutes: 20, enabled: true}

@@ -88,7 +88,6 @@ class SeedPromotionReport(AStockModel):
     source_artifact_ids: list[str] = Field(default_factory=list)
     recommendation_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @field_validator("source_artifact_ids")
     @classmethod

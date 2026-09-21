@@ -45,7 +45,7 @@ Serenity 是 AStockMultiAgent 的证据约束型 Specialist 方法层，不是�
 
 Serenity/scorecard/Juglar 输出只能是 evidence-bound Delta 或 report-only metric，不能直接产生目标价、仓位、交易权重或订单。所有 method-node evidence 继续受 frozen Evidence Pack、Evidence Grade、PIT、validity window 和 conflict gate 约束。
 
-Forecast/Valuation 的唯一数值账本仍是 Phase 9 Python deterministic artifacts；Committee、Portfolio、TradingClassification、paper confirmation 与 `broker_execution_allowed=false` 不因 Serenity 改变。任何 compiler、审计或多 Delta 恢复失败都只能降级到显式研究/NEEDS_INFO，不能放松这些硬门。
+Forecast/Valuation 的唯一数值账本仍是 Phase 9 Python deterministic artifacts；Committee、Portfolio、TradingClassification 与 paper confirmation 不因 Serenity 改变，Serenity 也不会引入真实券商执行能力。任何 compiler、审计或多 Delta 恢复失败都只能降级到显式研究/NEEDS_INFO，不能放松这些硬门。
 
 ## 7. 性能与回滚
 

@@ -53,28 +53,24 @@ class FinancialInstrumentResolver:
     ) -> FinancialInstrumentBinding:
         if market is Market.INDEX:
             raise ValueError("financial sources require an explicit stock exchange")
+        _ = as_of
         row = self.state.get_market_reference_release(
             ReferenceDatasetKind.INSTRUMENT_MASTER.value,
             f"{market.value}:{company_id}",
-            as_of=as_of,
         )
         if row is None:
             row = self.state.get_market_reference_release(
                 ReferenceDatasetKind.INSTRUMENT_MASTER.value,
                 market.value,
-                as_of=as_of,
             )
         if row is None:
             row = self.state.get_market_reference_release(
                 ReferenceDatasetKind.INSTRUMENT_MASTER.value,
                 "ALL",
-                as_of=as_of,
             )
         if row is None:
-            raise ValueError("financial source instrument release is unavailable at as_of")
+            raise ValueError("financial source instrument release is unavailable")
         manifest = self._verified_manifest(row)
-        if manifest.available_to_system_at > as_of:
-            raise ValueError("financial source instrument release is late")
         expected_id = f"{market.value}:{company_id}"
         records = self._read_instruments(manifest)
         matched = [
@@ -84,7 +80,6 @@ class FinancialInstrumentResolver:
             and item.market is market
             and item.symbol == company_id
             and item.instrument_type is InstrumentType.STOCK
-            and item.available_to_system_at <= as_of
         ]
         if len(matched) != 1:
             raise ValueError("financial source instrument identity is missing or ambiguous")

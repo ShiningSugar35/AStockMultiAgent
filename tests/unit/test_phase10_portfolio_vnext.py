@@ -83,7 +83,6 @@ def test_phase10_attribution_reconciles_and_never_mutates_execution(tmp_path: Pa
     assert not report.causal_credit_claimed
     assert not report.automatic_skill_modification_allowed
     assert not report.paper_ledger_write_allowed
-    assert not report.broker_execution_allowed
     assert service.audit(report.report_id)["status"] == "PASS"
 
 

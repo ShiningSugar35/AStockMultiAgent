@@ -23,7 +23,9 @@ def _quote_line(prefix: str, code: str, name: str = "TestCo") -> str:
     fields[30] = "20260910130000"
     fields[35] = "12.34/1000/12340000"
     fields[38] = "2.50"
+    fields[39] = "18.25"
     fields[44] = "88.80"
+    fields[46] = "2.75"
     return f'v_{prefix}{code}="{"~".join(fields)}";'
 
 
@@ -48,6 +50,8 @@ def test_tencent_batch_parser_supports_sh_sz_bj_and_required_seed_metrics() -> N
                 "settlement": 12.0,
                 "amount": 12_340_000.0,
                 "turnoverratio": 2.5,
+                "pe_ttm": 18.25,
+                "pb_mrq": 2.75,
                 "float_market_cap_cny": 8_880_000_000.0,
                 "quote_time": "2026-09-10T05:00:00+00:00",
             }

@@ -72,7 +72,6 @@ def test_specialist_research_skills_are_canonical_and_executable() -> None:
         assert "uv run astock research-team-task-result" in text
         assert "artifact" in lower
         assert "abstain" in lower
-        assert "broker_execution_allowed=false" in text
         for category in ("tasks", "outputs", "checks", "terms"):
             for term in contract[category]:
                 assert term.lower() in lower, (skill_name, term)
@@ -142,4 +141,3 @@ def test_python_team_dag_and_policy_bind_specialist_contracts() -> None:
     assert '"bull-case"' in team_source
     assert '"bear-case"' in team_source
     assert '["bear-case", "bull-case"]' in team_source
-    assert "broker_execution_allowed: false" in policy

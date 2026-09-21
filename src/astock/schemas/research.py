@@ -10,7 +10,6 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.evidence import EvidenceGrade
-from astock.schemas.pit import PointInTimeStatus
 from astock.schemas.serenity_v2 import SerenityMethodContractV2
 
 _TYPED_SERENITY_SKILL_VERSIONS = {
@@ -144,8 +143,6 @@ class ResearchPreparationRequest(AStockModel):
     financial_audit_run_id: str = Field(min_length=1)
     claim_ids: list[str] = Field(min_length=1)
     as_of: AwareDatetime
-    formal_historical: bool = True
-    allow_approximated: bool = False
 
     @model_validator(mode="after")
     def normalize_request(self) -> ResearchPreparationRequest:
@@ -153,8 +150,6 @@ class ResearchPreparationRequest(AStockModel):
         if not normalized_claim_ids:
             raise ValueError("research preparation requires at least one claim")
         object.__setattr__(self, "claim_ids", normalized_claim_ids)
-        if self.allow_approximated and not self.formal_historical:
-            raise ValueError("allow_approximated only applies to formal historical mode")
         return self
 
 
@@ -246,15 +241,11 @@ class EvidenceFreezeRequest(AStockModel):
     company_id: str = Field(min_length=1)
     as_of: AwareDatetime
     claim_ids: list[str] = Field(default_factory=list)
-    formal_historical: bool = True
-    allow_approximated: bool = False
 
     @model_validator(mode="after")
     def validate_claim_scope(self) -> EvidenceFreezeRequest:
         if len(self.claim_ids) != len(set(self.claim_ids)):
             raise ValueError("evidence freeze claim ids must be unique")
-        if self.allow_approximated and not self.formal_historical:
-            raise ValueError("allow_approximated only applies to formal historical mode")
         return self
 
 
@@ -262,16 +253,11 @@ class FrozenEvidencePack(AStockModel):
     pack_id: str = Field(min_length=1)
     company_id: str = Field(min_length=1)
     as_of: AwareDatetime
-    formal_historical: bool
-    allow_approximated: bool
     claim_ids: list[str] = Field(min_length=1)
     evidence_ids: list[str] = Field(min_length=1)
     conflict_ids: list[str]
     open_conflict_ids: list[str]
     evidence_grade_by_id: dict[str, EvidenceGrade]
-    pit_id_by_evidence_id: dict[str, str | None]
-    pit_status_by_evidence_id: dict[str, PointInTimeStatus | None]
-    missing_pit_evidence_ids: list[str]
     coverage_status: ResearchCoverageStatus
     degradation_codes: list[str]
     frozen_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -284,7 +270,6 @@ class FrozenEvidencePack(AStockModel):
             ("evidence", self.evidence_ids),
             ("conflict", self.conflict_ids),
             ("open conflict", self.open_conflict_ids),
-            ("missing PIT evidence", self.missing_pit_evidence_ids),
             ("degradation code", self.degradation_codes),
         ):
             if len(values) != len(set(values)):
@@ -292,16 +277,6 @@ class FrozenEvidencePack(AStockModel):
         evidence_set = set(self.evidence_ids)
         if set(self.evidence_grade_by_id) != evidence_set:
             raise ValueError("every frozen evidence requires one evidence grade")
-        if set(self.pit_id_by_evidence_id) != evidence_set:
-            raise ValueError("every frozen evidence requires a PIT id entry")
-        if set(self.pit_status_by_evidence_id) != evidence_set:
-            raise ValueError("every frozen evidence requires a PIT status entry")
-        if set(self.missing_pit_evidence_ids) != {
-            evidence_id
-            for evidence_id, pit_id in self.pit_id_by_evidence_id.items()
-            if pit_id is None
-        }:
-            raise ValueError("missing PIT evidence list must match PIT id entries")
         if not set(self.open_conflict_ids).issubset(self.conflict_ids):
             raise ValueError("open conflicts must be included in all conflicts")
         return self

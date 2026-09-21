@@ -416,8 +416,6 @@ class ResearchRunService:
                     financial_audit_run_id=request.financial_audit_run_id,
                     claim_ids=request.claim_ids,
                     as_of=request.as_of,
-                    formal_historical=request.formal_historical,
-                    allow_approximated=request.allow_approximated,
                     created_at=request.created_at,
                 )
             )
@@ -480,8 +478,11 @@ class ResearchRunService:
             "FinancialIntegrityEvidencePack",
             FinancialIntegrityEvidencePack,
         )
-        if financial.company_id != frozen_evidence.company_id or financial.as_of > request.as_of:
-            raise ValueError("research runtime financial company/as_of mismatch")
+        # Current research may consume a canonical audit that arrived while this
+        # request was running. Keep the company binding; audit time is provenance,
+        # not a historical visibility permission against the request start time.
+        if financial.company_id != frozen_evidence.company_id:
+            raise ValueError("research runtime financial company mismatch")
         outputs["financial_integrity"] = self._ref(financial_artifact)
         add_checkpoint(
             ResearchRunStage.FINANCIAL_INTEGRITY,

@@ -69,7 +69,6 @@ class EnterpriseIntelligenceObservation(AStockModel):
     available_to_system_at: AwareDatetime
     recommendation_allowed: Literal[False] = False
     portfolio_weight_authority_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @field_validator("person_names", "related_entity_ids")
     @classmethod
@@ -105,7 +104,6 @@ class EnterpriseIntelligenceResolution(AStockModel):
     resolved_at: AwareDatetime
     recommendation_allowed: Literal[False] = False
     portfolio_weight_authority_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @field_validator(
         "observation_ids",

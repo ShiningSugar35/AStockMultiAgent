@@ -35,7 +35,6 @@ from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
 from astock.market_data.reference import MarketReferenceService
 from astock.market_data.reference_storage import ReferenceParquetStore
-from astock.pit import PointInTimeRepository, PointInTimeService
 from astock.research import (
     PositionLifecycleService,
     ResearchCoreService,
@@ -48,7 +47,6 @@ from astock.research.institutional import InstitutionalResearchService
 from astock.research.team import ResearchTeamService
 from astock.research.trading_classification import TradingClassificationService
 from astock.schemas import (
-    AvailabilityBasis,
     BaseCaseBuildRequest,
     CommitteeAccessPolicy,
     CommitteeAssessment,
@@ -70,7 +68,6 @@ from astock.schemas import (
     LifecycleMetricDefinition,
     LifecycleSourceType,
     PaperTradingClassification,
-    PointInTimeStatus,
     PositionAction,
     PositionPlanCreateRequest,
     ResearchMemoArtifact,
@@ -851,17 +848,6 @@ def _lifecycle_artifacts(
 ) -> tuple[dict[str, str], str]:
     evidence = EvidenceRepository(state).get_evidence(evidence_id)
     assert evidence is not None
-    PointInTimeService(PointInTimeRepository(state), state, objects).create(
-        source_id="pit-source:business-e2e",
-        source_document_id=evidence.document_id,
-        source_snapshot_id=evidence.snapshot_id,
-        published_at=INSTITUTIONAL_NOW,
-        effective_at=INSTITUTIONAL_NOW,
-        ingested_at=INSTITUTIONAL_NOW,
-        available_to_system_at=INSTITUTIONAL_NOW,
-        point_in_time_status=PointInTimeStatus.DOCUMENT_RECONSTRUCTED,
-        availability_basis=AvailabilityBasis.OFFICIAL_PUBLICATION_TIMESTAMP,
-    )
     core = ResearchCoreService(
         state,
         objects,
@@ -871,8 +857,6 @@ def _lifecycle_artifacts(
         EvidenceFreezeRequest(
             company_id=COMPANY,
             as_of=INSTITUTIONAL_NOW,
-            formal_historical=True,
-            allow_approximated=False,
             claim_ids=[claim_id],
         )
     )
@@ -1088,7 +1072,6 @@ def _committee_protocol(
             data_coverage=Decimal("1"),
             evidence_coverage=Decimal("1"),
             specialist_coverage=Decimal("1"),
-            pit_coverage=Decimal("1"),
             liquidity_score=Decimal("1"),
             evidence_ids=[evidence_id],
             created_at=as_of,

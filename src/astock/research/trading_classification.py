@@ -62,7 +62,6 @@ class TradingClassificationStatusReport(TypedDict):
     reason_codes: list[str]
     artifact_id: str | None
     release_id: str | None
-    broker_execution_allowed: bool
 
 
 class TradingClassificationAuditReport(TypedDict):
@@ -70,7 +69,6 @@ class TradingClassificationAuditReport(TypedDict):
     finding_codes: list[str]
     artifact_id: str | None
     release_id: str | None
-    broker_execution_allowed: bool
 
 
 class TradingClassificationService:
@@ -512,7 +510,6 @@ class TradingClassificationService:
                 company_id=draft.company_id,
                 market=draft.market,
                 symbol=draft.symbol,
-                as_of=draft.as_of,
             )
             if draft.resolver_version is not None:
                 if str(baseline["type"]) != "TradingClassificationCorporateActionBaseline":
@@ -551,7 +548,6 @@ class TradingClassificationService:
             "source_object_hashes": source_hashes,
             "status": draft.status.value,
             "reason_codes": sorted(set(draft.reason_codes)),
-            "broker_execution_allowed": False,
         }
         identity = sha256_bytes(canonical_json_bytes(identity_payload))
         release = TradingClassificationRelease(
@@ -650,7 +646,6 @@ class TradingClassificationService:
                 "reason_codes": [str(exc)],
                 "artifact_id": None,
                 "release_id": None,
-                "broker_execution_allowed": False,
             }
         release = record.release
         current = as_of or release.as_of
@@ -666,7 +661,6 @@ class TradingClassificationService:
             "artifact_id": artifact_id,
             "release_id": release.release_id,
             "reason_codes": sorted(set(reasons)),
-            "broker_execution_allowed": False,
         }
 
     def audit(self, artifact_id: str) -> TradingClassificationAuditReport:
@@ -679,7 +673,6 @@ class TradingClassificationService:
                 "finding_codes": [str(exc)],
                 "artifact_id": None,
                 "release_id": None,
-                "broker_execution_allowed": False,
             }
         release = record.release
         registry = self.state.artifact_record(artifact_id)
@@ -721,7 +714,6 @@ class TradingClassificationService:
                         company_id=release.company_id,
                         market=release.market,
                         symbol=release.symbol,
-                        as_of=release.as_of,
                     )
                     if not baseline.absence_is_officially_certified:
                         raise ValueError("classification baseline is not officially certified")
@@ -732,7 +724,6 @@ class TradingClassificationService:
             "artifact_id": artifact_id,
             "release_id": release.release_id,
             "finding_codes": sorted(set(findings)),
-            "broker_execution_allowed": False,
         }
 
     def _validate_official_baseline(
@@ -742,7 +733,6 @@ class TradingClassificationService:
         company_id: str,
         market: Market,
         symbol: str,
-        as_of: datetime,
     ) -> None:
         if (
             baseline.company_id != company_id
@@ -750,8 +740,6 @@ class TradingClassificationService:
             or baseline.symbol != symbol
         ):
             raise ValueError("corporate-action baseline instrument identity mismatch")
-        if baseline.as_of > as_of:
-            raise ValueError("corporate-action baseline is future-visible")
         if baseline.absence_is_officially_certified:
             if baseline.reference_status != "OFFICIAL_ENUMERATION_COMPLETE":
                 raise ValueError("certified corporate-action baseline status is invalid")
@@ -766,7 +754,7 @@ class TradingClassificationService:
             if snapshot.fetch_status.value != "SUCCEEDED":
                 raise ValueError("official corporate-action query snapshot was not successful")
             if snapshot.available_to_system_at > baseline.as_of:
-                raise ValueError("official corporate-action query snapshot is future-visible")
+                raise ValueError("official corporate-action query snapshot postdates its baseline")
             if not self.objects.verify(snapshot.object_sha256):
                 raise ValueError("official corporate-action query snapshot object is unavailable")
         if baseline.absence_is_officially_certified and not baseline.official_query_snapshot_ids:
@@ -803,7 +791,6 @@ class TradingClassificationService:
                 company_id=company_id,
                 market=baseline.market,
                 symbol=baseline.symbol,
-                as_of=as_of,
             )
         except ValueError:
             return None
@@ -830,7 +817,6 @@ class TradingClassificationService:
             company_id=baseline.company_id,
             market=baseline.market,
             symbol=baseline.symbol,
-            as_of=baseline.as_of,
         )
         input_hashes: list[str] = []
         for snapshot_id in baseline.official_query_snapshot_ids:
@@ -890,7 +876,6 @@ class TradingClassificationService:
             "rule_version": self.trading_rules.rule_version,
             "board_rules": [asdict(item) for item in self.trading_rules.board_rules],
             "price_limit_rules": [asdict(item) for item in self.trading_rules.price_limit_rules],
-            "broker_execution_allowed": False,
         }
         object_ref = self.objects.put_json(payload)
         artifact_id = f"TradingClassificationRuleBook:{self.trading_rules.rule_version}"

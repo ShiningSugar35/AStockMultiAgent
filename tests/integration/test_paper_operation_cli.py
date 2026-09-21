@@ -69,7 +69,6 @@ def _protocol(
         evidence_ids=["evidence:fixture"],
         effective_from=now + timedelta(hours=1),
         requires_user_confirmation=True,
-        broker_execution_allowed=False,
         paper_simulation_allowed=verdict
         in {CommitteeVerdict.PAPER_ELIGIBLE, CommitteeVerdict.PAPER_EXIT},
         ledger_write_allowed=verdict

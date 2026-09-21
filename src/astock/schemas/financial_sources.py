@@ -169,7 +169,6 @@ class FinancialSourceReleaseManifest(AStockModel):
     official_lineage_snapshot_ids: list[str] = Field(default_factory=list)
     official_exhaustive_proof_allowed: bool = False
     official_snapshot_id: str
-    official_pit_id: str
     source_files: list[FinancialSourceFileDescriptor] = Field(min_length=1)
     certified_files: list[FinancialSourceFileDescriptor] = Field(min_length=1)
     source_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -184,8 +183,6 @@ class FinancialSourceReleaseManifest(AStockModel):
             raise ValueError("financial releases require an exchange-listed stock")
         if self.instrument_id != f"{self.market.value}:{self.company_id}":
             raise ValueError("financial release instrument identity is inconsistent")
-        if self.instrument_available_to_system_at > self.available_to_system_at:
-            raise ValueError("instrument release was unavailable at financial release time")
         for values, label in (
             (self.provider_ids, "provider_ids"),
             (self.raw_snapshot_ids, "raw_snapshot_ids"),

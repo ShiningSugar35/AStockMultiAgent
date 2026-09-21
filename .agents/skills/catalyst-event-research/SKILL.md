@@ -40,7 +40,7 @@ Abstain and leave `CATALYST_RISK=false` when a material event exists only in rum
 
 - Re-run `uv run astock research-team-status <plan_id>` and verify the typed artifact, COMPLETE result and readiness evidence.
 - Confirm each material event points to a frozen formal object and every probability/impact range states its basis and uncertainty.
-- Preserve `broker_execution_allowed=false`; this Skill never turns an event into order authority.
+- This Skill produces event research only and does not create paper orders or mutate the paper ledger.
 
 ## Workflows
 

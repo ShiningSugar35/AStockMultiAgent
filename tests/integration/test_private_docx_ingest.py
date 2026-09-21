@@ -106,6 +106,8 @@ def test_private_docx_is_fully_parsed_idempotent_and_block_evidence_is_claim_usa
     assert objects.get_bytes(first.manifest.raw_object_sha256) == raw
     assert first.manifest.source_page_count == 0
     assert first.manifest.git_policy == "EXCLUDED"
+    assert "pit_id" not in first.manifest.model_dump(mode="python")
+    assert "pit_metadata" not in first.model_dump(mode="python")
     report = first.parse_report
     assert report.processing_status is BookProcessingStatus.COMPLETE
     assert report.coverage_status is CoverageStatus.COMPLETE
@@ -161,7 +163,7 @@ def test_private_docx_is_fully_parsed_idempotent_and_block_evidence_is_claim_usa
         subject_id="method:test",
         predicate="has_block_evidence",
         object_json={"value": True},
-        as_of=first.pit_metadata.available_to_system_at + timedelta(seconds=1),
+        as_of=first.manifest.created_at + timedelta(seconds=1),
         claim_type=ClaimType.FACT,
         confidence=1.0,
         status=ClaimStatus.VALIDATED,

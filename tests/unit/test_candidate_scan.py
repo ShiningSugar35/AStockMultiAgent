@@ -36,7 +36,6 @@ from astock.schemas.candidates import (
     CandidateInputArtifact,
     CandidateInputRelease,
     CandidateLifecycleStatus,
-    CandidatePitStatus,
     CandidateQualityStatus,
     CandidateRecord,
     CandidateScanRequest,
@@ -76,7 +75,6 @@ def _release(
     include_signals: bool = True,
     quality: CandidateQualityStatus = CandidateQualityStatus.PASS,
     coverage: CandidateCoverageStatus = CandidateCoverageStatus.COMPLETE,
-    pit: CandidatePitStatus = CandidatePitStatus.CERTIFIED,
     tradability: CandidateTradability = CandidateTradability.TRADABLE,
     market: Market = Market.XSHG,
     symbol: str = "600519",
@@ -130,7 +128,7 @@ def _release(
             artifact_type=f"Fixture{role.value}",
             artifact_schema_version="fixture-v1",
             dataset_kind=role.value,
-            formal_status=pit.value,
+            formal_status=coverage.value,
             source_family={
                 CandidateArtifactRole.ANNOUNCEMENT_EVENTS: "cninfo-announcements",
                 CandidateArtifactRole.FINANCIAL_INTEGRITY: "financial-integrity",
@@ -140,7 +138,6 @@ def _release(
             object_hash=ref.sha256,
             coverage_status=coverage,
             available_to_system_at=available_at,
-            pit_status=pit,
             source_snapshot_ids=[f"snapshot:{release_id}:{role.value}"],
             evidence_ids=evidence_ids,
         )
@@ -167,8 +164,7 @@ def _release(
                 ].artifact_id,
                 observed_at=observed,
                 available_to_system_at=observed + timedelta(minutes=1),
-                pit_status=pit,
-            )
+                )
         )
     event_evidence = [f"evidence:{release_id}:event"]
     financial_evidence = [f"evidence:{release_id}:financial"]
@@ -213,8 +209,7 @@ def _release(
                     ].artifact_id,
                     observed_at=available_at,
                     available_to_system_at=available_at,
-                    pit_status=pit,
-                    evidence_ids=event_evidence,
+                            evidence_ids=event_evidence,
                 )
             ]
             if include_signals
@@ -238,8 +233,7 @@ def _release(
                     ].artifact_id,
                     observed_at=available_at,
                     available_to_system_at=available_at,
-                    pit_status=pit,
-                    evidence_ids=financial_evidence,
+                            evidence_ids=financial_evidence,
                 )
             ]
             if include_signals
@@ -255,8 +249,7 @@ def _release(
                     ].artifact_id,
                     observed_at=available_at,
                     available_to_system_at=available_at,
-                    pit_status=pit,
-                )
+                        )
             ]
             if include_signals
             else []
@@ -272,8 +265,7 @@ def _release(
                     ].artifact_id,
                     observed_at=available_at,
                     available_to_system_at=available_at,
-                    pit_status=pit,
-                    evidence_ids=holding_evidence,
+                            evidence_ids=holding_evidence,
                 )
             ]
             if include_signals
@@ -301,7 +293,6 @@ def _request(
     release: CandidateInputRelease,
     *,
     live: bool = False,
-    formal_historical: bool = False,
 ) -> CandidateScanRequest:
     object_hash = service.stage_input_release(release)
     return CandidateScanRequest(
@@ -310,7 +301,6 @@ def _request(
         input_release_id=release.input_release_id,
         input_release_object_hash=object_hash,
         as_of=release.as_of,
-        formal_historical=formal_historical,
         live=live,
     )
 
@@ -475,7 +465,6 @@ def test_price_volume_or_watchlist_alone_never_becomes_research_ready(
             source_artifact_id=watch_artifact.artifact_id,
             observed_at=as_of - timedelta(hours=1),
             available_to_system_at=as_of - timedelta(hours=1),
-            pit_status=CandidatePitStatus.CERTIFIED,
         )
     ]
     report = service.scan(_request(service, release))
@@ -591,7 +580,6 @@ def test_three_interruption_boundaries_recover_idempotently(
                         "input_release_object_hash": request.input_release_object_hash,
                         "as_of": request.as_of,
                         "rules_version": request.rules_version,
-                        "formal_historical": request.formal_historical,
                         "live": request.live,
                     }
                 ),
@@ -685,55 +673,6 @@ def test_registry_committed_recovery_fails_closed_on_corruption(
     row = service.repository.get_scan(scan_id)
     assert row is not None
     assert row["report_object_hash"] is None
-
-
-def test_historical_not_pit_safe_input_is_needs_info(
-    candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
-) -> None:
-    service, state, objects = candidate_runtime
-    as_of = datetime(2026, 7, 20, 8, tzinfo=UTC)
-    release = _release(
-        state,
-        objects,
-        "release:not-pit",
-        as_of,
-        pit=CandidatePitStatus.NOT_PIT_SAFE,
-    )
-    report = service.scan(_request(service, release, formal_historical=True))
-    assert report.status is CandidateScanStatus.NEEDS_INFO
-    assert any(code.startswith("NOT_PIT_SAFE:") for code in report.needs_info_codes)
-    assert not service.status(scan_id=report.scan_id)["records"]
-
-
-def test_current_not_pit_safe_legacy_marker_does_not_block_research(
-    candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
-) -> None:
-    service, state, objects = candidate_runtime
-    as_of = datetime(2026, 7, 20, 8, tzinfo=UTC)
-    release = _release(
-        state,
-        objects,
-        "release:current-not-pit",
-        as_of,
-        pit=CandidatePitStatus.NOT_PIT_SAFE,
-    )
-    report = service.scan(_request(service, release))
-    assert report.status is CandidateScanStatus.SUCCEEDED
-    assert not report.needs_info_codes
-
-
-def test_historical_future_nested_evidence_forces_needs_info(
-    candidate_runtime: tuple[CandidateScanService, StateStore, ObjectStore],
-) -> None:
-    service, state, objects = candidate_runtime
-    as_of = datetime(2026, 7, 20, 8, tzinfo=UTC)
-    release = _release(state, objects, "release:future-event", as_of)
-    release.companies[0].announcement_events[0].available_to_system_at = as_of + timedelta(
-        minutes=1
-    )
-    report = service.scan(_request(service, release, formal_historical=True))
-    assert report.status is CandidateScanStatus.NEEDS_INFO
-    assert any(code.startswith("FUTURE_INPUT:") for code in report.needs_info_codes)
 
 
 def test_current_acquisition_after_request_start_does_not_block_research(

@@ -111,7 +111,6 @@ class PortfolioAnalysisReport(AStockModel):
     source_artifact_ids: list[str]
     source_object_hashes: list[str]
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_report(self) -> PortfolioAnalysisReport:
@@ -202,7 +201,6 @@ class PortfolioConstructionReport(AStockModel):
     source_object_hashes: list[str]
     requires_user_confirmation: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_construction(self) -> PortfolioConstructionReport:

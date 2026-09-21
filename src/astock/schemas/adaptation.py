@@ -22,7 +22,6 @@ class AdaptiveProposalStatus(StrEnum):
 
 class ResearchModule(StrEnum):
     EVIDENCE = "EVIDENCE"
-    PIT = "PIT"
     FINANCIAL_INTEGRITY = "FINANCIAL_INTEGRITY"
     FUNDAMENTAL_MODEL = "FUNDAMENTAL_MODEL"
     BASE_CASE = "BASE_CASE"
@@ -43,7 +42,6 @@ class ResearchPlannerProposal(AStockModel):
     specialist_budget: int | None = Field(default=None, ge=1, le=32)
     status: Literal[AdaptiveProposalStatus.PROPOSED] = AdaptiveProposalStatus.PROPOSED
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_unique_requests(self) -> ResearchPlannerProposal:
@@ -69,7 +67,6 @@ class ValidatedResearchPlan(AStockModel):
     policy_version: str = Field(min_length=1)
     status: Literal[AdaptiveProposalStatus.VALIDATED] = AdaptiveProposalStatus.VALIDATED
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 class ProviderFailureDiagnostic(AStockModel):
@@ -91,7 +88,6 @@ class ProviderRecoveryProposal(AStockModel):
     status: Literal[AdaptiveProposalStatus.PROPOSED] = AdaptiveProposalStatus.PROPOSED
     manual_last: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_recovery_uniqueness(self) -> ProviderRecoveryProposal:
@@ -113,7 +109,6 @@ class ProviderRecoveryValidation(AStockModel):
     status: AdaptiveProposalStatus
     manual_last: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_status(self) -> ProviderRecoveryValidation:

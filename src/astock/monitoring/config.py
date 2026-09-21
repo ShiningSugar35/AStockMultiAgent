@@ -60,8 +60,6 @@ def load_continuous_monitor_config(path: Path) -> ContinuousMonitorConfig:
     if not isinstance(payload, dict) or payload.get("schema_version") != "continuous-monitor-v1":
         raise ValueError("Unsupported continuous monitor configuration")
     safety = _mapping(payload, "safety")
-    if safety.get("broker_execution_allowed") is not False:
-        raise ValueError("continuous monitor may never enable broker execution")
     if safety.get("news_can_directly_trade") is not False:
         raise ValueError("news leads may never directly trade")
     if safety.get("natural_language_rule_execution_allowed") is not False:

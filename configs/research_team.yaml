@@ -95,4 +95,3 @@ safety:
   seed_recommendation_allowed: false
   candidate_recommendation_allowed: false
   manual_candidate_fallback_allowed: false
-  broker_execution_allowed: false

@@ -42,7 +42,6 @@ class CurrentResearchContinuationRequest(AStockModel):
     automatic_resolution_budget_seconds: int = Field(default=1800, ge=60, le=7200)
     max_automatic_rounds: int = Field(default=3, ge=1, le=5)
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 class CurrentResearchExternalTask(AStockModel):
@@ -75,7 +74,6 @@ class CurrentResearchAutomaticResolution(AStockModel):
     capture_artifact_ids: list[str] = Field(default_factory=list)
     failure_code: str | None = Field(default=None, min_length=1)
     private_material_required: bool = False
-    broker_execution_allowed: Literal[False] = False
 
     @field_validator("capture_artifact_ids")
     @classmethod
@@ -123,7 +121,6 @@ class CurrentResearchContinuation(AStockModel):
     same_request_continuation_required: Literal[True] = True
     manual_escalation_after_automatic_exhaustion: Literal[True] = True
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @field_validator("acquisition_report_artifact_ids", "automatic_resolution_artifact_ids")
     @classmethod
@@ -204,7 +201,6 @@ class CurrentResearchEvidenceBinding(AStockModel):
     continuation_id: str = Field(min_length=1)
     task_id: str = Field(min_length=1)
     capture_artifact_id: str = Field(min_length=1)
-    broker_execution_allowed: Literal[False] = False
 
 
 __all__ = [

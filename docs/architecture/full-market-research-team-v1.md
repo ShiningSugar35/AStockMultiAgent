@@ -6,7 +6,7 @@
 >
 > 适用范围：AStockMultiAgent 当前主线；默认运行入口为 ChatGPT/Codex Chat 会话唤醒，不依赖后台常驻 LLM 服务。
 >
-> 核心边界：`broker_execution_allowed=false` 永久不变；本方案只提升研究、筛选、审查、模拟交易前置判断的专业性与可审计性。
+> 核心边界：本方案只提升研究、筛选、审查和模拟交易前置判断的专业性与可审计性；当前活动合同没有真实券商执行能力或权限字段。
 
 ## 1. 本轮问题与根因
 
@@ -170,7 +170,7 @@ NIST AI RMF / GenAI Profile 强调将可信度与风险管理纳入设计、开�
 
 用户提出荐股、投资组合推荐、买入/卖出判断或持仓处置时，顶层请求统一规范化为 `FULL_RESEARCH_RECOMMENDATION`；Seed/Candidate/Acquisition/Team/Committee/Portfolio 都只是同一请求里的内部阶段。`InvestmentRequestClosurePolicy` 读取 canonical `CapabilityExecutionPlan + CapabilityCoverageReceipt`，而最终 `FULL_RESEARCH_GATE` 必须消费已经闭合的 Mandatory Research DAG 和不可变 `RecommendationResearchReceipt`。任一 REQUIRED capability 或 Mandatory Research 节点未通过，都保持 `investment_conclusion_blocked=true`。
 
-公共层不允许“先给半份分析，再告诉用户下一步可以跑财报/行业/估值/多空/仓位”。正式停止只有两个：① Full Research 全链和 Publication Gate 完成，允许一次性完整 investor view；② 公共自动恢复与权威 Web 真正耗尽、剩余材料只能由用户私人输入补齐，此时只能请求最少必要资料且不得形成 BUY/组合结论。`broker_execution_allowed=false` 在所有状态保持不变。
+公共层不允许“先给半份分析，再告诉用户下一步可以跑财报/行业/估值/多空/仓位”。正式停止只有两个：① Full Research 全链和 Publication Gate 完成，允许一次性完整 investor view；② 公共自动恢复与权威 Web 真正耗尽、剩余材料只能由用户私人输入补齐，此时只能请求最少必要资料且不得形成 BUY/组合结论。任何状态都不会由研究链生成真实券商订单权限。
 
 ## 5. P1：投研团队 DAG
 

@@ -56,13 +56,10 @@ class InvestorSessionPreflightService:
         force_refresh: bool = False,
     ) -> InvestorSessionPreflightReceipt:
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
-        if request.decision_time is not None:
-            from astock.investor_orchestration.decision_freeze import DecisionFreezeService
-
-            DecisionFreezeService(self.store).verify(request)
-        as_of = aware_time(request.evidence_cutoff)
-        if as_of > utc_now():
-            raise ValueError("preflight cannot certify a future request time")
+        now = utc_now()
+        as_of = aware_time(request.analysis_as_of)
+        if as_of > now:
+            raise ValueError("preflight cannot certify a future analysis time")
         # The revision vector and all economic/metadata reads share one SQLite
         # snapshot. Receipt persistence happens only after this read transaction.
         with self._cache_lock, self.store.transaction(read_only=True):

@@ -1,6 +1,6 @@
 {
   "admitted_stage": "SHADOW",
-  "candidate_version": "sha256:86c7da45b14b57202a08f9269869e18dda236539f134a7d14e8466bef5db7ba2",
+  "candidate_version": "sha256:af705b6846a15e0f7aa95cfcd685db9bd479b98e8018c90335133ede061a24b5",
   "capability_id": "schema-drift-recorder",
   "checks": {
     "cache_behavior": "PASS",
@@ -21,9 +21,9 @@
   },
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
-  "created_at": "2026-09-09T04:05:13Z",
+  "created_at": "2026-09-21T10:48:00Z",
   "evidence_version": "e02-qualification-evidence-v1",
-  "expires_at": "2026-12-08T04:05:13Z",
+  "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
     "END_TO_END_CONTROLLED_LIVE_DRIFT_CAPTURE_NOT_RUN"
   ],
@@ -34,28 +34,28 @@
   "sources": [
     {
       "assertion": "Tracked Repo Skill contract used by the qualification pilot.",
-      "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "86c7da45b14b57202a08f9269869e18dda236539f134a7d14e8466bef5db7ba2",
+      "observed_at": "2026-09-21T10:48:00Z",
+      "sha256": "af705b6846a15e0f7aa95cfcd685db9bd479b98e8018c90335133ede061a24b5",
       "source_ref": "repo:.agents/skills/schema-drift-recorder/SKILL.md"
     },
     {
       "assertion": "The project is proprietary; these Repo Skills are project-owned and introduce no third-party runtime license or service ToS.",
-      "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "38dfdf04e4b9123b757e6fb0172c1ac33b070f130305bbd384b8e9c6bc80c0fe",
+      "observed_at": "2026-09-21T10:48:00Z",
+      "sha256": "1be2a7aee6d7b87ddd42b5d68a19c52373389b38489cab6f60492a32e3d96c72",
       "source_ref": "repo:pyproject.toml"
     },
     {
       "assertion": "The Repo Skill integration adds no runtime package dependency; the existing locked dependency graph is unchanged.",
-      "observed_at": "2026-09-02T06:16:28Z",
-      "sha256": "7be1b927daf59176ce26fe34bd33de6b9ef0b8e098c80baa447c108a7ecd9ba7",
+      "observed_at": "2026-09-21T10:48:00Z",
+      "sha256": "13ea4af85b82754a54a3cf60d0ad24f26fad103dfaddb29005983f11459b7d42",
       "source_ref": "repo:uv.lock"
     },
     {
       "assertion": "Recorded and controlled-live/exit assertions are bound to the repository test contract; a passing test run is required before the final status may claim PASS.",
-      "observed_at": "2026-09-09T04:05:13Z",
-      "sha256": "7c0eb6a5dd905f5a6382bdda4f7d5e2af9145b80343c8168a778ccf084febec5",
+      "observed_at": "2026-09-21T10:48:00Z",
+      "sha256": "70c753ba50f91bc18abad1de27843a40f1b80b22f6e6e12a670471e401dd5d19",
       "source_ref": "contract:tests/unit/test_e02_external_qualification.py"
     }
   ],
-  "valid_from": "2026-09-09T04:05:13Z"
+  "valid_from": "2026-09-21T10:48:00Z"
 }

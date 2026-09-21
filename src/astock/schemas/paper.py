@@ -442,7 +442,6 @@ class PaperPreparationReceipt(AStockModel):
     order_created: Literal[False] = False
     position_changed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_preparation_receipt(self) -> PaperPreparationReceipt:

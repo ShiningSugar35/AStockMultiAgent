@@ -38,7 +38,7 @@ Workflow 是跨 Skill 的**用户任务编排层**。它不替代 `.agents/skill
 5. **研究充分性与执行资格分开**：长期基本面研究可以在执行层数据不完整时继续；模拟订单/精确交易计划仍需完整的 Committee + TradingClassification/执行门禁。
 6. **内部日志与投资者输出分开**：reason code、artifact/hash、SQL、CLI transcript 留在诊断层；投资者默认只看结论、依据、估值/赔率、催化、风险和改变结论的条件。
 7. **没有正式证据就不伪装正式结论**：允许给出明确标注的 provisional research view，但不得把它冒充 `APPROVE_SIMULATION`、BUY、目标价或仓位授权。
-8. **永不真实券商下单**：所有 Workflow 都受 `broker_execution_allowed=false` 全局边界约束。
+8. **不引入真实券商执行**：当前产品没有真实券商执行能力或对应权限字段；需要模拟写入时继续走既有 paper confirmation。
 
 ## 维护要求
 

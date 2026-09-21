@@ -494,9 +494,26 @@ def test_scheduled_runtime_consumes_verified_checks_without_writing_economic_fac
                 for table in tables
             }
 
+    from unittest.mock import patch
+
     before = economics()
     receipt = service.run(request)
-    assert receipt == service.run(request)
+    frozen = store.get_preflight_for_request(f"scheduled:{run_id}")
+    assert frozen is not None
+    with patch.object(
+        InvestorSessionPreflightService,
+        "build",
+        side_effect=AssertionError("a resumed scheduled request must reuse its prepared context"),
+    ):
+        assert receipt == service.run(request)
+        restarted = ScheduledResearchService(
+            store,
+            InvestorSessionPreflightService(store),
+            analyzer=recorded_analyzer,
+            source_audit_policy=audit.policy,
+        )
+        assert receipt == restarted.run(request)
+    assert store.get_preflight_for_request(f"scheduled:{run_id}") == frozen
     assert economics() == before
     assert receipt.source_coverage_artifact_ids == reports
     assert receipt.source_coverage_complete is include_sources

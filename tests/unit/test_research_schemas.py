@@ -40,19 +40,12 @@ def test_research_skill_registry_has_exact_versioned_contracts_and_three_skill_c
     assert not memo.counts_as_specialist
 
 
-def test_evidence_freeze_scope_is_unique_and_approximation_is_explicit() -> None:
+def test_evidence_freeze_scope_is_unique() -> None:
     with pytest.raises(ValidationError, match="claim ids"):
         EvidenceFreezeRequest(
             company_id="company:fixture",
             as_of=datetime(2026, 1, 1, tzinfo=UTC),
             claim_ids=["claim:1", "claim:1"],
-        )
-    with pytest.raises(ValidationError, match="formal historical"):
-        EvidenceFreezeRequest(
-            company_id="company:fixture",
-            as_of=datetime(2026, 1, 1, tzinfo=UTC),
-            formal_historical=False,
-            allow_approximated=True,
         )
 
 

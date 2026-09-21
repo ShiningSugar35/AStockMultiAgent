@@ -51,6 +51,5 @@ daemon:
   pid_file: runtime/continuous_monitor.pid
   log_file: runtime/logs/continuous-monitor.log
 safety:
-  broker_execution_allowed: false
   news_can_directly_trade: false
   natural_language_rule_execution_allowed: false

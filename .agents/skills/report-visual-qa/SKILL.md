@@ -23,7 +23,7 @@ Return the ReportManifest identity, output hash, deterministic integrity finding
 - Do not alter investment facts, citations, page content or source artifacts to make a visual check pass.
 - Do not treat a Skill result as new source authority or bypass ReportService/ObjectStore lineage.
 - Do not copy images with unknown rights into a report or suppress privacy findings.
-- Do not enable broker execution; `broker_execution_allowed=false` remains unchanged.
+- Visual QA may not create or mutate paper orders or fills.
 
 ## Workflows
 

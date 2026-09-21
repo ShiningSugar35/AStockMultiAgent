@@ -251,7 +251,7 @@ def test_peer_percentile_requires_and_persists_audited_cohort(state, object_stor
                 value=Decimal(value),
                 unit=FinancialUnit.RATIO,
                 source_snapshot_ids=[lineage.source_snapshot_id or ""],
-                pit_ids=[lineage.pit_id or ""],
+
                 evidence_ids=lineage.evidence_ids,
             )
         )

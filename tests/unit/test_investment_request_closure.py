@@ -138,7 +138,6 @@ def test_material_recommendation_cannot_stop_at_intermediate_capability_state() 
     assert decision.investment_conclusion_blocked
     assert not decision.investor_view_allowed
     assert set(decision.missing_capabilities) == {"COMMITTEE", "PORTFOLIO"}
-    assert not decision.broker_execution_allowed
 
 
 def test_material_recommendation_is_terminal_only_after_verified_full_plan() -> None:

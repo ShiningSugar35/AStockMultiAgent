@@ -59,4 +59,4 @@ Investor-facing order: **建议组合 → 为什么比只买 X 更稳健/更匹�
 - Current Universe cannot support stock candidate discovery.
 - ETF candidate lacks an official registered product profile.
 - A claimed hedge lacks mechanism, stress evidence or verified implementation cost.
-- Any proposal would bypass Committee, target-band, paper-confirmation or `broker_execution_allowed=false` boundaries.
+- Reject any proposal that bypasses Committee, target-band or paper-confirmation boundaries; this workflow does not create real-broker execution capability.

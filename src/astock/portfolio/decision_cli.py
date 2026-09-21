@@ -146,7 +146,6 @@ def register_portfolio_decision_commands(
                 "duplicate_event_ids": sorted(duplicates),
                 "projection": projection,
                 "paper_ledger_write_allowed": False,
-                "broker_execution_allowed": False,
             }
         )
 

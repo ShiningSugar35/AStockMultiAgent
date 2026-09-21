@@ -496,7 +496,7 @@ def _build_receipt(
                 created_at=NOW,
             ),
         )
-    pit = service.point_in_time_snapshot(request, sources, conflicts=conflicts)
+    source_snapshot = service.current_source_snapshot(request, sources, conflicts=conflicts)
 
     codes = tuple(f"600{index + 1:03d}.XSHG" for index in range(candidate_count))
     holding_reviews = ()
@@ -569,11 +569,10 @@ def _build_receipt(
         node: FullResearchNodeStatus.PASS for node in FullResearchNode
     }
     reasons: dict[FullResearchNode | str, str] = {}
-    if pit.status != FullResearchNodeStatus.PASS:
-        statuses[FullResearchNode.POINT_IN_TIME_SNAPSHOT] = pit.status
-        reasons[FullResearchNode.POINT_IN_TIME_SNAPSHOT] = (
-            "PIT evidence is incomplete or conflicted"
-        )
+    # Source completeness/conflicts are enforced directly by publication_decision.
+
+
+
     if risk.status != FullResearchNodeStatus.PASS:
         statuses[FullResearchNode.RISK_AUDIT] = risk.status
         reasons[FullResearchNode.RISK_AUDIT] = "portfolio risk constraints failed"
@@ -587,7 +586,7 @@ def _build_receipt(
     )
     publication = service.publication_decision(
         dag,
-        pit,
+        source_snapshot,
         portfolio,
         risk,
         execution,
@@ -605,7 +604,7 @@ def _build_receipt(
             "as_of": NOW,
             "request_contract": contract,
             "holding_reviews": holding_reviews,
-            "pit_snapshot": pit,
+            "source_snapshot": source_snapshot,
             "dag": dag,
             "source_manifest": sources,
             "skill_executions": {node.value: statuses[node] for node in FullResearchNode},
@@ -778,6 +777,7 @@ def test_target_return_propagates_to_profit_loss_plan_and_public_answer() -> Non
     assert receipt.portfolio.target_annual_return == Decimal("1")
     assert receipt.portfolio.annual_profit_target == Decimal("100000")
     assert receipt.portfolio.target_horizon_profit is None
+    assert "target_horizon_profit" not in receipt.optimizer_outputs
     assert receipt.portfolio.modeled_downside_loss is not None
     assert receipt.portfolio.modeled_downside_loss >= Decimal("0")
     assert receipt.portfolio.objective_status in {
@@ -910,7 +910,7 @@ def test_missing_latest_financial_or_exchange_filing_blocks_publication(
     )
     assert receipt.publication.status == "BLOCKED"
     assert not receipt.publication.formal_recommendation_allowed
-    assert receipt.pit_snapshot.status == FullResearchNodeStatus.BLOCKED
+    assert receipt.source_snapshot.status == FullResearchNodeStatus.BLOCKED
 
 
 def test_conflicting_news_is_not_silently_selected() -> None:
@@ -920,7 +920,7 @@ def test_conflicting_news_is_not_silently_selected() -> None:
         _request("推荐现在可以买的股票"),
         open_conflict=True,
     )
-    assert receipt.pit_snapshot.status == FullResearchNodeStatus.BLOCKED
+    assert receipt.source_snapshot.status == FullResearchNodeStatus.BLOCKED
     assert receipt.publication.status == "BLOCKED"
 
 

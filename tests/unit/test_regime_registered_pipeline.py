@@ -140,7 +140,6 @@ def test_registered_features_are_reconstructed_before_training_and_never_write_l
     assert comparison.challenger_predictions == challenger.filter(model, snapshots[20:])
     assert len(comparison.baseline_snapshots) == 4
     assert comparison.admission_status == "SHADOW_ONLY"
-    assert comparison.broker_execution_allowed is False
     with closing(state.connect()) as connection:
         assert (
             connection.execute("SELECT COUNT(*) FROM market_regime_snapshots_v2").fetchone()[0] == 0

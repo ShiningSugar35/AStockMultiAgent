@@ -40,7 +40,6 @@ class ResearchRuntimeReadinessService:
         return {
             "schema_version": "provider-readiness-v1",
             "knowledge": status.model_dump(mode="json"),
-            "broker_execution_allowed": False,
         }
 
     def holding_due(

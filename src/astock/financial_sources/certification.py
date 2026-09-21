@@ -17,6 +17,7 @@ from astock.schemas import (
     DocumentPage,
     EvidenceGrade,
     FactStatus,
+    FinancialDurationSemantics,
     FinancialFact,
     FinancialFieldCode,
     FinancialPeriodType,
@@ -48,11 +49,20 @@ _UNIT_MULTIPLIERS = {
     FinancialUnit.SHARES: Decimal("1"),
 }
 _TABLE_HEADING_RE = re.compile(
-    r"(?m)^[ \t]*(?P<title>(?:合并|母公司|公司)?"
+    r"(?m)^[ \t]*(?:\d+\s*[、.．]\s*)?(?P<title>(?:合并|母公司|公司)?"
     r"(?:资产负债表|利润表|现金流量表))[ \t]*$"
 )
 _CURRENCY_TOKEN_RE = re.compile(r"币种\s*[:：]\s*人民币")
+_CURRENCY_DECLARATION_RE = re.compile(r"币种\s*[:：]\s*(?P<currency>[^\s，,；;]+)")
 _UNIT_TOKEN_RE = re.compile(r"单位\s*[:：]\s*(百万元|万元|千元|亿元|元)")
+_BALANCE_RELATIVE_PERIOD_RE = re.compile(
+    r"期\s*末\s*余\s*额[\s\S]{0,120}?期\s*初\s*余\s*额"
+)
+_CASH_FLOW_SUPPLEMENT_HEADING_RE = re.compile(r"现\s*金\s*流\s*量\s*表\s*补\s*充\s*资\s*料")
+_CURRENT_PRIOR_AMOUNT_RE = re.compile(
+    r"本\s*期\s*金\s*额[\s\S]{0,120}?上\s*期\s*金\s*额"
+)
+_NEXT_SUPPLEMENT_SUBSECTION_RE = re.compile(r"(?m)^[ \t]*[（(]\s*2\s*[）)]")
 _GENERIC_PERIOD_TOKEN_RE = re.compile(
     r"\d{4}\s*年\s*(?:"
     r"\d{1,2}\s*月\s*\d{1,2}\s*日|"
@@ -106,71 +116,95 @@ class FinancialPdfCertifier:
         observations: list[FinancialSourceObservation],
         mappings: list[FinancialFieldMapping],
     ) -> tuple[list[FinancialFact], list[str]]:
+        if not observations:
+            raise ValueError("Financial PDF certification requires at least one period observation")
         facts: list[FinancialFact] = []
         reasons: list[str] = []
         observed: dict[
             tuple[FinancialStatementType, FinancialFieldCode], FinancialSourceObservation
         ] = {}
+        basis = observations[0]
+        allow_official_only_recovery = any(
+            item.provider_id != "official-financial-document" for item in observations
+        )
         for item in observations:
             if item.statement_scope is not FinancialStatementScope.CONSOLIDATED:
                 raise ValueError("Financial PDF certification requires CONSOLIDATED hints")
+            if (
+                item.company_id != basis.company_id
+                or item.period_end != basis.period_end
+                or item.period_type is not basis.period_type
+            ):
+                raise ValueError(
+                    "Financial PDF certification observations must share one company period"
+                )
             if item.reported_value is not None:
                 observed.setdefault((item.statement_type, item.field_code), item)
         for mapping in mappings:
             key = (mapping.statement_type, mapping.field_code)
             hint = observed.get(key)
-            if hint is None:
+            if hint is None and not allow_official_only_recovery:
                 reasons.append(f"SECONDARY_FIELD_MISSING:{mapping.field_code.value}")
                 continue
-            matches = self._exact_matches(report, mapping, hint.period_end, hint.period_type)
+            matches = self._exact_matches(report, mapping, basis.period_end, basis.period_type)
             if len(matches) != 1:
+                if hint is None:
+                    reasons.append(f"SECONDARY_FIELD_MISSING:{mapping.field_code.value}")
                 code = "OFFICIAL_VALUE_NOT_FOUND" if not matches else "OFFICIAL_VALUE_AMBIGUOUS"
                 reasons.append(f"{code}:{mapping.field_code.value}")
                 continue
             page_id, char_start, char_end, value, unit = matches[0]
-            hint_value = hint.reported_value
-            if hint_value is None:
-                raise ValueError("financial certification hint unexpectedly lost its value")
-            if not _values_equivalent(hint_value, hint.unit, value, unit):
-                reasons.append(f"SECONDARY_VALUE_CONFLICT:{mapping.field_code.value}")
+            if hint is not None:
+                hint_value = hint.reported_value
+                if hint_value is None:
+                    raise ValueError("financial certification hint unexpectedly lost its value")
+                if not _values_equivalent(hint_value, hint.unit, value, unit):
+                    reasons.append(f"SECONDARY_VALUE_CONFLICT:{mapping.field_code.value}")
+                period_start = hint.period_start
+                duration_semantics = hint.duration_semantics
+            else:
+                reasons.append(f"OFFICIAL_ONLY_FIELD_RECOVERY:{mapping.field_code.value}")
+                period_start, duration_semantics = _official_period_semantics(
+                    mapping.statement_type,
+                    basis.period_end,
+                    basis.period_type,
+                )
             evidence = self.evidence.create_page_evidence(
                 page_id=page_id,
                 char_start=char_start,
                 char_end=char_end,
                 evidence_grade=EvidenceGrade.PRIMARY_OFFICIAL,
                 fact_status=FactStatus.DIRECT,
-                entity_ids=[hint.company_id, f"company:{hint.company_id}"],
+                entity_ids=[basis.company_id, f"company:{basis.company_id}"],
                 valid_from=report.document.published_at,
             )
             identity = {
-                "company_id": hint.company_id,
-                "period_start": hint.period_start,
-                "period_end": hint.period_end,
-                "period_type": hint.period_type,
-                "duration_semantics": hint.duration_semantics,
+                "company_id": basis.company_id,
+                "period_start": period_start,
+                "period_end": basis.period_end,
+                "period_type": basis.period_type,
+                "duration_semantics": duration_semantics,
                 "statement_type": mapping.statement_type,
                 "field_code": mapping.field_code,
                 "reported_value": value,
                 "unit": unit,
                 "source_snapshot_id": report.snapshot.snapshot_id,
-                "pit_id": report.pit.pit_id,
                 "evidence_id": evidence.evidence_id,
             }
             facts.append(
                 FinancialFact(
                     created_at=report.snapshot.available_to_system_at,
                     fact_id=f"financial-fact:{content_hash(identity)}",
-                    company_id=hint.company_id,
-                    period_start=hint.period_start,
-                    period_end=hint.period_end,
-                    period_type=hint.period_type,
-                    duration_semantics=hint.duration_semantics,
+                    company_id=basis.company_id,
+                    period_start=period_start,
+                    period_end=basis.period_end,
+                    period_type=basis.period_type,
+                    duration_semantics=duration_semantics,
                     statement_type=mapping.statement_type,
                     field_code=mapping.field_code,
                     reported_value=value,
                     unit=unit,
                     source_snapshot_id=report.snapshot.snapshot_id,
-                    pit_id=report.pit.pit_id,
                     evidence_ids=[evidence.evidence_id],
                 )
             )
@@ -231,7 +265,67 @@ class FinancialPdfCertifier:
                         field_unit,
                     )
                 )
+        if not matches and mapping.field_code is FinancialFieldCode.NET_PROFIT_CASH_FLOW:
+            return _cash_flow_supplement_matches(
+                report,
+                self.objects,
+                mapping,
+                period_end,
+                period_type,
+            )
         return matches
+
+
+def _cash_flow_supplement_matches(
+    report: OfficialFinancialReport,
+    objects: ObjectStore,
+    mapping: FinancialFieldMapping,
+    period_end: date,
+    period_type: FinancialPeriodType,
+) -> list[tuple[str, int, int, Decimal, FinancialUnit]]:
+    del period_end, period_type
+    deduplicated: dict[
+        tuple[str, int, int, Decimal, FinancialUnit],
+        tuple[str, int, int, Decimal, FinancialUnit],
+    ] = {}
+    for page in sorted(report.pages, key=lambda item: item.page_number):
+        if page.extraction_method is not PageExtractionMethod.NATIVE_TEXT or page.ocr_applied:
+            continue
+        text = objects.get_bytes(page.text_object_sha256).decode("utf-8")
+        for heading in _CASH_FLOW_SUPPLEMENT_HEADING_RE.finditer(text):
+            tail = text[heading.start() :]
+            next_subsection = _NEXT_SUPPLEMENT_SUBSECTION_RE.search(tail)
+            segment_end = (
+                heading.start() + next_subsection.start()
+                if next_subsection is not None
+                else len(text)
+            )
+            segment_text = text[heading.start() : segment_end]
+            currency_declarations = list(_CURRENCY_DECLARATION_RE.finditer(segment_text))
+            units = list(_UNIT_TOKEN_RE.finditer(segment_text))
+            if len(units) != 1:
+                continue
+            if currency_declarations and (
+                len(currency_declarations) != 1
+                or currency_declarations[0].group("currency") != "人民币"
+            ):
+                continue
+            if _CURRENT_PRIOR_AMOUNT_RE.search(segment_text[:_HEADER_SCAN_CHARS]) is None:
+                continue
+            unit = _UNITS[units[0].group(1)]
+            for row_start, row_end, value in _logical_row_values(
+                segment_text,
+                _field_label_pattern(mapping),
+                2,
+            ):
+                absolute_start = heading.start() + row_start
+                absolute_end = heading.start() + row_end
+                key = (page.page_id, absolute_start, absolute_end, value, unit)
+                existing = deduplicated.get(key)
+                candidate = (page.page_id, heading.start(), absolute_end, value, unit)
+                if existing is None or candidate[1] < existing[1]:
+                    deduplicated[key] = candidate
+    return list(deduplicated.values())
 
 
 def _statement_segments(
@@ -280,8 +374,14 @@ def _statement_header_identity(
     statement_type: FinancialStatementType,
 ) -> tuple[FinancialUnit, int] | None:
     currency = list(_CURRENCY_TOKEN_RE.finditer(header_text))
+    currency_declarations = list(_CURRENCY_DECLARATION_RE.finditer(header_text))
     units = list(_UNIT_TOKEN_RE.finditer(header_text))
-    if len(currency) != 1 or len(units) != 1:
+    if len(units) != 1 or len(currency) > 1:
+        return None
+    if currency_declarations and (
+        len(currency_declarations) != 1
+        or currency_declarations[0].group("currency") != "人民币"
+    ):
         return None
     period_patterns = _target_period_patterns(period_end, period_type, statement_type)
     target_matches: list[re.Match[str]] = []
@@ -291,7 +391,13 @@ def _statement_header_identity(
             target_matches = found
             break
     if not target_matches:
-        return None
+        if statement_type is not FinancialStatementType.BALANCE_SHEET:
+            return None
+        if _GENERIC_PERIOD_TOKEN_RE.search(header_text) is not None:
+            return None
+        if _BALANCE_RELATIVE_PERIOD_RE.search(header_text) is None:
+            return None
+        return _UNITS[units[0].group(1)], 2
     period_column_count = 1
     for target in target_matches:
         line_start = header_text.rfind("\n", 0, target.start()) + 1
@@ -304,6 +410,21 @@ def _statement_header_identity(
             len(_GENERIC_PERIOD_TOKEN_RE.findall(line)),
         )
     return _UNITS[units[0].group(1)], period_column_count
+
+
+def _official_period_semantics(
+    statement_type: FinancialStatementType,
+    period_end: date,
+    period_type: FinancialPeriodType,
+) -> tuple[date | None, FinancialDurationSemantics]:
+    if statement_type is FinancialStatementType.BALANCE_SHEET:
+        return None, FinancialDurationSemantics.INSTANT
+    semantics = (
+        FinancialDurationSemantics.REPORTED_PERIOD
+        if period_type is FinancialPeriodType.ANNUAL
+        else FinancialDurationSemantics.YEAR_TO_DATE
+    )
+    return date(period_end.year, 1, 1), semantics
 
 
 def _target_period_patterns(

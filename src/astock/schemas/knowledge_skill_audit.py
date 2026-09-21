@@ -69,7 +69,6 @@ class CuratedResearchSkill(AStockModel):
     shadow_or_prospective_only: bool
     formal_committee_weight_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_curated_skill(self) -> CuratedResearchSkill:
@@ -113,7 +112,6 @@ class KnowledgeSkillAuditDecision(AStockModel):
     replacement_skill_artifact_id: str | None = None
     formal_committee_weight_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_decision(self) -> KnowledgeSkillAuditDecision:

@@ -24,7 +24,6 @@ class BseReferenceSmokeRequest(BaseModel):
     live: Literal[True]
     purpose: Literal["INSTRUMENT_MASTER"]
     read_only: Literal[True]
-    broker_execution_allowed: Literal[False]
 
     @model_validator(mode="after")
     def validate_market(self) -> BseReferenceSmokeRequest:
@@ -116,7 +115,6 @@ def run_smoke(runtime: Path) -> dict[str, object]:
         "complete_coverage": True,
         "raw_page_lineage_verified": True,
         "read_only": True,
-        "broker_execution_allowed": False,
         "passed": True,
     }
 

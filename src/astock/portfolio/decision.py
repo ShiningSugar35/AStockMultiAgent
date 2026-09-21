@@ -1606,7 +1606,6 @@ class PortfolioDecisionService:
                 "artifact_id": artifact_id,
                 "finding_codes": ["UNKNOWN_PORTFOLIO_DECISION_ARTIFACT"],
                 "paper_ledger_write_allowed": False,
-                "broker_execution_allowed": False,
             }
         if not self.objects.verify(str(record["object_hash"])):
             findings.add("ARTIFACT_OBJECT_UNAVAILABLE")
@@ -1619,7 +1618,6 @@ class PortfolioDecisionService:
             "finding_codes": sorted(findings),
             "allocation_override_allowed": False,
             "paper_ledger_write_allowed": False,
-            "broker_execution_allowed": False,
         }
 
     def status(self, portfolio_id: str) -> dict[str, object]:
@@ -1631,7 +1629,6 @@ class PortfolioDecisionService:
             "portfolio_id": portfolio_id,
             "artifact_id": checkpoint["cursor"].get("artifact_id"),
             "object_hash": checkpoint.get("object_hash"),
-            "broker_execution_allowed": False,
         }
 
     def _variant(

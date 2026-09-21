@@ -19,6 +19,7 @@ _PHASE7_FORWARD_COLUMNS = {
     "thesis_status",
     "invalidation_reason_codes",
 }
+_RETIRED_PIT_COLUMNS = {"pit_statuses", "candidate_membership_pit_safe"}
 
 _OBSERVATION_SCHEMA = pa.schema(
     [
@@ -83,8 +84,6 @@ _OBSERVATION_SCHEMA = pa.schema(
         ("market_observation_ids", pa.list_(pa.string())),
         ("thesis_status", pa.string()),
         ("invalidation_reason_codes", pa.list_(pa.string())),
-        ("pit_statuses", pa.list_(pa.string())),
-        ("candidate_membership_pit_safe", pa.bool_()),
         ("corporate_action_coverage_complete", pa.bool_()),
         ("delisting_coverage_complete", pa.bool_()),
         ("t_plus_one_compliant", pa.bool_()),
@@ -159,7 +158,9 @@ class ParquetShadowStore:
         if len(rows) != 1:
             return False
         expected = self._row(observation, object_sha256=object_sha256)
-        actual = rows[0]
+        actual = {
+            key: value for key, value in rows[0].items() if key not in _RETIRED_PIT_COLUMNS
+        }
         if actual == expected:
             return True
         missing = set(expected) - set(actual)
@@ -245,10 +246,6 @@ class ParquetShadowStore:
             "market_observation_ids": observation.market_observation_ids,
             "thesis_status": observation.thesis_status.value,
             "invalidation_reason_codes": observation.invalidation_reason_codes,
-            "pit_statuses": [item.value for item in observation.pit_statuses],
-            "candidate_membership_pit_safe": (
-                observation.candidate_membership_pit_safe
-            ),
             "corporate_action_coverage_complete": (
                 observation.corporate_action_coverage_complete
             ),

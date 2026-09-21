@@ -27,5 +27,5 @@ Produce a compact scout table: **candidate → source → project fit → decisi
 - Do not treat GitHub stars, X/Reddit posts, influencer claims, or a single backtest as investment evidence.
 - Do not copy an external multi-agent architecture when existing Skills/Workflows already cover the same roles.
 - Do not add a dependency before checking whether a small local adapter/pattern is enough.
-- Do not bypass PIT, Evidence, Committee, TradingClassification, Paper confirmation, or `broker_execution_allowed=false`.
+- Do not bypass Evidence, Committee, TradingClassification, or paper confirmation.
 - Do not make automatic Skill mutations or production-weight changes from scouting results.

@@ -146,7 +146,6 @@ def test_completed_status_does_not_override_partial_financial_coverage(environme
             "periods": [],
             "input_fact_ids": [],
             "source_snapshot_ids": [],
-            "pit_ids": [],
             "verified_numbers": [],
             "recalculated_metrics": [],
             "rule_findings": [],

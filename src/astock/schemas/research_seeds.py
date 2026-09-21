@@ -103,7 +103,6 @@ class ResearchSeed(AStockModel):
     requires_deep_research: Literal[True] = True
     recommendation_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @field_validator(
         "origins",
@@ -131,6 +130,8 @@ class ResearchSeedRequest(AStockModel):
     max_market_seeds: int = Field(default=40, ge=0, le=60)
     max_breadth_challenger_seeds: int = Field(default=12, ge=0, le=20)
     max_long_horizon_value_seeds: int = Field(default=16, ge=0, le=30)
+    max_verified_discovery_seeds: int = Field(default=8, ge=0)
+    max_existing_candidate_seeds: int = Field(default=4, ge=0)
     breadth_min_market_score_ratio: float = Field(default=0.82, ge=0, le=1)
     breadth_max_boards_per_domain: int = Field(default=3, ge=1, le=8)
     max_expert_seeds_per_author: int = Field(default=10, ge=0, le=30)
@@ -175,7 +176,6 @@ class ResearchSeedReport(AStockModel):
     recommendation_allowed: Literal[False] = False
     candidate_record_write_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @field_validator("source_snapshot_ids", "source_object_hashes", "warning_codes")
     @classmethod

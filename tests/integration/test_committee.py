@@ -162,7 +162,6 @@ def _service_and_request(
             data_coverage=Decimal("1"),
             evidence_coverage=Decimal("1"),
             specialist_coverage=Decimal("1"),
-            pit_coverage=Decimal("1"),
             liquidity_score=Decimal("1"),
             evidence_ids=evidence_ids,
             created_at=as_of,
@@ -287,7 +286,6 @@ def test_committee_plan_is_read_only_and_decision_is_deterministic_auditable_and
     assert first.decision.verdict is CommitteeVerdict.PAPER_ELIGIBLE
     assert first.protocol.protocol_status is CommitteeProtocolStatus.ACTIVE
     assert first.protocol.requires_user_confirmation
-    assert not first.protocol.broker_execution_allowed
     assert first.protocol.paper_simulation_allowed
     assert first.protocol.ledger_write_allowed
     assert committee.audit(first.decision.decision_id)["status"] == "PASS"

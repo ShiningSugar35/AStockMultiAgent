@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
 
 from astock.investor_orchestration.models import (
     CapabilityCoverageReceipt,
@@ -40,7 +39,6 @@ class InvestmentClosureDecision(StrictModel):
     investor_view_allowed: bool
     automatic_resolution_exhausted: bool = False
     private_user_input_required: bool = False
-    broker_execution_allowed: Literal[False] = False
 
 
 _MATERIAL_INVESTMENT_INTENTS = frozenset(

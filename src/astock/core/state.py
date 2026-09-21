@@ -1047,7 +1047,7 @@ class StateStore:
                 "previous_release_id,manifest_artifact_id,manifest_object_hash,"
                 "manifest_schema_version,raw_snapshot_ids_json,observation_files_json,"
                 "canonical_files_json,coverage_json,"
-                "available_to_system_at,coverage_status,pit_status "
+                "available_to_system_at,coverage_status "
                 "FROM market_reference_release WHERE release_id=?",
                 (manifest.release_id,),
             ).fetchone()
@@ -1067,7 +1067,6 @@ class StateStore:
                 coverage_json,
                 manifest.available_to_system_at.isoformat(),
                 manifest.coverage.status.value,
-                manifest.pit_status.value,
             )
             if existing is not None:
                 if tuple(existing) != expected_release:
@@ -1124,8 +1123,8 @@ class StateStore:
                 "provider_id,batch_id,content_hash,previous_release_id,manifest_artifact_id,"
                 "manifest_object_hash,manifest_schema_version,raw_snapshot_ids_json,"
                 "observation_files_json,canonical_files_json,coverage_json,"
-                "available_to_system_at,coverage_status,pit_status,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "available_to_system_at,coverage_status,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (manifest.release_id, *expected_release[:6], *expected_release[6:], now),
             )
             connection.execute(

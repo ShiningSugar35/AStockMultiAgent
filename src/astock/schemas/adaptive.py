@@ -127,7 +127,6 @@ class AdaptiveShadowResearchAuthorizationRequest(AStockModel):
     production_weight_change_allowed: Literal[False] = False
     online_learning_allowed: Literal[False] = False
     main_paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
 
 class AdaptiveShadowResearchAuthorization(AdaptiveShadowResearchAuthorizationRequest):
@@ -325,7 +324,6 @@ class AdaptiveResearchReport(AStockModel):
     direct_production_weight_change_allowed: Literal[False] = False
     online_learning_allowed: Literal[False] = False
     main_paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
     report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -424,7 +422,6 @@ class AdaptiveResearchStatusReport(AStockModel):
     adaptive_weights_enabled: Literal[False] = False
     online_learning_allowed: Literal[False] = False
     main_paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
     next_permitted_stage: AdaptiveResearchNextStage
     status_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 

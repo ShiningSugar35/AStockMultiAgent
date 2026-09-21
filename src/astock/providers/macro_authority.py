@@ -1,8 +1,8 @@
-"""Recorded-first official macro releases with durable PIT semantics.
+"""Recorded-first official macro releases with durable source timestamps.
 
-Recorded fixtures are frozen official captures.  Replay preserves the original
-system-availability timestamp and registers typed PIT metadata.  Live extractors
-remain deliberately unavailable until an authority-specific parser is proven.
+Recorded fixtures are frozen official captures. Replay preserves the original
+system-availability timestamp and source lineage. Live extractors remain
+deliberately unavailable until an authority-specific parser is proven.
 """
 
 from __future__ import annotations
@@ -15,16 +15,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from astock.core.hashing import content_hash
-from astock.pit.repository import PointInTimeRepository
-from astock.pit.service import PointInTimeService
 from astock.providers.base import HttpProviderBase
 from astock.providers.http_resilience import HttpClientLike
-from astock.schemas import (
-    AvailabilityBasis,
-    FetchStatus,
-    PointInTimeStatus,
-    SourceSnapshot,
-)
+from astock.schemas import FetchStatus, SourceSnapshot
 
 
 class MacroAuthorityReleaseError(ValueError):
@@ -238,18 +231,7 @@ def _recorded_macro_release(
     _validate_macro_release(payload, provider_id)
     available = _aware_datetime(payload["available_to_system_at"])
     source_url = str(payload["source_url"])
-    indicator = str(payload["indicator_code"])
-    observation_period = str(payload["observation_period"])
-    revision = int(str(payload["revision_version"]))
-    source_id = f"macro:{provider_id}:{indicator}:{observation_period}:v{revision}"
-    repository = PointInTimeRepository(provider.state)
-    predecessor = None
-    if revision > 1:
-        predecessor = f"macro:{provider_id}:{indicator}:{observation_period}:v{revision - 1}"
-        if repository.get_by_source(predecessor) is None:
-            raise MacroAuthorityReleaseError(
-                f"Macro revision predecessor is not recorded: {predecessor}"
-            )
+
     object_ref = provider.object_store.put_bytes(content)
     snapshot = SourceSnapshot(
         created_at=available,
@@ -266,23 +248,6 @@ def _recorded_macro_release(
         rights_status="PUBLIC_OFFICIAL_AUTHORITY",
     )
     provider.state.register_snapshot(snapshot)
-    PointInTimeService(
-        repository,
-        provider.state,
-        provider.object_store,
-    ).create(
-        source_id=source_id,
-        source_snapshot_id=snapshot.snapshot_id,
-        period_end=_observation_period_end(observation_period),
-        published_at=None,
-        effective_at=None,
-        ingested_at=available,
-        available_to_system_at=available,
-        revised_at=available if revision > 1 else None,
-        supersedes_source_id=predecessor,
-        point_in_time_status=PointInTimeStatus.CERTIFIED,
-        availability_basis=AvailabilityBasis.FETCH_OBSERVED,
-    )
     return payload, snapshot
 
 
@@ -310,18 +275,14 @@ def _observation_period_end(raw: str) -> date:
     try:
         return date.fromisoformat(raw)
     except ValueError as exc:
-        raise MacroAuthorityReleaseError(
-            f"Unsupported macro observation period: {raw}"
-        ) from exc
+        raise MacroAuthorityReleaseError(f"Unsupported macro observation period: {raw}") from exc
 
 
 def _validate_macro_release(payload: dict[str, object], provider_id: str) -> None:
     """Validate the macro-economic release schema."""
     schema_version = payload.get("schema_version")
     if not isinstance(schema_version, str) or not schema_version.startswith("macro-release-v"):
-        raise MacroAuthorityReleaseError(
-            f"Invalid macro release schema version: {schema_version}"
-        )
+        raise MacroAuthorityReleaseError(f"Invalid macro release schema version: {schema_version}")
     source = payload.get("_astock_source")
     if not isinstance(source, str) or source != provider_id:
         raise MacroAuthorityReleaseError(
@@ -348,9 +309,7 @@ def _validate_macro_release(payload: dict[str, object], provider_id: str) -> Non
         raise MacroAuthorityReleaseError("Macro release missing available_to_system_at")
     try:
         published = date.fromisoformat(publication_date)
-        available_raw = datetime.fromisoformat(
-            available_to_system_at.replace("Z", "+00:00")
-        )
+        available_raw = datetime.fromisoformat(available_to_system_at.replace("Z", "+00:00"))
     except ValueError as exc:
         raise MacroAuthorityReleaseError("Macro release timeline is invalid") from exc
     if available_raw.tzinfo is None or available_raw.utcoffset() is None:

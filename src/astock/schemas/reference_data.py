@@ -1,4 +1,4 @@
-"""Point-in-time market-reference dataset contracts."""
+"""Current market-reference dataset contracts with legacy PIT fields ignored."""
 
 from __future__ import annotations
 
@@ -29,10 +29,16 @@ class ReferenceCoverageStatus(StrEnum):
     FAILED = "FAILED"
 
 
-class ReferencePitStatus(StrEnum):
-    CERTIFIED = "CERTIFIED"
-    RECONSTRUCTED = "RECONSTRUCTED"
-    UNVERIFIED = "UNVERIFIED"
+class _CurrentReferenceModel(AStockModel):
+    """Accept old payloads without carrying retired PIT status into new models."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_fields(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_status", None)
+        return value
 
 
 class CorporateActionStatus(StrEnum):
@@ -222,7 +228,7 @@ ReferenceRecord = (
 )
 
 
-class ReferenceBatch(AStockModel):
+class ReferenceBatch(_CurrentReferenceModel):
     batch_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     dataset_kind: ReferenceDatasetKind
     scope_key: str
@@ -230,7 +236,6 @@ class ReferenceBatch(AStockModel):
     raw_snapshot_ids: list[str] = Field(min_length=1)
     records: list[ReferenceRecord]
     coverage: ReferenceCoverage
-    pit_status: ReferencePitStatus
     available_to_system_at: AwareDatetime
 
     @model_validator(mode="after")
@@ -264,7 +269,7 @@ class ReferenceBatch(AStockModel):
                 isinstance(item, DailyBarObservation)
                 and item.available_to_system_at < item.session_close_at
             ):
-                raise ValueError("daily record is not point-in-time visible at batch release")
+                raise ValueError("daily record cannot be published before its session close")
         return self
 
 
@@ -276,7 +281,7 @@ class ReferenceFileDescriptor(AStockModel):
     logical_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class DatasetReleaseManifest(AStockModel):
+class DatasetReleaseManifest(_CurrentReferenceModel):
     # Omitted schema_version retains the legacy wire contract. New publishing
     # code opts into v3 explicitly so old cached fixtures remain readable.
     schema_version: str = "market-reference-release-v2"
@@ -294,7 +299,6 @@ class DatasetReleaseManifest(AStockModel):
     market_coverage_reconciliations: list[MarketCoverageReconciliation] = Field(
         default_factory=list
     )
-    pit_status: ReferencePitStatus
     available_to_system_at: AwareDatetime
 
     @model_validator(mode="after")
@@ -344,7 +348,7 @@ class DatasetReleaseManifest(AStockModel):
         return self
 
 
-class ReferenceSyncReport(AStockModel):
+class ReferenceSyncReport(_CurrentReferenceModel):
     # Omitted schema_version retains the v1 read contract. New service output
     # declares v2 explicitly rather than silently upgrading legacy payloads.
     schema_version: str = "reference-sync-report-v1"
@@ -360,7 +364,6 @@ class ReferenceSyncReport(AStockModel):
     market_coverage_reconciliations: list[MarketCoverageReconciliation] = Field(
         default_factory=list
     )
-    pit_status: ReferencePitStatus
     reason_codes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -397,7 +400,6 @@ __all__ = [
     "ReferenceCoverage",
     "ReferenceCoverageStatus",
     "ReferenceDatasetKind",
-    "ReferencePitStatus",
     "ReferenceFileDescriptor",
     "ReferenceSyncReport",
     "TradingSession",

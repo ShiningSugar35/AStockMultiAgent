@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "99f45caa9e33f32559fa8225e02bc6007139ac2ca34e3538aea847164b0ec293",
+  "report_id": "98ecb1bdff97001e6d4db87afb16f813dc67b1c8ff3440cef9223c7809a8930a",
   "capability_id": "playwright-mcp",
   "candidate_version": "0.0.80",
   "requested_stage": "SHADOW",
@@ -9,7 +9,6 @@
     "license": "PASS",
     "terms_of_service": "FAIL",
     "data_rights": "FAIL",
-    "pit": "FAIL",
     "provenance": "PASS",
     "credential_handling": "FAIL",
     "sbom": "FAIL",
@@ -27,7 +26,7 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "7a604030d5582ac201d42330f53a9315ebdb8644cace79365e09ce0d8eebfded"
+    "2fffb53027ad1dcebfebcd97b379489d0e3e16e122f45642164c5b6593b04484"
   ],
   "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",

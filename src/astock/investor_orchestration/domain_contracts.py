@@ -7,7 +7,6 @@ completed checkpoint before accepting it for a capability.
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -81,18 +80,18 @@ class DomainContractAudit:
                 raise ValueError(
                     "financial domain completion requires SUCCEEDED and COMPLETE coverage together"
                 )
-            if not output.input_fact_ids or not output.source_snapshot_ids or not output.pit_ids:
+            if not output.input_fact_ids or not output.source_snapshot_ids:
                 raise ValueError("financial integrity is missing its canonical input lineage")
             if output.hard_blocks:
                 raise ValueError("financial integrity has unresolved hard blocks")
         elif isinstance(output, IndustryProfile):
             if output.status.value != "READY" or output.missing_codes:
                 raise ValueError("industry research has not reached READY")
-            self._evidence(output.evidence_ids, request.evidence_cutoff)
+            self._evidence(output.evidence_ids)
         elif isinstance(output, ValuationPack):
             if output.status.value != "READY" or output.blocking_codes or not output.results:
                 raise ValueError("valuation has not reached its deterministic completion gate")
-            self._evidence(output.assumption_evidence_ids, request.evidence_cutoff)
+            self._evidence(output.assumption_evidence_ids)
         elif isinstance(output, InstitutionalDecisionContext):
             bundle = self.verifier.load(
                 output.fundamental_model_bundle_artifact_id, FundamentalModelBundle
@@ -102,9 +101,9 @@ class DomainContractAudit:
                 raise ValueError("institutional decision and fundamental bundle identities differ")
             if bundle.status.value != "READY" or bundle.blocking_codes:
                 raise ValueError("institutional decision requires a READY fundamental bundle")
-            self.verifier._check_time(bundle.model_dump(mode="json"), request.evidence_cutoff)
+            self.verifier._check_time(bundle.model_dump(mode="json"))
             self.verifier._verify_linked_hashes(bundle.model_dump(mode="json"))
-            self._evidence(output.evidence_ids, request.evidence_cutoff)
+            self._evidence(output.evidence_ids)
         elif isinstance(output, ResearchRoleOutput):
             self._role(node, artifact_id, output, request)
         elif isinstance(output, FullResearchInputReadinessReport):
@@ -116,8 +115,8 @@ class DomainContractAudit:
 
             if artifact_id != output.receipt_id:
                 raise ValueError("full-research capability must expose the sealed receipt identity")
-            if output.request_id != request.request_id or output.as_of != request.evidence_cutoff:
-                raise ValueError("recommendation receipt belongs to another request or as-of")
+            if output.request_id != request.request_id:
+                raise ValueError("recommendation receipt belongs to another request")
             replay = FullResearchRecommendationService(
                 self.verifier.store, objects=self.verifier.objects
             ).verify_receipt(output)
@@ -148,7 +147,7 @@ class DomainContractAudit:
             if plan is None or plan.position_id != output.position_id:
                 raise ValueError("holding review has no matching canonical monitoring plan")
             self._require_company(plan.company_id, request)
-            self._evidence(output.evidence_ids, request.evidence_cutoff)
+            self._evidence(output.evidence_ids)
         elif isinstance(output, ETFResearchMetrics):
             if output.observation_count <= 0 or not output.source_artifact_ids:
                 raise ValueError("ETF metrics have no observed source data")
@@ -167,7 +166,7 @@ class DomainContractAudit:
         ):
             raise ValueError("domain research belongs to another security")
 
-    def _evidence(self, evidence_ids: list[str], cutoff: datetime) -> None:
+    def _evidence(self, evidence_ids: list[str]) -> None:
         if not evidence_ids:
             raise ValueError("domain research requires verifiable evidence")
         repository = EvidenceRepository(self.verifier.state)
@@ -175,8 +174,6 @@ class DomainContractAudit:
             evidence = repository.get_evidence(evidence_id)
             if evidence is None:
                 raise ValueError("domain research references unavailable Evidence")
-            if evidence.available_to_system_at > cutoff:
-                raise ValueError("domain Evidence was unavailable at the frozen decision time")
             if evidence.fact_status.value in {"CONFLICTED", "UNVERIFIED"}:
                 raise ValueError(
                     "unverified or conflicted Evidence cannot certify domain completion"
@@ -195,7 +192,7 @@ class DomainContractAudit:
             raise ValueError("research role container is not allowed for this capability")
         plan = self.verifier.load(f"ResearchTeamPlan:{output.plan_id}", ResearchTeamPlan)
         assert isinstance(plan, ResearchTeamPlan)
-        self.verifier._check_time(plan.model_dump(mode="json"), request.evidence_cutoff)
+        self.verifier._check_time(plan.model_dump(mode="json"))
         self._require_company(plan.company_id, request)
         task = next((item for item in plan.tasks if item.task_id == output.task_id), None)
         if (
@@ -210,13 +207,13 @@ class DomainContractAudit:
             output.readiness_check_results.values()
         ):
             raise ValueError("research role has incomplete domain readiness checks")
-        completed = self._completed_task(plan, task.task_id, request.evidence_cutoff, set())
+        completed = self._completed_task(plan, task.task_id, set())
         if artifact_id not in completed.output_artifact_ids:
             raise ValueError("research role output is not the canonical completed task output")
-        self._evidence(output.evidence_ids, request.evidence_cutoff)
+        self._evidence(output.evidence_ids)
         if node.capability_id == "RED_TEAM":
-            bull = self._completed_task(plan, "bull-case", request.evidence_cutoff, set())
-            bear = self._completed_task(plan, "bear-case", request.evidence_cutoff, set())
+            bull = self._completed_task(plan, "bull-case", set())
+            bear = self._completed_task(plan, "bear-case", set())
             if bull.independent_context_id == bear.independent_context_id:
                 raise ValueError("red-team review requires independent bull and bear contexts")
 
@@ -224,7 +221,6 @@ class DomainContractAudit:
         self,
         plan: ResearchTeamPlan,
         task_id: str,
-        cutoff: datetime,
         visiting: set[str],
     ) -> ResearchRoleResult:
         if task_id in visiting or len(visiting) > 100:
@@ -254,7 +250,7 @@ class DomainContractAudit:
             or result.state.value != "COMPLETE"
         ):
             raise ValueError("research checkpoint points to a different task or result state")
-        self.verifier._check_time(result.model_dump(mode="json"), cutoff)
+        self.verifier._check_time(result.model_dump(mode="json"))
         evidence_ids: set[str] = set()
         for output_id in result.output_artifact_ids:
             output = self.verifier.load(output_id, ResearchRoleOutput)
@@ -266,7 +262,7 @@ class DomainContractAudit:
                 or not output.member_artifact_ids
             ):
                 raise ValueError("research role member lineage differs from the canonical plan")
-            self.verifier._check_time(output.model_dump(mode="json"), cutoff)
+            self.verifier._check_time(output.model_dump(mode="json"))
             output_record = self.verifier.state.artifact_record(output_id)
             assert output_record is not None
             if set(output.readiness_check_results) != set(task.readiness_checks) or not all(
@@ -285,7 +281,7 @@ class DomainContractAudit:
                     )
                 model = self.verifier.load(member_id, output_model(str(member["type"])))
                 member_payload = model.model_dump(mode="json")
-                self.verifier._check_time(member_payload, cutoff)
+                self.verifier._check_time(member_payload)
                 self.verifier._verify_linked_hashes(member_payload)
                 if member_payload.get("status") in {
                     "FAILED",
@@ -303,7 +299,7 @@ class DomainContractAudit:
         if evidence_ids != set(result.evidence_ids):
             raise ValueError("research role result Evidence differs from its outputs")
         for dependency in task.dependencies:
-            self._completed_task(plan, dependency, cutoff, visiting | {task_id})
+            self._completed_task(plan, dependency, visiting | {task_id})
             witness = self._checkpoint_witnesses[f"{plan.plan_id}:{dependency}"]
             if (
                 not isinstance(witness, dict)
@@ -344,7 +340,7 @@ class DomainContractAudit:
             raise ValueError(
                 "readiness report does not match the current canonical research results"
             )
-        self.verifier._check_time(plan.model_dump(mode="json"), request.evidence_cutoff)
+        self.verifier._check_time(plan.model_dump(mode="json"))
         for task in plan.tasks:
             if task.required_for_recommendation:
-                self._completed_task(plan, task.task_id, request.evidence_cutoff, set())
+                self._completed_task(plan, task.task_id, set())

@@ -507,9 +507,8 @@ class VerifiedAnswerProjector:
             request.request_id != coverage.request_id
             or coverage.request_fingerprint != content_hash(request)
             or request.normalized_intent != preflight.normalized_intent
-            or request.evidence_cutoff != preflight.as_of
         ):
-            raise ValueError("answer projection request/intent/cutoff binding differs")
+            raise ValueError("answer projection request/intent binding differs")
         with self.verifier.store.connect() as connection:
             row = connection.execute(
                 "SELECT payload_json FROM capability_execution_plans WHERE plan_id=?",

@@ -428,8 +428,6 @@ def load_research_planner_policy(path: Path) -> ResearchPlannerPolicy:
             raise ValueError("research planner dependency order is cyclic or reversed")
     if raw.get("paper_ledger_write_allowed") is not False:
         raise ValueError("research planner cannot enable paper ledger writes")
-    if raw.get("broker_execution_allowed") is not False:
-        raise ValueError("research planner cannot enable broker execution")
     return ResearchPlannerPolicy(
         policy_version=str(raw["schema_version"]),
         mandatory_modules=mandatory,

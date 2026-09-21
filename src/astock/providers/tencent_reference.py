@@ -175,7 +175,9 @@ class TencentReferenceProvider(HttpProviderBase):
             price = _positive_number(fields[3])
             settlement = _positive_number(fields[4])
             turnover = _nonnegative_number(fields[38])
+            pe_ttm = _positive_number(fields[39])
             float_cap_100m = _nonnegative_number(fields[44])
+            pb_mrq = _positive_number(fields[46])
             amount = _amount_from_composite(fields[35])
             if not name or (price <= 0 and settlement <= 0):
                 raise ValueError("Tencent quote fallback lacks a usable identity/price")
@@ -193,6 +195,8 @@ class TencentReferenceProvider(HttpProviderBase):
                     "settlement": settlement,
                     "amount": amount,
                     "turnoverratio": turnover,
+                    "pe_ttm": pe_ttm if pe_ttm > 0 else None,
+                    "pb_mrq": pb_mrq if pb_mrq > 0 else None,
                     "float_market_cap_cny": float_cap_100m * 100_000_000,
                     "quote_time": quote_time.isoformat(),
                 }

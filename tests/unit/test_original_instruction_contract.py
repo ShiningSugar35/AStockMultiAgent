@@ -43,7 +43,6 @@ def test_root_documents_separate_current_plan_and_accepted_facts() -> None:
     assert not retired_design.exists()
     for required in (
         "本文件只保存尚未完成的工作",
-        "broker_execution_allowed=false",
     ):
         assert required in plan
     manifest = yaml.safe_load(

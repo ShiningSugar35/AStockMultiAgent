@@ -42,17 +42,39 @@ def test_domain_node_output_is_a_real_canonical_model(capability: str, expected:
     assert model.__module__.startswith("astock.schemas.")
 
 
-def test_nested_price_availability_cannot_bypass_temporal_check() -> None:
-    cutoff = datetime.now(UTC)
+@pytest.mark.parametrize(
+    "contract",
+    (
+        "ResearchIntent",
+        "CompanyResearchIntent",
+        "PolicyRegimeProfile",
+        "MarketRiskProfile",
+        "BlindCandidateShortlist",
+        "MarketContextPack",
+        "IndependentBullCase",
+        "IndependentBearCase",
+        "ModelRiskValidationReport",
+    ),
+)
+def test_research_team_members_have_canonical_output_contracts(contract: str) -> None:
+    model = output_model(contract)
+    assert issubclass(model, BaseModel)
+    assert model.__module__ == "astock.schemas.research_team"
+
+
+def test_current_research_accepts_data_acquired_before_decision_freeze() -> None:
+    question_time = datetime.now(UTC)
+    acquired_at = question_time + timedelta(days=1)
+    decision_time = acquired_at + timedelta(seconds=1)
     payload = {
-        "as_of": cutoff.isoformat(),
+        "as_of": acquired_at.isoformat(),
         "market_price_anchor": {
-            "observed_at": cutoff.isoformat(),
-            "available_to_system_at": (cutoff + timedelta(days=1)).isoformat(),
+            "observed_at": acquired_at.isoformat(),
+            "available_to_system_at": acquired_at.isoformat(),
         },
     }
-    with pytest.raises(ValueError, match="frozen|future"):
-        RegisteredOutputVerifier._check_time(payload, cutoff)
+    RegisteredOutputVerifier._check_time(payload, decision_time)
+
 
 
 def test_forecast_dates_are_not_confused_with_future_input_availability() -> None:

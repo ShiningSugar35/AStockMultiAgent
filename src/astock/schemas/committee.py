@@ -118,9 +118,16 @@ class CommitteeCoverageMetrics(AStockModel):
     data_coverage: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
     evidence_coverage: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
     specialist_coverage: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
-    pit_coverage: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
     liquidity_score: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
     evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_coverage(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_coverage", None)
+        return value
 
     @model_validator(mode="after")
     def validate_evidence(self) -> CommitteeCoverageMetrics:
@@ -326,7 +333,6 @@ class CommitteeRuleConfig(AStockModel):
     min_data_coverage: Decimal = Field(ge=0, le=1)
     min_evidence_coverage: Decimal = Field(ge=0, le=1)
     min_specialist_coverage: Decimal = Field(ge=0, le=1)
-    min_pit_coverage: Decimal = Field(ge=0, le=1)
     min_liquidity_score: Decimal = Field(ge=0, le=1)
     max_single_position: Decimal = Field(gt=0, le=1)
     high_position_threshold: Decimal = Field(gt=0, le=1)
@@ -345,6 +351,14 @@ class CommitteeRuleConfig(AStockModel):
     max_estimated_text_tokens: int = Field(ge=1)
     provider_enabled: bool = False
     provider_cost_ceiling_cny: Decimal = Field(ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_threshold(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("min_pit_coverage", None)
+        return value
 
     @model_validator(mode="after")
     def validate_rules(self) -> CommitteeRuleConfig:
@@ -576,7 +590,6 @@ class TradeProtocol(AStockModel):
     evidence_ids: list[str] = Field(min_length=1)
     effective_from: AwareDatetime
     requires_user_confirmation: Literal[True] = True
-    broker_execution_allowed: Literal[False] = False
     paper_simulation_allowed: bool = False
     ledger_write_allowed: bool = False
 

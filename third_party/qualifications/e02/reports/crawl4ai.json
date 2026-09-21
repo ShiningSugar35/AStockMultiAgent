@@ -1,6 +1,6 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "4c014e51b3302d1bb3da752dce04af73a88e3be69e2f0da12c8a13e353f6fdbf",
+  "report_id": "e89db05ebdf3b77db8afae8f0e47115da6a05c9e2200ee82daf3dcd6c6f626fd",
   "capability_id": "crawl4ai",
   "candidate_version": "0.9.3",
   "requested_stage": "SHADOW",
@@ -9,7 +9,6 @@
     "license": "PASS",
     "terms_of_service": "FAIL",
     "data_rights": "FAIL",
-    "pit": "FAIL",
     "provenance": "PASS",
     "credential_handling": "FAIL",
     "sbom": "FAIL",
@@ -27,7 +26,7 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "EXACT_ITEM",
   "evidence_object_hashes": [
-    "6f0b8094ccbe95b24338105ad3facb358094b9f163980d934f0621b49d0842a7"
+    "1c2f6a6290498d1ff9b1717dac809a99aa3d8dbfa6d8309af5eb647350db9e9a"
   ],
   "valid_from": "2026-09-02T06:16:28Z",
   "expires_at": "2026-10-02T06:16:28Z",

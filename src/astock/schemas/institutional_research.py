@@ -12,7 +12,6 @@ from pydantic import AwareDatetime, Field, model_validator
 from astock.schemas.base import AStockModel
 from astock.schemas.entry_quality import EntryQualityState
 from astock.schemas.evidence import ClaimType, EvidenceGrade, FactStatus
-from astock.schemas.pit import PointInTimeStatus
 
 _SHA256 = r"^[0-9a-f]{64}$"
 
@@ -128,7 +127,14 @@ class EvidenceQualityVector(AStockModel):
     evidence_id: str = Field(min_length=1)
     evidence_grade: EvidenceGrade
     fact_status: FactStatus
-    pit_status: PointInTimeStatus | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_retired_pit_status(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("pit_status", None)
+        return value
     authority_tier: EvidenceAuthorityTier
     directness: EvidenceDirectness
     independence_group: str = Field(min_length=1)
@@ -245,7 +251,6 @@ class EvidenceSufficiencyReport(AStockModel):
     source_artifact_ids: list[str]
     source_object_hashes: list[str]
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_report(self) -> EvidenceSufficiencyReport:
@@ -943,7 +948,6 @@ class InstitutionalDecisionContext(AStockModel):
     source_artifact_ids: list[str]
     source_object_hashes: list[str]
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_context(self) -> InstitutionalDecisionContext:
@@ -980,7 +984,6 @@ class FundamentalModelBundle(AStockModel):
     evidence_ids: list[str]
     claim_ids: list[str]
     paper_ledger_write_allowed: Literal[False] = False
-    broker_execution_allowed: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_bundle(self) -> FundamentalModelBundle:

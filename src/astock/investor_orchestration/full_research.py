@@ -34,6 +34,7 @@ from astock.schemas.full_research import (
     CandidateRankingEntry,
     ChallengerAssessment,
     CompanyFundamentalSnapshot,
+    CurrentSourceSnapshot,
     EvidenceConflict,
     ExecutionInstruction,
     FinancialQualityAssessment,
@@ -48,7 +49,6 @@ from astock.schemas.full_research import (
     MacroResearchOutcome,
     ModelPortfolioAssumptions,
     NewsEventResearchPack,
-    PointInTimeSnapshot,
     PortfolioAssumptionSource,
     PortfolioConstructionSnapshot,
     PortfolioPositionPlan,
@@ -234,7 +234,7 @@ class FullResearchRecommendationService:
         if parent is not None:
             contract = FullResearchRequestContract(
                 request_id=request.request_id,
-                as_of_timestamp=request.evidence_cutoff,
+                as_of_timestamp=request.analysis_as_of,
                 raw_text_hash=content_hash(request.raw_text),
                 account_id=request.account_id,
                 portfolio_assumptions=parent.portfolio_assumptions,
@@ -313,7 +313,7 @@ class FullResearchRecommendationService:
         requested_count = self._requested_count(request.raw_text)
         contract = FullResearchRequestContract(
             request_id=request.request_id,
-            as_of_timestamp=request.evidence_cutoff,
+            as_of_timestamp=request.analysis_as_of,
             raw_text_hash=content_hash(request.raw_text),
             account_id=request.account_id,
             portfolio_assumptions=assumptions,
@@ -444,50 +444,48 @@ class FullResearchRecommendationService:
         value = int(match.group(1))
         return value if value > 0 else None
 
-    def point_in_time_snapshot(
+    def current_source_snapshot(
         self,
         request: InvestorRequestEnvelope,
         sources: Sequence[SourceLineageEntry],
         *,
         conflicts: Sequence[EvidenceConflict] = (),
-    ) -> PointInTimeSnapshot:
+    ) -> CurrentSourceSnapshot:
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
-        visible: list[SourceLineageEntry] = []
-        leakage = 0
-        for source in sources:
-            normalized = SourceLineageEntry.model_validate(source.model_dump())
-            if normalized.available_to_system_at > request.evidence_cutoff:
-                leakage += 1
-                continue
-            visible.append(normalized)
-        families = {item.family for item in visible}
+        normalized_sources = [
+            SourceLineageEntry.model_validate(source.model_dump()) for source in sources
+        ]
+        families = {item.family for item in normalized_sources}
         required = set(self.policy.critical_source_families)
         coverage = (
-            Decimal(len(required & families)) / Decimal(len(required)) if required else Decimal("1")
+            Decimal(len(required & families)) / Decimal(len(required))
+            if required
+            else Decimal("1")
         )
         open_conflicts = [item for item in conflicts if item.status == "OPEN"]
         status = (
             FullResearchNodeStatus.PASS
-            if not leakage and not open_conflicts and coverage == Decimal("1")
-            else FullResearchNodeStatus.FAIL
-            if leakage
+            if not open_conflicts and coverage == Decimal("1")
             else FullResearchNodeStatus.BLOCKED
+        )
+        captured_at = max(
+            (item.available_to_system_at for item in normalized_sources),
+            default=request.analysis_as_of,
         )
         body = {
             "request_id": request.request_id,
-            "as_of": request.evidence_cutoff,
-            "source_ids": sorted(item.source_id for item in visible),
+            "captured_at": captured_at,
+            "source_ids": sorted(item.source_id for item in normalized_sources),
             "conflicts": sorted(item.conflict_id for item in conflicts),
         }
-        return PointInTimeSnapshot(
-            snapshot_id=f"pit-{uuid.uuid5(uuid.NAMESPACE_URL, content_hash(body))}",
+        return CurrentSourceSnapshot(
+            snapshot_id=f"source-{uuid.uuid5(uuid.NAMESPACE_URL, content_hash(body))}",
             request_id=request.request_id,
-            as_of_timestamp=request.evidence_cutoff,
-            sources=tuple(sorted(visible, key=lambda item: item.source_id)),
+            captured_at=captured_at,
+            sources=tuple(sorted(normalized_sources, key=lambda item: item.source_id)),
             conflicts=tuple(sorted(conflicts, key=lambda item: item.conflict_id)),
             critical_source_families=self.policy.critical_source_families,
             lineage_coverage=coverage,
-            point_in_time_leakage_count=leakage,
             status=status,
         )
 
@@ -993,7 +991,7 @@ class FullResearchRecommendationService:
         coverage = Decimal(accepted) / Decimal(len(self.policy.mandatory_nodes))
         body = {
             "request_id": request.request_id,
-            "as_of": request.evidence_cutoff,
+            "as_of": request.analysis_as_of,
             "policy": self.policy.policy_id,
             "executions": [item.model_dump(mode="json") for item in executions],
         }
@@ -1001,7 +999,7 @@ class FullResearchRecommendationService:
             dag_id=f"full-research-dag-{uuid.uuid5(uuid.NAMESPACE_URL, content_hash(body))}",
             policy_id=self.policy.policy_id,
             request_id=request.request_id,
-            as_of_timestamp=request.evidence_cutoff,
+            as_of_timestamp=request.analysis_as_of,
             executions=tuple(executions),
             degraded_allowed=self.policy.degraded_allowed,
             mandatory_coverage=coverage,
@@ -1011,7 +1009,7 @@ class FullResearchRecommendationService:
     def publication_decision(
         self,
         dag: FullResearchDAGReceipt,
-        pit: PointInTimeSnapshot,
+        source_snapshot: CurrentSourceSnapshot,
         portfolio: PortfolioConstructionSnapshot,
         risk_audit: PortfolioRiskAudit,
         execution_plans: Sequence[ExecutionInstruction],
@@ -1020,7 +1018,7 @@ class FullResearchRecommendationService:
         reasons: list[str] = []
         formal = (
             dag.publication_ready
-            and pit.status == FullResearchNodeStatus.PASS
+            and source_snapshot.status == FullResearchNodeStatus.PASS
             and risk_audit.status == FullResearchNodeStatus.PASS
         )
         if portfolio.constraint_violations:
@@ -1048,8 +1046,8 @@ class FullResearchRecommendationService:
             status = "BLOCKED"
             if not dag.publication_ready:
                 reasons.append("MANDATORY_RESEARCH_DAG_NOT_READY")
-            if pit.status != FullResearchNodeStatus.PASS:
-                reasons.append("POINT_IN_TIME_EVIDENCE_NOT_READY")
+            if source_snapshot.status != FullResearchNodeStatus.PASS:
+                reasons.append("CURRENT_SOURCE_EVIDENCE_NOT_READY")
             if risk_audit.status != FullResearchNodeStatus.PASS:
                 reasons.append("RISK_AUDIT_NOT_READY")
         return PublicationDecision(
@@ -1287,9 +1285,7 @@ class FullResearchRecommendationService:
         if receipt.publication.formal_recommendation_allowed:
             if receipt.dag.mandatory_coverage != Decimal("1") or not receipt.dag.publication_ready:
                 raise ValueError("publication gate bypassed incomplete Mandatory Research")
-            if receipt.pit_snapshot.point_in_time_leakage_count:
-                raise ValueError("publication gate bypassed point-in-time leakage")
-            if receipt.pit_snapshot.lineage_coverage != Decimal("1"):
+            if receipt.source_snapshot.lineage_coverage != Decimal("1"):
                 raise ValueError("publication gate bypassed incomplete source lineage")
         if receipt.publication.instant_trade_parameters_allowed and any(
             not item.quote_fresh for item in receipt.execution_plans

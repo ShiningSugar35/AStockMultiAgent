@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any, cast
 
 from typer.testing import CliRunner
 
@@ -85,5 +86,5 @@ def test_supplemental_service_factory_and_adapter_share_project_root(tmp_path):
     _, state, objects = _runtime(tmp_path / "runtime")
     service = SupplementalEvidenceService(PROJECT_ROOT, state, objects)
     assert service.factory.project_root == PROJECT_ROOT.resolve()
-    provider = service.factory.create("finnhub-news-hints")
+    provider = cast(Any, service.factory.create("finnhub-news-hints"))
     assert provider.project_root == service.factory.project_root

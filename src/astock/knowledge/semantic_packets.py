@@ -1,4 +1,4 @@
-"""Offline OpenCode/DeepSeek packets built only from complete ArgumentUnits."""
+"""Offline semantic-model packets built only from complete ArgumentUnits."""
 
 from __future__ import annotations
 
@@ -34,6 +34,15 @@ from astock.schemas import (
     SemanticSkillCandidate,
 )
 
+DEFAULT_SEMANTIC_PROVIDER = "gemini-agent-bridge"
+DEFAULT_SEMANTIC_MODEL_ID = "gemini-flash-latest"
+DEFAULT_SEMANTIC_TRANSPORT_POLICY = "GEMINI_AGENT_BRIDGE_AUTO"
+ALLOWED_SEMANTIC_TRANSPORT_POLICIES = {
+    "GEMINI_AGENT_BRIDGE_AUTO",
+    "CHATGPT_MAIN_AGENT_DIRECT",
+    "GEMINI_AGENT_BRIDGE_WITH_CHATGPT_FALLBACK",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class SemanticPacketExecution:
@@ -62,7 +71,20 @@ class SemanticPacketService:
         self.runtime_root = runtime_root.resolve()
         self.prompt_file = prompt_file.resolve()
 
-    def export(self, run_id: str) -> SemanticPacketExecution:
+    def export(
+        self,
+        run_id: str,
+        *,
+        provider: str = DEFAULT_SEMANTIC_PROVIDER,
+        model_id: str = DEFAULT_SEMANTIC_MODEL_ID,
+        transport_policy: str = DEFAULT_SEMANTIC_TRANSPORT_POLICY,
+    ) -> SemanticPacketExecution:
+        provider = provider.strip()
+        model_id = model_id.strip()
+        if not provider or not model_id:
+            raise ValueError("semantic LLM provider and model_id are required")
+        if transport_policy not in ALLOWED_SEMANTIC_TRANSPORT_POLICIES:
+            raise ValueError("semantic LLM transport policy is not allowed")
         run = self.repository.get_run(run_id)
         if run is None:
             raise KeyError(run_id)
@@ -70,7 +92,7 @@ class SemanticPacketService:
             SemanticRunStage.EMBEDDING_SCREENED,
             SemanticRunStage.DEEPSEEK_PACKET_READY,
         }:
-            raise ValueError("semantic run is not ready for an offline DeepSeek packet")
+            raise ValueError("semantic run is not ready for an offline semantic-model packet")
         registration = self._verified_embedding_registration(run_id)
         directory = self.parquet_store.run_directory(
             run.author_source_id,
@@ -206,8 +228,10 @@ class SemanticPacketService:
         prompt_bytes = self.prompt_file.read_bytes()
         prompt_hash = sha256_bytes(prompt_bytes)
         input_manifest = {
-            "schema_version": "semantic-deepseek-input-manifest-v3",
+            "schema_version": "semantic-llm-input-manifest-v4",
             "run_id": run_id,
+            "provider": provider,
+            "model_id": model_id,
             "embedding_manifest_id": registration.manifest.manifest_id,
             "embedding_contract_version": (
                 registration.manifest.embedding_contract_version.value
@@ -215,7 +239,7 @@ class SemanticPacketService:
             "packet_contract_version": (
                 SemanticPacketContract.COMPLETE_ARGUMENT_UNIT_V2.value
             ),
-            "transport_policy": "LOCAL_ONLY_MANUAL_NO_AUTO_SEND",
+            "transport_policy": transport_policy,
             "packet_object_sha256": packet_object.sha256,
             "result_schema_sha256": schema_hash,
             "prompt_sha256": prompt_hash,
@@ -234,26 +258,27 @@ class SemanticPacketService:
         input_manifest_object = self.object_store.put_json(input_manifest)
         batch_identity = {
             "run_id": run_id,
+            "provider": provider,
+            "model_id": model_id,
             "packet_object_sha256": packet_object.sha256,
             "prompt_sha256": prompt_hash,
             "result_schema_sha256": schema_hash,
             "input_manifest_sha256": input_manifest_object.sha256,
-            "model_id": "deepseek-v4-flash",
             "packet_contract_version": SemanticPacketContract.COMPLETE_ARGUMENT_UNIT_V2,
-            "transport_policy": "LOCAL_ONLY_MANUAL_NO_AUTO_SEND",
+            "transport_policy": transport_policy,
         }
         now = run.started_at
         batch = SemanticLlmBatch(
             batch_id=f"semantic-llm-batch:{content_hash(batch_identity)}",
             run_id=run_id,
-            provider="opencode-manual",
-            model_id="deepseek-v4-flash",
+            provider=provider,
+            model_id=model_id,
             prompt_sha256=prompt_hash,
             result_schema_sha256=schema_hash,
             input_manifest_sha256=input_manifest_object.sha256,
             packet_object_sha256=packet_object.sha256,
             status=SemanticLlmBatchStatus.PACKET_READY,
-            local_only=True,
+            local_only=False,
             exported_argument_count=len(packets),
             imported_result_count=0,
             updated_at=now,
@@ -277,8 +302,8 @@ class SemanticPacketService:
                     "batch_id": batch.batch_id,
                     "provider": batch.provider,
                     "model_id": batch.model_id,
-                    "expected_result_file": "deepseek-results.jsonl",
-                    "external_request_sent": False,
+                    "expected_result_file": "semantic-results.jsonl",
+                    "external_request_sent_at_export": False,
                 }
             )
             + b"\n",
@@ -351,7 +376,7 @@ class SemanticPacketService:
             paragraph_ids = {paragraph.paragraph_id for paragraph in packet.paragraphs}
             for ordinal, draft in enumerate(result.candidates, start=1):
                 if not set(draft.evidence_paragraph_ids).issubset(paragraph_ids):
-                    raise ValueError("DeepSeek candidate cites a paragraph outside its argument")
+                    raise ValueError("semantic candidate cites a paragraph outside its argument")
                 payload = {
                     "schema_version": "semantic-skill-candidate-payload-v1",
                     "argument_unit_id": result.argument_unit_id,
@@ -423,6 +448,8 @@ class SemanticPacketService:
         required_keys = {
             "schema_version",
             "run_id",
+            "provider",
+            "model_id",
             "embedding_manifest_id",
             "embedding_contract_version",
             "packet_contract_version",
@@ -440,8 +467,10 @@ class SemanticPacketService:
             raise ValueError("semantic LLM input manifest fields are not exact")
         if (
             input_manifest["schema_version"]
-            != "semantic-deepseek-input-manifest-v3"
+            != "semantic-llm-input-manifest-v4"
             or input_manifest["run_id"] != batch.run_id
+            or input_manifest["provider"] != batch.provider
+            or input_manifest["model_id"] != batch.model_id
             or input_manifest["embedding_manifest_id"]
             != registration.manifest.manifest_id
             or input_manifest["embedding_contract_version"]
@@ -449,7 +478,7 @@ class SemanticPacketService:
             or input_manifest["packet_contract_version"]
             != SemanticPacketContract.COMPLETE_ARGUMENT_UNIT_V2.value
             or input_manifest["transport_policy"]
-            != "LOCAL_ONLY_MANUAL_NO_AUTO_SEND"
+            not in ALLOWED_SEMANTIC_TRANSPORT_POLICIES
             or input_manifest["packet_object_sha256"]
             != batch.packet_object_sha256
             or input_manifest["result_schema_sha256"]
@@ -620,23 +649,23 @@ class SemanticPacketService:
                 if line.strip()
             ]
         except (UnicodeDecodeError, ValueError) as exc:
-            raise ValueError("invalid DeepSeek semantic JSONL result") from exc
+            raise ValueError("invalid semantic-model JSONL result") from exc
         packets = self._packet_index(batch)
         by_id = {result.argument_unit_id: result for result in results}
         if len(by_id) != len(results):
-            raise ValueError("DeepSeek semantic results contain duplicate arguments")
+            raise ValueError("semantic-model results contain duplicate arguments")
         if set(by_id) != set(packets):
-            raise ValueError("DeepSeek semantic results must cover every exported argument once")
+            raise ValueError("semantic-model results must cover every exported argument once")
         for argument_unit_id, result in by_id.items():
             packet = packets[argument_unit_id]
             if result.input_sha256 != packet.input_sha256:
-                raise ValueError("DeepSeek semantic result input hash mismatch")
+                raise ValueError("semantic-model result input hash mismatch")
             paragraph_ids = {paragraph.paragraph_id for paragraph in packet.paragraphs}
             if any(
                 not set(candidate.evidence_paragraph_ids).issubset(paragraph_ids)
                 for candidate in result.candidates
             ):
-                raise ValueError("DeepSeek semantic result cites an unknown paragraph")
+                raise ValueError("semantic-model result cites an unknown paragraph")
         return [by_id[argument_unit_id] for argument_unit_id in sorted(by_id)]
 
 

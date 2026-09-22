@@ -67,7 +67,9 @@ def summarize(record: sqlite3.Row, payload: dict[str, Any]) -> dict[str, Any]:
         portfolio = payload.get("portfolio")
         positions = portfolio.get("positions", []) if isinstance(portfolio, dict) else []
         result["position_count"] = len(positions) if isinstance(positions, list) else None
-        result["requires_current_research_refresh"] = "pit_snapshot" in payload
+        result["requires_current_research_refresh"] = (
+            "pit_snapshot" in payload or "broker_execution_allowed" in payload
+        )
         result["current_request_satisfied"] = "NOT_EVALUATED"
     if record["type"] == "ResearchSeedReport":
         for key in ("universe_coverage_level", "universe_coverage_status",

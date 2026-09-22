@@ -128,7 +128,15 @@ class RecommendationFulfillmentService:
                 if not item.eligible and "COMMITTEE_WATCH" in item.rejection_reasons
             )
         )
-        seed_reports = self._seed_reports(receipt)
+        try:
+            seed_reports = self._seed_reports(receipt)
+        except ArtifactReadError:
+            return RecommendationFulfillmentAssessment(
+                **base,
+                state=RecommendationFulfillmentState.REFRESH_CURRENT_RESEARCH,
+                satisfied=False,
+                next_action="REBUILD_CURRENT_RECOMMENDATION_RECEIPT",
+            )
         report_ids = tuple(report.report_id for report in seed_reports)
         universe_formal = (
             all(report.formal_full_market_coverage_allowed for report in seed_reports)
@@ -255,6 +263,8 @@ class RecommendationFulfillmentService:
             maximum_price = plan.maximum_acceptable_price
             current_entry = (
                 plan.quote_fresh
+                and plan.instant_quantity_allowed
+                and (plan.initial_shares is not None and plan.initial_shares > 0)
                 and buy_low <= plan.reference_price <= buy_high
                 and plan.reference_price <= maximum_price
             )

@@ -1,51 +1,19 @@
 schema_version: project-work-package-manifest-v1
 plan_id: investor-orchestration-and-regime-plan-v1
 status: CURRENT
-updated_on: 2026-09-21
+updated_on: 2026-09-22
+
 authority:
   machine_index: planning/work_packages_v1.yaml
   human_plan: 开发计划.md
   governance: docs/README.md
   recent_evidence: 进度验收.md
+
 rules:
   allowed_statuses: [PLANNED, IN_PROGRESS, BLOCKED, REVIEW]
   completed_packages_removed_from_active_manifest: true
   unique_writer_lane_required: true
   dependency_ids_must_exist: true
   markdown_consistency_check_required: true
-work_packages:
-  - id: WP-43
-    order: 43
-    title: 旧工件兼容读取与可定位发布故障
-    status: IN_PROGRESS
-    priority: P0
-    owner_lane: wp43-47-recommendation-audit
-    depends_on: []
-  - id: WP-44
-    order: 44
-    title: 轻量 CLI 与只读诊断入口
-    status: PLANNED
-    priority: P1
-    owner_lane: wp43-47-recommendation-audit
-    depends_on: [WP-43]
-  - id: WP-45
-    order: 45
-    title: 可恢复的荐股编排与根因漏斗
-    status: PLANNED
-    priority: P0
-    owner_lane: wp43-47-recommendation-audit
-    depends_on: [WP-43, WP-44]
-  - id: WP-46
-    order: 46
-    title: 可建仓覆盖目标与增量扩池
-    status: PLANNED
-    priority: P0
-    owner_lane: wp43-47-recommendation-audit
-    depends_on: [WP-45]
-  - id: WP-47
-    order: 47
-    title: 宿主感知时限、Scheduled接力与最终收口
-    status: PLANNED
-    priority: P0
-    owner_lane: wp43-47-recommendation-audit
-    depends_on: [WP-45, WP-46]
+
+work_packages: []

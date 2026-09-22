@@ -347,7 +347,7 @@ class KillableResearchWorker:
             receive.close()
             send.close()
             if scratch is not None:
-                shutil.rmtree(scratch)
+                shutil.rmtree(scratch, ignore_errors=True)
 
 
 def run_company_request(

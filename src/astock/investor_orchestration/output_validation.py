@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from astock import schemas
+from astock.core import artifact_reading
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.investor_orchestration.domain_contracts import DomainContractAudit
@@ -102,6 +103,7 @@ class RegisteredOutputVerifier:
                 {
                     "registered_output_verifier": inspect.getsource(type(self)),
                     "domain_contract_audit": inspect.getsource(DomainContractAudit),
+                    "artifact_reading": inspect.getsource(artifact_reading),
                 }
             )
         except (OSError, TypeError):
@@ -109,15 +111,15 @@ class RegisteredOutputVerifier:
                 {"contract": "registered-output-verifier-source-unavailable-v1"}
             )
 
-    def load(self, artifact_id: str, model: type[BaseModel]) -> BaseModel:
+    def load[ModelT: BaseModel](self, artifact_id: str, model: type[ModelT]) -> ModelT:
         record = self.state.artifact_record(artifact_id)
         if record is None or record["type"] != model.__name__:
             raise ValueError("output is not registered with the required artifact type")
-        result = model.model_validate_json(self.objects.get_bytes(str(record["object_hash"])))
-        version = getattr(result, "schema_version", None)
-        if version is not None and version != record["schema_version"]:
-            raise ValueError("artifact registry and payload schema versions differ")
-        return result
+        return artifact_reading.decode_registered_artifact(
+            self.objects.get_bytes(str(record["object_hash"])),
+            model,
+            registry_schema_version=str(record["schema_version"]),
+        )
 
     def verify(
         self,
@@ -172,6 +174,18 @@ class RegisteredOutputVerifier:
         model: type[BaseModel],
         request: InvestorRequestEnvelope,
     ) -> None:
+        if (
+            request.decision_freeze_artifact_id is not None
+            and node.capability_id not in _POST_FREEZE_DERIVED_OUTPUTS
+        ):
+            from astock.investor_orchestration.decision_freeze import DecisionFreezeService
+
+            frozen = DecisionFreezeService(self.store, self.objects).get(
+                request.decision_freeze_artifact_id
+            )
+            frozen_ids = {binding.artifact_id for binding in frozen.input_bindings}
+            if artifact_id not in frozen_ids:
+                raise ValueError("output is not bound to the frozen decision input identity")
         output = self.load(artifact_id, model)
         payload = output.model_dump(mode="json")
         self._check_time(payload, request.analysis_as_of, node.freshness_seconds)

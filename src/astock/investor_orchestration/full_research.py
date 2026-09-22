@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 import uuid
 from collections import defaultdict
@@ -26,7 +25,10 @@ from astock.investor_orchestration.investment_objectives import (
     goal_entry_ceiling,
     objective_projection,
 )
-from astock.investor_orchestration.models import InvestorRequestEnvelope
+from astock.investor_orchestration.models import (
+    InvestorRequestEnvelope,
+    requested_recommendation_count,
+)
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
 from astock.schemas.entry_quality import EntryQualityState
@@ -239,7 +241,7 @@ class FullResearchRecommendationService:
                 account_id=request.account_id,
                 portfolio_assumptions=parent.portfolio_assumptions,
                 requested_instruments=tuple(request.entity_ids),
-                requested_count=self._requested_count(request.raw_text),
+                requested_count=self._requested_count(request),
                 current_recommendation=request.research_mode == "CURRENT",
                 decision_context=(
                     "EXISTING_HOLDING"
@@ -310,7 +312,7 @@ class FullResearchRecommendationService:
             ),
             user_constraints=user_constraints,
         )
-        requested_count = self._requested_count(request.raw_text)
+        requested_count = self._requested_count(request)
         contract = FullResearchRequestContract(
             request_id=request.request_id,
             as_of_timestamp=request.analysis_as_of,
@@ -437,12 +439,11 @@ class FullResearchRecommendationService:
         )
 
     @staticmethod
-    def _requested_count(raw_text: str) -> int | None:
-        match = re.search(r"(?:选|挑|推荐)\s*(\d+)\s*(?:只|支|个)?(?:股|股票)", raw_text)
-        if match is None:
-            return None
-        value = int(match.group(1))
-        return value if value > 0 else None
+    def _requested_count(request: InvestorRequestEnvelope) -> int | None:
+        target = request.metadata.get("recommendation_target_actionable")
+        if isinstance(target, int) and target > 0:
+            return target
+        return requested_recommendation_count(request.raw_text)
 
     def current_source_snapshot(
         self,

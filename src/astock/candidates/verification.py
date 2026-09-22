@@ -606,8 +606,11 @@ class ProductionCandidateInputVerifier:
     ) -> None:
         self._verify_registered_artifact(artifact)
         current_live = self._current_live(release)
-        pack = FinancialIntegrityEvidencePack.model_validate_json(
-            self.objects.get_bytes(artifact.object_hash)
+        from astock.core.artifact_reading import decode_registered_artifact
+
+        pack = decode_registered_artifact(
+            self.objects.get_bytes(artifact.object_hash), FinancialIntegrityEvidencePack,
+            registry_schema_version="1.0",
         )
         evidence = set(pack.source_snapshot_ids)
         for item in [

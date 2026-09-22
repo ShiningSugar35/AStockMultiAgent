@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from pydantic import Field
@@ -52,14 +52,21 @@ def register_public_commands(app: typer.Typer) -> None:
         ] = False,
     ) -> None:
         """Reproduce an investor answer from its verified receipt, without re-execution."""
+        diagnostic: dict[str, Any] = {}
         try:
             answer = _existing_service(database).publish_verified(
-                coverage_receipt_id=coverage_receipt_id
+                coverage_receipt_id=coverage_receipt_id, diagnostics=diagnostic
             )
         except (ValueError, OSError, sqlite3.DatabaseError, StorageError) as exc:
             _unavailable(exc, diagnostics=diagnostics)
             raise typer.Exit(code=2) from None
-        typer.echo(answer.model_dump_json(indent=2))
+        if diagnostics:
+            typer.echo(json.dumps(
+                {"answer": answer.model_dump(mode="json"), "diagnostic": diagnostic},
+                ensure_ascii=False, indent=2,
+            ))
+        else:
+            typer.echo(answer.model_dump_json(indent=2))
         if answer.degraded:
             raise typer.Exit(code=2)
 

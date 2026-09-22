@@ -163,7 +163,9 @@ class FullResearchReceiptAssembler:
         )
 
         regime, regime_available_at = self._regime(request.analysis_as_of)
-        seed_report = self._seed_report(readiness)
+        seed_report, seed_report_artifact_id, seed_report_object_hash = self._seed_report(
+            readiness
+        )
         seeds_by_company = {item.company_id: item for item in seed_report.seeds}
 
         macro_values = self._team_task_components(readiness, "macro-regime", MacroResearchOutcome)
@@ -326,6 +328,11 @@ class FullResearchReceiptAssembler:
             conflicts,
         )
         input_hashes = self._dependency_hashes(context)
+        registered_seed_hash = input_hashes.get(seed_report_artifact_id)
+        if registered_seed_hash not in (None, seed_report_object_hash):
+            raise ValueError("ResearchSeedReport dependency hash conflicts with frozen lineage")
+        input_hashes[seed_report_artifact_id] = seed_report_object_hash
+        input_hashes = dict(sorted(input_hashes.items()))
         statuses: dict[FullResearchNode | str, FullResearchNodeStatus | str] = {
             node: FullResearchNodeStatus.PASS for node in FullResearchNode
         }
@@ -622,7 +629,9 @@ class FullResearchReceiptAssembler:
             raise ValueError(f"Full Research role has no typed {model.__name__} member")
         return tuple(values)
 
-    def _seed_report(self, readiness: FullResearchInputReadinessReport) -> ResearchSeedReport:
+    def _seed_report(
+        self, readiness: FullResearchInputReadinessReport
+    ) -> tuple[ResearchSeedReport, str, str]:
         checkpoint = self.state.get_checkpoint(
             "research-team-task", f"{readiness.plan_id}:universe-acquisition"
         )
@@ -641,8 +650,15 @@ class FullResearchReceiptAssembler:
             for member_id in output.member_artifact_ids:
                 member = self.state.artifact_record(member_id)
                 if member is not None and str(member["type"]) == "ResearchSeedReport":
-                    return ResearchSeedReport.model_validate_json(
-                        self.objects.get_bytes(str(member["object_hash"]))
+                    object_hash = str(member["object_hash"])
+                    if not self.objects.verify(object_hash):
+                        raise ValueError("frozen ResearchSeedReport object is unavailable")
+                    return (
+                        ResearchSeedReport.model_validate_json(
+                            self.objects.get_bytes(object_hash)
+                        ),
+                        member_id,
+                        object_hash,
                     )
         raise ValueError("full-market readiness has no frozen ResearchSeedReport")
 

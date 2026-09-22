@@ -228,9 +228,12 @@ def test_partial_financial_coverage_cannot_hide_behind_succeeded_status(computed
         object_hash=ref.sha256,
         input_hashes=[],
     )
+    from astock.core.artifact_reading import ArtifactReadError
+
     request, preflight = _request_context(store)
-    with pytest.raises(ValueError, match="SUCCEEDED"):
+    with pytest.raises(ArtifactReadError) as captured:
         verifier.verify(_BASE_NODES["FINANCIAL_INTEGRITY"], (invalid_id,), request, preflight)
+    assert captured.value.code == "SCHEMA_VALIDATION_FAILED"
 
 
 def test_real_role_registration_is_accepted_only_for_its_planned_domain(computed_pipeline) -> None:

@@ -13,6 +13,9 @@ from astock.investor_orchestration.models import (
     RequestIntent,
     StrictModel,
 )
+from astock.investor_orchestration.recommendation_fulfillment import (
+    RecommendationFulfillmentAssessment,
+)
 
 
 class InvestmentRequestNotTerminalError(RuntimeError):
@@ -39,6 +42,7 @@ class InvestmentClosureDecision(StrictModel):
     investor_view_allowed: bool
     automatic_resolution_exhausted: bool = False
     private_user_input_required: bool = False
+    recommendation_fulfillment: RecommendationFulfillmentAssessment | None = None
 
 
 _MATERIAL_INVESTMENT_INTENTS = frozenset(
@@ -66,6 +70,7 @@ class InvestmentRequestClosurePolicy:
         *,
         automatic_resolution_exhausted: bool = False,
         private_user_input_required: bool = False,
+        recommendation_fulfillment: RecommendationFulfillmentAssessment | None = None,
     ) -> InvestmentClosureDecision:
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
         plan = CapabilityExecutionPlan.model_validate(plan.model_dump())
@@ -78,6 +83,12 @@ class InvestmentRequestClosurePolicy:
             raise ValueError(
                 "public-source resolution must be exhausted before requesting user input"
             )
+
+        if (
+            recommendation_fulfillment is not None
+            and recommendation_fulfillment.request_id != request.request_id
+        ):
+            raise ValueError("recommendation fulfillment belongs to another request")
 
         required = tuple(
             sorted(
@@ -118,6 +129,29 @@ class InvestmentRequestClosurePolicy:
             and coverage.prohibited_call_count == 0
             and not coverage.unresolved_conflicts
         )
+        if (
+            terminal_coverage
+            and recommendation_fulfillment is not None
+            and not recommendation_fulfillment.satisfied
+        ):
+            return InvestmentClosureDecision(
+                request_id=request.request_id,
+                intent=request.normalized_intent,
+                state=(
+                    InvestmentClosureState.PUBLIC_DATA_UNAVAILABLE
+                    if automatic_resolution_exhausted
+                    else InvestmentClosureState.CONTINUE_AUTOMATICALLY
+                ),
+                required_capabilities=required,
+                completed_capabilities=completed,
+                missing_capabilities=(),
+                same_request_continuation_required=not automatic_resolution_exhausted,
+                investment_conclusion_blocked=True,
+                investor_view_allowed=False,
+                automatic_resolution_exhausted=automatic_resolution_exhausted,
+                private_user_input_required=False,
+                recommendation_fulfillment=recommendation_fulfillment,
+            )
         if terminal_coverage:
             return InvestmentClosureDecision(
                 request_id=request.request_id,
@@ -131,6 +165,7 @@ class InvestmentRequestClosurePolicy:
                 investor_view_allowed=True,
                 automatic_resolution_exhausted=automatic_resolution_exhausted,
                 private_user_input_required=False,
+                recommendation_fulfillment=recommendation_fulfillment,
             )
         if private_user_input_required:
             return InvestmentClosureDecision(

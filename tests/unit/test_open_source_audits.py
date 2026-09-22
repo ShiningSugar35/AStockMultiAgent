@@ -25,7 +25,7 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
     release = load_local_adaptation_release(
         PROJECT_ROOT / registry.open_source_local_adaptation_release_file
     )
-    assert release.release_id == "serenity-local-adaptation-v1"
+    assert release.release_id == "serenity-local-adaptation-v2"
     assert content_hash(
         [{"path": item.path, "sha256": item.sha256} for item in release.local_adaptation_files]
     ) == release.local_adaptation_sha256

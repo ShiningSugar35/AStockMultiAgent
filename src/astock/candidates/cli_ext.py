@@ -189,6 +189,9 @@ def register_candidate_input_commands(
         max_market_seeds: Annotated[int, typer.Option(min=0, max=60)] = 40,
         max_long_horizon_value_seeds: Annotated[int | None, typer.Option(min=0, max=30)] = None,
         max_expert_seeds_per_author: Annotated[int, typer.Option(min=0, max=30)] = 10,
+        exclude_company: Annotated[
+            list[str] | None, typer.Option("--exclude-company")
+        ] = None,
     ) -> None:
         timestamp = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
         paths, _, _ = services()
@@ -208,6 +211,7 @@ def register_candidate_input_commands(
             breadth_min_market_score_ratio=team_policy.breadth_min_market_score_ratio,
             breadth_max_boards_per_domain=team_policy.breadth_max_boards_per_domain,
             max_expert_seeds_per_author=max_expert_seeds_per_author,
+            excluded_company_ids=sorted(set(exclude_company or ())),
             market_fetch_workers=min(3, hardware.provider_workers),
             expert_overlay_max_priority_bonus=team_policy.expert_overlay_max_priority_bonus,
             created_at=timestamp,

@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any
 
+from pydantic import ValidationError
+
+from astock.core.artifact_reading import ArtifactReadError
 from astock.core.errors import StorageError
 from astock.investor_orchestration.models import (
     CapabilityCoverageReceipt,
     InvestorAnswer,
     InvestorAnswerDraft,
+    InvestorRequestEnvelope,
     InvestorSessionPreflightReceipt,
 )
 from astock.investor_orchestration.output_validation import RegisteredOutputVerifier
@@ -113,10 +118,14 @@ class InvestorAnswerGateway:
             draft_artifact_id=draft_artifact_id,
         )
 
-    def publish_verified(self, *, coverage_receipt_id: str) -> InvestorAnswer:
+    def publish_verified(
+        self, *, coverage_receipt_id: str, diagnostics: dict[str, Any] | None = None
+    ) -> InvestorAnswer:
         """Derive the public answer from source artifacts; no free-form draft input."""
         from astock.investor_orchestration.answer_projection import VerifiedAnswerProjector
 
+        if diagnostics is not None:
+            diagnostics.clear()
         if self.verifier is None:
             raise ValueError("public output requires the canonical stores")
         with self.verifier.store.connect() as connection:
@@ -132,9 +141,58 @@ class InvestorAnswerGateway:
             raise ValueError("request preflight is unavailable")
         self._aware_not_future(preflight.as_of, utc_now())
         try:
-            artifact_id, draft = VerifiedAnswerProjector(self.verifier).freeze(preflight, coverage)
+            projector = VerifiedAnswerProjector(self.verifier)
+            request_artifact_id = (
+                f"InvestorRequestEnvelope:{content_hash(coverage.request_id)}"
+            )
+            request = self.verifier.load(request_artifact_id, InvestorRequestEnvelope)
+            if (
+                request.request_id != coverage.request_id
+                or coverage.request_fingerprint != content_hash(request)
+                or request.normalized_intent != preflight.normalized_intent
+            ):
+                raise ValueError("publication request binding differs")
+            from astock.investor_orchestration.recommendation_fulfillment import (
+                RecommendationFulfillmentService,
+            )
+
+            fulfillment = RecommendationFulfillmentService(
+                self.verifier.state, self.verifier.objects
+            ).assess(request, coverage)
+            if fulfillment is not None and not fulfillment.satisfied:
+                if diagnostics is not None:
+                    diagnostics.update(
+                        {
+                            "code": "RECOMMENDATION_TARGET_NOT_SATISFIED",
+                            "state": fulfillment.state.value,
+                            "next_action": fulfillment.next_action,
+                        }
+                    )
+                return InvestorAnswer(
+                    request_id=coverage.request_id,
+                    conclusion="当前研究尚未形成足够数量的可建仓标的，本次不作为最终荐股结果。",
+                    reasons=("现有观察对象不会被用来凑足可建仓数量，研究仍需继续扩展并核验候选。",),
+                    risks=("在正式研究与入场条件完成前，不应把观察名单当作当前买入组合。",),
+                    actions=("继续完成当前请求的候选扩展、深度研究与组合核验。",),
+                    change_conditions=("达到本次荐股数量目标并通过全部研究与发布核验后再形成最终组合。",),
+                    evidence_as_of=preflight.as_of,
+                    degraded=True,
+                    degradation_reason="荐股数量目标尚未满足。",
+                )
+            artifact_id, draft = projector.freeze(preflight, coverage)
         except (ValueError, OSError, StorageError) as exc:
-            _LOG.warning("verified answer projection rejected: %s", type(exc).__name__)
+            diagnostic = (
+                exc.diagnostic() if isinstance(exc, ArtifactReadError)
+                else {"code": (
+                    "PRIVACY_REVIEW_FAILED" if isinstance(exc, CapitalDisclosureError)
+                    else "CANONICAL_STORAGE_FAILURE" if isinstance(exc, (OSError, StorageError))
+                    else "SCHEMA_VALIDATION_FAILED" if isinstance(exc, ValidationError)
+                    else "DOMAIN_VALIDATION_FAILED"
+                )}
+            )
+            if diagnostics is not None:
+                diagnostics.update(diagnostic)
+            _LOG.warning("verified answer projection rejected: %s", diagnostic["code"])
             fallback = InvestorAnswerDraft(
                 request_id=coverage.request_id,
                 conclusion="关键资料尚未核实完整。",
@@ -145,7 +203,12 @@ class InvestorAnswerGateway:
                 evidence_as_of=preflight.as_of,
             )
             return self._safe_answer(
-                fallback, preflight, privacy_blocked=isinstance(exc, CapitalDisclosureError)
+                fallback,
+                preflight,
+                privacy_blocked=isinstance(exc, CapitalDisclosureError),
+                research_fault=isinstance(
+                    exc, (ArtifactReadError, ValidationError, OSError, StorageError)
+                ),
             )
         return self.render(
             draft,
@@ -275,6 +338,7 @@ class InvestorAnswerGateway:
         preflight: InvestorSessionPreflightReceipt,
         *,
         privacy_blocked: bool = False,
+        research_fault: bool = False,
         request_text: str | None = None,
     ) -> InvestorAnswer:
         visible = "\n".join(
@@ -297,6 +361,18 @@ class InvestorAnswerGateway:
                 evidence_as_of=min(draft.evidence_as_of, preflight.as_of),
                 degraded=True,
                 degradation_reason="账户信息需要隐藏后再展示。",
+            )
+        if research_fault:
+            return InvestorAnswer(
+                request_id=draft.request_id,
+                conclusion="本次研究结果未能完成读取与核验，暂不能作为当前买卖依据。",
+                reasons=("这是研究结果的处理故障，不能据此判断市场缺乏投资机会。",),
+                risks=("未经重新核验的历史结论不代表当前的投资判断。",),
+                actions=("恢复核验后，继续完成本次研究。",),
+                change_conditions=("本次研究的结果通过必要核验后，再形成正式判断。",),
+                evidence_as_of=min(draft.evidence_as_of, preflight.as_of),
+                degraded=True,
+                degradation_reason="研究结果处理未完成。",
             )
         # Never retain unchecked directions, numbers, dates or credentials from
         # any draft field in the fallback. Diagnostics stay out of the public model.

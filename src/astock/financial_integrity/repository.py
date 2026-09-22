@@ -164,7 +164,11 @@ class FinancialIntegrityRepository:
         if record is None or record.report_object_hash is None:
             return None
         payload = self.object_store.get_bytes(record.report_object_hash)
-        return FinancialIntegrityEvidencePack.model_validate_json(payload)
+        from astock.core.artifact_reading import decode_registered_artifact
+
+        return decode_registered_artifact(
+            payload, FinancialIntegrityEvidencePack, registry_schema_version="1.0"
+        )
 
     def start_attempt(self, audit_run_id: str) -> str:
         attempt_id = uuid4().hex

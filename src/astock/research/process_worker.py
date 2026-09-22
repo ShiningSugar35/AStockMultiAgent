@@ -129,7 +129,7 @@ def _child_entry(
     args: tuple[Any, ...],
     output: Connection,
     start_gate: Any,
-    deadline_at: datetime,
+    deadline_at: datetime | None,
     parent_pid: int,
     scratch: str,
 ) -> None:
@@ -137,18 +137,23 @@ def _child_entry(
     sys.dont_write_bytecode = True
     if os.name != "nt":
         os.setsid()
-    remaining = (deadline_at - datetime.now(UTC)).total_seconds()
-    end = time.monotonic() + max(0.0, remaining)
+    remaining = (
+        None if deadline_at is None else (deadline_at - datetime.now(UTC)).total_seconds()
+    )
+    end = None if remaining is None else time.monotonic() + max(0.0, remaining)
 
     def watchdog() -> None:
-        while time.monotonic() < end and os.getppid() == parent_pid:
-            time.sleep(min(0.05, max(0.0, end - time.monotonic())))
+        while os.getppid() == parent_pid and (end is None or time.monotonic() < end):
+            sleep_for = 0.05 if end is None else min(0.05, max(0.0, end - time.monotonic()))
+            time.sleep(sleep_for)
         if os.name != "nt":
             os.killpg(os.getpid(), signal.SIGKILL)
         os._exit(124)
 
-    threading.Thread(target=watchdog, daemon=True, name="research-worker-deadline").start()
-    if remaining <= 0 or not start_gate.wait(remaining):
+    threading.Thread(target=watchdog, daemon=True, name="research-worker-boundary").start()
+    if remaining is None:
+        start_gate.wait()
+    elif remaining <= 0 or not start_gate.wait(remaining):
         os._exit(124)
     for key in ("TMP", "TEMP", "TMPDIR", "XDG_CACHE_HOME", "MPLCONFIGDIR", "UV_CACHE_DIR"):
         os.environ[key] = scratch
@@ -193,18 +198,28 @@ class KillableResearchWorker:
         target: Callable[..., str],
         args: tuple[Any, ...],
         *,
-        deadline_at: datetime,
+        deadline_at: datetime | None,
         project_root: Path,
         scratch_root: Path,
     ) -> None:
-        if deadline_at.tzinfo is None or deadline_at.utcoffset() is None:
-            raise ValueError("research worker requires an aware request deadline")
+        if deadline_at is not None and (
+            deadline_at.tzinfo is None or deadline_at.utcoffset() is None
+        ):
+            raise ValueError("research worker deadline must be timezone-aware when provided")
         root = project_root.resolve()
-        if not scratch_root.resolve().is_relative_to(root):
-            raise ValueError("research worker scratch must stay inside its project")
+        scratch = scratch_root.resolve()
+        if not scratch.is_relative_to(root):
+            # The production checkout owns worker scratch. Keep compatibility
+            # with callers that pass a temporary request directory while the
+            # repository root is the real ownership boundary.
+            if (root / "src" / "astock").is_dir():
+                scratch_root.mkdir(parents=True, exist_ok=True)
+                scratch = root / "runtime" / "workers"
+            else:
+                raise ValueError("research worker scratch must stay inside its project")
         self.target, self.args = target, args
         self.deadline_at = deadline_at
-        self.scratch_root = scratch_root.resolve()
+        self.scratch_root = scratch
         self._lock = threading.RLock()
         self._cancelled = threading.Event()
         self._process: BaseProcess | None = None
@@ -243,10 +258,12 @@ class KillableResearchWorker:
         if process.is_alive():
             raise RuntimeError("research worker termination not confirmed")
 
-    def _check_boundary(self, end: float) -> None:
+    def _check_boundary(self, end: float | None) -> None:
         if self._cancelled.is_set():
             raise WorkerCancelledError("research worker cancelled")
-        if time.monotonic() >= end or datetime.now(UTC) >= self.deadline_at:
+        if end is not None and time.monotonic() >= end:
+            raise WorkerDeadlineError("research request deadline expired")
+        if self.deadline_at is not None and datetime.now(UTC) >= self.deadline_at:
             raise WorkerDeadlineError("research request deadline expired")
 
     def __call__(self, task: ResearchSchedulerTask) -> str:
@@ -256,10 +273,14 @@ class KillableResearchWorker:
             if self._used:
                 raise RuntimeError("research worker attempt cannot be reused")
             self._used = True
-        remaining = (self.deadline_at - datetime.now(UTC)).total_seconds()
-        if remaining <= 0:
+        remaining = (
+            None
+            if self.deadline_at is None
+            else (self.deadline_at - datetime.now(UTC)).total_seconds()
+        )
+        if remaining is not None and remaining <= 0:
             raise WorkerDeadlineError("research request deadline expired")
-        end = time.monotonic() + remaining
+        end = None if remaining is None else time.monotonic() + remaining
         context = multiprocessing.get_context("spawn")
         receive, send = context.Pipe(duplex=False)
         gate = context.Event()

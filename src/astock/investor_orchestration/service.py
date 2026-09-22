@@ -28,6 +28,9 @@ from astock.investor_orchestration.models import (
     SubjectEventKind,
 )
 from astock.investor_orchestration.preflight import InvestorSessionPreflightService
+from astock.investor_orchestration.recommendation_fulfillment import (
+    RecommendationFulfillmentService,
+)
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
 
@@ -323,12 +326,18 @@ class InvestorOrchestrationService:
     ) -> InvestmentClosureDecision:
         """Return the canonical same-request terminal decision for an investor request."""
 
+        fulfillment = None
+        if self.gateway.verifier is not None:
+            fulfillment = RecommendationFulfillmentService(
+                self.gateway.verifier.state, self.gateway.verifier.objects
+            ).assess(request, coverage)
         return InvestmentRequestClosurePolicy.evaluate(
             request,
             plan,
             coverage,
             automatic_resolution_exhausted=automatic_resolution_exhausted,
             private_user_input_required=private_user_input_required,
+            recommendation_fulfillment=fulfillment,
         )
 
     def answer(
@@ -365,9 +374,13 @@ class InvestorOrchestrationService:
             coverage_receipt_id=coverage_receipt_id,
         )
 
-    def publish_verified(self, *, coverage_receipt_id: str) -> InvestorAnswer:
+    def publish_verified(
+        self, *, coverage_receipt_id: str, diagnostics: dict[str, Any] | None = None
+    ) -> InvestorAnswer:
         """Generate and audit the answer from already-verified domain artifacts."""
-        return self.gateway.publish_verified(coverage_receipt_id=coverage_receipt_id)
+        return self.gateway.publish_verified(
+            coverage_receipt_id=coverage_receipt_id, diagnostics=diagnostics
+        )
 
     def _built_in_handlers(self) -> dict[str, CapabilityHandler]:
         return {

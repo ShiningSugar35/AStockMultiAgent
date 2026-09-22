@@ -50,6 +50,17 @@ ChatGPT / Work / Codex Scheduled Task（语义研究/通知平面，按时唤醒
 
 平台能力会更新，实施时必须重新核验官方文档、当前账户计划、工作区权限和桌面应用版本；本文不把当前任务上限、模型名称或界面名称硬编码进业务 Schema。
 
+### 2.1 宿主感知的长研究续接
+
+研究总时限不再用统一的 35/40/45 分钟硬截断。调用环境必须显式标明 `CHATGPT_CHAT` 或 `OTHER_AGENT`，模型名、进程名和 CLI 入口均不能代替宿主身份。
+
+- `CHATGPT_CHAT`：逻辑请求从本轮开始时累计真实 elapsed；只有 `elapsed > 2400s` 且可验证完成量严格小于 `2/3` 时才请求续接。续接前先保存 request/run/input revision、已完成工件与唯一 owner lease；随后由当前会话真实可调用的平台 Scheduled 能力创建 **1 小时频率**任务，并请求首轮立即执行或平台允许的最近时刻执行。只有拿到真实 opaque task id / 创建回执才能标记“已创建”；提示词、YAML、preview 或本地 binding 本身都不能冒充平台任务。
+- `OTHER_AGENT`：不设置整体研究时限，不因 35/40/45 分钟截断 Research Team、公司深研或最终报告。该规则只取消总体 wall-clock 截断；HTTP timeout、provider retry、单任务 lease、并发上限、内存/候选数和显式花费预算仍保持有界，卡死 worker 仍可被 lease 取消。
+- `2/3` 进度只计算冻结工作图中已有终态证据的工作项；失败、跳过、只创建计划或排队不计完成。新发现的必要工作进入版本化分母，不能通过缩小分母规避接力。
+- 主对话与 Scheduled 续接共享逻辑 request id，但每次唤醒都必须重新核对输入 revision、owner lease 与已完成 checkpoint，避免重复深研、重复写 receipt 或双 owner。任务完成后只停用该请求创建的临时 Scheduled，不影响其它自动化。
+
+本地 `CurrentResearchSlaService` 因此支持显式取消总体 deadline：无总体 deadline 的 run 仍保留 task lease 与可取消 worker；历史/显式 `budget_seconds` 合同继续受原边界约束。平台 Scheduled 是宿主续接平面，不进入行情、研究事实或推荐权威。
+
 ## 3. 为什么采用双层而非“让 GPT 每小时全做一遍”
 
 ### 3.1 本地 Monitor 擅长的工作

@@ -64,7 +64,9 @@ def _failure() -> str:
 
 
 def _wait_marker(marker: Path) -> None:
-    deadline = time.monotonic() + 15
+    # Windows spawn imports the test module in each child; endpoint security and
+    # cold filesystem caches can make nested spawn exceed the old 15s fixture bound.
+    deadline = time.monotonic() + 30
     while not marker.exists() and time.monotonic() < deadline:
         time.sleep(0.02)
     assert marker.exists(), "worker did not reach its blocking operation"
@@ -93,14 +95,31 @@ def test_spawned_success_is_reaped_and_temp_is_project_local(tmp_path: Path) -> 
     assert not list((tmp_path / "workers").iterdir())
 
 
+def test_worker_without_overall_deadline_remains_cancellable_and_project_local(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "unbounded-success.json"
+    worker = KillableResearchWorker(
+        _success,
+        (str(marker),),
+        deadline_at=None,
+        project_root=ROOT,
+        scratch_root=tmp_path / "workers",
+    )
+    assert worker(TASK) == "ResearchRunReport:recorded-test"
+    assert marker.exists()
+    assert not worker.alive
+    assert not list((tmp_path / "workers").iterdir())
+
+
 def test_deadline_kills_real_blocking_process(tmp_path: Path) -> None:
     marker = tmp_path / "deadline.pid"
-    worker = _worker(tmp_path, _blocking, (str(marker),), seconds=8)
+    worker = _worker(tmp_path, _blocking, (str(marker),), seconds=20)
     started = time.monotonic()
     with pytest.raises(WorkerDeadlineError):
         worker(TASK)
     assert marker.exists()
-    assert time.monotonic() - started < 11
+    assert time.monotonic() - started < 23
     assert not worker.alive
     assert not Path(str(marker) + ".late").exists()
 

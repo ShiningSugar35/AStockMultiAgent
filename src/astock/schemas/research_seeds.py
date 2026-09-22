@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Literal
 
@@ -142,7 +143,17 @@ class ResearchSeedRequest(AStockModel):
     minimum_amount_cny: float = Field(default=20_000_000.0, ge=0)
     minimum_float_market_cap_cny: float = Field(default=2_000_000_000.0, ge=0)
     include_existing_candidates: bool = True
+    excluded_company_ids: list[str] = Field(default_factory=list, max_length=5000)
     live: bool = False
+
+    @field_validator("excluded_company_ids")
+    @classmethod
+    def validate_excluded_company_ids(cls, value: list[str]) -> list[str]:
+        if value != sorted(set(value)):
+            raise ValueError("excluded company ids must be sorted and unique")
+        if any(re.fullmatch(r"\d{6}", item) is None for item in value):
+            raise ValueError("excluded company ids must be six-digit security codes")
+        return value
 
 
 class ResearchSeedReport(AStockModel):
@@ -155,6 +166,7 @@ class ResearchSeedReport(AStockModel):
     registry_release_object_hash: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     profiles: list[ExpertDomainProfile]
     seeds: list[ResearchSeed]
+    excluded_company_ids: list[str] = Field(default_factory=list)
     source_snapshot_ids: list[str]
     source_object_hashes: list[str]
     warning_codes: list[str]
@@ -177,7 +189,9 @@ class ResearchSeedReport(AStockModel):
     candidate_record_write_allowed: Literal[False] = False
     paper_ledger_write_allowed: Literal[False] = False
 
-    @field_validator("source_snapshot_ids", "source_object_hashes", "warning_codes")
+    @field_validator(
+        "excluded_company_ids", "source_snapshot_ids", "source_object_hashes", "warning_codes"
+    )
     @classmethod
     def validate_sorted_sets(cls, value: list[str]) -> list[str]:
         if value != sorted(set(value)):
@@ -234,6 +248,10 @@ class ResearchSeedReport(AStockModel):
 
     @model_validator(mode="after")
     def validate_counts(self) -> ResearchSeedReport:
+        if any(re.fullmatch(r"\d{6}", item) is None for item in self.excluded_company_ids):
+            raise ValueError("excluded company ids must be six-digit security codes")
+        if {item.company_id for item in self.seeds}.intersection(self.excluded_company_ids):
+            raise ValueError("excluded companies cannot re-enter the research-seed report")
         market = sum(ResearchSeedOrigin.MARKET in item.origins for item in self.seeds)
         breadth = sum(
             ResearchSeedOrigin.BREADTH_CHALLENGER in item.origins for item in self.seeds

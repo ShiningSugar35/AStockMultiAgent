@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import yaml
 
+from astock.core.artifact_reading import decode_registered_artifact
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
@@ -998,8 +999,9 @@ class ResearchTeamService:
             try:
                 if str(record["type"]) == "FinancialIntegrityEvidencePack":
                     packs.append(
-                        FinancialIntegrityEvidencePack.model_validate_json(
-                            self.objects.get_bytes(object_hash)
+                        decode_registered_artifact(
+                            self.objects.get_bytes(object_hash), FinancialIntegrityEvidencePack,
+                            registry_schema_version=str(record["schema_version"]),
                         )
                     )
                 elif str(record["type"]) == "FinancialQualityAssessment":

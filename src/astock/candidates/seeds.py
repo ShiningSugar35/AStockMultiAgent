@@ -1396,8 +1396,14 @@ class ResearchSeedService:
         ):
             warnings.add("FORMAL_UNIVERSE_DENOMINATOR_NOT_RECONCILED")
 
+        excluded_company_ids = set(request.excluded_company_ids)
+        selection_market_rows = {
+            company_id: row
+            for company_id, row in market_rows.items()
+            if company_id not in excluded_company_ids
+        }
         blind_market_rows = sorted(
-            market_rows.values(),
+            selection_market_rows.values(),
             key=lambda item: (-item.market_score, item.company_id),
         )[: request.max_market_seeds]
         blind_company_ids = {item.company_id for item in blind_market_rows}
@@ -1415,7 +1421,7 @@ class ResearchSeedService:
         long_horizon_value_rows = self._industry_balanced_market_rows(
             [
                 item
-                for item in market_rows.values()
+                for item in selection_market_rows.values()
                 if item.company_id not in blind_company_ids
                 and item.long_horizon_value_score is not None
             ],
@@ -1438,6 +1444,8 @@ class ResearchSeedService:
                 limit=request.max_total_seeds,
             ):
                 company_id = str(row["company_id"])
+                if company_id in excluded_company_ids:
+                    continue
                 market_row = market_rows.get(company_id)
                 market = (
                     market_row.market
@@ -1493,7 +1501,7 @@ class ResearchSeedService:
                 blind_breadth_domain_counts, breadth_cutoff = self._apply_breadth_challengers(
                     boards=boards,
                     blind_company_ids=blind_company_ids,
-                    market_rows=market_rows,
+                    market_rows=selection_market_rows,
                     accumulators=accumulators,
                     request=request,
                     source_snapshots=source_snapshots,
@@ -1569,7 +1577,11 @@ class ResearchSeedService:
                 verified_release, verified_release_hash = verified_release_row
                 merged = merge_discovery_seed_tranche(
                     tuple(seeds),
-                    tuple(verified_release.seeds),
+                    tuple(
+                        seed
+                        for seed in verified_release.seeds
+                        if seed.company_id not in excluded_company_ids
+                    ),
                     max_total=request.max_total_seeds,
                     max_market=request.max_market_seeds,
                     max_long_horizon_value=request.max_long_horizon_value_seeds,
@@ -1647,6 +1659,7 @@ class ResearchSeedService:
             registry_release_object_hash=registry_binding.object_hash if registry_binding else None,
             profiles=profiles,
             seeds=seeds,
+            excluded_company_ids=request.excluded_company_ids,
             source_snapshot_ids=sorted(source_snapshots),
             source_object_hashes=sorted(source_hashes),
             warning_codes=sorted(warnings),

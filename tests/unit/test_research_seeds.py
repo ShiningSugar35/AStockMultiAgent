@@ -845,3 +845,40 @@ def test_official_master_industry_mapping_keeps_breadth_alive_without_board_taxo
     assert {item.company_id for item in breadth} == {"600001", "600002"}
     assert "BREADTH_DOMAIN_MAPPING_UNAVAILABLE" not in report.warning_codes
     assert "BREADTH_DOMAIN_MARKET_TAXONOMY_UNAVAILABLE" not in report.warning_codes
+
+
+def test_excluded_companies_enable_a_disjoint_incremental_seed_batch(tmp_path: Path) -> None:
+    service, _, _ = _service(tmp_path)
+    first = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=5,
+            max_market_seeds=2,
+            max_breadth_challenger_seeds=0,
+            max_long_horizon_value_seeds=0,
+            max_expert_seeds_per_author=0,
+            include_existing_candidates=False,
+            created_at=NOW,
+        )
+    )
+    first_ids = sorted(item.company_id for item in first.seeds)
+    assert len(first_ids) == 2
+
+    second = service.generate(
+        ResearchSeedRequest(
+            as_of=NOW,
+            max_total_seeds=5,
+            max_market_seeds=2,
+            max_breadth_challenger_seeds=0,
+            max_long_horizon_value_seeds=0,
+            max_expert_seeds_per_author=0,
+            include_existing_candidates=False,
+            excluded_company_ids=first_ids,
+            created_at=NOW,
+        )
+    )
+    second_ids = {item.company_id for item in second.seeds}
+    assert second.excluded_company_ids == first_ids
+    assert second_ids
+    assert second_ids.isdisjoint(first_ids)
+    assert len(second_ids) == 2

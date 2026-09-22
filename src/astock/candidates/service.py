@@ -703,8 +703,11 @@ class CandidateScanService:
 
     def _financial_partial_is_research_safe(self, artifact: CandidateInputArtifact) -> bool:
         try:
-            pack = FinancialIntegrityEvidencePack.model_validate_json(
-                self.objects.get_bytes(artifact.object_hash)
+            from astock.core.artifact_reading import decode_registered_artifact
+
+            pack = decode_registered_artifact(
+                self.objects.get_bytes(artifact.object_hash), FinancialIntegrityEvidencePack,
+                registry_schema_version="1.0",
             )
         except (AStockError, OSError, ValueError):
             return False

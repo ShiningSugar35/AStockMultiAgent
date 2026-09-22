@@ -32,6 +32,14 @@ description: Route broad or multi-step A-share research requests across candidat
 20. **Same-request terminal contract:** 所有荐股、买卖判断、持仓处置和组合决策统一归一为 `FULL_RESEARCH_RECOMMENDATION`，不得把 Seed、Candidate、acquisition gap、team nonterminal、未完成 Committee/Portfolio、上游 `FullResearchInputReadinessReport` 或未封存的研究结果当作用户终局。必须继续调用本 Skill 路由出的全部适用 Skills，直到 `InvestmentRequestClosurePolicy` 为当前 canonical capability plan 返回 `READY_FOR_INVESTOR_VIEW`，且最终 `RecommendationResearchReceipt + Publication Gate` 允许发布；若返回 `CONTINUE_AUTOMATICALLY`，继续本轮工作而不是回复“下一步可以继续……”。只有公共自动恢复预算与权威 Web 都真实耗尽且缺口只能来自私人输入时，才可停止为 `NEEDS_USER_INPUT`，且此时不得形成 BUY/组合建议。
 21. broad recommendation 的 bounded shortlist 不是最终答案。每个入围标的都必须在同一请求中进入 `$company-deep-research`，之后再完成 cross-name Red Team / Committee / `$portfolio-manager` / Mandatory Research DAG / `RecommendationResearchReceipt` / Publication Gate；被淘汰标的也要保留简洁的淘汰理由，避免幸存者偏差。进入完整研究前先冻结“投资预期”：本金与目标年化分别按本轮明确值 → 最近已注册请求或持仓/荐股研究中可验证的用户已记录值 → 默认 100000 元 / 100% 年化解析，允许一项来自历史而另一项来自本轮；模型 DEFAULT 不得覆盖更早的用户显式值；坏对象、无效记录和其它账户记录跳过，按字段实际记录时间选择最近值。目标年化只用于目标利润、同期限收益路径、下行情景、目标缺口和更严格的目标收益买入价上限；不得因此放宽任何硬风险门、自动加杠杆或提高仓位上限。用户真实账户事实未知时仍不得伪造成已知；只有资本、价格和交易单位具备有效证据时才生成合法交易数量。**隐私采用偏松、request-aware 规则：规划本金/预算、目标盈利、建议配置金额/股数以及公开证券/公司事实可正常输出；只有真实/模拟账户和现有持仓的个性化本金、成本、现金/资产、当前股数、实际盈亏默认不主动输出。用户本轮明确提及或询问对应账户/持仓数值时，应从已核实记录中正常回答。**
 
+## 宿主接力与结果目标
+
+遵循 AGENTS 的“Agent 宿主、研究接力与荐股交付口径”。`CHATGPT_CHAT` 超过 2400 秒且核验完成量小于 2/3，保存同一 request_id 的断点，真实创建每小时一次且首轮立即/最近时刻启动的 Scheduled；记录真实 task ID 和创建回执，不把提示词文件称作已创建。`OTHER_AGENT` 不执行总体 35/40/45 分钟截断，但单个请求、批次和资源预算仍有界。Same-request 指研究身份与证据链连续，不强迫一个 ChatGPT 激活轮次容纳所有工作。接力必须检查 owner lease，完成后只停用对应临时任务。
+
+宽泛荐股与新增组合默认最低 3 只、目标 5 只符合当前或明确近期建仓条件的证券，用户明确数量优先；单股分析不套配额。WATCH 和尚未触发的条件不计入当前可建仓数。先验证 CURRENT Universe 的真实覆盖与 LIVE 来源，再按未研究候选增量扩池，不能复用离线三五只样本声称全市场研究，更不能拿其他 request_id 的旧 WATCH 回执作为本次结论。候选不足时继续扩行业、补证与深研；无合格机会只能以真实已穷尽的漏斗证据解释，不能降低财务/Committee/Portfolio/Publication 门或强行 BUY 凑数。
+
+开发/恢复时优先执行 `python -B -m astock.diagnostics artifacts --type SeedPromotionReport --limit 5` 或按精确 ID 的 `artifact`、指定表的 `schema`。该入口只显示有界诊断，不初始化数据库，不产生推荐权威。复杂 Windows 参数使用结构化 argv 或项目内 UTF-8 JSON 文件，避免嵌套 shell 引号与全表探测。
+
 ## Workflows
 
 - [`docs/workflows/workflow-full-market-research-team.md`](../../../docs/workflows/workflow-full-market-research-team.md)

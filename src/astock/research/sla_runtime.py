@@ -298,12 +298,14 @@ class CurrentResearchSlaService:
         *,
         request_id: str,
         task_specs: Sequence[tuple[str, str | None, ResearchTaskCategory, Sequence[str], str]],
-        budget_seconds: int = 2700,
+        budget_seconds: int | None = 2700,
         legacy_batch_caller: str | None = None,
         legacy_batch_explicit: bool = True,
     ) -> ResearchSchedulerRun:
-        if type(budget_seconds) is not int or budget_seconds <= 0:
-            raise ValueError("research budget must be a positive integer")
+        if budget_seconds is not None and (
+            type(budget_seconds) is not int or budget_seconds <= 0
+        ):
+            raise ValueError("research budget must be a positive integer when explicitly set")
         if legacy_batch_caller is not None and not legacy_batch_caller.strip():
             raise ValueError("legacy batch caller identity must not be blank")
         now = self.clock()
@@ -313,7 +315,12 @@ class CurrentResearchSlaService:
             request_id=request_id,
             status=ResearchSchedulerRunStatus.RUNNING,
             generation=1,
-            deadline_at=now + timedelta(seconds=budget_seconds),
+            deadline_at=(
+                now + timedelta(seconds=budget_seconds)
+                if budget_seconds is not None
+                else datetime.max.replace(tzinfo=UTC)
+            ),
+            overall_deadline_enforced=budget_seconds is not None,
             started_at=now,
             created_at=now,
             updated_at=now,
@@ -402,10 +409,9 @@ class CurrentResearchSlaService:
                 )
                 old_tasks = self._tasks_from_connection(connection, existing.run_id)
                 if (
-                    existing.deadline_at - existing.started_at
-                ).total_seconds() != budget_seconds or self._task_contract(
-                    old_tasks
-                ) != self._task_contract(tasks):
+                    not self._budget_contract_matches(existing, budget_seconds)
+                    or self._task_contract(old_tasks) != self._task_contract(tasks)
+                ):
                     raise ValueError(
                         "research request contract differs from its registered graph or budget"
                     )
@@ -433,6 +439,21 @@ class CurrentResearchSlaService:
         return run
 
     @staticmethod
+    def _budget_contract_matches(
+        run: ResearchSchedulerRun, budget_seconds: int | None
+    ) -> bool:
+        if budget_seconds is None:
+            return not run.overall_deadline_enforced
+        return (
+            run.overall_deadline_enforced
+            and int((run.deadline_at - run.started_at).total_seconds()) == budget_seconds
+        )
+
+    @staticmethod
+    def _deadline_hit(run: ResearchSchedulerRun, at: datetime) -> bool:
+        return run.overall_deadline_enforced and at >= run.deadline_at
+
+    @staticmethod
     def _batch_input_contract(
         tasks: Sequence[ResearchSchedulerTask],
     ) -> tuple[tuple[str, str, str], ...]:
@@ -457,7 +478,7 @@ class CurrentResearchSlaService:
         *,
         caller: str,
         tasks: Sequence[ResearchSchedulerTask],
-        budget_seconds: int,
+        budget_seconds: int | None,
         explicit: bool,
     ) -> ResearchSchedulerRun | None:
         """Read old caller:hash graphs under the same transaction as create_run.
@@ -494,7 +515,7 @@ class CurrentResearchSlaService:
                 if explicit:
                     raise ValueError("research request contract differs from its legacy graph")
                 continue
-            if (existing.deadline_at - existing.started_at).total_seconds() != budget_seconds:
+            if not self._budget_contract_matches(existing, budget_seconds):
                 raise ValueError("research request contract differs from its legacy budget")
             matching.append(existing)
         if len(matching) > 1:
@@ -582,7 +603,7 @@ class CurrentResearchSlaService:
                             running_by_category[task_state[task_id].category] -= 1
                             unowned_task_ids.remove(task_id)
                     now = self.clock()
-                    if now >= run.deadline_at:
+                    if self._deadline_hit(run, now):
                         self._cancel_cached_tasks(
                             connection,
                             run,
@@ -658,6 +679,36 @@ class CurrentResearchSlaService:
                             running_by_category[started.category] += 1
 
                     if running:
+                        expired_owned: list[tuple[Future[str], ResearchSchedulerTask]] = []
+                        lease_now = self.clock()
+                        for future, dispatched in tuple(running.items()):
+                            latest = task_state[dispatched.task_id]
+                            handler = handlers.get(dispatched.node_id)
+                            if (
+                                isinstance(handler, CancellableTaskHandler)
+                                and latest.status is ResearchSchedulerTaskStatus.RUNNING
+                                and latest.lease_expires_at is not None
+                                and latest.lease_expires_at <= lease_now
+                            ):
+                                expired_owned.append((future, dispatched))
+                        for future, dispatched in expired_owned:
+                            latest = task_state[dispatched.task_id]
+                            handler = handlers.get(dispatched.node_id)
+                            if isinstance(handler, CancellableTaskHandler):
+                                handler.cancel()
+                            future.cancel()
+                            running.pop(future, None)
+                            running_by_category[dispatched.category] -= 1
+                            task_state[dispatched.task_id] = self._transition_cached_task(
+                                connection,
+                                run,
+                                latest,
+                                ResearchSchedulerTaskStatus.FAILED,
+                                error_code="TASK_LEASE_EXPIRED",
+                                at=lease_now,
+                            )
+                        if expired_owned:
+                            continue
                         done, _ = wait(tuple(running), timeout=0.05, return_when=FIRST_COMPLETED)
                         deadline_hit = False
                         for future in done:
@@ -673,7 +724,7 @@ class CurrentResearchSlaService:
                             ):
                                 # The dispatched attempt no longer owns this task.
                                 continue
-                            if completed_at >= run.deadline_at:
+                            if self._deadline_hit(run, completed_at):
                                 task_state[task.task_id] = self._transition_cached_task(
                                     connection,
                                     run,
@@ -853,7 +904,7 @@ class CurrentResearchSlaService:
                 ResearchSchedulerTaskStatus.CANCELLED,
             }:
                 raise ValueError("LLM takeover requires a failed or cancelled program task")
-            if now >= run.deadline_at:
+            if self._deadline_hit(run, now):
                 raise ValueError("LLM takeover cannot start after the request deadline")
             rows = connection.execute(
                 "SELECT round_index,status,packet_object_hash FROM research_llm_takeover "
@@ -978,7 +1029,7 @@ class CurrentResearchSlaService:
         task = self._task(packet.task_id)
         if run.generation != packet.generation or task.generation != packet.generation:
             raise ValueError("LLM takeover result is stale")
-        if now >= run.deadline_at:
+        if self._deadline_hit(run, now):
             raise ValueError("LLM takeover result arrived after the request deadline")
 
         artifact_id = result.result_artifact_id or ""
@@ -1002,7 +1053,7 @@ class CurrentResearchSlaService:
                 "SELECT status,packet_object_hash FROM research_llm_takeover WHERE packet_id=?",
                 (packet.packet_id,),
             ).fetchone()
-            if now >= current_run.deadline_at:
+            if self._deadline_hit(current_run, now):
                 raise ValueError("LLM takeover result arrived after the request deadline")
             if (
                 current_run != run
@@ -1164,12 +1215,12 @@ class CurrentResearchSlaService:
                 if task.status is not ResearchSchedulerTaskStatus.RUNNING:
                     continue
                 if (
-                    now < run.deadline_at
+                    not self._deadline_hit(run, now)
                     and task.lease_expires_at is not None
                     and task.lease_expires_at > now
                 ):
                     continue
-                deadline_hit = now >= run.deadline_at
+                deadline_hit = self._deadline_hit(run, now)
                 self._transition_cached_task(
                     connection,
                     run,
@@ -1323,7 +1374,11 @@ class CurrentResearchSlaService:
 
         if not tasks:
             return ()
-        lease_expires_at = min(run.deadline_at, at + timedelta(minutes=10))
+        lease_expires_at = (
+            min(run.deadline_at, at + timedelta(minutes=10))
+            if run.overall_deadline_enforced
+            else at + timedelta(minutes=10)
+        )
         updated_rows: list[tuple[ResearchSchedulerTask, str, ResearchSchedulerTaskStatus]] = []
         for task in tasks:
             if task.run_id != run.run_id or task.generation != run.generation:

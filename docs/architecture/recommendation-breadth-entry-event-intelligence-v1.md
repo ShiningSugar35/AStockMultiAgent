@@ -66,6 +66,18 @@ breadth challenger 只允许：
 
 存在财务、治理、证据、估值或其它组合硬约束失败的候选继续归为“暂不考虑”，不得因为组合为空而自动升级到观察名单。观察事件绑定当前 request、正式 receipt 与 as-of，保持可重放；观察名单的可选写入失败也不能反向改变已经通过 Publication Gate 的研究结论。
 
+### 2.6 宽泛荐股的数量满足门与增量扩池
+
+宽泛 CURRENT 荐股和新增组合请求把“研究链已完成”与“用户要求的结果数量已满足”拆成两道门。没有显式数量时，默认 `minimum_actionable=3 / target_actionable=5`；用户明确要求 N 只时以 N 为目标。单股判断和既有持仓处置不套用多标的配额。
+
+可建仓计数只接受同 request 的正式 `RecommendationResearchReceipt` 中已经进入 Portfolio 的正权重/正股数证券，并要求 Publication Gate 允许正式推荐、执行计划存在、当前报价新鲜、参考价落在买入区间且不高于最大可接受价。`WATCH`、无正权重、报价失效、尚未触发的条件买入和被财务/治理/委员会否决的标的均不计入立即可建仓数量；这些内容可以保留在观察或近期条件栏目，但不能凑数。
+
+数量满足还要求该 receipt 直接绑定的 `ResearchSeedReport` 已取得正式全市场覆盖资格。工程高覆盖、PARTIAL Universe、旧离线小样本或另一个 request 的历史 receipt 均不能证明“全市场没有更好机会”。本次 2026-09-20 实战复盘即验证了这一边界：实际 promotion 只处理 3 个 Seed，0 个新晋升、2 个旧 Candidate 复用、1 个公开行情输入缺失；绑定 SeedReport 明确 `formal_full_market_coverage_allowed=false`。因此两个 `COMMITTEE_WATCH` 是两只公司的有效局部判断，却不能作为全市场荐股终态。
+
+若最低数量尚未满足，状态机按真实缺口继续：先恢复正式 Universe；若当前 SeedReport 仍有未深研候选则继续下一批；否则以 `excluded_company_ids` 排除已研究/已分配 Seed，在同一已验证 Universe 中生成不重复增量批次。排除只改变下一批研究预算，不重排 reserved pure blind 的公平性，也不放宽公司质量、财务、估值、Committee、Portfolio 或 Publication Gate。只有正式 Universe、公开恢复路径或显式总资源预算确已耗尽时，才允许把不足数量作为诚实的未满足终态；流程故障不得被翻译为“市场无机会”。
+
+发布边界会再次执行同一 fulfillment 校验，因此即使调用者绕过 closure 直接调用 public `publish`，不足数量或 Universe 未正式覆盖的宽泛荐股也只返回非终局结果，不会把观察名单发布成最终组合。
+
 ## 3. EntryQuality：好股票是否处在可接受的入场位置
 
 ### 3.1 不是技术面买卖系统

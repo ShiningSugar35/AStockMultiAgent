@@ -10,8 +10,6 @@ from importlib.metadata import version
 from typing import Any, cast
 
 import numpy as np
-from pyod.models.ecod import ECOD
-from sklearn.ensemble import IsolationForest
 from threadpoolctl import threadpool_limits
 
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
@@ -203,6 +201,8 @@ class FinancialAnomalyEngine:
             }
             serialized = canonical_json_bytes(state)
         elif spec.model_type is FinancialAnomalyModelType.ISOLATION_FOREST:
+            from sklearn.ensemble import IsolationForest
+
             n_estimators = int(spec.parameters.get("n_estimators", 200))
             with threadpool_limits(limits=1):
                 model = IsolationForest(
@@ -221,6 +221,8 @@ class FinancialAnomalyEngine:
             serialized = pickle.dumps(model, protocol=5)
             limitations.append("FEATURE_ATTRIBUTION_USES_ROBUST_DISTANCE_HEURISTIC")
         elif spec.model_type is FinancialAnomalyModelType.PYOD_ECOD:
+            from pyod.models.ecod import ECOD
+
             with threadpool_limits(limits=1):
                 model = ECOD(
                     contamination=cast(Any, float(spec.contamination)),

@@ -166,6 +166,7 @@ class ResearchSchedulerRun(AStockModel):
     status: ResearchSchedulerRunStatus
     generation: int = Field(ge=1)
     deadline_at: AwareDatetime
+    overall_deadline_enforced: bool = True
     started_at: AwareDatetime
     finished_at: AwareDatetime | None = None
     updated_at: AwareDatetime

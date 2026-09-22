@@ -644,9 +644,13 @@ def register_research_runtime_commands(
             raise typer.BadParameter("batch request requires a non-empty requests list")
         if not 1 <= max_parallel_companies <= 4:
             raise typer.BadParameter("--max-parallel-companies must be between 1 and 4")
-        budget_seconds = payload.get("budget_seconds", 2700)
-        if type(budget_seconds) is not int or not 1 <= budget_seconds <= 2700:
-            raise typer.BadParameter("batch budget_seconds must be between 1 and 2700")
+        budget_seconds = payload.get("budget_seconds")
+        if budget_seconds is not None and (
+            type(budget_seconds) is not int or not 1 <= budget_seconds <= 2700
+        ):
+            raise typer.BadParameter(
+                "explicit batch budget_seconds must be between 1 and 2700"
+            )
 
         parsed: list[tuple[str, ResearchRunRequest]] = []
         batch_identity: list[dict[str, object]] = []
@@ -724,7 +728,11 @@ def register_research_runtime_commands(
                     str(worker_paths.root), str(worker_state.path), str(worker_paths.objects),
                     str(worker_paths.parquet), request.model_dump_json(),
                 ),
-                deadline_at=scheduler_run.deadline_at,
+                deadline_at=(
+                    scheduler_run.deadline_at
+                    if scheduler_run.overall_deadline_enforced
+                    else None
+                ),
                 project_root=worker_paths.root,
                 scratch_root=worker_paths.runtime / "worker_tmp",
             )

@@ -124,6 +124,71 @@ def test_target_pool_rejects_cross_company_identity_reuse(tmp_path: Path) -> Non
         )
 
 
+def test_scheduler_can_explicitly_disable_the_overall_request_deadline(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    run = service.create_run(
+        request_id="unbounded-agent-request",
+        budget_seconds=None,
+        task_specs=[("research-a", "A", ResearchTaskCategory.NETWORK, [], "input-v1")],
+    )
+    assert not run.overall_deadline_enforced
+    assert run.deadline_at.year == 9999
+
+    result = service.execute(
+        run.run_id,
+        {"research-a": lambda task: f"artifact:{task.node_id}"},
+    )
+    assert result.status is ResearchSchedulerRunStatus.COMPLETED
+    assert not result.overall_deadline_enforced
+
+
+def test_unbounded_run_still_cancels_a_stuck_owned_worker_at_task_lease(
+    tmp_path: Path,
+) -> None:
+    state = StateStore(tmp_path / "state.sqlite", PROJECT_ROOT / "migrations")
+    state.migrate()
+    now = [datetime(2026, 9, 22, tzinfo=UTC)]
+    service = CurrentResearchSlaService(
+        state, ObjectStore(tmp_path / "objects"), clock=lambda: now[0]
+    )
+    run = service.create_run(
+        request_id="unbounded-stuck-worker",
+        budget_seconds=None,
+        task_specs=[("research-a", "A", ResearchTaskCategory.NETWORK, [], "input-v1")],
+    )
+    started = threading.Event()
+    stopped = threading.Event()
+
+    class BlockingOwnedHandler:
+        def __call__(self, task) -> str:
+            started.set()
+            stopped.wait(5)
+            return f"artifact:{task.node_id}"
+
+        def cancel(self) -> None:
+            stopped.set()
+
+    handler = BlockingOwnedHandler()
+    result_holder = []
+
+    def execute() -> None:
+        result_holder.append(service.execute(run.run_id, {"research-a": handler}))
+
+    thread = threading.Thread(target=execute)
+    thread.start()
+    assert started.wait(2)
+    now[0] += timedelta(minutes=11)
+    thread.join(3)
+    assert not thread.is_alive()
+    assert stopped.is_set()
+    assert result_holder[0].status is ResearchSchedulerRunStatus.FAILED
+    task = service.tasks(run.run_id)[0]
+    assert task.status is ResearchSchedulerTaskStatus.FAILED
+    assert task.error_code == "TASK_LEASE_EXPIRED"
+
+
 def test_scheduler_runs_independent_backend_and_llm_tasks_in_parallel(tmp_path: Path) -> None:
     service = _service(tmp_path)
     run = service.create_run(

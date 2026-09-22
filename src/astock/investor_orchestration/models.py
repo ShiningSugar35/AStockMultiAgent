@@ -90,6 +90,70 @@ _HOLDING_CONTEXT_PATTERNS = (
 )
 
 
+_BROAD_RECOMMENDATION_PATTERNS = (
+    re.compile(
+        r"推荐(?:几只|几支|股票|标的|组合|一组|一些)|推荐.{0,8}(?:可买|值得买).{0,6}(?:股票|标的)|买什么|买哪些|"
+        r"有哪些.{0,10}(?:可买|值得买)|投资组合|组合(?:推荐|配置)|怎么配置|"
+        r"配(?:置)?其他(?:股票|标的)|(?:再|另外)(?:推荐|选|挑).{0,8}(?:股票|标的)"
+    ),
+    re.compile(
+        r"(?:选|挑|推荐)\s*(?:\d+|[一二三四五六七八九十]+)\s*(?:只|支|个)?"
+        r"(?:股|股票|标的)"
+    ),
+    re.compile(
+        r"\b(?:stock picks?|what (?:stocks? )?to buy|recommend (?:some )?stocks?|"
+        r"portfolio allocation|build (?:me )?a portfolio)\b",
+        re.IGNORECASE,
+    ),
+)
+
+_CHINESE_SMALL_INTEGERS = {
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+
+
+def requested_recommendation_count(raw_text: str) -> int | None:
+    match = re.search(
+        r"(?:选|挑|推荐)\s*(\d+|[一二三四五六七八九十]+)\s*(?:只|支|个)?"
+        r"(?:股|股票|标的)",
+        raw_text,
+    )
+    if match is None:
+        return None
+    token = match.group(1)
+    if token.isdigit():
+        value = int(token)
+    elif token in _CHINESE_SMALL_INTEGERS:
+        value = _CHINESE_SMALL_INTEGERS[token]
+    elif token.startswith("十") and len(token) == 2:
+        value = 10 + _CHINESE_SMALL_INTEGERS.get(token[1], 0)
+    elif token.endswith("十") and len(token) == 2:
+        value = _CHINESE_SMALL_INTEGERS.get(token[0], 0) * 10
+    else:
+        return None
+    return value if value > 0 else None
+
+
+def recommendation_quantity_targets(raw_text: str) -> tuple[int, int] | None:
+    """Return minimum/target counts only for broad stock-picking requests."""
+    text = raw_text.strip()
+    if not any(pattern.search(text) is not None for pattern in _BROAD_RECOMMENDATION_PATTERNS):
+        return None
+    explicit = requested_recommendation_count(text)
+    if explicit is not None:
+        return explicit, explicit
+    return 3, 5
+
+
 def _intent_value(intent: RequestIntent | str) -> str:
     return intent.value if isinstance(intent, RequestIntent) else str(intent)
 
@@ -266,8 +330,17 @@ class InvestorRequestEnvelope(StrictModel):
         if intent_value != RequestIntent.FULL_RESEARCH_RECOMMENDATION.value:
             metadata.setdefault("full_research_routed_from", intent_value)
         metadata["full_research_router_policy"] = "full-research-recommendation-v1"
-        if requires_existing_holding_context(text, intent):
+        holding_context = requires_existing_holding_context(text, intent)
+        if holding_context:
             metadata["full_research_holding_context"] = True
+        quantity_targets = None if holding_context else recommendation_quantity_targets(text)
+        if quantity_targets is not None:
+            minimum, target = quantity_targets
+            metadata.setdefault("recommendation_minimum_actionable", minimum)
+            metadata.setdefault("recommendation_target_actionable", target)
+            metadata.setdefault(
+                "recommendation_quantity_policy", "broad-current-recommendation-v1"
+            )
         routed["metadata"] = metadata
         return routed
 

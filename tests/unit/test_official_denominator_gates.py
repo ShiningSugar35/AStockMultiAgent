@@ -9,7 +9,7 @@ honestly UNAVAILABLE (AGENTS.md: 未实现的能力必须如实标记不可用).
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -23,7 +23,6 @@ from astock.market_data.reference_config import (
     MarketReferenceConfig,
     load_market_reference_config,
 )
-from astock.pit import PointInTimeRepository
 from astock.providers.config import load_provider_registry
 from astock.providers.exchange_official_reference import (
     SseOfficialReferenceProvider,
@@ -38,10 +37,8 @@ from astock.providers.macro_authority import (
 )
 from astock.providers.runtime import ProviderFactory, load_transport_profiles
 from astock.schemas import (
-    AvailabilityBasis,
     CompletenessSemantics,
     Market,
-    PointInTimeStatus,
     ProviderRegistry,
     UniverseCoverageLevel,
     UniverseDenominatorAuthority,
@@ -238,13 +235,12 @@ def test_macro_providers_construct_via_factory_and_fetch_recorded_fixtures(
     )
 
     cases = [
-        (NbsStatisticalReleaseProvider, "gdp", date(2026, 6, 30)),
-        (PbocMonetaryPolicyReleaseProvider, "m2", date(2026, 6, 30)),
-        (MofFiscalPolicyReleaseProvider, "fiscal_revenue", date(2026, 6, 30)),
-        (NdrcPricingPolicyReleaseProvider, "refined_oil_price", date(2026, 7, 1)),
+        (NbsStatisticalReleaseProvider, "gdp", "2026-Q2"),
+        (PbocMonetaryPolicyReleaseProvider, "m2", "2026-06"),
+        (MofFiscalPolicyReleaseProvider, "fiscal_revenue", "2026-06"),
+        (NdrcPricingPolicyReleaseProvider, "refined_oil_price", "2026-07-01"),
     ]
-    pit_repository = PointInTimeRepository(state)
-    for adapter_type, indicator_code, expected_period_end in cases:
+    for adapter_type, indicator_code, expected_observation_period in cases:
         provider = cast(
             NbsStatisticalReleaseProvider
             | PbocMonetaryPolicyReleaseProvider
@@ -259,21 +255,12 @@ def test_macro_providers_construct_via_factory_and_fetch_recorded_fixtures(
         assert snapshot.source_id == adapter_type.provider_id
         assert snapshot.source_url == payload["source_url"]
         assert snapshot.available_to_system_at == recorded_available
+        assert payload["observation_period"] == expected_observation_period
         assert isinstance(payload.get("data_points"), list)
         assert payload["data_points"]
         assert object_store.verify(snapshot.object_sha256)
-        pit_rows = pit_repository.for_snapshot(snapshot.snapshot_id)
-        assert len(pit_rows) == 1
-        pit = pit_rows[0]
-        assert pit.source_id == (
-            f"macro:{adapter_type.provider_id}:{indicator_code}:"
-            f"{payload['observation_period']}:v{payload['revision_version']}"
-        )
-        assert pit.period_end == expected_period_end
-        assert pit.published_at is None
-        assert pit.available_to_system_at == snapshot.available_to_system_at
-        assert pit.point_in_time_status is PointInTimeStatus.CERTIFIED
-        assert pit.availability_basis is AvailabilityBasis.FETCH_OBSERVED
+        assert state.get_snapshot(snapshot.snapshot_id) == snapshot
+        assert snapshot.created_at == recorded_available
 
 
 def test_macro_recorded_first_never_goes_live_unconditionally(

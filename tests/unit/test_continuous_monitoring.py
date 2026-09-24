@@ -704,6 +704,94 @@ def test_spawn_daemon_threads_owner_id_into_subprocess_command(
     assert kwargs["env"]["ASTOCK_PROJECT_ROOT"] == str(tmp_path.resolve())
 
 
+
+def test_daemon_runs_storage_maintenance_without_turning_cleanup_failure_into_monitor_failure(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    config = load_continuous_monitor_config(PROJECT_ROOT / "configs" / "continuous_monitor.yaml")
+    maintenance_calls: list[str] = []
+
+    class _OneCycleService:
+        def run_cycle(
+            self,
+            *,
+            owner_id: str,
+            live: bool,
+            now: datetime,
+            lease_guard=None,
+        ):
+            assert owner_id == "owner-maintenance"
+            assert live is False
+            assert now.tzinfo is not None
+            assert lease_guard is not None
+            lease_guard()
+            assert repo.request_daemon_stop(at=datetime.now(UTC))
+            return SimpleNamespace(run_id="monitor-run:maintenance")
+
+    def maintenance() -> None:
+        maintenance_calls.append("called")
+        raise RuntimeError("simulated cleanup failure")
+
+    code = monitor_daemon.run_daemon(
+        cast(ContinuousMonitorService, _OneCycleService()),
+        repo,
+        config,
+        live=False,
+        interval_seconds=1,
+        owner_id="owner-maintenance",
+        maintenance=maintenance,
+        maintenance_interval_seconds=3600,
+    )
+
+    assert code == 0
+    assert maintenance_calls == ["called"]
+    status = repo.daemon_status()
+    assert status.state is MonitorDaemonState.STOPPED
+    assert status.last_run_id == "monitor-run:maintenance"
+
+
+
+def test_daemon_runs_storage_maintenance_even_when_monitor_cycle_fails(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    config = load_continuous_monitor_config(PROJECT_ROOT / "configs" / "continuous_monitor.yaml")
+    maintenance_calls: list[str] = []
+
+    class _FailingService:
+        def run_cycle(
+            self,
+            *,
+            owner_id: str,
+            live: bool,
+            now: datetime,
+            lease_guard=None,
+        ):
+            assert owner_id == "owner-maintenance-after-failure"
+            assert live is False
+            assert now.tzinfo is not None
+            assert lease_guard is not None
+            lease_guard()
+            assert repo.request_daemon_stop(at=datetime.now(UTC))
+            raise RuntimeError("simulated monitor cycle failure")
+
+    def maintenance() -> None:
+        maintenance_calls.append("called")
+
+    code = monitor_daemon.run_daemon(
+        cast(ContinuousMonitorService, _FailingService()),
+        repo,
+        config,
+        live=False,
+        interval_seconds=1,
+        owner_id="owner-maintenance-after-failure",
+        maintenance=maintenance,
+        maintenance_interval_seconds=3600,
+    )
+
+    assert code == 0
+    assert maintenance_calls == ["called"]
+
+
 def test_long_cycle_renews_lease_and_blocks_second_daemon_owner(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     base_config = load_continuous_monitor_config(

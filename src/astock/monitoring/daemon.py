@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
@@ -14,6 +16,8 @@ from uuid import uuid4
 from astock.monitoring.config import ContinuousMonitorConfig
 from astock.monitoring.repository import ContinuousMonitorRepository
 from astock.monitoring.service import ContinuousMonitorService
+
+LOGGER = logging.getLogger(__name__)
 
 
 class _DaemonLeaseLost(RuntimeError):
@@ -85,6 +89,8 @@ def run_daemon(
     live: bool,
     interval_seconds: int | None = None,
     owner_id: str | None = None,
+    maintenance: Callable[[], None] | None = None,
+    maintenance_interval_seconds: int = 6 * 3600,
 ) -> int:
     owner = owner_id or f"continuous-monitor:{uuid4().hex}"
     interval = interval_seconds or config.wake_interval_seconds
@@ -98,6 +104,7 @@ def run_daemon(
     ):
         return 3
     failed = False
+    next_maintenance_at = time.monotonic()
     try:
         while True:
             if repository.daemon_stop_requested(owner):
@@ -125,6 +132,17 @@ def run_daemon(
                 failed = True
                 if not repository.heartbeat_daemon(owner, at=datetime.now(UTC)):
                     return 4
+            if maintenance is not None and time.monotonic() >= next_maintenance_at:
+                try:
+                    maintenance()
+                except Exception:
+                    # Housekeeping must not take down the investment monitor, but the
+                    # failure remains observable in the normal operational log.
+                    LOGGER.exception("storage lifecycle maintenance failed")
+                finally:
+                    next_maintenance_at = time.monotonic() + max(
+                        60, maintenance_interval_seconds
+                    )
             deadline = time.monotonic() + interval
             while time.monotonic() < deadline:
                 if repository.daemon_stop_requested(owner):

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
+import shutil
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
@@ -18,11 +20,33 @@ from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.settings import ProjectPaths
+from astock.storage_retention import (
+    active_linked_worktree_roots,
+    iter_matching_tree_roots,
+    remove_tree,
+    snapshot_tree,
+)
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _StorageCategory = Literal[
-    "OBJECT_STORE", "RUNTIME_TMP", "REPORT_STAGING", "REPORT_OUTPUT", "LOG_BACKUP"
+    "OBJECT_STORE",
+    "RUNTIME_TMP",
+    "REPORT_STAGING",
+    "REPORT_OUTPUT",
+    "LOG_BACKUP",
+    "QUALITY_RUN_TMP",
+    "LONGRUN_SCRATCH",
+    "STALE_WORKTREE",
+    "RUNTIME_TEST_SCRATCH",
+    "AI_BRIDGE_TMP",
 ]
+_AUTO_TREE_CATEGORIES = {
+    "QUALITY_RUN_TMP",
+    "LONGRUN_SCRATCH",
+    "STALE_WORKTREE",
+    "RUNTIME_TEST_SCRATCH",
+    "AI_BRIDGE_TMP",
+}
 
 
 class _Model(BaseModel):
@@ -41,17 +65,38 @@ class StorageClassPolicy(_Model):
         return self
 
 
+class StorageTreePolicy(_Model):
+    retention_hours: int = Field(ge=1)
+    orphan_retention_hours: int | None = Field(default=None, ge=1)
+    patterns: list[str] = Field(default_factory=list)
+    max_depth: int = Field(default=1, ge=1, le=8)
+
+
+class StorageAutomationPolicy(_Model):
+    enabled: bool
+    interval_hours: int = Field(ge=1, le=168)
+    max_delete_bytes_per_run: int = Field(ge=1)
+
+
 class StorageWatermarks(_Model):
     runtime_warning_bytes: int = Field(ge=0)
     runtime_critical_bytes: int = Field(ge=0)
     object_store_warning_bytes: int = Field(ge=0)
     report_warning_bytes: int = Field(ge=0)
     temp_warning_bytes: int = Field(ge=0)
+    ephemeral_warning_bytes: int = Field(default=4 * 1024**3, ge=0)
+    ephemeral_critical_bytes: int = Field(default=8 * 1024**3, ge=0)
+    volume_free_warning_bytes: int = Field(default=40 * 1024**3, ge=0)
+    volume_free_critical_bytes: int = Field(default=20 * 1024**3, ge=0)
 
     @model_validator(mode="after")
     def ordered(self) -> StorageWatermarks:
         if self.runtime_critical_bytes < self.runtime_warning_bytes:
             raise ValueError("runtime critical watermark must be >= warning watermark")
+        if self.ephemeral_critical_bytes < self.ephemeral_warning_bytes:
+            raise ValueError("ephemeral critical watermark must be >= warning watermark")
+        if self.volume_free_critical_bytes > self.volume_free_warning_bytes:
+            raise ValueError("volume critical free watermark must be <= warning watermark")
         return self
 
 
@@ -69,6 +114,45 @@ class StorageLifecyclePolicy(_Model):
     report_staging: StorageClassPolicy
     report_output: StorageClassPolicy
     logs: StorageClassPolicy
+    quality_run_tmp: StorageTreePolicy = Field(
+        default_factory=lambda: StorageTreePolicy(
+            retention_hours=2,
+            orphan_retention_hours=24,
+            patterns=["tmp"],
+            max_depth=2,
+        )
+    )
+    longrun_scratch: StorageTreePolicy = Field(
+        default_factory=lambda: StorageTreePolicy(
+            retention_hours=24,
+            patterns=["pytest*", "cache-*", "process-tmp", "tmp*"],
+            max_depth=5,
+        )
+    )
+    stale_worktrees: StorageTreePolicy = Field(
+        default_factory=lambda: StorageTreePolicy(
+            retention_hours=48, patterns=["*"], max_depth=1
+        )
+    )
+    runtime_test_scratch: StorageTreePolicy = Field(
+        default_factory=lambda: StorageTreePolicy(
+            retention_hours=24,
+            patterns=["pytest-*", "uv-cache-*"],
+            max_depth=1,
+        )
+    )
+    ai_bridge_tmp: StorageTreePolicy = Field(
+        default_factory=lambda: StorageTreePolicy(
+            retention_hours=24, patterns=["tmp*"], max_depth=1
+        )
+    )
+    automation: StorageAutomationPolicy = Field(
+        default_factory=lambda: StorageAutomationPolicy(
+            enabled=True,
+            interval_hours=6,
+            max_delete_bytes_per_run=20 * 1024**3,
+        )
+    )
     watermarks: StorageWatermarks
     operations_slo: OperationsSLOPolicy
 
@@ -78,6 +162,9 @@ class StorageCandidate(_Model):
     relative_path: str = Field(min_length=1)
     byte_size: int = Field(ge=0)
     mtime_ns: int = Field(ge=0)
+    entry_type: Literal["FILE", "TREE"] = "FILE"
+    file_count: int = Field(default=1, ge=0)
+    dir_count: int = Field(default=0, ge=0)
     referenced: bool = False
     eligible: bool
     reason: str = Field(min_length=1)
@@ -98,6 +185,8 @@ class StorageLifecyclePlan(_Model):
     object_store_bytes: int = Field(ge=0)
     temp_bytes: int = Field(ge=0)
     report_bytes: int = Field(ge=0)
+    ephemeral_bytes: int = Field(default=0, ge=0)
+    volume_free_bytes: int = Field(default=0, ge=0)
     watermark_status: Literal["OK", "WARNING", "CRITICAL"]
     deletion_requires_confirmation: Literal[True] = True
 
@@ -331,14 +420,26 @@ class StorageLifecycleService:
                 )
             )
 
+        tree_candidates = self._ephemeral_tree_candidates(instant)
+        candidates.extend(tree_candidates)
+        scanned_count += sum(item.file_count for item in tree_candidates)
+        scanned_bytes += sum(item.byte_size for item in tree_candidates)
+
         candidates.sort(key=lambda item: (item.category, item.relative_path))
         eligible = [item for item in candidates if item.eligible]
-        runtime_bytes = self._bounded_tree_size(self.paths.runtime, 100_000)
-        object_store_bytes = self._bounded_tree_size(self.paths.objects, 100_000)
-        temp_bytes = self._bounded_tree_size(self.paths.runtime / "tmp", 100_000)
-        report_bytes = self._bounded_tree_size(self.paths.reports, 100_000)
+        runtime_bytes = snapshot_tree(self.paths.runtime).byte_size
+        object_store_bytes = snapshot_tree(self.paths.objects).byte_size
+        temp_bytes = snapshot_tree(self.paths.runtime / "tmp").byte_size
+        report_bytes = snapshot_tree(self.paths.reports).byte_size
+        ephemeral_bytes = sum(item.byte_size for item in tree_candidates)
+        volume_free_bytes = shutil.disk_usage(self.paths.root).free
         watermark_status = self._watermark(
-            runtime_bytes, object_store_bytes, temp_bytes, report_bytes
+            runtime_bytes,
+            object_store_bytes,
+            temp_bytes,
+            report_bytes,
+            ephemeral_bytes,
+            volume_free_bytes,
         )
         identity = self._plan_identity_payload(candidates, scan_truncated=truncated)
         return StorageLifecyclePlan(
@@ -347,7 +448,9 @@ class StorageLifecycleService:
             candidates=candidates,
             scanned_file_count=scanned_count,
             scanned_bytes=scanned_bytes,
-            eligible_file_count=len(eligible),
+            eligible_file_count=sum(
+                item.file_count if item.entry_type == "TREE" else 1 for item in eligible
+            ),
             eligible_bytes=sum(item.byte_size for item in eligible),
             referenced_object_count=sum(
                 item.category == "OBJECT_STORE" and item.referenced for item in candidates
@@ -357,6 +460,8 @@ class StorageLifecycleService:
             object_store_bytes=object_store_bytes,
             temp_bytes=temp_bytes,
             report_bytes=report_bytes,
+            ephemeral_bytes=ephemeral_bytes,
+            volume_free_bytes=volume_free_bytes,
             watermark_status=watermark_status,
         )
 
@@ -483,6 +588,12 @@ class StorageLifecycleService:
             if not self._allowed_candidate_path(path, item.category):
                 findings.add("CANDIDATE_OUTSIDE_ALLOWED_ROOT")
                 blocking.add("CANDIDATE_OUTSIDE_ALLOWED_ROOT")
+            if item.entry_type == "TREE" and item.category not in _AUTO_TREE_CATEGORIES:
+                findings.add("TREE_CATEGORY_NOT_EPHEMERAL")
+                blocking.add("TREE_CATEGORY_NOT_EPHEMERAL")
+            if item.entry_type == "FILE" and item.category in _AUTO_TREE_CATEGORIES:
+                findings.add("EPHEMERAL_TREE_CATEGORY_NOT_TREE")
+                blocking.add("EPHEMERAL_TREE_CATEGORY_NOT_TREE")
             if item.referenced and item.eligible:
                 findings.add("REFERENCED_CANDIDATE_MARKED_FOR_DELETE")
                 blocking.add("REFERENCED_CANDIDATE_MARKED_FOR_DELETE")
@@ -531,6 +642,39 @@ class StorageLifecycleService:
                 if report_key in active_staging_keys:
                     skipped.append(f"BECAME_ACTIVE_STAGING:{item.relative_path}")
                     continue
+            if item.entry_type == "TREE":
+                if not path.exists():
+                    skipped.append(f"ALREADY_MISSING:{item.relative_path}")
+                    continue
+                if item.category == "STALE_WORKTREE" and path in active_linked_worktree_roots(
+                    self.paths.root
+                ):
+                    skipped.append(f"BECAME_ACTIVE_WORKTREE:{item.relative_path}")
+                    continue
+                if (
+                    item.category == "QUALITY_RUN_TMP"
+                    and item.reason != "QUALITY_RUN_ORPHAN_EXPIRED"
+                    and not (path.parent / "result.json").is_file()
+                ):
+                    skipped.append(f"QUALITY_RUN_NOT_TERMINAL:{item.relative_path}")
+                    continue
+                current = snapshot_tree(path)
+                if (
+                    current.byte_size != item.byte_size
+                    or current.file_count != item.file_count
+                    or current.dir_count != item.dir_count
+                    or current.latest_mtime_ns != item.mtime_ns
+                ):
+                    skipped.append(f"CHANGED_SINCE_PLAN:{item.relative_path}")
+                    continue
+                try:
+                    remove_tree(path)
+                except OSError:
+                    skipped.append(f"DELETE_FAILED:{item.relative_path}")
+                    continue
+                deleted_count += item.file_count
+                deleted_bytes += item.byte_size
+                continue
             try:
                 stat = path.stat()
             except FileNotFoundError:
@@ -721,10 +865,14 @@ class StorageLifecycleService:
                 recovery_started = None
         report_rate = report_published / report_total if report_total else None
         skill_tokens_per_route = skill_cost / route_count if route_count else None
-        runtime_bytes = self._bounded_tree_size(self.paths.runtime, 100_000)
-        object_bytes = self._bounded_tree_size(self.paths.objects, 100_000)
-        temp_bytes = self._bounded_tree_size(self.paths.runtime / "tmp", 100_000)
-        report_bytes = self._bounded_tree_size(self.paths.reports, 100_000)
+        runtime_bytes = snapshot_tree(self.paths.runtime).byte_size
+        object_bytes = snapshot_tree(self.paths.objects).byte_size
+        temp_bytes = snapshot_tree(self.paths.runtime / "tmp").byte_size
+        report_bytes = snapshot_tree(self.paths.reports).byte_size
+        ephemeral_bytes = sum(
+            item.byte_size for item in self._ephemeral_tree_candidates(instant)
+        )
+        volume_free_bytes = shutil.disk_usage(self.paths.root).free
         runtime_growth = (
             runtime_bytes - baseline_runtime_bytes
             if baseline_runtime_bytes is not None
@@ -751,7 +899,17 @@ class StorageLifecycleService:
             and report_rate < self.policy.operations_slo.report_success_rate_target
         ):
             findings.add("REPORT_SUCCESS_RATE_LOW")
-        if self._watermark(runtime_bytes, object_bytes, temp_bytes, report_bytes) != "OK":
+        if (
+            self._watermark(
+                runtime_bytes,
+                object_bytes,
+                temp_bytes,
+                report_bytes,
+                ephemeral_bytes,
+                volume_free_bytes,
+            )
+            != "OK"
+        ):
             findings.add("STORAGE_WATERMARK_EXCEEDED")
         return OperationsSLOReport(
             generated_at=instant,
@@ -849,6 +1007,239 @@ class StorageLifecycleService:
                 elif isinstance(current, str) and _SHA256.fullmatch(current):
                     target.add(current)
 
+    def _ephemeral_tree_candidates(self, instant: datetime) -> list[StorageCandidate]:
+        candidates: list[StorageCandidate] = []
+
+        quality_root = self.paths.root / ".ai-bridge" / "quality-runs"
+        if quality_root.is_dir():
+            try:
+                quality_runs = list(quality_root.iterdir())
+            except OSError:
+                quality_runs = []
+            for run_root in quality_runs:
+                target = run_root / "tmp"
+                if not target.is_dir() or target.is_symlink():
+                    continue
+                terminal = (run_root / "result.json").is_file()
+                quality_policy = self.policy.quality_run_tmp
+                if terminal:
+                    candidates.append(
+                        self._tree_candidate(
+                            "QUALITY_RUN_TMP",
+                            target,
+                            quality_policy,
+                            instant,
+                        )
+                    )
+                    continue
+                orphan_hours = quality_policy.orphan_retention_hours
+                if orphan_hours is None:
+                    candidates.append(
+                        self._tree_candidate(
+                            "QUALITY_RUN_TMP",
+                            target,
+                            quality_policy,
+                            instant,
+                            referenced=True,
+                            protected_reason="QUALITY_RUN_NOT_TERMINAL_PROTECTED",
+                        )
+                    )
+                    continue
+                orphan_policy = quality_policy.model_copy(
+                    update={"retention_hours": orphan_hours}
+                )
+                orphan = self._tree_candidate(
+                    "QUALITY_RUN_TMP",
+                    target,
+                    orphan_policy,
+                    instant,
+                )
+                candidates.append(
+                    orphan.model_copy(
+                        update=(
+                            {"reason": "QUALITY_RUN_ORPHAN_EXPIRED"}
+                            if orphan.eligible
+                            else {
+                                "referenced": True,
+                                "reason": "QUALITY_RUN_NOT_TERMINAL_PROTECTED",
+                            }
+                        )
+                    )
+                )
+
+        longrun_root = self.paths.runtime / "longrun"
+        for target in iter_matching_tree_roots(
+            longrun_root,
+            self.policy.longrun_scratch.patterns,
+            max_depth=self.policy.longrun_scratch.max_depth,
+        ):
+            candidates.append(
+                self._tree_candidate(
+                    "LONGRUN_SCRATCH",
+                    target,
+                    self.policy.longrun_scratch,
+                    instant,
+                )
+            )
+
+        active_worktrees = active_linked_worktree_roots(self.paths.root)
+        worktree_root = self.paths.runtime / "worktrees"
+        if worktree_root.is_dir():
+            try:
+                worktrees = list(worktree_root.iterdir())
+            except OSError:
+                worktrees = []
+            for target in worktrees:
+                if not target.is_dir() or target.is_symlink():
+                    continue
+                active = target.resolve() in active_worktrees
+                candidates.append(
+                    self._tree_candidate(
+                        "STALE_WORKTREE",
+                        target,
+                        self.policy.stale_worktrees,
+                        instant,
+                        referenced=active,
+                        protected_reason="ACTIVE_GIT_WORKTREE_PROTECTED",
+                    )
+                )
+
+        for target in iter_matching_tree_roots(
+            self.paths.runtime,
+            self.policy.runtime_test_scratch.patterns,
+            max_depth=self.policy.runtime_test_scratch.max_depth,
+        ):
+            candidates.append(
+                self._tree_candidate(
+                    "RUNTIME_TEST_SCRATCH",
+                    target,
+                    self.policy.runtime_test_scratch,
+                    instant,
+                )
+            )
+
+        ai_bridge_root = self.paths.root / ".ai-bridge"
+        for target in iter_matching_tree_roots(
+            ai_bridge_root,
+            self.policy.ai_bridge_tmp.patterns,
+            max_depth=self.policy.ai_bridge_tmp.max_depth,
+        ):
+            candidates.append(
+                self._tree_candidate(
+                    "AI_BRIDGE_TMP",
+                    target,
+                    self.policy.ai_bridge_tmp,
+                    instant,
+                )
+            )
+        return candidates
+
+    def _tree_candidate(
+        self,
+        category: _StorageCategory,
+        path: Path,
+        policy: StorageTreePolicy,
+        instant: datetime,
+        *,
+        referenced: bool = False,
+        protected_reason: str = "TREE_PROTECTED",
+    ) -> StorageCandidate:
+        snapshot = snapshot_tree(path)
+        cutoff = instant - timedelta(hours=policy.retention_hours)
+        modified = datetime.fromtimestamp(snapshot.latest_mtime_ns / 1_000_000_000, UTC)
+        expired = modified <= cutoff
+        eligible = expired and not referenced
+        relative = path.resolve().relative_to(self.paths.root.resolve()).as_posix()
+        return StorageCandidate(
+            category=category,
+            relative_path=relative,
+            byte_size=snapshot.byte_size,
+            mtime_ns=snapshot.latest_mtime_ns,
+            entry_type="TREE",
+            file_count=snapshot.file_count,
+            dir_count=snapshot.dir_count,
+            referenced=referenced,
+            eligible=eligible,
+            reason=(
+                protected_reason
+                if referenced
+                else f"{category}_EXPIRED"
+                if eligible
+                else f"{category}_NOT_EXPIRED"
+            ),
+        )
+
+    def automatic_plan(self, *, now: datetime | None = None) -> StorageLifecyclePlan:
+        """Create a policy-approved plan containing only auto-deletable ephemeral trees."""
+
+        instant = (now or datetime.now(UTC)).astimezone(UTC)
+        candidates = self._ephemeral_tree_candidates(instant)
+        budget = self.policy.automation.max_delete_bytes_per_run
+        used = 0
+        bounded: list[StorageCandidate] = []
+        for item in sorted(candidates, key=lambda value: (value.mtime_ns, value.relative_path)):
+            if item.eligible and used + item.byte_size > budget:
+                item = item.model_copy(
+                    update={"eligible": False, "reason": "AUTO_DELETE_BUDGET_DEFERRED"}
+                )
+            elif item.eligible:
+                used += item.byte_size
+            bounded.append(item)
+        bounded.sort(key=lambda item: (item.category, item.relative_path))
+        eligible = [item for item in bounded if item.eligible]
+        runtime_bytes = snapshot_tree(self.paths.runtime).byte_size
+        object_store_bytes = snapshot_tree(self.paths.objects).byte_size
+        temp_bytes = snapshot_tree(self.paths.runtime / "tmp").byte_size
+        report_bytes = snapshot_tree(self.paths.reports).byte_size
+        ephemeral_bytes = sum(item.byte_size for item in bounded)
+        volume_free_bytes = shutil.disk_usage(self.paths.root).free
+        identity = self._plan_identity_payload(bounded, scan_truncated=False)
+        return StorageLifecyclePlan(
+            plan_id=content_hash(identity),
+            generated_at=instant,
+            candidates=bounded,
+            scanned_file_count=sum(item.file_count for item in bounded),
+            scanned_bytes=sum(item.byte_size for item in bounded),
+            eligible_file_count=sum(item.file_count for item in eligible),
+            eligible_bytes=sum(item.byte_size for item in eligible),
+            referenced_object_count=0,
+            scan_truncated=False,
+            runtime_bytes=runtime_bytes,
+            object_store_bytes=object_store_bytes,
+            temp_bytes=temp_bytes,
+            report_bytes=report_bytes,
+            ephemeral_bytes=ephemeral_bytes,
+            volume_free_bytes=volume_free_bytes,
+            watermark_status=self._watermark(
+                runtime_bytes,
+                object_store_bytes,
+                temp_bytes,
+                report_bytes,
+                ephemeral_bytes,
+                volume_free_bytes,
+            ),
+        )
+
+    def automatic_cleanup(
+        self,
+        *,
+        apply: bool,
+        now: datetime | None = None,
+    ) -> tuple[StorageLifecyclePlan, StorageLifecycleAudit, StorageLifecycleRun | None]:
+        """Audit and optionally execute only the explicitly auto-safe ephemeral categories."""
+
+        plan = self.automatic_plan(now=now)
+        self.persist_plan(plan)
+        report = self.audit(plan)
+        self.record_audit(report)
+        if not apply:
+            return plan, report, None
+        if not self.policy.automation.enabled:
+            raise ValueError("storage lifecycle automation is disabled by policy")
+        run = self.run(plan, confirm=True)
+        self.record_run(run)
+        return plan, report, run
+
     def _candidate(
         self,
         category: _StorageCategory,
@@ -931,35 +1322,83 @@ class StorageLifecycleService:
         object_bytes: int,
         temp_bytes: int,
         report_bytes: int,
+        ephemeral_bytes: int,
+        volume_free_bytes: int,
     ) -> Literal["OK", "WARNING", "CRITICAL"]:
         marks = self.policy.watermarks
-        if runtime_bytes >= marks.runtime_critical_bytes:
+        if (
+            runtime_bytes >= marks.runtime_critical_bytes
+            or ephemeral_bytes >= marks.ephemeral_critical_bytes
+            or volume_free_bytes <= marks.volume_free_critical_bytes
+        ):
             return "CRITICAL"
         if (
             runtime_bytes >= marks.runtime_warning_bytes
             or object_bytes >= marks.object_store_warning_bytes
             or temp_bytes >= marks.temp_warning_bytes
             or report_bytes >= marks.report_warning_bytes
+            or ephemeral_bytes >= marks.ephemeral_warning_bytes
+            or volume_free_bytes <= marks.volume_free_warning_bytes
         ):
             return "WARNING"
         return "OK"
 
     def _allowed_candidate_path(self, path: Path, category: str) -> bool:
-        roots = {
+        file_roots = {
             "OBJECT_STORE": self.paths.objects,
             "RUNTIME_TMP": self.paths.runtime / "tmp",
             "REPORT_STAGING": self.paths.report_staging,
             "REPORT_OUTPUT": self.paths.reports / "output",
             "LOG_BACKUP": self.paths.logs,
         }
-        root = roots.get(category)
-        if root is None:
-            return False
-        try:
-            path.resolve().relative_to(root.resolve())
-            return path.is_file() or not path.exists()
-        except ValueError:
-            return False
+        root = file_roots.get(category)
+        if root is not None:
+            try:
+                path.resolve().relative_to(root.resolve())
+                return path.is_file() or not path.exists()
+            except ValueError:
+                return False
+
+        def direct_child(parent: Path) -> bool:
+            try:
+                return path.parent.resolve() == parent.resolve()
+            except OSError:
+                return False
+
+        def matches(patterns: list[str]) -> bool:
+            return any(
+                fnmatch.fnmatchcase(path.name.casefold(), pattern.casefold())
+                for pattern in patterns
+            )
+
+        if category == "QUALITY_RUN_TMP":
+            quality_root = self.paths.root / ".ai-bridge" / "quality-runs"
+            try:
+                relative = path.relative_to(quality_root.resolve())
+            except ValueError:
+                return False
+            return len(relative.parts) == 2 and relative.parts[-1] == "tmp"
+        if category == "LONGRUN_SCRATCH":
+            longrun_root = self.paths.runtime / "longrun"
+            try:
+                relative = path.relative_to(longrun_root.resolve())
+            except ValueError:
+                return False
+            return (
+                1 <= len(relative.parts) <= self.policy.longrun_scratch.max_depth
+                and matches(self.policy.longrun_scratch.patterns)
+            )
+        if category == "STALE_WORKTREE":
+            return direct_child(self.paths.runtime / "worktrees")
+        if category == "RUNTIME_TEST_SCRATCH":
+            return direct_child(self.paths.runtime) and matches(
+                self.policy.runtime_test_scratch.patterns
+            )
+        if category == "AI_BRIDGE_TMP":
+            return direct_child(self.paths.root / ".ai-bridge") and matches(
+                self.policy.ai_bridge_tmp.patterns
+            )
+        return False
 
     @staticmethod
     def _table_exists(connection: object, table: str) -> bool:
@@ -1003,11 +1442,15 @@ class StorageLifecycleService:
 
 __all__ = [
     "OperationsSLOReport",
+    "StorageAutomationPolicy",
     "StorageCandidate",
+    "StorageClassPolicy",
     "StorageLifecycleAudit",
     "StorageLifecyclePlan",
     "StorageLifecyclePolicy",
     "StorageLifecycleRun",
     "StorageLifecycleService",
+    "StorageTreePolicy",
+    "StorageWatermarks",
     "load_storage_lifecycle_policy",
 ]

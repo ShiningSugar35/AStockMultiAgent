@@ -1,25 +1,67 @@
 schema_version: storage-lifecycle-policy-v1
+
 object_store:
   orphan_retention_days: 14
   scan_limit: 20000
+
 runtime_tmp:
   retention_hours: 24
   scan_limit: 5000
+
 report_staging:
   retention_hours: 24
   scan_limit: 2000
+
 report_output:
   orphan_retention_days: 90
   scan_limit: 5000
+
 logs:
   retention_hours: 336
   scan_limit: 1000
+
+quality_run_tmp:
+  retention_hours: 2
+  orphan_retention_hours: 24
+  patterns: [tmp]
+  max_depth: 2
+
+longrun_scratch:
+  retention_hours: 24
+  patterns: ["pytest*", "cache-*", "process-tmp", "tmp*"]
+  max_depth: 5
+
+stale_worktrees:
+  retention_hours: 48
+  patterns: ["*"]
+  max_depth: 1
+
+runtime_test_scratch:
+  retention_hours: 24
+  patterns: ["pytest-*", "uv-cache-*"]
+  max_depth: 1
+
+ai_bridge_tmp:
+  retention_hours: 24
+  patterns: ["tmp*"]
+  max_depth: 1
+
+automation:
+  enabled: true
+  interval_hours: 6
+  max_delete_bytes_per_run: 21474836480
+
 watermarks:
-  runtime_warning_bytes: 5368709120
-  runtime_critical_bytes: 10737418240
+  runtime_warning_bytes: 17179869184
+  runtime_critical_bytes: 34359738368
   object_store_warning_bytes: 4294967296
   report_warning_bytes: 1073741824
   temp_warning_bytes: 1073741824
+  ephemeral_warning_bytes: 4294967296
+  ephemeral_critical_bytes: 8589934592
+  volume_free_warning_bytes: 42949672960
+  volume_free_critical_bytes: 21474836480
+
 operations_slo:
   evidence_freshness_target_seconds: 86400
   monitor_backlog_warning: 100

@@ -16,6 +16,7 @@ from astock.monitoring.config import load_continuous_monitor_config
 from astock.monitoring.daemon import run_daemon, spawn_daemon
 from astock.monitoring.repository import ContinuousMonitorRepository
 from astock.monitoring.service import ContinuousMonitorService
+from astock.operations import StorageLifecycleService
 from astock.schemas.continuous_monitoring import (
     MonitorRuleRequest,
     MonitorTargetReason,
@@ -136,6 +137,12 @@ def register_continuous_monitor_commands(
         owner_id: Annotated[str | None, typer.Option("--owner-id", hidden=True)] = None,
     ) -> None:
         _, repo, service, config = build()
+        storage_paths, storage_state, storage_objects = services()
+        lifecycle = StorageLifecycleService(storage_paths, storage_state, storage_objects)
+        def storage_maintenance() -> None:
+            lifecycle.automatic_cleanup(apply=True)
+
+        maintenance = storage_maintenance if lifecycle.policy.automation.enabled else None
         code = run_daemon(
             service,
             repo,
@@ -143,6 +150,8 @@ def register_continuous_monitor_commands(
             live=live,
             interval_seconds=interval_seconds,
             owner_id=owner_id,
+            maintenance=maintenance,
+            maintenance_interval_seconds=lifecycle.policy.automation.interval_hours * 3600,
         )
         if code:
             raise typer.Exit(code=code)

@@ -18,10 +18,12 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.operations import (
     OperationsSLOPolicy,
+    StorageAutomationPolicy,
     StorageCandidate,
     StorageClassPolicy,
     StorageLifecyclePolicy,
     StorageLifecycleService,
+    StorageTreePolicy,
     StorageWatermarks,
     load_storage_lifecycle_policy,
 )
@@ -68,12 +70,39 @@ def _make_policy(
             orphan_retention_days=report_retention_days, scan_limit=scan_limit
         ),
         logs=StorageClassPolicy(retention_hours=log_retention_hours, scan_limit=scan_limit),
+        quality_run_tmp=StorageTreePolicy(
+            retention_hours=2,
+            orphan_retention_hours=24,
+            patterns=["tmp"],
+            max_depth=2,
+        ),
+        longrun_scratch=StorageTreePolicy(
+            retention_hours=24,
+            patterns=["pytest*", "cache-*", "process-tmp", "tmp*"],
+            max_depth=5,
+        ),
+        stale_worktrees=StorageTreePolicy(retention_hours=48, patterns=["*"], max_depth=1),
+        runtime_test_scratch=StorageTreePolicy(
+            retention_hours=24,
+            patterns=["pytest-*", "uv-cache-*"],
+            max_depth=1,
+        ),
+        ai_bridge_tmp=StorageTreePolicy(retention_hours=24, patterns=["tmp*"], max_depth=1),
+        automation=StorageAutomationPolicy(
+            enabled=True,
+            interval_hours=6,
+            max_delete_bytes_per_run=20 * 1024**3,
+        ),
         watermarks=StorageWatermarks(
             runtime_warning_bytes=runtime_warning,
             runtime_critical_bytes=runtime_critical,
             object_store_warning_bytes=object_warning,
             report_warning_bytes=report_warning,
             temp_warning_bytes=temp_warning,
+            ephemeral_warning_bytes=4 * 1024**3,
+            ephemeral_critical_bytes=8 * 1024**3,
+            volume_free_warning_bytes=40 * 1024**3,
+            volume_free_critical_bytes=20 * 1024**3,
         ),
         operations_slo=OperationsSLOPolicy(
             evidence_freshness_target_seconds=evidence_freshness,
@@ -106,6 +135,12 @@ def _write_file(path: Path, content: bytes = b"test", mtime: float | None = None
     path.write_bytes(content)
     if mtime is not None:
         os.utime(path, (mtime, mtime))
+
+
+def _age_tree(root: Path, mtime: float) -> None:
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        os.utime(path, (mtime, mtime))
+    os.utime(root, (mtime, mtime))
 
 
 def _make_object(objects_root: Path, sha256: str, data: bytes = b"obj") -> Path:
@@ -162,6 +197,8 @@ operations_slo:
         policy = load_storage_lifecycle_policy(config_path)
         assert policy.schema_version == "storage-lifecycle-policy-v1"
         assert policy.object_store.orphan_retention_days == 14
+        assert policy.automation.enabled is True
+        assert policy.quality_run_tmp.orphan_retention_hours == 24
         assert policy.operations_slo.evidence_freshness_target_seconds == 86400
 
     def test_policy_rejects_both_retentions(self) -> None:
@@ -985,6 +1022,184 @@ class TestEndToEndFlow:
         assert len(plan1.candidates) == len(plan2.candidates)
 
 
+
+# ---------------------------------------------------------------------------
+# Ephemeral tree retention
+# ---------------------------------------------------------------------------
+
+
+class TestEphemeralTreeRetention:
+    def _service(self, tmp_path: Path, policy: StorageLifecyclePolicy | None = None):
+        paths = _make_paths(tmp_path)
+        paths.ensure_directories()
+        state = _make_state(tmp_path)
+        service = StorageLifecycleService(
+            paths,
+            state,
+            ObjectStore(paths.objects),
+            policy or _make_policy(),
+        )
+        return paths, state, service
+
+    def test_terminal_quality_run_tmp_is_tree_candidate_and_nonterminal_is_protected(
+        self, tmp_path: Path
+    ) -> None:
+        paths, _, service = self._service(tmp_path)
+        now = datetime(2026, 9, 24, tzinfo=UTC)
+        old = (now - timedelta(hours=3)).timestamp()
+
+        terminal = paths.root / ".ai-bridge" / "quality-runs" / "terminal"
+        _write_file(terminal / "tmp" / "pytest" / "payload.bin", b"x" * 64)
+        _write_file(terminal / "result.json", b"{}")
+        _age_tree(terminal / "tmp", old)
+
+        running = paths.root / ".ai-bridge" / "quality-runs" / "running"
+        _write_file(running / "tmp" / "pytest" / "payload.bin", b"y" * 64)
+        _age_tree(running / "tmp", old)
+
+        plan = service.automatic_plan(now=now)
+        by_path = {item.relative_path: item for item in plan.candidates}
+        terminal_item = by_path[".ai-bridge/quality-runs/terminal/tmp"]
+        running_item = by_path[".ai-bridge/quality-runs/running/tmp"]
+
+        assert terminal_item.entry_type == "TREE"
+        assert terminal_item.eligible is True
+        assert terminal_item.file_count == 1
+        assert running_item.referenced is True
+        assert running_item.eligible is False
+        assert running_item.reason == "QUALITY_RUN_NOT_TERMINAL_PROTECTED"
+
+
+    def test_abandoned_quality_run_tmp_expires_after_orphan_grace(
+        self, tmp_path: Path
+    ) -> None:
+        paths, _, service = self._service(tmp_path)
+        now = datetime(2026, 9, 24, tzinfo=UTC)
+        old = (now - timedelta(hours=30)).timestamp()
+
+        abandoned = paths.root / ".ai-bridge" / "quality-runs" / "abandoned"
+        scratch = abandoned / "tmp"
+        _write_file(scratch / "pytest" / "payload.bin", b"orphan")
+        _age_tree(scratch, old)
+
+        plan = service.automatic_plan(now=now)
+        item = next(
+            candidate
+            for candidate in plan.candidates
+            if candidate.relative_path == ".ai-bridge/quality-runs/abandoned/tmp"
+        )
+        assert item.eligible is True
+        assert item.referenced is False
+        assert item.reason == "QUALITY_RUN_ORPHAN_EXPIRED"
+
+        run = service.run(plan, confirm=True)
+        assert run.skip_reasons == []
+        assert not scratch.exists()
+
+    def test_longrun_scratch_is_deleted_as_tree_but_small_authority_receipt_remains(
+        self, tmp_path: Path
+    ) -> None:
+        paths, _, service = self._service(tmp_path)
+        now = datetime(2026, 9, 24, tzinfo=UTC)
+        old = (now - timedelta(hours=30)).timestamp()
+
+        run_root = paths.runtime / "longrun" / "wp-test" / "full-validation"
+        scratch = run_root / "pytest-tmp-0"
+        _write_file(scratch / "case" / "state.sqlite", b"scratch")
+        _age_tree(scratch, old)
+        authority = run_root / "authority-repro" / "state.sqlite"
+        _write_file(authority, b"receipt")
+
+        plan = service.automatic_plan(now=now)
+        target = next(
+            item for item in plan.candidates if item.relative_path.endswith("pytest-tmp-0")
+        )
+        assert target.category == "LONGRUN_SCRATCH"
+        assert target.eligible is True
+
+        run = service.run(plan, confirm=True)
+        assert run.deleted_file_count >= 1
+        assert not scratch.exists()
+        assert authority.read_bytes() == b"receipt"
+
+    def test_registered_git_worktree_is_protected_while_stale_peer_is_eligible(
+        self, tmp_path: Path
+    ) -> None:
+        paths, _, service = self._service(tmp_path)
+        now = datetime(2026, 9, 24, tzinfo=UTC)
+        old = (now - timedelta(hours=72)).timestamp()
+
+        live = paths.runtime / "worktrees" / "live"
+        stale = paths.runtime / "worktrees" / "stale"
+        _write_file(live / "runtime" / "payload.bin", b"live")
+        _write_file(stale / "runtime" / "payload.bin", b"stale")
+        _age_tree(live, old)
+        _age_tree(stale, old)
+
+        metadata = paths.root / ".git" / "worktrees" / "live"
+        metadata.mkdir(parents=True)
+        (metadata / "gitdir").write_text(str(live / ".git"), encoding="utf-8")
+
+        plan = service.automatic_plan(now=now)
+        by_name = {
+            Path(item.relative_path).name: item
+            for item in plan.candidates
+            if item.category == "STALE_WORKTREE"
+        }
+        assert by_name["live"].referenced is True
+        assert by_name["live"].eligible is False
+        assert by_name["live"].reason == "ACTIVE_GIT_WORKTREE_PROTECTED"
+        assert by_name["stale"].eligible is True
+
+
+    def test_longrun_allowed_root_enforces_configured_scan_depth(self, tmp_path: Path) -> None:
+        paths, _, service = self._service(tmp_path)
+        deep = paths.runtime / "longrun" / "a" / "b" / "c" / "d" / "e" / "tmp-deep"
+        deep.mkdir(parents=True)
+        assert service._allowed_candidate_path(deep.resolve(), "LONGRUN_SCRATCH") is False
+
+    def test_tree_changed_after_plan_is_not_deleted(self, tmp_path: Path) -> None:
+        paths, _, service = self._service(tmp_path)
+        now = datetime(2026, 9, 24, tzinfo=UTC)
+        old = (now - timedelta(hours=30)).timestamp()
+
+        scratch = paths.runtime / "longrun" / "run" / "pytest-old"
+        _write_file(scratch / "a.txt", b"a")
+        _age_tree(scratch, old)
+        plan = service.automatic_plan(now=now)
+
+        _write_file(scratch / "new.txt", b"changed")
+        run = service.run(plan, confirm=True)
+
+        assert scratch.exists()
+        assert any(reason.startswith("CHANGED_SINCE_PLAN:") for reason in run.skip_reasons)
+
+    def test_automatic_plan_never_selects_canonical_object_or_report_outputs(
+        self, tmp_path: Path
+    ) -> None:
+        paths, _, service = self._service(tmp_path)
+        now = datetime(2026, 9, 24, tzinfo=UTC)
+        old = (now - timedelta(days=100)).timestamp()
+
+        digest = _dummy_sha256("canonical")
+        object_path = _make_object(paths.objects, digest)
+        os.utime(object_path, (old, old))
+        report = paths.reports / "output" / "old-report.md"
+        _write_file(report, b"report", mtime=old)
+
+        plan = service.automatic_plan(now=now)
+
+        assert all(item.category in {
+            "QUALITY_RUN_TMP",
+            "LONGRUN_SCRATCH",
+            "STALE_WORKTREE",
+            "RUNTIME_TEST_SCRATCH",
+            "AI_BRIDGE_TMP",
+        } for item in plan.candidates)
+        assert object_path.exists()
+        assert report.exists()
+
+
 # ---------------------------------------------------------------------------
 # Operational receipts
 # ---------------------------------------------------------------------------
@@ -1103,6 +1318,7 @@ class TestOperationsCLI:
             "storage-lifecycle-plan",
             "storage-lifecycle-audit",
             "storage-lifecycle-run",
+            "storage-lifecycle-auto",
             "operations-slo-report",
         }
         assert expected.issubset(commands)

@@ -39,6 +39,8 @@ def register_operations_commands(
                 "object_store_bytes": plan.object_store_bytes,
                 "temp_bytes": plan.temp_bytes,
                 "report_bytes": plan.report_bytes,
+                "ephemeral_bytes": plan.ephemeral_bytes,
+                "volume_free_bytes": plan.volume_free_bytes,
                 "watermark_status": plan.watermark_status,
                 "deletion_requires_confirmation": plan.deletion_requires_confirmation,
                 "candidates": [item.model_dump(mode="json") for item in plan.candidates],
@@ -101,6 +103,41 @@ def register_operations_commands(
                 "skip_reasons": run.skip_reasons,
             }
         )
+
+    @app.command("storage-lifecycle-auto")
+    def storage_lifecycle_auto(
+        apply: Annotated[bool, typer.Option("--apply")] = False,
+    ) -> None:
+        """Dry-run or execute policy-approved cleanup for ephemeral execution trees only."""
+
+        service = lifecycle_service()
+        try:
+            plan, audit, run = service.automatic_cleanup(apply=apply)
+        except ValueError as exc:
+            emit({"status": "REJECTED", "error": str(exc)})
+            raise typer.Exit(code=3) from exc
+        payload = {
+            "status": "COMPLETED" if run is not None else "DRY_RUN",
+            "plan_id": plan.plan_id,
+            "audit_status": audit.status,
+            "finding_codes": audit.finding_codes,
+            "eligible_file_count": plan.eligible_file_count,
+            "eligible_bytes": plan.eligible_bytes,
+            "ephemeral_bytes": plan.ephemeral_bytes,
+            "volume_free_bytes": plan.volume_free_bytes,
+            "watermark_status": plan.watermark_status,
+            "candidates": [
+                item.model_dump(mode="json")
+                for item in plan.candidates
+                if item.eligible or item.referenced
+            ],
+            "deleted_file_count": run.deleted_file_count if run is not None else 0,
+            "deleted_bytes": run.deleted_bytes if run is not None else 0,
+            "skip_reasons": run.skip_reasons if run is not None else [],
+        }
+        emit(payload)
+        if audit.status != "PASS":
+            raise typer.Exit(code=3)
 
     @app.command("operations-slo-report")
     def operations_slo_report() -> None:

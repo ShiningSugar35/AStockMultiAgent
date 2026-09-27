@@ -46,6 +46,7 @@ dependencies = [
     { name = "baostock" },
     { name = "cryptography" },
     { name = "httpx" },
+    { name = "legacy-doc" },
     { name = "pdfplumber" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -78,6 +79,7 @@ requires-dist = [
     { name = "baostock", specifier = "==0.8.9" },
     { name = "cryptography", specifier = ">=49.0.0,<50" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
+    { name = "legacy-doc", specifier = "==0.2.1" },
     { name = "pdfplumber", specifier = ">=0.11.10,<0.12" },
     { name = "pyarrow", specifier = ">=25.0.0,<26" },
     { name = "pydantic", specifier = ">=2.12.0,<3" },
@@ -557,6 +559,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0f/41/c5f71f9f00aabcc71fee8b7475e3f64747282580c2fe748961ba29b18385/kiwisolver-1.5.0-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:f6764a4ccab3078db14a632420930f6186058750df066b8ea2a7106df91d3203", size = 138036, upload-time = "2026-03-09T13:15:36.894Z" },
     { url = "https://files.pythonhosted.org/packages/fa/06/7399a607f434119c6e1fdc8ec89a8d51ccccadf3341dee4ead6bd14caaf5/kiwisolver-1.5.0-graalpy312-graalpy250_312_native-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c31c13da98624f957b0fb1b5bae5383b2333c2c3f6793d9825dd5ce79b525cb7", size = 194295, upload-time = "2026-03-09T13:15:38.22Z" },
     { url = "https://files.pythonhosted.org/packages/b5/91/53255615acd2a1eaca307ede3c90eb550bae9c94581f8c00081b6b1c8f44/kiwisolver-1.5.0-graalpy312-graalpy250_312_native-win_amd64.whl", hash = "sha256:1f1489f769582498610e015a8ef2d36f28f505ab3096d0e16b4858a9ec214f57", size = 75987, upload-time = "2026-03-09T13:15:39.65Z" },
+]
+
+[[package]]
+name = "legacy-doc"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/99/ec/7cc1afd576a1508aafdd3d6e7cb126b993940772703d35243741fa49b220/legacy_doc-0.2.1.tar.gz", hash = "sha256:3573a034638af1ebbbe1a727baf18b2f69e6ad6439e4650be59aadc069a9bb42", size = 13011, upload-time = "2026-05-28T13:29:32.925Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/c0/c20afbf15f0f453be9202ce2b9e4b4f4456f1661a8413d437237ef428ef0/legacy_doc-0.2.1-py3-none-any.whl", hash = "sha256:51c428238efc48ef77b32fb7e9e0f35081eeb0a88e181dd3f793189dc63355e6", size = 11688, upload-time = "2026-05-28T13:29:31.821Z" },
 ]
 
 [[package]]

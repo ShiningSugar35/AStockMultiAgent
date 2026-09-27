@@ -14,6 +14,8 @@ Primary skill: `$evidence-investigation`.
 
 2. **Reuse existing frozen evidence**
    - Check registered snapshots/artifacts and their audit status before fetching again.
+   - Resolve snapshot aliases to the canonical source/content identity before establishing downstream foreign keys; preserve each fetch attempt as an append-only observation rather than replacing the canonical source fact.
+   - For admitted official reports, reuse by company/period/document type and capability-scoped freshness only when raw/admission/hash/identity/completeness still verify; unrelated plan changes must not force a full refetch.
    - A valid existing source is preferred to duplicate collection.
 
 3. **Diagnose, repair and fallback deterministically**
@@ -62,4 +64,4 @@ Before returning any public-data `NEEDS_INFO`/unavailable result, the Agent must
 
 After public recovery is genuinely exhausted, `PUBLIC_DATA_UNAVAILABLE` records a bounded unresolved attempt with no private-material demand. Preserve acquired evidence and describe only the remaining uncertainty. Ask for user input only when it is actually private or requires their authorization. Do not let an unavailable source, incomplete intermediate artifact or exhausted budget trigger an endless full-graph rerun. LLM query/source/parse proposals remain allowed; truth, accounting, historical PIT and execution checks remain deterministic.
 
-Current implementation, validation scope and known limitations: `docs/architecture/adaptive-recovery-and-validation-v1.md`.
+Current implementation and validation boundaries: `docs/architecture/adaptive-recovery-and-validation-v1.md`; canonical snapshot/report identity, native document reuse and gate-efficiency specifics: `docs/architecture/evidence-gate-efficiency-v1.md`.

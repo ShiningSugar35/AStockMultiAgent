@@ -740,7 +740,7 @@ def test_default_model_portfolio_is_explicit_and_does_not_ask_for_missing_constr
     contract = service.request_contract(_request("推荐现在可以买的股票"))
     assert contract.portfolio_assumptions.source.value == "MODEL_PORTFOLIO"
     assert contract.portfolio_assumptions.capital_rmb == Decimal("100000")
-    assert contract.portfolio_assumptions.target_annual_return == Decimal("1")
+    assert contract.portfolio_assumptions.target_annual_return == Decimal("0.5")
     assert contract.portfolio_assumptions.capital_source is not None
     assert contract.portfolio_assumptions.target_annual_return_source is not None
     assert contract.portfolio_assumptions.capital_source.value == "DEFAULT"
@@ -774,8 +774,8 @@ def test_target_return_propagates_to_profit_loss_plan_and_public_answer() -> Non
         _request("推荐现在可以买的股票", request_id="expectation-public"),
     )
 
-    assert receipt.portfolio.target_annual_return == Decimal("1")
-    assert receipt.portfolio.annual_profit_target == Decimal("100000")
+    assert receipt.portfolio.target_annual_return == Decimal("0.5")
+    assert receipt.portfolio.annual_profit_target == Decimal("50000")
     assert receipt.portfolio.target_horizon_profit is None
     assert "target_horizon_profit" not in receipt.optimizer_outputs
     assert receipt.portfolio.modeled_downside_loss is not None
@@ -788,7 +788,7 @@ def test_target_return_propagates_to_profit_loss_plan_and_public_answer() -> Non
     projected = VerifiedAnswerProjector._full_research_decision(
         cast(Any, SimpleNamespace(outputs={"FULL_RESEARCH_GATE": (receipt,)}))
     )
-    assert any("目标年化100%" in item for item in projected["reasons"])
+    assert any("目标年化50%" in item for item in projected["reasons"])
     assert any("不构成收益承诺" in item for item in projected["reasons"])
     assert any("估值下行情景加权损失" in item for item in projected["reasons"])
     if receipt.portfolio.objective_status == "BELOW_HORIZON_TARGET":

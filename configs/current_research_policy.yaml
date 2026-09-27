@@ -14,6 +14,9 @@ capabilities:
     research_question: "从交易所官方页面确认 {company_id} 的证券身份、市场和当前上市状态。"
     preferred_authorities: [EXCHANGE_OFFICIAL, ISSUER_IR]
     external_on: [PARTIAL, FAILED]
+    reuse_freshness_seconds: 86400
+    reuse_across_shanghai_date: true
+    reuse_requires_same_lookback: false
   DAILY_MARKET:
     core: true
     stage: 1
@@ -22,6 +25,9 @@ capabilities:
     research_question: "取得 {company_id} 当前及近期未复权日线价格。"
     preferred_authorities: [EXCHANGE_OFFICIAL, PUBLIC_MARKET_DATA]
     external_on: [FAILED]
+    reuse_freshness_seconds: 120
+    reuse_across_shanghai_date: false
+    reuse_requires_same_lookback: true
   CORPORATE_ACTIONS:
     core: false
     stage: 1
@@ -30,6 +36,9 @@ capabilities:
     research_question: "核实 {company_id} 最近公司行动及其官方公告。"
     preferred_authorities: [EXCHANGE_OFFICIAL, CNINFO_OFFICIAL, ISSUER_IR]
     external_on: []
+    reuse_freshness_seconds: 1800
+    reuse_across_shanghai_date: false
+    reuse_requires_same_lookback: true
   FINANCIAL_ANNUAL:
     core: true
     stage: 1
@@ -38,6 +47,9 @@ capabilities:
     research_question: "从发行人官网、交易所或法定披露平台取得 {company_id} 的最新年度报告并核对关键财务事实。"
     preferred_authorities: [ISSUER_IR, EXCHANGE_OFFICIAL, CNINFO_OFFICIAL]
     external_on: [PARTIAL, FAILED]
+    reuse_freshness_seconds: 21600
+    reuse_across_shanghai_date: true
+    reuse_requires_same_lookback: false
   FINANCIAL_LATEST_INTERIM:
     core: true
     stage: 1
@@ -46,3 +58,6 @@ capabilities:
     research_question: "从发行人官网、交易所或法定披露平台取得 {company_id} 的最新已披露季度或中期报告并核对关键财务事实。"
     preferred_authorities: [ISSUER_IR, EXCHANGE_OFFICIAL, CNINFO_OFFICIAL]
     external_on: [PARTIAL, FAILED]
+    reuse_freshness_seconds: 3600
+    reuse_across_shanghai_date: true
+    reuse_requires_same_lookback: false

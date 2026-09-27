@@ -4,7 +4,7 @@ status: ENABLED
 
 model_portfolio_defaults:
   capital_rmb: 100000
-  target_annual_return: 1.00
+  target_annual_return: 0.50
   risk_profile: MEDIUM
   horizon_min_months: 3
   horizon_max_months: 12

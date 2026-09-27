@@ -737,6 +737,57 @@ def test_captured_exchange_financial_report_recovers_when_cninfo_is_unavailable(
     assert report.snapshot.snapshot_id == capture.snapshot_id
 
 
+def test_captured_financial_report_binds_period_and_rejects_summary(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    observed = datetime(2026, 3, 20, 8, tzinfo=UTC)
+    proposal = AgentSourceProposal.model_validate(
+        {
+            "requested_capability": "financial.official_document",
+            "query": "recover exact annual report from the exchange",
+            "candidate_url": "https://www.szse.cn/disclosure/listedinfo/period-binding.pdf",
+            "expected_fact": "official 2025 annual-report values",
+            "preferred_source_class": SourceClass.PRIMARY_OFFICIAL_WEB,
+            "formal_use": True,
+            "require_complete": False,
+            "reason": "exercise report-period binding",
+        }
+    )
+    capture_service = OfficialWebDocumentCaptureService(service.state, service.objects)
+    capture_service.capture(
+        proposal,
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n",
+        title="平安银行2025年年度报告",
+        company_ids=["000001"],
+        published_at=observed - timedelta(days=1),
+        period_end=date(2024, 12, 31),
+        document_type=DocumentType.ANNUAL_REPORT,
+        disclosure_id="szse-wrong-bound-period",
+        observed_at=observed,
+    )
+    summary_proposal = AgentSourceProposal.model_validate(
+        {
+            **proposal.model_dump(mode="json"),
+            "candidate_url": "https://www.szse.cn/disclosure/listedinfo/annual-summary.pdf",
+        }
+    )
+    capture_service.capture(
+        summary_proposal,
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\nsummary",
+        title="平安银行2025年年度报告摘要",
+        company_ids=["000001"],
+        published_at=observed - timedelta(hours=12),
+        period_end=PERIOD_END,
+        document_type=DocumentType.ANNUAL_REPORT,
+        disclosure_id="szse-summary-2025",
+        observed_at=observed + timedelta(minutes=1),
+    )
+
+    candidates = service.official._captured_candidates(
+        "000001", PERIOD_END, FinancialPeriodType.ANNUAL
+    )
+    assert [item.document.title for item in candidates] == []
+
+
 def test_bjse_exact_item_financial_report_uses_formal_exchange_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -824,6 +875,38 @@ def test_official_annual_financial_report_title_is_recognized() -> None:
         "示例股份2025年年度报告",
         date(2025, 12, 31),
         FinancialPeriodType.ANNUAL,
+    )
+    assert _exact_report_title(
+        "示例股份 2025 年年度报告全文（修订版）",
+        date(2025, 12, 31),
+        FinancialPeriodType.ANNUAL,
+    )
+    assert _exact_report_title(
+        "Example Holdings 2025 Annual Report (Revised)",
+        date(2025, 12, 31),
+        FinancialPeriodType.ANNUAL,
+    )
+    assert not _exact_report_title(
+        "示例股份2025年年度报告摘要",
+        date(2025, 12, 31),
+        FinancialPeriodType.ANNUAL,
+    )
+
+
+def test_semianual_report_title_accepts_spacing_full_text_revision_and_alias() -> None:
+    period_end = date(2026, 6, 30)
+    for title in (
+        "示例股份2026年半年度报告全文",
+        "示例股份2026 年半年度报告",
+        "示例股份2026年半年度报告（修订版）",
+        "Example Holdings 2026 Interim Report",
+        "Example Holdings 2026 Half-Year Report (Amended)",
+    ):
+        assert _exact_report_title(title, period_end, FinancialPeriodType.SEMIANNUAL)
+    assert not _exact_report_title(
+        "示例股份2026年半年度报告摘要",
+        period_end,
+        FinancialPeriodType.SEMIANNUAL,
     )
 
 

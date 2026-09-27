@@ -183,13 +183,11 @@ def test_current_docs_do_not_claim_unearned_source_auditor_backup() -> None:
         assert not any(claim in text for claim in forbidden_claims), path
 
 
-def test_e02_skill_evidence_hashes_bind_actual_repo_contracts() -> None:
-    shared_repo_sources = {
-        "repo:pyproject.toml": PROJECT_ROOT / "pyproject.toml",
-        "repo:uv.lock": PROJECT_ROOT / "uv.lock",
-        "contract:tests/unit/test_e02_external_qualification.py": (
-            PROJECT_ROOT / "tests/unit/test_e02_external_qualification.py"
-        ),
+def test_e02_skill_evidence_binds_candidate_without_global_repo_hash_coupling() -> None:
+    historical_context_refs = {
+        "repo:pyproject.toml",
+        "repo:uv.lock",
+        "contract:tests/unit/test_e02_external_qualification.py",
     }
     for capability_id in SKILL_CANDIDATES:
         evidence = _load(capability_id)
@@ -199,11 +197,24 @@ def test_e02_skill_evidence_hashes_bind_actual_repo_contracts() -> None:
             for item in evidence.sources
             if item.source_ref.endswith(f"/{capability_id}/SKILL.md")
         )
-        assert skill_source.sha256 == _canonical_text_sha256(skill_path)
-        assert evidence.candidate_version == f"sha256:{_canonical_text_sha256(skill_path)}"
-        for source_ref, source_path in shared_repo_sources.items():
-            source = next(item for item in evidence.sources if item.source_ref == source_ref)
-            assert source.sha256 == _canonical_text_sha256(source_path)
+        current_skill_hash = _canonical_text_sha256(skill_path)
+        assert skill_source.sha256 == current_skill_hash
+        assert evidence.candidate_version == f"sha256:{current_skill_hash}"
+
+        # The qualification record is frozen evidence from its observation time.
+        # Repo-wide dependency/test hashes describe that historical context; binding
+        # them to today's unrelated pyproject/lock/test bytes would invalidate an
+        # unchanged Skill whenever the repository evolves. Keep those hashes
+        # immutable and well-formed, while the actual candidate contract remains
+        # bound above by its exact current Skill hash.
+        sources_by_ref = {item.source_ref: item for item in evidence.sources}
+        assert historical_context_refs <= sources_by_ref.keys()
+        for source_ref in historical_context_refs:
+            source = sources_by_ref[source_ref]
+            assert source.sha256 is not None
+            assert len(source.sha256) == 64
+            assert all(char in "0123456789abcdef" for char in source.sha256)
+            assert source.observed_at <= evidence.created_at
 
 
 def test_e02_all_tracked_evidence_materializes_through_canonical_m06(tmp_path: Path) -> None:

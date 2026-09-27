@@ -64,6 +64,36 @@ class PdfParseService:
         ocr_enabled: bool = True,
     ) -> DocumentParseReport:
         parser_version = self._parser_version(ocr_enabled)
+        all_pages = page_numbers is None
+        page_scope_hash = (
+            content_hash({"scope": "ALL"})
+            if all_pages
+            else None
+        )
+        if page_scope_hash is not None:
+            cached = self.repository.get_report(
+                snapshot.snapshot_id,
+                parser_version,
+                page_scope_hash,
+            )
+            if cached is not None and self._cached_report_objects_available(cached):
+                return cached
+            content_cached = self.repository.get_report_for_object_hash(
+                snapshot.object_sha256,
+                parser_version,
+                page_scope_hash,
+            )
+            if content_cached is not None:
+                reused = self._reuse_cached_report(
+                    document,
+                    snapshot,
+                    content_cached,
+                    parser_version,
+                    page_scope_hash,
+                )
+                if reused is not None:
+                    return reused
+
         pdf_bytes = self.object_store.get_bytes(snapshot.object_sha256)
         if not pdf_bytes.lstrip().startswith(b"%PDF-"):
             raise DataQualityError(
@@ -81,14 +111,34 @@ class PdfParseService:
             ) from exc
         with pdf:
             pages = self._normalize_pages(page_numbers, pdf.page_count)
-            page_scope_hash = content_hash(pages)
+            full_page_sequence = list(range(1, pdf.page_count + 1))
+            page_scope_hash = (
+                content_hash({"scope": "ALL"})
+                if pages == full_page_sequence
+                else content_hash(pages)
+            )
             cached = self.repository.get_report(
                 snapshot.snapshot_id,
                 parser_version,
                 page_scope_hash,
             )
-            if cached is not None:
+            if cached is not None and self._cached_report_objects_available(cached):
                 return cached
+            content_cached = self.repository.get_report_for_object_hash(
+                snapshot.object_sha256,
+                parser_version,
+                page_scope_hash,
+            )
+            if content_cached is not None:
+                reused = self._reuse_cached_report(
+                    document,
+                    snapshot,
+                    content_cached,
+                    parser_version,
+                    page_scope_hash,
+                )
+                if reused is not None:
+                    return reused
             started_at = datetime.now(UTC).isoformat()
             parsed_pages = self._parse_pages(
                 pdf,
@@ -106,6 +156,50 @@ class PdfParseService:
                 pages,
                 parsed_pages,
             )
+        return self._register_report(
+            report,
+            snapshot,
+            parser_version,
+            page_scope_hash,
+            started_at,
+        )
+
+    def _page_objects_available(self, page: DocumentPage) -> bool:
+        try:
+            if not self.object_store.verify(page.text_object_sha256):
+                return False
+            if (
+                page.page_image_sha256 is not None
+                and not self.object_store.verify(page.page_image_sha256)
+            ):
+                return False
+        except ValueError:
+            return False
+        return True
+
+    def _cached_report_objects_available(self, report: DocumentParseReport) -> bool:
+        try:
+            if (
+                report.report_object_sha256 is None
+                or not self.object_store.verify(report.report_object_sha256)
+            ):
+                return False
+        except ValueError:
+            return False
+        for page_id in report.page_ids:
+            page = self.repository.get_page_by_id(page_id)
+            if page is None or not self._page_objects_available(page):
+                return False
+        return True
+
+    def _register_report(
+        self,
+        report: DocumentParseReport,
+        snapshot: SourceSnapshot,
+        parser_version: str,
+        page_scope_hash: str,
+        started_at: str,
+    ) -> DocumentParseReport:
         report_ref = self.object_store.put_json(report.model_dump(mode="json"))
         report = report.model_copy(update={"report_object_sha256": report_ref.sha256})
         self.state.register_artifact(
@@ -123,6 +217,59 @@ class PdfParseService:
         )
         return report
 
+    def _reuse_cached_report(
+        self,
+        document: SourceDocument,
+        snapshot: SourceSnapshot,
+        cached: DocumentParseReport,
+        parser_version: str,
+        page_scope_hash: str,
+    ) -> DocumentParseReport | None:
+        cloned_pages: list[DocumentPage] = []
+        for page_id in cached.page_ids:
+            source_page = self.repository.get_page_by_id(page_id)
+            if source_page is None:
+                return None
+            if not self.object_store.verify(source_page.text_object_sha256):
+                return None
+            if (
+                source_page.page_image_sha256 is not None
+                and not self.object_store.verify(source_page.page_image_sha256)
+            ):
+                return None
+            cloned = source_page.model_copy(
+                update={
+                    "page_id": content_hash(
+                        {
+                            "snapshot_id": snapshot.snapshot_id,
+                            "page_number": source_page.page_number,
+                            "parser_version": parser_version,
+                            "text_sha256": source_page.text_sha256,
+                        }
+                    ),
+                    "document_id": document.document_id,
+                    "snapshot_id": snapshot.snapshot_id,
+                    "created_at": snapshot.fetched_at,
+                }
+            )
+            self.repository.register_page(cloned)
+            cloned_pages.append(cloned)
+        report = self._build_report(
+            document,
+            snapshot,
+            parser_version,
+            cached.source_page_count,
+            list(cached.requested_pages),
+            cloned_pages,
+        )
+        return self._register_report(
+            report,
+            snapshot,
+            parser_version,
+            page_scope_hash,
+            snapshot.fetched_at.isoformat(),
+        )
+
     def _parse_pages(
         self,
         pdf: pymupdf.Document,
@@ -137,7 +284,7 @@ class PdfParseService:
         current_section: list[str] = []
         for page_number in pages:
             cached = self.repository.get_page(snapshot.snapshot_id, page_number, parser_version)
-            if cached is not None:
+            if cached is not None and self._page_objects_available(cached):
                 parsed.append(cached)
                 if cached.section_path:
                     current_section = cached.section_path
@@ -290,7 +437,7 @@ class PdfParseService:
         pages = (
             list(range(1, page_count + 1))
             if page_numbers is None
-            else sorted(set(page_numbers))
+            else list(dict.fromkeys(page_numbers))
         )
         if any(page < 1 or page > page_count for page in pages):
             raise ValueError(f"page_numbers must be within 1..{page_count}")

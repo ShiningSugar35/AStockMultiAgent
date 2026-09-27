@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -15,15 +14,20 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import (
     DisclosureEnumerationProvider,
+    DocumentBlockRepository,
     DocumentPageRepository,
     DocumentRepository,
+    OfficialReflowableParseService,
     PdfParseService,
 )
+from astock.documents.media import PDF_MIME
+from astock.documents.report_identity import ReportCompleteness, is_full_report_title
 from astock.providers import ProviderFactory
 from astock.schemas import (
     DisclosureCategory,
     DisclosureExchange,
     DisclosureSearchRequest,
+    DocumentBlock,
     DocumentPage,
     DocumentType,
     FetchStatus,
@@ -46,6 +50,7 @@ class OfficialFinancialReport:
     exhaustive_proof_allowed: bool
     snapshot: SourceSnapshot
     pages: list[DocumentPage]
+    blocks: list[DocumentBlock]
     supersedes_document_id: str | None
 
 
@@ -74,7 +79,14 @@ class OfficialFinancialReportService:
         self.provider_factory = provider_factory
         self.documents = DocumentRepository(state)
         self.pages = DocumentPageRepository(state)
+        self.blocks = DocumentBlockRepository(state)
         self.parser = PdfParseService(objects, state, self.pages)
+        self.reflow_parser = OfficialReflowableParseService(
+            objects,
+            state,
+            blocks=self.blocks,
+            pages=self.pages,
+        )
 
     def get(
         self,
@@ -122,10 +134,20 @@ class OfficialFinancialReportService:
             if canonical_snapshot is None:
                 raise ValueError("Official financial snapshot registration is incomplete")
             snapshot = canonical_snapshot
-            parse = self.parser.parse(document, snapshot, ocr_enabled=False)
+            if snapshot.mime == PDF_MIME:
+                parse = self.parser.parse(document, snapshot, ocr_enabled=False)
+                parsed_blocks: list[DocumentBlock] = []
+            else:
+                parse = self.reflow_parser.parse(document, snapshot)
+                maybe_blocks = [
+                    self.blocks.get_block_by_id(block_id) for block_id in parse.block_ids
+                ]
+                if any(item is None for item in maybe_blocks):
+                    raise ValueError("Official document parsed-block registration is incomplete")
+                parsed_blocks = [item for item in maybe_blocks if item is not None]
             pages = [self.pages.get_page_by_id(page_id) for page_id in parse.page_ids]
             if any(page is None for page in pages):
-                raise ValueError("Official PDF page registration is incomplete")
+                raise ValueError("Official document page registration is incomplete")
             reports.append(
                 OfficialFinancialReport(
                     document=document,
@@ -137,6 +159,7 @@ class OfficialFinancialReportService:
                     exhaustive_proof_allowed=candidate.exhaustive_proof_allowed,
                     snapshot=snapshot,
                     pages=[page for page in pages if page is not None],
+                    blocks=parsed_blocks,
                     supersedes_document_id=supersedes,
                 )
             )
@@ -150,11 +173,34 @@ class OfficialFinancialReportService:
         period_type: FinancialPeriodType,
     ) -> list[_OfficialFinancialCandidate]:
         with self.state.connect() as connection:
-            rows = connection.execute(
-                "SELECT artifact_id,schema_version,object_hash,input_hashes_json "
-                "FROM artifact_registry WHERE type='OfficialWebDocumentCapture' "
-                "ORDER BY created_at,artifact_id"
-            ).fetchall()
+            lookup_available = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='official_document_lookup'"
+            ).fetchone() is not None
+            if lookup_available:
+                rows = connection.execute(
+                    "SELECT a.artifact_id,a.schema_version,a.object_hash,a.input_hashes_json "
+                    "FROM artifact_registry a "
+                    "LEFT JOIN official_document_lookup l "
+                    "ON l.capture_artifact_id=a.artifact_id AND l.company_id=? "
+                    "WHERE a.type='OfficialWebDocumentCapture' AND ("
+                    "(l.company_id=? AND l.period_end=? AND l.document_type=?) OR "
+                    "NOT EXISTS (SELECT 1 FROM official_document_lookup x "
+                    "WHERE x.capture_artifact_id=a.artifact_id)"
+                    ") ORDER BY a.created_at,a.artifact_id",
+                    (
+                        company_id,
+                        company_id,
+                        period_end.isoformat(),
+                        _document_type(period_type).value,
+                    ),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT artifact_id,schema_version,object_hash,input_hashes_json "
+                    "FROM artifact_registry WHERE type='OfficialWebDocumentCapture' "
+                    "ORDER BY created_at,artifact_id"
+                ).fetchall()
         result: list[_OfficialFinancialCandidate] = []
         for row in rows:
             object_hash = str(row["object_hash"])
@@ -188,15 +234,28 @@ class OfficialFinancialReportService:
             document = self.documents.get_model(capture.document_id)
             snapshot = self.documents.snapshot(capture.snapshot_id)
             admission_snapshot = self.state.get_snapshot(capture.admission_snapshot_id)
+            if document is None or snapshot is None or admission_snapshot is None:
+                continue
+            expected_raw_hash = snapshot.object_sha256
+            expected_admission_hash = admission_snapshot.object_sha256
+            if capture.schema_version == "1.2":
+                dependency_roles_valid = (
+                    capture.object_sha256 == expected_raw_hash
+                    and capture.raw_document_sha256 == expected_raw_hash
+                    and capture.admission_object_sha256 == expected_admission_hash
+                    and len(input_hashes) == 2
+                    and set(input_hashes) == {expected_raw_hash, expected_admission_hash}
+                )
+            else:
+                # Historical v1 artifacts encoded dependency roles by list position.
+                dependency_roles_valid = input_hashes == [
+                    expected_raw_hash,
+                    expected_admission_hash,
+                ]
             if (
-                document is None
-                or snapshot is None
-                or admission_snapshot is None
-                or snapshot.object_sha256 != capture.object_sha256
-                or not self.objects.verify(snapshot.object_sha256)
-                or not self.objects.verify(admission_snapshot.object_sha256)
-                or input_hashes
-                != [snapshot.object_sha256, admission_snapshot.object_sha256]
+                not dependency_roles_valid
+                or not self.objects.verify(expected_raw_hash)
+                or not self.objects.verify(expected_admission_hash)
             ):
                 continue
             try:
@@ -207,11 +266,15 @@ class OfficialFinancialReportService:
                 continue
             proposal_payload = admission.get("proposal") if isinstance(admission, dict) else None
             decision_payload = admission.get("decision") if isinstance(admission, dict) else None
+            admission_schema = (
+                admission.get("schema_version") if isinstance(admission, dict) else None
+            )
             if (
                 not isinstance(admission, dict)
                 or not isinstance(proposal_payload, dict)
                 or not isinstance(decision_payload, dict)
-                or admission.get("schema_version") != "official-web-admission-v1"
+                or admission_schema
+                not in {"official-web-admission-v1", "official-web-admission-v2"}
                 or admission.get("document_id") != document.document_id
                 or admission.get("document_snapshot_id") != snapshot.snapshot_id
                 or admission.get("document_object_sha256") != snapshot.object_sha256
@@ -240,6 +303,14 @@ class OfficialFinancialReportService:
                 or admission_snapshot.source_url != document.source_url
                 or snapshot.fetch_status is not FetchStatus.SUCCEEDED
                 or admission_snapshot.fetch_status is not FetchStatus.SUCCEEDED
+            ):
+                continue
+            if admission_schema == "official-web-admission-v2" and (
+                capture.period_end != period_end
+                or capture.document_completeness != ReportCompleteness.FULL.value
+                or admission.get("period_end") != period_end.isoformat()
+                or admission.get("document_completeness") != capture.document_completeness
+                or admission.get("revision_status") != capture.revision_status
             ):
                 continue
             result.append(
@@ -463,14 +534,8 @@ def _title_key(period_end: date, period_type: FinancialPeriodType) -> str:
 def _exact_report_title(
     title: str, period_end: date, period_type: FinancialPeriodType
 ) -> bool:
-    if period_type is FinancialPeriodType.QUARTERLY:
-        quarter = "一|第一" if period_end.month == 3 else "三|第三"
-        key = rf"{period_end.year}年(?:{quarter})季度报告"
-    elif period_type is FinancialPeriodType.ANNUAL:
-        key = rf"{period_end.year}年年度(?:财务)?报告"
-    else:
-        key = re.escape(_title_key(period_end, period_type))
-    return re.fullmatch(rf".*{key}(?:[（(](?:更正|修订)(?:后)?[）)])?", title) is not None
+    """Compatibility name for semantic full-report title recognition."""
+    return is_full_report_title(title, period_end, period_type)
 
 
 __all__ = ["OfficialFinancialReport", "OfficialFinancialReportService"]

@@ -6,6 +6,7 @@ from astock.documents.official_web import OfficialWebDocumentCaptureService
 from astock.documents.page_repository import DocumentPageRepository
 from astock.documents.pdf_parser import PdfParseService
 from astock.documents.provider_contracts import DisclosureEnumerationProvider
+from astock.documents.reflow_parser import OfficialReflowableParseService
 from astock.documents.repository import DocumentRepository
 from astock.documents.service import DisclosureSyncService
 
@@ -16,6 +17,7 @@ __all__ = [
     "DisclosureSyncService",
     "DocumentPageRepository",
     "DocumentRepository",
+    "OfficialReflowableParseService",
     "OfficialWebDocumentCaptureService",
     "PdfParseService",
 ]

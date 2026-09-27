@@ -64,6 +64,7 @@ class FakeAcquisition:
         self.objects = objects
         self.gap_rounds = list(gap_rounds)
         self.calls = 0
+        self.trusted_identity_capture_calls: list[tuple[str, ...]] = []
 
     def acquire(
         self,
@@ -75,12 +76,8 @@ class FakeAcquisition:
         reuse_report_artifact_id: str | None = None,
         trusted_identity_capture_ids: tuple[str, ...] = (),
     ) -> CurrentResearchAcquisitionReport:
-        del (
-            lookback_days,
-            planner_plan_artifact_id,
-            reuse_report_artifact_id,
-            trusted_identity_capture_ids,
-        )
+        self.trusted_identity_capture_calls.append(trusted_identity_capture_ids)
+        del lookback_days, planner_plan_artifact_id, reuse_report_artifact_id
         index = min(self.calls, len(self.gap_rounds) - 1)
         gapped = self.gap_rounds[index]
         self.calls += 1
@@ -181,11 +178,17 @@ def _request(
     )
 
 
-def _capture_annual_report(state: StateStore, objects: ObjectStore, company_id: str) -> str:
+def _capture_annual_report(
+    state: StateStore,
+    objects: ObjectStore,
+    company_id: str,
+    *,
+    url: str = "https://www.sse.com.cn/disclosure/listedinfo/example.pdf",
+) -> str:
     proposal = AgentSourceProposal(
         requested_capability="financial.official_document",
         query="official annual report recovery",
-        candidate_url=HttpUrl("https://www.sse.com.cn/disclosure/listedinfo/example.pdf"),
+        candidate_url=HttpUrl(url),
         expected_fact="latest annual financial facts",
         preferred_source_class=SourceClass.PRIMARY_OFFICIAL_WEB,
         formal_use=True,
@@ -258,7 +261,54 @@ def test_exchange_official_capture_can_resolve_identity_when_structured_sources_
     assert "sse-official-web" in resolved.provider_path
     assert "OFFICIAL_EXCHANGE_DOCUMENT_IDENTITY_FALLBACK" in resolved.internal_reason_codes
     assert rejected == failed
-    assert stale == failed
+    assert stale.status is AcquisitionAttemptStatus.SUCCEEDED
+    assert "OFFICIAL_EXCHANGE_DOCUMENT_IDENTITY_FALLBACK" in stale.internal_reason_codes
+
+
+def test_cninfo_formal_identity_capture_is_consumed_without_implying_exchange_tradability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths, state, objects = _runtime(tmp_path)
+    acquisition = CurrentResearchAcquisitionService(paths, state, objects, clock=lambda: NOW)
+    capture_artifact_id = _capture_annual_report(
+        state,
+        objects,
+        "600519",
+        url="https://www.cninfo.com.cn/new/disclosure/detail/example.pdf",
+    )
+    capture_id = capture_artifact_id.removeprefix("OfficialWebDocumentCapture:")
+    failed = AcquisitionAttempt(
+        capability=AcquisitionCapability.INSTRUMENT_IDENTITY,
+        status=AcquisitionAttemptStatus.FAILED,
+        provider_path=["eastmoney-reference"],
+        fallback_used=True,
+        record_count=0,
+        latency_ms=5,
+        internal_reason_codes=["TARGET_INSTRUMENT_IDENTITY_NOT_FOUND"],
+        source_snapshot_ids=[],
+        created_at=NOW,
+    )
+    monkeypatch.setattr(acquisition, "_reference_attempt", lambda *_args, **_kwargs: failed)
+
+    resolved = acquisition._identity_attempt(
+        "600519",
+        Market.XSHG,
+        trusted_identity_capture_ids=(capture_id,),
+    )
+
+    assert resolved.status is AcquisitionAttemptStatus.SUCCEEDED
+    assert "cninfo-official-web" in resolved.provider_path
+    assert "OFFICIAL_EXCHANGE_DOCUMENT_IDENTITY_FALLBACK" in resolved.internal_reason_codes
+    # This fallback proves static issuer/security identity only. It does not manufacture
+    # a quote, suspension state, current listing status, or any execution permission.
+    assert resolved.record_count == 1
+
+
+def test_identity_gap_accepts_existing_financial_official_document_capability() -> None:
+    assert CurrentResearchContinuationService._capture_capabilities(
+        AcquisitionCapability.INSTRUMENT_IDENTITY
+    ) == frozenset({"disclosure.document", "financial.official_document"})
 
 
 def _register_generic_artifact(
@@ -407,6 +457,7 @@ def test_same_request_automatically_continues_from_evidence_to_team_and_gate(
 
     continued = service.resume(started.continuation_id)
     assert acquisition.calls == 2
+    assert acquisition.trusted_identity_capture_calls == [(), (capture_artifact_id,)]
     assert continued.status is CurrentResearchContinuationStatus.TEAM_RESEARCH_REQUIRED
     assert continued.team_plan_id is not None
     assert not continued.investor_view_allowed
@@ -429,6 +480,18 @@ def test_continuation_accepts_non_default_bounded_recovery_budget(tmp_path: Path
     record = service.start(_request(request_id="budget-900", budget_seconds=900))
     assert record.automatic_resolution_budget_seconds == 900
     assert record.deadline_at == record.started_at + timedelta(seconds=900)
+
+
+def test_rejected_bound_evidence_requires_binding_change_before_retry() -> None:
+    assert not CurrentResearchContinuationService._failure_allows_retry(
+        "BOUND_EVIDENCE_NOT_ACCEPTED:SOURCE_PERIOD_MISMATCH"
+    )
+    assert CurrentResearchContinuationService._failure_allows_retry(
+        "ACQUISITION_UNRESOLVED:PROVIDER_EMPTY"
+    )
+    assert not CurrentResearchContinuationService._failure_allows_retry(
+        "INVALID_REQUEST_CONFIGURATION"
+    )
 
 
 def test_start_is_idempotent_for_the_same_request(tmp_path: Path) -> None:

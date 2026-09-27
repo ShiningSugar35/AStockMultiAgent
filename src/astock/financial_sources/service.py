@@ -1115,11 +1115,12 @@ def _verify_official_lineage(
             raise ValueError("exact-item admission payload is invalid") from exc
         proposal = admission.get("proposal") if isinstance(admission, dict) else None
         decision = admission.get("decision") if isinstance(admission, dict) else None
+        admission_schema = admission.get("schema_version") if isinstance(admission, dict) else None
         if (
             not isinstance(admission, dict)
             or not isinstance(proposal, dict)
             or not isinstance(decision, dict)
-            or admission.get("schema_version") != "official-web-admission-v1"
+            or admission_schema not in {"official-web-admission-v1", "official-web-admission-v2"}
             or admission.get("document_id") != manifest.official_document_id
             or admission.get("document_snapshot_id") != manifest.official_snapshot_id
             or admission.get("exhaustive_proof_allowed") is not False
@@ -1132,6 +1133,17 @@ def _verify_official_lineage(
             or decision.get("admission_status") != "ADMIT_AFTER_SNAPSHOT"
         ):
             raise ValueError("exact-item admission semantics are invalid")
+        if admission_schema == "official-web-admission-v2":
+            official_snapshot = state.get_snapshot(manifest.official_snapshot_id)
+            if (
+                official_snapshot is None
+                or admission.get("document_object_sha256") != official_snapshot.object_sha256
+                or admission.get("period_end") != manifest.period_end.isoformat()
+                or admission.get("document_completeness") != "FULL"
+                or admission.get("revision_status")
+                not in {"ORIGINAL", "REVISION", "CORRECTION", "UNKNOWN"}
+            ):
+                raise ValueError("exact-item admission report identity is invalid")
         return
     if kind is OfficialFinancialLineageKind.RECORDED_EXACT_ITEM_FIXTURE:
         if (

@@ -58,6 +58,7 @@ class DocumentPartKind(StrEnum):
 class DocumentBlockKind(StrEnum):
     PARAGRAPH = "PARAGRAPH"
     TABLE_CELL_PARAGRAPH = "TABLE_CELL_PARAGRAPH"
+    TABLE_ROW = "TABLE_ROW"
 
 
 class DisclosureSearchRequest(AStockModel):
@@ -188,6 +189,9 @@ class DocumentBlock(AStockModel):
         if self.block_kind is DocumentBlockKind.TABLE_CELL_PARAGRAPH:
             if any(value is None for value in table_location):
                 raise ValueError("table-cell blocks require table, row, and cell indices")
+        elif self.block_kind is DocumentBlockKind.TABLE_ROW:
+            if self.table_index is None or self.row_index is None or self.cell_index is not None:
+                raise ValueError("table-row blocks require table and row indices only")
         elif any(value is not None for value in table_location):
             raise ValueError("plain paragraphs cannot carry table-cell indices")
         return self

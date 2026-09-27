@@ -49,6 +49,7 @@ class AcquisitionAttempt(AStockModel):
     fallback_used: bool = False
     record_count: int = Field(default=0, ge=0)
     latency_ms: int = Field(ge=0)
+    verified_at: AwareDatetime | None = None
     internal_reason_codes: list[str] = Field(default_factory=list)
     source_snapshot_ids: list[str] = Field(default_factory=list)
 
@@ -71,6 +72,11 @@ class CapabilityScheduleStep(AStockModel):
     provider_candidates: list[str] = Field(default_factory=list)
     degraded_provider_candidates: list[str] = Field(default_factory=list)
     preferred_authorities: list[ExternalAuthority] = Field(default_factory=list)
+    # Additive compatibility fields: legacy frozen schedules deserialize with
+    # freshness=0 and therefore are readable but never silently reusable.
+    reuse_freshness_seconds: int = Field(default=0, ge=0)
+    reuse_across_shanghai_date: bool = False
+    reuse_requires_same_lookback: bool = True
 
 
 class CurrentResearchSchedule(AStockModel):

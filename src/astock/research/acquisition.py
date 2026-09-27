@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from astock.core.hashing import content_hash
 from astock.core.logging import emit_operational_event
 from astock.core.object_store import ObjectStore
+from astock.core.source_policy_gate import load_authority_domain_registry
 from astock.core.state import StateStore
 from astock.documents.repository import DocumentRepository
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
@@ -37,6 +38,7 @@ from astock.schemas.research_acquisition import (
     AcquisitionAttempt,
     AcquisitionAttemptStatus,
     AcquisitionCapability,
+    CapabilityScheduleStep,
     CurrentResearchAcquisitionReport,
     CurrentResearchAcquisitionStatus,
     CurrentResearchSchedule,
@@ -64,6 +66,9 @@ class CurrentResearchAcquisitionService:
         self.clock = clock or (lambda: datetime.now(UTC))
         self.policy = load_default_current_research_policy(paths.root)
         self.provider_registry = load_default_provider_registry(paths.root)
+        self.authority_registry = load_authority_domain_registry(
+            paths.root / "configs" / "authority_domains.yaml"
+        )
         self.capability_graph = CapabilityGraph(self.policy, self.provider_registry, state)
         self._service_lock = Lock()
         self._market_service_instance: MarketReferenceService | None = None
@@ -169,6 +174,9 @@ class CurrentResearchAcquisitionService:
                     trusted_identity_capture_ids=trusted_identity_capture_ids,
                 )
             stage_results = self._run_parallel(tasks, max_workers=schedule.max_workers)
+            stage_results = [
+                item.model_copy(update={"verified_at": started_at}) for item in stage_results
+            ]
             if period_discovery_reasons:
                 stage_results = [
                     item.model_copy(
@@ -334,44 +342,51 @@ class CurrentResearchAcquisitionService:
             previous.report_id != report_artifact_id
             or previous.company_id != company_id
             or previous.market is not market
-            or previous.policy_hash != current_schedule.policy_hash
-            or previous.planner_plan_artifact_id != planner_plan_artifact_id
             or previous.decision_as_of > started_at
-        ):
-            return {}, None
-        age_seconds = (started_at - previous.decision_as_of).total_seconds()
-        if age_seconds < 0 or age_seconds > current_schedule.automatic_resolution_budget_seconds:
-            return {}, None
-        if _shanghai_acquisition_dates(previous.started_at) != _shanghai_acquisition_dates(
-            started_at
         ):
             return {}, None
 
         previous_schedule = self._load_schedule(previous.schedule_artifact_id)
         if previous_schedule is None:
             return {}, None
-        if (
-            previous_schedule.company_id != company_id
-            or previous_schedule.market is not market
-            or previous_schedule.lookback_days != resolved_lookback
-            or previous_schedule.policy_hash != current_schedule.policy_hash
-            or previous_schedule.planner_plan_artifact_id != planner_plan_artifact_id
-            or self._schedule_contract(previous_schedule)
-            != self._schedule_contract(current_schedule)
-        ):
+        if previous_schedule.company_id != company_id or previous_schedule.market is not market:
             return {}, None
 
+        previous_steps = {item.capability: item for item in previous_schedule.steps}
         previous_attempts = {item.capability: item for item in previous.attempts}
         reusable: dict[AcquisitionCapability, AcquisitionAttempt] = {}
         for step in sorted(
             current_schedule.steps,
             key=lambda item: (item.stage, item.capability.value),
         ):
+            previous_step = previous_steps.get(step.capability)
             attempt = previous_attempts.get(step.capability)
             if (
-                attempt is None
+                previous_step is None
+                or attempt is None
                 or attempt.status is not AcquisitionAttemptStatus.SUCCEEDED
-                or any(dependency not in reusable for dependency in step.dependencies)
+                or attempt.verified_at is None
+                or step.reuse_freshness_seconds <= 0
+                or self._step_reuse_contract(previous_step)
+                != self._step_reuse_contract(step)
+            ):
+                continue
+            age_seconds = (started_at - attempt.verified_at).total_seconds()
+            if age_seconds < 0 or age_seconds > step.reuse_freshness_seconds:
+                continue
+            if (
+                step.reuse_requires_same_lookback
+                and previous_schedule.lookback_days != resolved_lookback
+            ):
+                continue
+            if (
+                not step.reuse_across_shanghai_date
+                and _shanghai_acquisition_dates(attempt.verified_at)
+                != _shanghai_acquisition_dates(started_at)
+            ):
+                continue
+            if (
+                any(dependency not in reusable for dependency in step.dependencies)
                 or not self._attempt_snapshots_reusable(attempt, started_at)
             ):
                 continue
@@ -406,17 +421,20 @@ class CurrentResearchAcquisitionService:
         return schedule if schedule.schedule_id == artifact_id else None
 
     @staticmethod
-    def _schedule_contract(
-        schedule: CurrentResearchSchedule,
-    ) -> tuple[tuple[object, ...], ...]:
-        return tuple(
-            (
-                step.capability,
-                step.stage,
-                step.core,
-                tuple(step.dependencies),
-            )
-            for step in schedule.steps
+    def _step_reuse_contract(step: CapabilityScheduleStep) -> tuple[object, ...]:
+        """Only changes that can alter one capability invalidate that capability."""
+
+        return (
+            step.capability,
+            step.stage,
+            step.core,
+            tuple(step.dependencies),
+            tuple(step.provider_candidates),
+            tuple(step.degraded_provider_candidates),
+            tuple(step.preferred_authorities),
+            step.reuse_freshness_seconds,
+            step.reuse_across_shanghai_date,
+            step.reuse_requires_same_lookback,
         )
 
     def _attempt_snapshots_reusable(
@@ -686,20 +704,29 @@ class CurrentResearchAcquisitionService:
             ),
         )
 
+    def _formal_identity_source_allowed(self, source_id: str, market: Market) -> bool:
+        exchange_sources = {
+            Market.XSHG: "sse-official-web",
+            Market.XSHE: "szse-official-web",
+            Market.BJSE: "bse-official-web",
+        }
+        if source_id in set(exchange_sources.values()):
+            return source_id == exchange_sources[market]
+        return any(
+            source.source_id == source_id
+            and source.source_class is SourceClass.PRIMARY_OFFICIAL_WEB
+            and "instrument.identity" in source.formal_capabilities
+            for source in self.authority_registry.sources
+        )
+
     def _trusted_exchange_identity_capture(
         self,
         company_id: str,
         market: Market,
         capture_ids: tuple[str, ...],
     ) -> tuple[OfficialWebDocumentCapture, tuple[str, ...]] | None:
-        expected_source = {
-            Market.XSHG: "sse-official-web",
-            Market.XSHE: "szse-official-web",
-            Market.BJSE: "bse-official-web",
-        }[market]
         documents = DocumentRepository(self.state)
         now = self.clock()
-        freshness_floor = now - timedelta(days=180)
         for capture_id in capture_ids:
             artifact_id = (
                 capture_id
@@ -722,7 +749,7 @@ class CurrentResearchAcquisitionService:
             except (json.JSONDecodeError, TypeError, ValueError):
                 continue
             if (
-                capture.source_id != expected_source
+                not self._formal_identity_source_allowed(capture.source_id, market)
                 or capture.source_class is not SourceClass.PRIMARY_OFFICIAL_WEB
                 or capture.requested_capability
                 not in {"disclosure.document", "financial.official_document"}
@@ -734,15 +761,14 @@ class CurrentResearchAcquisitionService:
             if (
                 document is None
                 or company_id not in document.company_ids
-                or document.publisher != expected_source
-                or document.published_at < freshness_floor
+                or document.publisher != capture.source_id
                 or document.published_at > now
                 or document.source_url != str(capture.source_url)
                 or capture.observed_at > now
                 or snapshot is None
                 or admission is None
-                or snapshot.source_id != expected_source
-                or admission.source_id != f"{expected_source}:admission"
+                or snapshot.source_id != capture.source_id
+                or admission.source_id != f"{capture.source_id}:admission"
                 or snapshot.source_url != document.source_url
                 or admission.source_url != document.source_url
                 or snapshot.available_to_system_at > now
@@ -766,7 +792,8 @@ class CurrentResearchAcquisitionService:
             if (
                 not isinstance(proposal, dict)
                 or not isinstance(decision, dict)
-                or admission_payload.get("schema_version") != "official-web-admission-v1"
+                or admission_payload.get("schema_version")
+                not in {"official-web-admission-v1", "official-web-admission-v2"}
                 or admission_payload.get("document_id") != document.document_id
                 or admission_payload.get("document_snapshot_id") != snapshot.snapshot_id
                 or admission_payload.get("document_object_sha256") != snapshot.object_sha256
@@ -777,7 +804,7 @@ class CurrentResearchAcquisitionService:
                 or proposal.get("require_complete") is not False
                 or decision.get("requested_capability") != capture.requested_capability
                 or decision.get("allowed") is not True
-                or decision.get("source_id") != expected_source
+                or decision.get("source_id") != capture.source_id
                 or decision.get("formal_eligible") is not True
                 or decision.get("exhaustive_proof_allowed") is not False
                 or decision.get("admission_status") != "ADMIT_AFTER_SNAPSHOT"

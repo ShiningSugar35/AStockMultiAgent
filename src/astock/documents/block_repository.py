@@ -84,3 +84,22 @@ class DocumentBlockRepository:
                 (snapshot_id, parser_version),
             ).fetchall()
         return [DocumentBlock.model_validate_json(row["block_json"]) for row in rows]
+
+    def blocks_for_object_hash(
+        self,
+        object_hash: str,
+        parser_version: str,
+    ) -> list[DocumentBlock]:
+        """Reuse immutable-content parsing without merging source provenance."""
+
+        with self.state.connect() as connection:
+            source = connection.execute(
+                "SELECT b.snapshot_id FROM document_block b "
+                "JOIN source_snapshot_index s ON s.snapshot_id=b.snapshot_id "
+                "WHERE s.object_hash=? AND b.parser_version=? "
+                "ORDER BY b.snapshot_id,b.block_index LIMIT 1",
+                (object_hash, parser_version),
+            ).fetchone()
+        if source is None:
+            return []
+        return self.blocks_for(str(source["snapshot_id"]), parser_version)

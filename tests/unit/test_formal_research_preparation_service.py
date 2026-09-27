@@ -366,34 +366,34 @@ def test_research_preparation_open_evidence_conflict_needs_info(
     assert _artifact_count(state, "FrozenEvidencePack") == 0
 
 
-@pytest.mark.parametrize(
-    ("mismatch", "error_match"),
-    [
-        ("company", "financial audit company mismatch"),
-        ("as_of", "financial audit is newer"),
-    ],
-)
-def test_research_preparation_rejects_financial_company_or_as_of_mismatch(
+def test_research_preparation_rejects_financial_company_mismatch(
     state,
     object_store,
-    mismatch: str,
-    error_match: str,
 ) -> None:
-    seed = (
-        _seed(state, object_store, financial_company_id="000001")
-        if mismatch == "company"
-        else _seed(
-            state,
-            object_store,
-            financial_as_of=datetime(2026, 7, 1, tzinfo=UTC),
-        )
-    )
-    with pytest.raises(ResearchPreparationRejectedError, match=error_match):
+    seed = _seed(state, object_store, financial_company_id="000001")
+    with pytest.raises(
+        ResearchPreparationRejectedError,
+        match="financial audit company mismatch",
+    ):
         seed.service.prepare(seed.request)
     assert _artifact_count(state, "ResearchPreparationManifest") == 0
 
 
-def test_research_preparation_missing_pit_needs_info(
+def test_current_research_preparation_accepts_later_verified_financial_audit(
+    state,
+    object_store,
+) -> None:
+    seed = _seed(
+        state,
+        object_store,
+        financial_as_of=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    execution = seed.service.prepare(seed.request)
+    assert execution.manifest.status is ResearchPreparationStatus.READY_FOR_BASE_CASE
+    assert execution.manifest.blocking_codes == []
+
+
+def test_current_research_preparation_does_not_require_legacy_pit_metadata(
     state,
     object_store,
 ) -> None:
@@ -404,9 +404,9 @@ def test_research_preparation_missing_pit_needs_info(
             (seed.evidence_snapshot_id,),
         )
     execution = seed.service.prepare(seed.request)
-    assert execution.manifest.status is ResearchPreparationStatus.NEEDS_INFO
-    assert execution.manifest.required_action_codes == ["PIT_METADATA_REQUIRED"]
-    assert _artifact_count(state, "FrozenEvidencePack") == 0
+    assert execution.manifest.status is ResearchPreparationStatus.READY_FOR_BASE_CASE
+    assert execution.manifest.blocking_codes == []
+    assert _artifact_count(state, "FrozenEvidencePack") == 1
 
 
 @pytest.mark.parametrize(

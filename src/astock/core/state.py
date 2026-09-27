@@ -656,42 +656,184 @@ class StateStore:
             ).rowcount
         return updated == 1
 
-    def register_snapshot(self, snapshot: SourceSnapshot) -> None:
+    def register_snapshot(self, snapshot: SourceSnapshot) -> SourceSnapshot:
+        requested_id = snapshot.snapshot_id
+        observed_at = snapshot.fetched_at.isoformat()
+        availability_at = snapshot.available_to_system_at.isoformat()
+        fetch_status = snapshot.fetch_status.value
         with self.transaction() as connection:
-            connection.execute(
-                "INSERT OR IGNORE INTO source_snapshot_index(snapshot_id,source_id,object_hash,"
-                "fetched_at,availability_at,fetch_status) VALUES(?,?,?,?,?,?)",
-                (
-                    snapshot.snapshot_id,
-                    snapshot.source_id,
-                    snapshot.object_sha256,
-                    snapshot.fetched_at.isoformat(),
-                    snapshot.available_to_system_at.isoformat(),
-                    snapshot.fetch_status.value,
-                ),
+            observation_schema = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='source_snapshot_alias'"
+            ).fetchone() is not None
+            existing_id = connection.execute(
+                "SELECT source_id,object_hash FROM source_snapshot_index WHERE snapshot_id=?",
+                (requested_id,),
+            ).fetchone()
+            if existing_id is not None and (
+                str(existing_id["source_id"]) != snapshot.source_id
+                or str(existing_id["object_hash"]) != snapshot.object_sha256
+            ):
+                raise ValueError(f"Source snapshot id collision: {requested_id}")
+
+            existing_alias = (
+                connection.execute(
+                    "SELECT canonical_snapshot_id,source_id,object_hash "
+                    "FROM source_snapshot_alias WHERE requested_snapshot_id=?",
+                    (requested_id,),
+                ).fetchone()
+                if observation_schema
+                else None
             )
-            connection.execute(
-                "INSERT OR IGNORE INTO source_snapshot_detail(snapshot_id,source_url,mime,"
-                "byte_size,headers_hash,rights_status) VALUES(?,?,?,?,?,?)",
-                (
-                    snapshot.snapshot_id,
+            if existing_alias is not None and (
+                str(existing_alias["source_id"]) != snapshot.source_id
+                or str(existing_alias["object_hash"]) != snapshot.object_sha256
+            ):
+                raise ValueError(f"Source snapshot alias collision: {requested_id}")
+
+            if existing_id is None and existing_alias is None:
+                connection.execute(
+                    "INSERT INTO source_snapshot_index(snapshot_id,source_id,object_hash,"
+                    "fetched_at,availability_at,fetch_status) VALUES(?,?,?,?,?,?) "
+                    "ON CONFLICT(source_id,object_hash) DO NOTHING",
+                    (
+                        requested_id,
+                        snapshot.source_id,
+                        snapshot.object_sha256,
+                        observed_at,
+                        availability_at,
+                        fetch_status,
+                    ),
+                )
+
+            canonical_row = connection.execute(
+                "SELECT snapshot_id FROM source_snapshot_index "
+                "WHERE source_id=? AND object_hash=?",
+                (snapshot.source_id, snapshot.object_sha256),
+            ).fetchone()
+            if canonical_row is None:
+                raise RuntimeError("Source snapshot canonical registration failed")
+            canonical_id = str(canonical_row["snapshot_id"])
+            if (
+                existing_alias is not None
+                and str(existing_alias["canonical_snapshot_id"]) != canonical_id
+            ):
+                raise ValueError(f"Source snapshot alias collision: {requested_id}")
+            if observation_schema and existing_alias is None:
+                connection.execute(
+                    "INSERT INTO source_snapshot_alias("
+                    "requested_snapshot_id,canonical_snapshot_id,source_id,object_hash"
+                    ") VALUES(?,?,?,?)",
+                    (
+                        requested_id,
+                        canonical_id,
+                        snapshot.source_id,
+                        snapshot.object_sha256,
+                    ),
+                )
+
+            canonical_detail = connection.execute(
+                "SELECT byte_size FROM source_snapshot_detail WHERE snapshot_id=?",
+                (canonical_id,),
+            ).fetchone()
+            if canonical_detail is None:
+                if canonical_id != requested_id:
+                    raise RuntimeError("Canonical source snapshot detail is missing")
+                connection.execute(
+                    "INSERT INTO source_snapshot_detail(snapshot_id,source_url,mime,"
+                    "byte_size,headers_hash,rights_status) VALUES(?,?,?,?,?,?)",
+                    (
+                        canonical_id,
+                        snapshot.source_url,
+                        snapshot.mime,
+                        snapshot.byte_size,
+                        snapshot.headers_hash,
+                        snapshot.rights_status,
+                    ),
+                )
+            elif int(canonical_detail["byte_size"]) != snapshot.byte_size:
+                raise ValueError(
+                    f"Source snapshot content size mismatch for {requested_id}"
+                )
+
+            if observation_schema:
+                observation_payload = {
+                    "requested_snapshot_id": requested_id,
+                    "canonical_snapshot_id": canonical_id,
+                    "observed_at": observed_at,
+                    "availability_at": availability_at,
+                    "source_url": snapshot.source_url,
+                    "mime": snapshot.mime,
+                    "byte_size": snapshot.byte_size,
+                    "headers_hash": snapshot.headers_hash,
+                    "fetch_status": fetch_status,
+                    "rights_status": snapshot.rights_status,
+                }
+                observation_id = "source-observation:" + content_hash(observation_payload)
+                expected_observation = (
+                    requested_id,
+                    canonical_id,
+                    observed_at,
+                    availability_at,
                     snapshot.source_url,
                     snapshot.mime,
                     snapshot.byte_size,
                     snapshot.headers_hash,
+                    fetch_status,
                     snapshot.rights_status,
-                ),
-            )
+                )
+                existing_observation = connection.execute(
+                    "SELECT requested_snapshot_id,canonical_snapshot_id,observed_at,"
+                    "availability_at,source_url,mime,byte_size,headers_hash,fetch_status,"
+                    "rights_status FROM source_snapshot_observation WHERE observation_id=?",
+                    (observation_id,),
+                ).fetchone()
+                if existing_observation is None:
+                    connection.execute(
+                        "INSERT INTO source_snapshot_observation("
+                        "observation_id,requested_snapshot_id,canonical_snapshot_id,observed_at,"
+                        "availability_at,source_url,mime,byte_size,headers_hash,fetch_status,"
+                        "rights_status) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            observation_id,
+                            *expected_observation,
+                        ),
+                    )
+                elif tuple(existing_observation) != expected_observation:
+                    raise ValueError(
+                        f"Source snapshot observation identity collision: {observation_id}"
+                    )
+
+        canonical = self.get_snapshot(canonical_id)
+        if canonical is None:
+            raise RuntimeError("Source snapshot canonical readback failed")
+        return canonical
 
     def get_snapshot(self, snapshot_id: str) -> SourceSnapshot | None:
         with self.connect() as connection:
+            alias_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='source_snapshot_alias'"
+            ).fetchone()
+            alias = (
+                connection.execute(
+                    "SELECT canonical_snapshot_id FROM source_snapshot_alias "
+                    "WHERE requested_snapshot_id=?",
+                    (snapshot_id,),
+                ).fetchone()
+                if alias_table is not None
+                else None
+            )
+            canonical_id = (
+                str(alias["canonical_snapshot_id"]) if alias is not None else snapshot_id
+            )
             row = connection.execute(
                 "SELECT i.snapshot_id,i.source_id,i.object_hash,i.fetched_at,"
                 "i.availability_at,i.fetch_status,d.source_url,d.mime,d.byte_size,"
                 "d.headers_hash,d.rights_status FROM source_snapshot_index i "
                 "JOIN source_snapshot_detail d ON d.snapshot_id=i.snapshot_id "
                 "WHERE i.snapshot_id=?",
-                (snapshot_id,),
+                (canonical_id,),
             ).fetchone()
         if row is None:
             return None

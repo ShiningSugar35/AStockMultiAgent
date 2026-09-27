@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from enum import StrEnum
 from typing import Literal
 
@@ -51,7 +52,23 @@ class OfficialWebDocumentCapture(AStockModel):
     admission_snapshot_id: str
     source_url: HttpUrl
     object_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # v1.2+ named roles make semantic verification independent from list position.
+    # object_sha256 remains the v1-compatible alias for raw_document_sha256.
+    raw_document_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    admission_object_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     observed_at: AwareDatetime
+    media_type: Literal[
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+        "text/plain",
+    ] = "application/pdf"
+    parser_name: str | None = None
+    parser_version: str | None = None
+    text_encoding: str | None = None
+    period_end: date | None = None
+    document_completeness: Literal["FULL", "SUMMARY", "UNKNOWN"] = "UNKNOWN"
+    revision_status: Literal["ORIGINAL", "REVISION", "CORRECTION", "UNKNOWN"] = "UNKNOWN"
     policy_reason_codes: list[str] = Field(default_factory=list)
     formal_eligible: Literal[True] = True
     exhaustive_proof_allowed: Literal[False] = False

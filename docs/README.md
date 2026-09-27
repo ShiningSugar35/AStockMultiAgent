@@ -111,6 +111,7 @@ Skill 是单个专业角色的方法与工具合同，不是自由人格提示�
 - [推荐广度、入场质量与企业事件情报](architecture/recommendation-breadth-entry-event-intelligence-v1.md)
 - [Serenity 方法层](architecture/serenity-method-layer-v1.md)
 - [技能驱动候选发现](architecture/skill-driven-candidate-discovery-v1.md)
+- [证据门禁精简与原生文档恢复](architecture/evidence-gate-efficiency-v1.md)
 - [公共回复合同](architecture/public-response-contract-v1.md)
 - [投资请求统一编排蓝图](architecture/investment-request-orchestration-v1.md)
 - [市场状态与风险预算总控蓝图](architecture/market-regime-control-v1.md)

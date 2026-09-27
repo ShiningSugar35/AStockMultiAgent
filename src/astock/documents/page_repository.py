@@ -82,6 +82,23 @@ class DocumentPageRepository:
             ).fetchone()
         return DocumentParseReport.model_validate_json(row["report_json"]) if row else None
 
+    def get_report_for_object_hash(
+        self,
+        object_hash: str,
+        parser_version: str,
+        page_scope_hash: str,
+    ) -> DocumentParseReport | None:
+        """Reuse parsing by immutable raw content without merging source observations."""
+        with self.state.connect() as connection:
+            row = connection.execute(
+                "SELECT r.report_json FROM document_parse_run r "
+                "JOIN source_snapshot_index s ON s.snapshot_id=r.snapshot_id "
+                "WHERE s.object_hash=? AND r.parser_version=? AND r.page_scope_hash=? "
+                "ORDER BY r.finished_at,r.parse_run_id LIMIT 1",
+                (object_hash, parser_version, page_scope_hash),
+            ).fetchone()
+        return DocumentParseReport.model_validate_json(row["report_json"]) if row else None
+
     def register_report(
         self,
         report: DocumentParseReport,

@@ -150,6 +150,18 @@ def test_terminal_capabilities_cannot_publish_broad_result_below_minimum() -> No
     assert satisfied.investor_view_allowed
     assert satisfied.recommendation_fulfillment is not None
 
+    exhausted = InvestmentRequestClosurePolicy.evaluate(
+        request,
+        plan,
+        coverage,
+        automatic_resolution_exhausted=True,
+        recommendation_fulfillment=_fulfillment(request.request_id, satisfied=False),
+    )
+    assert exhausted.state is InvestmentClosureState.PUBLIC_DATA_UNAVAILABLE
+    assert not exhausted.same_request_continuation_required
+    assert exhausted.investment_conclusion_blocked
+    assert not exhausted.investor_view_allowed
+
 
 def test_three_actionable_names_still_require_a_formal_full_market_universe(
     monkeypatch,

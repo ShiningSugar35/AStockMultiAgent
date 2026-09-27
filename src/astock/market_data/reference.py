@@ -1672,11 +1672,15 @@ class MarketReferenceService:
                 raise ValueError("Official Web corporate-action admission is invalid") from exc
             proposal = admission.get("proposal") if isinstance(admission, dict) else None
             decision = admission.get("decision") if isinstance(admission, dict) else None
+            admission_schema = (
+                admission.get("schema_version") if isinstance(admission, dict) else None
+            )
             if (
                 not isinstance(admission, dict)
                 or not isinstance(proposal, dict)
                 or not isinstance(decision, dict)
-                or admission.get("schema_version") != "official-web-admission-v1"
+                or admission_schema
+                not in {"official-web-admission-v1", "official-web-admission-v2"}
                 or admission.get("document_id") != document.document_id
                 or admission.get("document_snapshot_id") != snapshot.snapshot_id
                 or admission.get("document_object_sha256") != snapshot.object_sha256
@@ -1702,6 +1706,13 @@ class MarketReferenceService:
                 or admission_snapshot.source_url != document.source_url
                 or snapshot.fetch_status is not FetchStatus.SUCCEEDED
                 or admission_snapshot.fetch_status is not FetchStatus.SUCCEEDED
+            ):
+                continue
+            if admission_schema == "official-web-admission-v2" and (
+                admission.get("period_end")
+                != (capture.period_end.isoformat() if capture.period_end is not None else None)
+                or admission.get("document_completeness") != capture.document_completeness
+                or admission.get("revision_status") != capture.revision_status
             ):
                 continue
             published_date = document.published_at.astimezone(_SHANGHAI).date()

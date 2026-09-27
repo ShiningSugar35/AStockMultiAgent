@@ -1,4 +1,4 @@
-"""Fail-closed native-PDF financial-number certification for real issuer reports."""
+"""Fail-closed financial-number certification for native official document formats."""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ class FinancialPdfCertifier:
                 code = "OFFICIAL_VALUE_NOT_FOUND" if not matches else "OFFICIAL_VALUE_AMBIGUOUS"
                 reasons.append(f"{code}:{mapping.field_code.value}")
                 continue
-            _page_id, _char_start, _char_end, value, unit = matches[0]
+            _locator_kind, _unit_id, _char_start, _char_end, value, unit = matches[0]
             values.append((mapping, value, unit))
         return values, list(dict.fromkeys(reasons))
 
@@ -117,7 +117,9 @@ class FinancialPdfCertifier:
         mappings: list[FinancialFieldMapping],
     ) -> tuple[list[FinancialFact], list[str]]:
         if not observations:
-            raise ValueError("Financial PDF certification requires at least one period observation")
+            raise ValueError(
+                "Financial document certification requires at least one period observation"
+            )
         facts: list[FinancialFact] = []
         reasons: list[str] = []
         observed: dict[
@@ -153,7 +155,7 @@ class FinancialPdfCertifier:
                 code = "OFFICIAL_VALUE_NOT_FOUND" if not matches else "OFFICIAL_VALUE_AMBIGUOUS"
                 reasons.append(f"{code}:{mapping.field_code.value}")
                 continue
-            page_id, char_start, char_end, value, unit = matches[0]
+            locator_kind, unit_id, char_start, char_end, value, unit = matches[0]
             if hint is not None:
                 hint_value = hint.reported_value
                 if hint_value is None:
@@ -169,15 +171,24 @@ class FinancialPdfCertifier:
                     basis.period_end,
                     basis.period_type,
                 )
-            evidence = self.evidence.create_page_evidence(
-                page_id=page_id,
-                char_start=char_start,
-                char_end=char_end,
-                evidence_grade=EvidenceGrade.PRIMARY_OFFICIAL,
-                fact_status=FactStatus.DIRECT,
-                entity_ids=[basis.company_id, f"company:{basis.company_id}"],
-                valid_from=report.document.published_at,
-            )
+            evidence_kwargs = {
+                "char_start": char_start,
+                "char_end": char_end,
+                "evidence_grade": EvidenceGrade.PRIMARY_OFFICIAL,
+                "fact_status": FactStatus.DIRECT,
+                "entity_ids": [basis.company_id, f"company:{basis.company_id}"],
+                "valid_from": report.document.published_at,
+            }
+            if locator_kind == "BLOCK":
+                evidence = self.evidence.create_block_evidence(
+                    block_id=unit_id,
+                    **evidence_kwargs,
+                )
+            else:
+                evidence = self.evidence.create_page_evidence(
+                    page_id=unit_id,
+                    **evidence_kwargs,
+                )
             identity = {
                 "company_id": basis.company_id,
                 "period_start": period_start,
@@ -216,7 +227,7 @@ class FinancialPdfCertifier:
         mapping: FinancialFieldMapping,
         period_end: date,
         period_type: FinancialPeriodType,
-    ) -> list[tuple[str, int, int, Decimal, FinancialUnit]]:
+    ) -> list[tuple[str, str, int, int, Decimal, FinancialUnit]]:
         statement = _statement_segments(
             report,
             self.objects,
@@ -241,7 +252,7 @@ class FinancialPdfCertifier:
             else statement_unit
         )
         label_re = _field_label_pattern(mapping)
-        matches: list[tuple[str, int, int, Decimal, FinancialUnit]] = []
+        matches: list[tuple[str, str, int, int, Decimal, FinancialUnit]] = []
         for page_id, text, segment_start, segment_end in segments:
             segment_text = text[segment_start:segment_end]
             for row_start, row_end, value in _logical_row_values(
@@ -256,11 +267,23 @@ class FinancialPdfCertifier:
                     if page_id == heading_page_id and heading_start <= absolute_start
                     else absolute_start
                 )
+                locator = _native_evidence_locator(
+                    report,
+                    self.objects,
+                    page_id=page_id,
+                    row_start=absolute_start,
+                    row_end=absolute_end,
+                    page_evidence_start=evidence_start,
+                )
+                if locator is None:
+                    continue
+                locator_kind, unit_id, locator_start, locator_end = locator
                 matches.append(
                     (
-                        page_id,
-                        evidence_start,
-                        absolute_end,
+                        locator_kind,
+                        unit_id,
+                        locator_start,
+                        locator_end,
                         value,
                         field_unit,
                     )
@@ -276,17 +299,47 @@ class FinancialPdfCertifier:
         return matches
 
 
+def _native_evidence_locator(
+    report: OfficialFinancialReport,
+    objects: ObjectStore,
+    *,
+    page_id: str,
+    row_start: int,
+    row_end: int,
+    page_evidence_start: int,
+) -> tuple[str, str, int, int] | None:
+    """Map compatibility-page offsets back to the immutable native source unit."""
+
+    if not report.blocks:
+        return ("PAGE", page_id, page_evidence_start, row_end)
+    if len(report.pages) != 1 or report.pages[0].page_id != page_id:
+        return None
+
+    offset = 0
+    for block in report.blocks:
+        text = objects.get_bytes(block.text_object_sha256).decode("utf-8")
+        block_end = offset + len(text)
+        if offset <= row_start and row_end <= block_end:
+            local_start = row_start - offset
+            local_end = row_end - offset
+            if 0 <= local_start < local_end <= len(text):
+                return ("BLOCK", block.block_id, local_start, local_end)
+            return None
+        offset = block_end + 1
+    return None
+
+
 def _cash_flow_supplement_matches(
     report: OfficialFinancialReport,
     objects: ObjectStore,
     mapping: FinancialFieldMapping,
     period_end: date,
     period_type: FinancialPeriodType,
-) -> list[tuple[str, int, int, Decimal, FinancialUnit]]:
+) -> list[tuple[str, str, int, int, Decimal, FinancialUnit]]:
     del period_end, period_type
     deduplicated: dict[
-        tuple[str, int, int, Decimal, FinancialUnit],
-        tuple[str, int, int, Decimal, FinancialUnit],
+        tuple[str, str, int, int, Decimal, FinancialUnit],
+        tuple[str, str, int, int, Decimal, FinancialUnit],
     ] = {}
     for page in sorted(report.pages, key=lambda item: item.page_number):
         if page.extraction_method is not PageExtractionMethod.NATIVE_TEXT or page.ocr_applied:
@@ -320,11 +373,26 @@ def _cash_flow_supplement_matches(
             ):
                 absolute_start = heading.start() + row_start
                 absolute_end = heading.start() + row_end
-                key = (page.page_id, absolute_start, absolute_end, value, unit)
-                existing = deduplicated.get(key)
-                candidate = (page.page_id, heading.start(), absolute_end, value, unit)
-                if existing is None or candidate[1] < existing[1]:
-                    deduplicated[key] = candidate
+                locator = _native_evidence_locator(
+                    report,
+                    objects,
+                    page_id=page.page_id,
+                    row_start=absolute_start,
+                    row_end=absolute_end,
+                    page_evidence_start=heading.start(),
+                )
+                if locator is None:
+                    continue
+                locator_kind, unit_id, locator_start, locator_end = locator
+                candidate = (
+                    locator_kind,
+                    unit_id,
+                    locator_start,
+                    locator_end,
+                    value,
+                    unit,
+                )
+                deduplicated.setdefault(candidate, candidate)
     return list(deduplicated.values())
 
 

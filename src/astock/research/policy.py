@@ -32,6 +32,9 @@ class CapabilityPolicy:
     research_question: str
     preferred_authorities: tuple[ExternalAuthority, ...]
     external_on: tuple[AcquisitionAttemptStatus, ...]
+    reuse_freshness_seconds: int
+    reuse_across_shanghai_date: bool
+    reuse_requires_same_lookback: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +115,11 @@ class CapabilityGraph:
                     provider_candidates=candidates,
                     degraded_provider_candidates=degraded,
                     preferred_authorities=list(capability_policy.preferred_authorities),
+                    reuse_freshness_seconds=capability_policy.reuse_freshness_seconds,
+                    reuse_across_shanghai_date=capability_policy.reuse_across_shanghai_date,
+                    reuse_requires_same_lookback=(
+                        capability_policy.reuse_requires_same_lookback
+                    ),
                 )
             )
         identity = {
@@ -204,6 +212,13 @@ def load_current_research_policy(path: Path) -> CurrentResearchPolicy:
             raise ValueError("Current research authority preference must be non-empty")
         if not isinstance(external_on_raw, list):
             raise ValueError("Current research external_on must be a list")
+        freshness = int(value["reuse_freshness_seconds"])
+        across_date = value.get("reuse_across_shanghai_date")
+        same_lookback = value.get("reuse_requires_same_lookback")
+        if not 1 <= freshness <= 604800:
+            raise ValueError("Current research reuse freshness must be in 1..604800 seconds")
+        if not isinstance(across_date, bool) or not isinstance(same_lookback, bool):
+            raise ValueError("Current research reuse scope flags must be booleans")
         capabilities[capability] = CapabilityPolicy(
             capability=capability,
             core=bool(value.get("core", False)),
@@ -213,6 +228,9 @@ def load_current_research_policy(path: Path) -> CurrentResearchPolicy:
             research_question=str(value["research_question"]),
             preferred_authorities=tuple(ExternalAuthority(str(item)) for item in authorities_raw),
             external_on=tuple(AcquisitionAttemptStatus(str(item)) for item in external_on_raw),
+            reuse_freshness_seconds=freshness,
+            reuse_across_shanghai_date=across_date,
+            reuse_requires_same_lookback=same_lookback,
         )
     if set(capabilities) != set(AcquisitionCapability):
         raise ValueError("Current research policy must cover every acquisition capability")

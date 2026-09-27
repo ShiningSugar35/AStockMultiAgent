@@ -13,6 +13,18 @@ class DocumentRepository:
         self.state = state
 
     def register(self, document: SourceDocument, snapshot: SourceSnapshot) -> None:
+        canonical_snapshot = self.state.get_snapshot(snapshot.snapshot_id)
+        if canonical_snapshot is None:
+            raise ValueError(
+                "Source snapshot must be registered before document linkage: "
+                f"{snapshot.snapshot_id}"
+            )
+        if (
+            canonical_snapshot.source_id != snapshot.source_id
+            or canonical_snapshot.object_sha256 != snapshot.object_sha256
+        ):
+            raise ValueError(f"Source snapshot identity collision: {snapshot.snapshot_id}")
+        canonical_snapshot_id = canonical_snapshot.snapshot_id
         with self.state.transaction() as connection:
             existing = connection.execute(
                 "SELECT title,publisher,document_type,company_ids_json,published_at,effective_at,"
@@ -42,7 +54,7 @@ class DocumentRepository:
             connection.execute(
                 "INSERT OR IGNORE INTO document_snapshot(document_id,snapshot_id,linked_at) "
                 "VALUES(?,?,?)",
-                (document.document_id, snapshot.snapshot_id, utc_now_text()),
+                (document.document_id, canonical_snapshot_id, utc_now_text()),
             )
 
     def get(self, document_id: str) -> dict[str, object] | None:
@@ -106,27 +118,6 @@ class DocumentRepository:
         )
 
     def snapshot(self, snapshot_id: str) -> SourceSnapshot | None:
-        with self.state.connect() as connection:
-            row = connection.execute(
-                "SELECT i.snapshot_id,i.source_id,i.object_hash,i.fetched_at,"
-                "i.availability_at,i.fetch_status,d.source_url,d.mime,d.byte_size,"
-                "d.headers_hash,d.rights_status FROM source_snapshot_index i "
-                "JOIN source_snapshot_detail d ON d.snapshot_id=i.snapshot_id "
-                "WHERE i.snapshot_id=?",
-                (snapshot_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return SourceSnapshot(
-            snapshot_id=row["snapshot_id"],
-            source_id=row["source_id"],
-            object_sha256=row["object_hash"],
-            fetched_at=row["fetched_at"],
-            available_to_system_at=row["availability_at"],
-            source_url=row["source_url"],
-            mime=row["mime"],
-            byte_size=row["byte_size"],
-            headers_hash=row["headers_hash"],
-            fetch_status=row["fetch_status"],
-            rights_status=row["rights_status"],
-        )
+        # StateStore owns canonical-snapshot alias resolution. Keeping one read path
+        # prevents duplicate observation aliases from looking like missing snapshots.
+        return self.state.get_snapshot(snapshot_id)

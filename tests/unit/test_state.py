@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -100,6 +101,8 @@ def test_migration_is_idempotent_and_configures_sqlite(tmp_path: Path) -> None:
         "0076",
         "0077",
         "0078",
+        "0079",
+        "0080",
     ]
     assert state.migrate() == []
     with state.connect() as connection:
@@ -922,6 +925,123 @@ def test_source_snapshot_round_trips_from_split_index_tables(
     assert restored.model_dump(exclude={"created_at"}) == snapshot.model_dump(
         exclude={"created_at"}
     )
+
+
+def test_source_snapshot_duplicate_content_reuses_canonical_and_records_observations(
+    state: StateStore,
+) -> None:
+    first = SourceSnapshot(
+        snapshot_id="snapshot:canonical",
+        source_id="source:test",
+        object_sha256="c" * 64,
+        fetched_at=datetime(2026, 9, 25, 1, 0, tzinfo=UTC),
+        available_to_system_at=datetime(2026, 9, 25, 1, 0, tzinfo=UTC),
+        source_url="https://example.invalid/report.pdf",
+        mime="application/pdf",
+        byte_size=128,
+        headers_hash="d" * 64,
+        fetch_status=FetchStatus.SUCCEEDED,
+        rights_status="PUBLIC_OFFICIAL_WEB",
+    )
+    later = first.model_copy(
+        update={
+            "snapshot_id": "snapshot:later-observation",
+            "fetched_at": datetime(2026, 9, 25, 2, 0, tzinfo=UTC),
+            "available_to_system_at": datetime(2026, 9, 25, 2, 0, tzinfo=UTC),
+            "source_url": "https://example.invalid/mirror/report.pdf",
+            "headers_hash": "e" * 64,
+        }
+    )
+
+    first_registered = state.register_snapshot(first)
+    later_registered = state.register_snapshot(later)
+    retry_registered = state.register_snapshot(first)
+
+    assert first_registered.snapshot_id == first.snapshot_id
+    assert later_registered.snapshot_id == first.snapshot_id
+    assert retry_registered.snapshot_id == first.snapshot_id
+    assert later_registered.object_sha256 == first.object_sha256
+    with state.connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM source_snapshot_index "
+            "WHERE source_id=? AND object_hash=?",
+            (first.source_id, first.object_sha256),
+        ).fetchone()[0] == 1
+        observations = connection.execute(
+            "SELECT requested_snapshot_id,source_url,observed_at "
+            "FROM source_snapshot_observation "
+            "WHERE canonical_snapshot_id=? ORDER BY observed_at",
+            (first.snapshot_id,),
+        ).fetchall()
+        assert [
+            (row["requested_snapshot_id"], row["source_url"])
+            for row in observations
+        ] == [
+            (first.snapshot_id, first.source_url),
+            (later.snapshot_id, later.source_url),
+        ]
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_source_snapshot_id_collision_is_not_silently_ignored(state: StateStore) -> None:
+    first = SourceSnapshot(
+        snapshot_id="snapshot:collision",
+        source_id="source:test",
+        object_sha256="1" * 64,
+        fetched_at=datetime(2026, 9, 25, 3, 0, tzinfo=UTC),
+        available_to_system_at=datetime(2026, 9, 25, 3, 0, tzinfo=UTC),
+        source_url="https://example.invalid/first",
+        mime="application/json",
+        byte_size=10,
+        fetch_status=FetchStatus.SUCCEEDED,
+        rights_status="TEST",
+    )
+    conflicting = first.model_copy(update={"object_sha256": "2" * 64})
+
+    state.register_snapshot(first)
+    with pytest.raises(ValueError, match="snapshot id collision"):
+        state.register_snapshot(conflicting)
+
+
+def test_source_snapshot_duplicate_content_is_concurrent_idempotent(tmp_path: Path) -> None:
+    database = tmp_path / "concurrent.sqlite"
+    migrations = PROJECT_ROOT / "migrations"
+    StateStore(database, migrations).migrate()
+    observed_base = datetime(2026, 9, 25, 4, 0, tzinfo=UTC)
+
+    def register(index: int) -> str:
+        store = StateStore(database, migrations)
+        snapshot = SourceSnapshot(
+            snapshot_id=f"snapshot:concurrent:{index}",
+            source_id="source:concurrent",
+            object_sha256="3" * 64,
+            fetched_at=observed_base + timedelta(seconds=index),
+            available_to_system_at=observed_base + timedelta(seconds=index),
+            source_url=f"https://example.invalid/report/{index}",
+            mime="application/pdf",
+            byte_size=64,
+            fetch_status=FetchStatus.SUCCEEDED,
+            rights_status="TEST",
+        )
+        return store.register_snapshot(snapshot).snapshot_id
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        canonical_ids = list(executor.map(register, range(4)))
+
+    assert len(set(canonical_ids)) == 1
+    state = StateStore(database, migrations)
+    with state.connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM source_snapshot_index "
+            "WHERE source_id='source:concurrent' AND object_hash=?",
+            ("3" * 64,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM source_snapshot_observation "
+            "WHERE canonical_snapshot_id=?",
+            (canonical_ids[0],),
+        ).fetchone()[0] == 4
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_cursor_idempotency_and_collection_interfaces(state: StateStore) -> None:

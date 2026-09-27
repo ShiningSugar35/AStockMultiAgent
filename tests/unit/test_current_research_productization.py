@@ -33,6 +33,7 @@ from astock.schemas.research_acquisition import (
     AcquisitionAttempt,
     AcquisitionAttemptStatus,
     AcquisitionCapability,
+    CurrentResearchAcquisitionReport,
     CurrentResearchAcquisitionStatus,
     InvestorGapCategory,
 )
@@ -866,6 +867,338 @@ def test_same_request_reuse_reruns_only_failed_capability_and_preserves_lineage(
     second_record = state.artifact_record(second.report_id)
     assert first_record is not None and second_record is not None
     assert str(first_record["object_hash"]) in second_record["input_hashes"]
+
+
+def _run_two_successful_acquisitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    clock_times: list[datetime],
+) -> tuple[
+    CurrentResearchAcquisitionService,
+    StateStore,
+    ObjectStore,
+    list[AcquisitionCapability],
+    CurrentResearchAcquisitionReport,
+    CurrentResearchAcquisitionReport,
+]:
+    paths = _paths(tmp_path)
+    paths.ensure_directories()
+    state = StateStore(paths.state_db, PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(paths.objects)
+    times = iter(clock_times)
+    service = CurrentResearchAcquisitionService(
+        paths,
+        state,
+        objects,
+        clock=lambda: next(times),
+    )
+    monkeypatch.setattr(
+        service,
+        "_discover_financial_periods",
+        lambda *_args: (
+            [
+                (
+                    AcquisitionCapability.FINANCIAL_ANNUAL,
+                    date(2025, 12, 31),
+                    FinancialPeriodType.ANNUAL,
+                ),
+                (
+                    AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+                    date(2026, 6, 30),
+                    FinancialPeriodType.SEMIANNUAL,
+                ),
+            ],
+            [],
+        ),
+    )
+    calls: list[AcquisitionCapability] = []
+    counts: dict[AcquisitionCapability, int] = {}
+
+    def fake_task(
+        capability: AcquisitionCapability,
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[], AcquisitionAttempt]:
+        def run() -> AcquisitionAttempt:
+            calls.append(capability)
+            current = counts.get(capability, 0) + 1
+            counts[capability] = current
+            ref = objects.put_json({"capability": capability.value, "attempt": current})
+            snapshot = SourceSnapshot(
+                snapshot_id=f"snapshot:freshness:{capability.value}:{current}",
+                source_id="test-current-research",
+                object_sha256=ref.sha256,
+                fetched_at=clock_times[0],
+                available_to_system_at=clock_times[0],
+                fetch_status=FetchStatus.SUCCEEDED,
+                source_url="https://example.invalid/current-research",
+                mime="application/json",
+                byte_size=ref.byte_size,
+                headers_hash="d" * 64,
+                rights_status="PUBLIC_REFERENCE_DATA",
+                created_at=clock_times[0],
+            )
+            state.register_snapshot(snapshot)
+            return AcquisitionAttempt(
+                capability=capability,
+                status=AcquisitionAttemptStatus.SUCCEEDED,
+                provider_path=["test-current-research"],
+                fallback_used=False,
+                record_count=1,
+                latency_ms=10,
+                internal_reason_codes=[],
+                source_snapshot_ids=[snapshot.snapshot_id],
+                created_at=clock_times[0],
+            )
+
+        return run
+
+    monkeypatch.setattr(service, "_task_for_capability", fake_task)
+    first = service.acquire("600938", Market.XSHG)
+    first_call_count = len(calls)
+    second = service.acquire(
+        "600938",
+        Market.XSHG,
+        reuse_report_artifact_id=first.report_id,
+    )
+    return service, state, objects, calls[first_call_count:], first, second
+
+
+def test_reuse_freshness_is_independent_from_recovery_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = datetime(2026, 8, 12, 1, 0, tzinfo=UTC)
+    _service, _state, _objects, second_calls, first, second = _run_two_successful_acquisitions(
+        tmp_path,
+        monkeypatch,
+        clock_times=[
+            base,
+            base + timedelta(seconds=1),
+            base + timedelta(seconds=4000),
+            base + timedelta(seconds=4001),
+        ],
+    )
+
+    assert first.automatic_resolution_budget_seconds == 1800
+    assert set(second_calls) == {
+        AcquisitionCapability.DAILY_MARKET,
+        AcquisitionCapability.CORPORATE_ACTIONS,
+        AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+    }
+    reused = {
+        item.capability
+        for item in second.attempts
+        if "SAME_REQUEST_VERIFIED_REUSE" in item.internal_reason_codes
+    }
+    assert reused == {
+        AcquisitionCapability.INSTRUMENT_IDENTITY,
+        AcquisitionCapability.FINANCIAL_ANNUAL,
+    }
+
+
+def test_reuse_invalidates_market_at_shanghai_close_without_invalidating_slow_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before_close = datetime(2026, 8, 12, 6, 59, tzinfo=UTC)
+    _service, _state, _objects, second_calls, _first, second = (
+        _run_two_successful_acquisitions(
+            tmp_path,
+            monkeypatch,
+            clock_times=[
+                before_close,
+                before_close + timedelta(seconds=1),
+                before_close + timedelta(minutes=2),
+                before_close + timedelta(minutes=2, seconds=1),
+            ],
+        )
+    )
+
+    assert set(second_calls) == {
+        AcquisitionCapability.DAILY_MARKET,
+        AcquisitionCapability.CORPORATE_ACTIONS,
+    }
+    reused = {
+        item.capability
+        for item in second.attempts
+        if "SAME_REQUEST_VERIFIED_REUSE" in item.internal_reason_codes
+    }
+    assert reused == {
+        AcquisitionCapability.INSTRUMENT_IDENTITY,
+        AcquisitionCapability.FINANCIAL_ANNUAL,
+        AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+    }
+
+
+def test_reuse_can_cross_midnight_for_slow_facts_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    late_evening = datetime(2026, 8, 12, 15, 50, tzinfo=UTC)
+    _service, _state, _objects, second_calls, _first, second = (
+        _run_two_successful_acquisitions(
+            tmp_path,
+            monkeypatch,
+            clock_times=[
+                late_evening,
+                late_evening + timedelta(seconds=1),
+                late_evening + timedelta(minutes=30),
+                late_evening + timedelta(minutes=30, seconds=1),
+            ],
+        )
+    )
+
+    assert set(second_calls) == {
+        AcquisitionCapability.DAILY_MARKET,
+        AcquisitionCapability.CORPORATE_ACTIONS,
+    }
+    assert {
+        item.capability
+        for item in second.attempts
+        if "SAME_REQUEST_VERIFIED_REUSE" in item.internal_reason_codes
+    } == {
+        AcquisitionCapability.INSTRUMENT_IDENTITY,
+        AcquisitionCapability.FINANCIAL_ANNUAL,
+        AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+    }
+
+
+def test_unrelated_plan_change_does_not_invalidate_capability_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = datetime(2026, 8, 12, 1, 0, tzinfo=UTC)
+    service, _state, _objects, _second_calls, first, _second = _run_two_successful_acquisitions(
+        tmp_path,
+        monkeypatch,
+        clock_times=[
+            base,
+            base + timedelta(seconds=1),
+            base + timedelta(seconds=30),
+            base + timedelta(seconds=31),
+        ],
+    )
+    previous_schedule = service._load_schedule(first.schedule_artifact_id)
+    assert previous_schedule is not None
+    changed_plan_schedule = previous_schedule.model_copy(
+        update={
+            "schedule_id": "current-research-schedule:unrelated-plan-change",
+            "planner_plan_artifact_id": "validated-plan:unrelated-change",
+            "created_at": base + timedelta(seconds=60),
+        }
+    )
+
+    reusable, _report_hash = service._reusable_attempts(
+        first.report_id,
+        company_id="600938",
+        market=Market.XSHG,
+        resolved_lookback=previous_schedule.lookback_days,
+        planner_plan_artifact_id="validated-plan:unrelated-change",
+        current_schedule=changed_plan_schedule,
+        started_at=base + timedelta(seconds=60),
+    )
+
+    assert set(reusable) == set(AcquisitionCapability)
+
+
+def test_relevant_step_change_invalidates_only_step_and_dependents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = datetime(2026, 8, 12, 1, 0, tzinfo=UTC)
+    service, _state, _objects, _second_calls, first, _second = _run_two_successful_acquisitions(
+        tmp_path,
+        monkeypatch,
+        clock_times=[
+            base,
+            base + timedelta(seconds=1),
+            base + timedelta(seconds=30),
+            base + timedelta(seconds=31),
+        ],
+    )
+    previous_schedule = service._load_schedule(first.schedule_artifact_id)
+    assert previous_schedule is not None
+    changed_steps = [
+        step.model_copy(
+            update={"provider_candidates": [*step.provider_candidates, "new-daily-provider"]}
+        )
+        if step.capability is AcquisitionCapability.DAILY_MARKET
+        else step
+        for step in previous_schedule.steps
+    ]
+    changed_schedule = previous_schedule.model_copy(
+        update={
+            "schedule_id": "current-research-schedule:daily-route-change",
+            "steps": changed_steps,
+            "created_at": base + timedelta(seconds=60),
+        }
+    )
+
+    reusable, _report_hash = service._reusable_attempts(
+        first.report_id,
+        company_id="600938",
+        market=Market.XSHG,
+        resolved_lookback=previous_schedule.lookback_days,
+        planner_plan_artifact_id=None,
+        current_schedule=changed_schedule,
+        started_at=base + timedelta(seconds=60),
+    )
+
+    assert AcquisitionCapability.DAILY_MARKET not in reusable
+    assert set(reusable) == set(AcquisitionCapability) - {
+        AcquisitionCapability.DAILY_MARKET
+    }
+
+
+def test_legacy_attempt_without_verified_at_is_readable_but_not_reused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = datetime(2026, 8, 12, 1, 0, tzinfo=UTC)
+    service, state, objects, _second_calls, first, _second = _run_two_successful_acquisitions(
+        tmp_path,
+        monkeypatch,
+        clock_times=[
+            base,
+            base + timedelta(seconds=1),
+            base + timedelta(seconds=30),
+            base + timedelta(seconds=31),
+        ],
+    )
+    previous_schedule = service._load_schedule(first.schedule_artifact_id)
+    assert previous_schedule is not None
+    legacy_id = "current-research-acquisition:legacy-no-verified-at"
+    legacy_report = first.model_copy(
+        update={
+            "report_id": legacy_id,
+            "attempts": [
+                attempt.model_copy(update={"verified_at": None}) for attempt in first.attempts
+            ],
+        }
+    )
+    legacy_ref = objects.put_json(legacy_report.model_dump(mode="json"))
+    state.register_artifact(
+        artifact_id=legacy_id,
+        artifact_type="CurrentResearchAcquisitionReport",
+        schema_version=legacy_report.schema_version,
+        object_hash=legacy_ref.sha256,
+        input_hashes=[],
+    )
+
+    reusable, _report_hash = service._reusable_attempts(
+        legacy_id,
+        company_id="600938",
+        market=Market.XSHG,
+        resolved_lookback=previous_schedule.lookback_days,
+        planner_plan_artifact_id=None,
+        current_schedule=previous_schedule,
+        started_at=base + timedelta(seconds=60),
+    )
+
+    assert reusable == {}
 
 
 def test_same_request_reuse_rejects_tampered_snapshot(tmp_path: Path) -> None:

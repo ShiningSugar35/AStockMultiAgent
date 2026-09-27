@@ -17,6 +17,7 @@ from astock.research.policy import load_default_current_research_policy
 from astock.research.team import ResearchTeamService
 from astock.schemas.operational import OperationalSeverity
 from astock.schemas.research_acquisition import (
+    AcquisitionAttempt,
     AcquisitionCapability,
     CurrentResearchAcquisitionReport,
     ExternalResearchNeed,
@@ -173,7 +174,16 @@ class CurrentResearchContinuationService:
                 if not unresolved:
                     record = self.resume(record.continuation_id)
                     continue
-                for task in unresolved:
+                retryable = tuple(
+                    task
+                    for task in unresolved
+                    if self._failure_allows_retry(task.last_failure_code)
+                )
+                if not retryable:
+                    # Deterministic failures with unchanged inputs must not consume another
+                    # resolver round merely to reproduce the same result.
+                    return self._escalate_manual(record)
+                for task in retryable:
                     if self.clock() >= record.deadline_at:
                         return self._escalate_manual(record)
                     try:
@@ -563,6 +573,19 @@ class CurrentResearchContinuationService:
             ),
             "investor_view_allowed": record.investor_view_allowed,
             "full_research_input_ready": record.full_research_input_ready,
+            "recovery_diagnostics": [
+                {
+                    "task_id": task.task_id,
+                    "capability": task.capability.value,
+                    "failure_code": task.last_failure_code,
+                    "retryable_without_input_change": self._failure_allows_retry(
+                        task.last_failure_code
+                    ),
+                    "minimum_recovery_action": self._minimum_recovery_action(task),
+                }
+                for task in record.external_tasks
+                if task.status is not ExternalResearchTaskStatus.RESOLVED
+            ],
         }
 
     def _require(self, continuation_id: str) -> CurrentResearchContinuation:
@@ -596,10 +619,9 @@ class CurrentResearchContinuationService:
             AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
         }:
             return frozenset({"financial.official_document"})
-        if capability in {
-            AcquisitionCapability.INSTRUMENT_IDENTITY,
-            AcquisitionCapability.CORPORATE_ACTIONS,
-        }:
+        if capability is AcquisitionCapability.INSTRUMENT_IDENTITY:
+            return frozenset({"disclosure.document", "financial.official_document"})
+        if capability is AcquisitionCapability.CORPORATE_ACTIONS:
             return frozenset({"disclosure.document"})
         return frozenset()
 
@@ -634,6 +656,7 @@ class CurrentResearchContinuationService:
         automatic_round: int,
     ) -> list[CurrentResearchExternalTask]:
         needs = {item.capability: item for item in report.external_research_needs}
+        attempt_by_capability = {item.capability: item for item in report.attempts}
         existing = {item.capability: item for item in record.external_tasks}
         tasks: list[CurrentResearchExternalTask] = []
         for capability, task in existing.items():
@@ -653,10 +676,9 @@ class CurrentResearchContinuationService:
                             key=lambda item: item.value,
                         ),
                         "automatic_rounds_attempted": automatic_round,
-                        "last_failure_code": (
-                            "BOUND_EVIDENCE_NOT_ACCEPTED_BY_ACQUISITION"
-                            if task.capture_artifact_ids
-                            else "AUTOMATIC_SOURCE_STILL_UNAVAILABLE"
+                        "last_failure_code": self._reconciled_failure_code(
+                            task,
+                            attempt_by_capability.get(capability),
                         ),
                     }
                 )
@@ -673,6 +695,51 @@ class CurrentResearchContinuationService:
             [item for item in tasks if item.status is not ExternalResearchTaskStatus.RESOLVED],
             key=lambda item: item.task_id,
         )
+
+    @staticmethod
+    def _reconciled_failure_code(
+        task: CurrentResearchExternalTask,
+        attempt: AcquisitionAttempt | None,
+    ) -> str:
+        if task.capture_artifact_ids:
+            reason = (
+                attempt.internal_reason_codes[0]
+                if attempt is not None and attempt.internal_reason_codes
+                else "UNSPECIFIED_ACQUISITION_REJECTION"
+            )
+            return f"BOUND_EVIDENCE_NOT_ACCEPTED:{reason}"
+        if task.last_failure_code:
+            return task.last_failure_code
+        if attempt is not None and attempt.internal_reason_codes:
+            return f"ACQUISITION_UNRESOLVED:{attempt.internal_reason_codes[0]}"
+        return "ACQUISITION_UNRESOLVED:UNKNOWN"
+
+    @staticmethod
+    def _failure_allows_retry(failure_code: str | None) -> bool:
+        if failure_code is None:
+            return True
+        upper = failure_code.upper()
+        # A rejected bound artifact is deterministic until that binding changes, so
+        # advertising it as retryable-without-input-change only burns recovery rounds.
+        if upper.startswith("BOUND_EVIDENCE_NOT_ACCEPTED:"):
+            return False
+        if upper.startswith("ACQUISITION_UNRESOLVED:"):
+            return True
+        return any(
+            marker in upper
+            for marker in ("TRANSIENT", "TIMEOUT", "NETWORK", "RATE_LIMIT", "RETRYABLE")
+        )
+
+    @staticmethod
+    def _minimum_recovery_action(task: CurrentResearchExternalTask) -> str:
+        code = task.last_failure_code or ""
+        if task.capture_artifact_ids and code.startswith("BOUND_EVIDENCE_NOT_ACCEPTED:"):
+            return "inspect the named acquisition rejection and replace only the invalid binding"
+        if CurrentResearchContinuationService._failure_allows_retry(task.last_failure_code):
+            return "retry the same bounded public acquisition after the transient condition clears"
+        if "UNSUPPORTED" in code.upper():
+            return "use an already-admitted parser or an authoritative equivalent format"
+        return "change the failed input/evidence condition before retrying this task"
 
     @staticmethod
     def _resolved_task_history(

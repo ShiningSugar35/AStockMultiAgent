@@ -1,0 +1,10 @@
+# Template only. Copy machine-specific values to:
+# runtime/local/qqbot_stock_subscription.yaml (Git-ignored).
+version: qqbot-stock-subscription-v1
+transport: ssh
+ssh_host: CHANGE_ME
+identity_file: ""
+known_hosts_file: ""
+remote_command: bash /srv/opencode-next/workspace/qqbot/control/ops/astock_feed_submit.sh
+connect_timeout_seconds: 8
+command_timeout_seconds: 30

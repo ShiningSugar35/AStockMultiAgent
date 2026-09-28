@@ -3,7 +3,7 @@
 > 状态：CURRENT
 > 是否已实现：是；三领域本地调度、五类来源准备、窗口/水位/同意绑定、语义 lease 单一 owner、typed submit、通知 outbox/恢复与 missed-run 补偿均已有可执行产品入口。完整 controlled-live/prospective 与平台原生任务是否真实创建仍是运行证据门：无标的/无能力回执的空跑只计 smoke，recorded/DEGRADED 不得冒充 live，未真实创建与授权绑定的平台任务不得声明可用。
 > 版本：scheduled-research-orchestration-v1
-> 更新日期：2026-09-09
+> 更新日期：2026-09-28
 > 适用范围：AStockMultiAgent 的持续跟踪、定时语义研究与用户通知；不授权真实交易或无确认模拟交易
 
 ## 1. 结论
@@ -146,6 +146,22 @@ ChatGPT / Work / Codex Scheduled Task（语义研究/通知平面，按时唤醒
 - 结束：公告落地、订单终结、催化剂窗口结束、达到最大运行次数或需要用户裁决。
 
 默认不建议创建多个按公司拆分的小时任务；应按“组合/研究集合 + 重大增量”聚合，以节省活动任务槽、模型额度和通知噪声。
+
+### 4.4 ChatGPT 报告同步到 QQBot 股票订阅
+
+当用户明确要求把 Scheduled Task 的最终投资者报告同步到 QQ 群时，**ChatGPT Scheduled Task 仍是唯一报告时钟**。AStock 不再创建第二个 Windows/本地报告定时器，也不把这条通知接入 `scheduled_notifications`；它只提供一个确定性的 transport CLI：`uv run astock investor qqbot-stock-submit REPORT_FILE`。
+
+链路固定为：
+
+```text
+ChatGPT Scheduled Task → AStock 增量研究/最终正文
+  → qqbot-stock-submit（单次 SSH stdin）
+  → QQBot packs/astock inbox
+  → QQBot 现有 subscriptions / FeedRunner
+  → 统一 PUSH delivery → 目标群
+```
+
+QQBot 的 `astock_report` 订阅不配置 `prompt`，因此不调用 QQBot Brain/LLM；AStock 不知道 QQ 群号，目标仍由 QQBot 的运行配置管理。transport 不维护第二套 hash/幂等账本，也不对模糊超时自动重试：SSH 返回成功才记 `SENT`，确定失败记 `FAILED`，超时或不可读回执记 `UNKNOWN`，避免在无法确认前次状态时制造重复群消息。
 
 ## 5. 执行位置选择
 

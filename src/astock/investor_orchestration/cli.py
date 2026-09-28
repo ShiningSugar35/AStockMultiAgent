@@ -32,6 +32,11 @@ from astock.investor_orchestration.models import (
 from astock.investor_orchestration.paper_replay import CanonicalConfirmedPaperReplayAdapter
 from astock.investor_orchestration.preflight import InvestorSessionPreflightService
 from astock.investor_orchestration.public_cli import register_public_commands
+from astock.investor_orchestration.qqbot_stock_subscription import (
+    QQBotStockSubscriptionConfig,
+    QQBotStockSubscriptionSubmitter,
+    StockSubscriptionSubmitStatus,
+)
 from astock.investor_orchestration.regime import MarketRegimeService
 from astock.investor_orchestration.schedule_clock import (
     DailyTrackingSchedule,
@@ -641,3 +646,30 @@ def schedule_tick(
     )
     if status in {"BLOCKED", "DEGRADED"}:
         raise typer.Exit(code=3)
+
+
+@app.command("qqbot-stock-submit")
+def qqbot_stock_submit(
+    report_file: Path = typer.Argument(..., exists=True, readable=True, dir_okay=False),
+    report_id: str | None = typer.Option(None),
+    config_path: Path = typer.Option(
+        Path("runtime/local/qqbot_stock_subscription.yaml"),
+        exists=True,
+        readable=True,
+        dir_okay=False,
+    ),
+) -> None:
+    """Submit one already-written investor report to QQBot's stock subscription inbox."""
+
+    try:
+        text = report_file.read_text(encoding="utf-8")
+        config = QQBotStockSubscriptionConfig.load(config_path)
+        result = QQBotStockSubscriptionSubmitter(config).submit(
+            text,
+            report_id=report_id,
+        )
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _dump(result.as_dict())
+    if result.status is not StockSubscriptionSubmitStatus.SENT:
+        raise typer.Exit(code=4)

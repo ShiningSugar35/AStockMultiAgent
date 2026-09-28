@@ -31,6 +31,7 @@ EXPECTED_WORKFLOWS = {
     "workflow-adaptive-edge.md",
     "workflow-research-tech-scout.md",
     "workflow-continuous-investment-monitoring.md",
+    "workflow-ten-stock-q3-watch.md",
 }
 
 
@@ -90,3 +91,15 @@ def test_current_company_and_evidence_workflows_lock_policy_web_manual_order() -
     assert "Schema Repair" in evidence
     assert "Adaptive Edge / Deterministic Core" in adaptive
     assert "Manual remains last" in adaptive
+
+
+def test_ten_stock_prebound_watcher_survives_single_round_completion() -> None:
+    workflow = (WORKFLOWS / "workflow-ten-stock-q3-watch.md").read_text(encoding="utf-8")
+    architecture = (
+        PROJECT_ROOT / "docs/architecture/scheduled-research-orchestration-v1.md"
+    ).read_text(encoding="utf-8")
+    agents = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    for text in (workflow, architecture, agents):
+        assert "continuation watcher" in text
+        assert "单个" in text and "round" in text
+        assert "不得停用" in text or "不随单个 round 完成而停用" in text

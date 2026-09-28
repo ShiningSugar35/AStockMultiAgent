@@ -52,12 +52,12 @@ ChatGPT / Work / Codex Scheduled Task（语义研究/通知平面，按时唤醒
 
 ### 2.1 宿主感知的长研究续接
 
-研究总时限不再用统一的 35/40/45 分钟硬截断。调用环境必须显式标明 `CHATGPT_CHAT` 或 `OTHER_AGENT`，模型名、进程名和 CLI 入口均不能代替宿主身份。
+逻辑研究与单次激活分别计时。宿主必须显式标明 `CHATGPT_CHAT` 或 `OTHER_AGENT`，模型名、进程名和CLI入口不能代替宿主身份。
 
-- `CHATGPT_CHAT`：逻辑请求从本轮开始时累计真实 elapsed；只有 `elapsed > 2400s` 且可验证完成量严格小于 `2/3` 时才请求续接。续接前先保存 request/run/input revision、已完成工件与唯一 owner lease；随后由当前会话真实可调用的平台 Scheduled 能力创建 **1 小时频率**任务，并请求首轮立即执行或平台允许的最近时刻执行。只有拿到真实 opaque task id / 创建回执才能标记“已创建”；提示词、YAML、preview 或本地 binding 本身都不能冒充平台任务。
+- **CHATGPT_CHAT**：单次激活以真实开始时间计时，阈值唯一来源为 `configs/chat_invocation_policy_v1.yaml`：1800秒开始停止启动新长任务并收口，2100秒前结束本次激活；不再以2/3完成率决定是否续接。先保存同一request/round的已核验结果、缺口与owner checkpoint，只有当前任务已有用户授权且绑定了经核验的通知通道时，才通过该通道提交当前部分结果；未绑定时只保存checkpoint并由当前响应交付，不得默认假定QQ。交互式ChatGPT会话在平台允许时可真实创建或复用子Scheduled并保存opaque task ID；Scheduled automation运行时若平台禁止动态创建automation，则必须使用预先绑定的每小时continuation watcher，round从campaign绑定继承其opaque ID；watcher只恢复同一未完成轮，不重新全量抓取。周期频率不高于每小时一次，不能承诺亚小时周期；预绑定或权限缺失必须明确记录，不能把提示词或本地配置当成已创建任务。此限制约束激活，不截断逻辑研究；相同owner重入不得重置开始时刻。
 - `OTHER_AGENT`：不设置整体研究时限，不因 35/40/45 分钟截断 Research Team、公司深研或最终报告。该规则只取消总体 wall-clock 截断；HTTP timeout、provider retry、单任务 lease、并发上限、内存/候选数和显式花费预算仍保持有界，卡死 worker 仍可被 lease 取消。
-- `2/3` 进度只计算冻结工作图中已有终态证据的工作项；失败、跳过、只创建计划或排队不计完成。新发现的必要工作进入版本化分母，不能通过缩小分母规避接力。
-- 主对话与 Scheduled 续接共享逻辑 request id，但每次唤醒都必须重新核对输入 revision、owner lease 与已完成 checkpoint，避免重复深研、重复写 receipt 或双 owner。任务完成后只停用该请求创建的临时 Scheduled，不影响其它自动化。
+- 进度仅计算已有终态证据的工作项；失败、跳过和排队不算完成。进度不能豁免35分钟激活上限，新增必要工作保留在原round的版本化工作图。
+- 主对话与 Scheduled 续接共享逻辑 request id，但每次唤醒都必须重新核对输入 revision、owner lease 与已完成 checkpoint，避免重复深研、重复写 receipt 或双 owner。逻辑请求完成后只停用该请求临时创建的 Scheduled，不影响其它自动化；预绑定的长期 continuation watcher 不随单个 round 完成而停用，只有其 campaign/日常跟踪整体明确结束时才停止。
 
 本地 `CurrentResearchSlaService` 因此支持显式取消总体 deadline：无总体 deadline 的 run 仍保留 task lease 与可取消 worker；历史/显式 `budget_seconds` 合同继续受原边界约束。平台 Scheduled 是宿主续接平面，不进入行情、研究事实或推荐权威。
 

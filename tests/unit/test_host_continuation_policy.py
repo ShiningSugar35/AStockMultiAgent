@@ -4,89 +4,96 @@ import pytest
 
 from astock.investor_orchestration.host_continuation import (
     AgentHost,
+    ChatInvocationPolicy,
     HostContinuationPolicy,
 )
 
 
-@pytest.mark.parametrize("elapsed", [0, 2399, 2400])
-def test_chat_does_not_handoff_before_strictly_exceeding_forty_minutes(elapsed: int) -> None:
+@pytest.mark.parametrize("elapsed", [0, 1799])
+def test_chat_stays_within_primary_window(elapsed: int) -> None:
     result = HostContinuationPolicy.evaluate(
         host=AgentHost.CHATGPT_CHAT,
         elapsed_seconds=elapsed,
         completed_units=1,
         total_units=6,
     )
+    assert not result.overall_deadline_enforced
+    assert result.activation_deadline_enforced
     assert not result.continuation_required
-    assert not result.scheduled_creation_required
-    assert not result.run_immediately
+    assert not result.invocation_stop_required
 
 
-def test_chat_handoff_requires_less_than_two_thirds_progress() -> None:
-    trigger = HostContinuationPolicy.evaluate(
-        host=AgentHost.CHATGPT_CHAT,
-        elapsed_seconds=2401,
-        completed_units=3,
-        total_units=6,
-    )
-    assert trigger.continuation_required
-    assert trigger.scheduled_creation_required
-    assert trigger.schedule_cadence_seconds == 3600
-    assert trigger.run_immediately
-    assert trigger.reason_code == "CHATGPT_HOURLY_CONTINUATION_REQUIRED"
-
-    exact_two_thirds = HostContinuationPolicy.evaluate(
-        host=AgentHost.CHATGPT_CHAT,
-        elapsed_seconds=3600,
-        completed_units=4,
-        total_units=6,
-    )
-    assert not exact_two_thirds.continuation_required
-    assert exact_two_thirds.reason_code == "CHATGPT_PROGRESS_AT_OR_ABOVE_TWO_THIRDS"
-
-
-def test_existing_chat_scheduled_binding_prevents_duplicate_creation() -> None:
+@pytest.mark.parametrize("completed", [0, 3, 4, 5])
+@pytest.mark.parametrize("elapsed", [1800, 2099, 2100, 2401])
+def test_unfinished_chat_hands_off_regardless_of_completion_ratio(
+    completed: int,
+    elapsed: int,
+) -> None:
     result = HostContinuationPolicy.evaluate(
-        host=AgentHost.CHATGPT_CHAT,
-        elapsed_seconds=4000,
-        completed_units=1,
+        host="CHATGPT_CHAT",
+        elapsed_seconds=elapsed,
+        completed_units=completed,
         total_units=6,
-        existing_platform_task_id="task-opaque-1",
+    )
+    assert result.continuation_required and result.scheduled_creation_required
+    assert result.partial_delivery_required
+    assert result.schedule_cadence_seconds == 3600
+    assert result.invocation_stop_required == (elapsed >= 2100)
+    assert result.remaining_invocation_seconds == max(0, 2100 - elapsed)
+
+
+def test_completed_round_does_not_create_child() -> None:
+    result = HostContinuationPolicy.evaluate(
+        host="CHATGPT_CHAT",
+        elapsed_seconds=2100,
+        completed_units=6,
+        total_units=6,
+    )
+    assert result.invocation_stop_required
+    assert not result.continuation_required
+
+
+def test_existing_child_prevents_duplicate_creation() -> None:
+    result = HostContinuationPolicy.evaluate(
+        host="CHATGPT_CHAT",
+        elapsed_seconds=1800,
+        completed_units=5,
+        total_units=6,
+        existing_platform_task_id="opaque-child",
     )
     assert result.continuation_required
     assert not result.scheduled_creation_required
     assert not result.run_immediately
-    assert result.reason_code == "CHATGPT_CONTINUATION_ALREADY_BOUND"
 
 
-@pytest.mark.parametrize("elapsed", [2701, 3600, 12_000, 86_400])
-def test_other_agents_never_inherit_an_overall_research_deadline(elapsed: int) -> None:
+@pytest.mark.parametrize("elapsed", [2100, 2400, 12000, 86400])
+def test_other_agents_have_no_overall_deadline(elapsed: int) -> None:
     result = HostContinuationPolicy.evaluate(
-        host=AgentHost.OTHER_AGENT,
+        host="OTHER_AGENT",
         elapsed_seconds=elapsed,
         completed_units=0,
         total_units=10,
     )
     assert not result.overall_deadline_enforced
     assert not result.continuation_required
-    assert not result.scheduled_creation_required
-    assert result.reason_code == "OTHER_AGENT_NO_OVERALL_RESEARCH_DEADLINE"
+    assert not result.invocation_stop_required
 
 
 @pytest.mark.parametrize(
-    ("completed", "total"),
-    [(-1, 6), (7, 6), (1, 0), (1, -1)],
+    "completed,total,elapsed",
+    [(-1, 6, 0), (7, 6, 0), (1, 0, 0), (1, 6, -1)],
 )
-def test_progress_contract_rejects_invalid_denominators(completed: int, total: int) -> None:
+def test_invalid_progress_rejected(completed: int, total: int, elapsed: int) -> None:
     with pytest.raises(ValueError):
         HostContinuationPolicy.evaluate(
-            host=AgentHost.CHATGPT_CHAT,
-            elapsed_seconds=2500,
+            host="CHATGPT_CHAT",
+            elapsed_seconds=elapsed,
             completed_units=completed,
             total_units=total,
         )
 
 
-def test_unknown_host_and_blank_bound_task_are_rejected() -> None:
+def test_invalid_host_or_task_rejected() -> None:
     with pytest.raises(ValueError):
         HostContinuationPolicy.evaluate(
             host="UNKNOWN",
@@ -96,9 +103,26 @@ def test_unknown_host_and_blank_bound_task_are_rejected() -> None:
         )
     with pytest.raises(ValueError, match="cannot be blank"):
         HostContinuationPolicy.evaluate(
-            host=AgentHost.CHATGPT_CHAT,
+            host="CHATGPT_CHAT",
             elapsed_seconds=2500,
             completed_units=1,
             total_units=6,
             existing_platform_task_id=" ",
+        )
+
+
+@pytest.mark.parametrize(
+    "closeout,hard,cadence",
+    [(2100, 2100, 3600), (1800, 2400, 3600), (1800, 2100, 1800)],
+)
+def test_policy_cannot_extend_user_limit_or_invent_subhourly_recurrence(
+    closeout: int,
+    hard: int,
+    cadence: int,
+) -> None:
+    with pytest.raises(ValueError):
+        ChatInvocationPolicy(
+            closeout_after_seconds=closeout,
+            hard_limit_seconds=hard,
+            continuation_cadence_seconds=cadence,
         )

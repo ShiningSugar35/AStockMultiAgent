@@ -159,6 +159,119 @@ def _dummy_sha256(seed: str = "a") -> str:
 # ---------------------------------------------------------------------------
 
 
+def test_registered_worktree_expired_quality_tmp_is_cleaned_not_source(tmp_path: Path) -> None:
+    paths = _make_paths(tmp_path)
+    service = StorageLifecycleService(
+        paths,
+        _make_state(tmp_path),
+        ObjectStore(paths.objects),
+        _make_policy(),
+    )
+    linked = paths.runtime / "worktrees" / "live"
+    target = linked / ".ai-bridge" / "quality-runs" / "run-1" / "tmp"
+    _write_file(target / "test.sqlite", b"reproducible-test-data")
+    _write_file(target.parent / "result.json", b'{"child_exit_code":0}')
+    _write_file(linked / "source.py", b"preserve")
+    _write_file(
+        tmp_path / ".git" / "worktrees" / "live" / "gitdir",
+        str(linked / ".git").encode(),
+    )
+    _age_tree(target, (datetime.now(UTC) - timedelta(hours=3)).timestamp())
+    plan = service.automatic_plan()
+    candidate = next(item for item in plan.candidates if item.category == "QUALITY_RUN_TMP")
+    assert candidate.eligible
+    assert service.audit(plan).status == "PASS"
+    parent = next(item for item in plan.candidates if item.category == "STALE_WORKTREE")
+    assert parent.referenced and not parent.eligible
+    assert plan.ephemeral_bytes == parent.byte_size  # no nested double count
+    run = service.run(plan, confirm=True)
+    assert run.deleted_bytes == len(b"reproducible-test-data")
+    assert not target.exists()
+    assert (linked / "source.py").read_bytes() == b"preserve"
+    assert (target.parent / "result.json").is_file()
+
+
+def test_registered_worktree_active_and_changed_tmp_remain_protected(tmp_path: Path) -> None:
+    paths = _make_paths(tmp_path)
+    service = StorageLifecycleService(
+        paths,
+        _make_state(tmp_path),
+        ObjectStore(paths.objects),
+        _make_policy(),
+    )
+    linked = paths.runtime / "worktrees" / "live"
+    target = linked / ".ai-bridge" / "quality-runs" / "run-1" / "tmp"
+    _write_file(target / "data", b"first")
+    _write_file(
+        tmp_path / ".git" / "worktrees" / "live" / "gitdir",
+        str(linked / ".git").encode(),
+    )
+    candidate = next(
+        item
+        for item in service.automatic_plan().candidates
+        if item.category == "QUALITY_RUN_TMP"
+    )
+    assert not candidate.eligible
+    _write_file(target.parent / "result.json", b'{"child_exit_code":0}')
+    _age_tree(target, (datetime.now(UTC) - timedelta(hours=3)).timestamp())
+    plan = service.automatic_plan()
+    _write_file(target / "changed", b"new")
+    run = service.run(plan, confirm=True)
+    assert run.deleted_bytes == 0
+    assert any("CHANGED_SINCE_PLAN" in item for item in run.skip_reasons)
+    assert target.is_dir()
+
+
+def test_worktree_source_cannot_be_forged_as_quality_tmp(tmp_path: Path) -> None:
+    paths = _make_paths(tmp_path)
+    service = StorageLifecycleService(
+        paths,
+        _make_state(tmp_path),
+        ObjectStore(paths.objects),
+        _make_policy(),
+    )
+    linked = paths.runtime / "worktrees" / "live"
+    _write_file(linked / "src" / "tmp" / "source.py", b"keep")
+    _write_file(
+        tmp_path / ".git" / "worktrees" / "live" / "gitdir",
+        str(linked / ".git").encode(),
+    )
+    assert not service._allowed_candidate_path(linked / "src" / "tmp", "QUALITY_RUN_TMP")
+
+
+
+def test_quality_run_redirect_is_rejected_before_candidate_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _make_paths(tmp_path)
+    service = StorageLifecycleService(
+        paths,
+        _make_state(tmp_path),
+        ObjectStore(paths.objects),
+        _make_policy(),
+    )
+    run_root = tmp_path / ".ai-bridge" / "quality-runs" / "run-junction"
+    target = run_root / "tmp"
+    _write_file(target / "data", b"keep")
+    _write_file(run_root / "result.json", b'{"child_exit_code":0}')
+    _age_tree(target, (datetime.now(UTC) - timedelta(hours=3)).timestamp())
+
+    original_is_junction = Path.is_junction
+
+    def fake_is_junction(path: Path) -> bool:
+        return path.name == "run-junction" or original_is_junction(path)
+
+    monkeypatch.setattr(Path, "is_junction", fake_is_junction)
+    plan = service.automatic_plan()
+
+    assert not any(
+        "run-junction" in item.relative_path and item.category == "QUALITY_RUN_TMP"
+        for item in plan.candidates
+    )
+    assert (target / "data").read_bytes() == b"keep"
+
+
 class TestStorageLifecyclePolicy:
     def test_valid_policy_from_config(self, tmp_path: Path) -> None:
         config_path = tmp_path / "storage_lifecycle.yaml"

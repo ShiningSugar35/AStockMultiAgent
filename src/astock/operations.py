@@ -431,7 +431,7 @@ class StorageLifecycleService:
         object_store_bytes = snapshot_tree(self.paths.objects).byte_size
         temp_bytes = snapshot_tree(self.paths.runtime / "tmp").byte_size
         report_bytes = snapshot_tree(self.paths.reports).byte_size
-        ephemeral_bytes = sum(item.byte_size for item in tree_candidates)
+        ephemeral_bytes = self._nonoverlapping_tree_bytes(tree_candidates)
         volume_free_bytes = shutil.disk_usage(self.paths.root).free
         watermark_status = self._watermark(
             runtime_bytes,
@@ -1010,15 +1010,40 @@ class StorageLifecycleService:
     def _ephemeral_tree_candidates(self, instant: datetime) -> list[StorageCandidate]:
         candidates: list[StorageCandidate] = []
 
-        quality_root = self.paths.root / ".ai-bridge" / "quality-runs"
-        if quality_root.is_dir():
+        quality_roots = [self.paths.root / ".ai-bridge" / "quality-runs"]
+        # A registered worktree protects source, not its own expired pytest workspace.
+        # Reuse identical TTL/orphan/change-since-plan checks; never recurse into source.
+        worktree_parent = (self.paths.runtime / "worktrees").resolve()
+        for linked in sorted(active_linked_worktree_roots(self.paths.root)):
+            if (
+                linked.parent == worktree_parent
+                and not linked.is_symlink()
+                and not linked.is_junction()
+            ):
+                quality_roots.append(linked / ".ai-bridge" / "quality-runs")
+        for quality_root in quality_roots:
+            bridge_root = quality_root.parent
+            if (
+                not quality_root.is_dir()
+                or bridge_root.is_symlink()
+                or bridge_root.is_junction()
+                or quality_root.is_symlink()
+                or quality_root.is_junction()
+            ):
+                continue
             try:
                 quality_runs = list(quality_root.iterdir())
             except OSError:
                 quality_runs = []
             for run_root in quality_runs:
+                if run_root.is_symlink() or run_root.is_junction():
+                    continue
                 target = run_root / "tmp"
-                if not target.is_dir() or target.is_symlink():
+                if (
+                    not target.is_dir()
+                    or target.is_symlink()
+                    or target.is_junction()
+                ):
                     continue
                 terminal = (run_root / "result.json").is_file()
                 quality_policy = self.policy.quality_run_tmp
@@ -1134,6 +1159,18 @@ class StorageLifecycleService:
             )
         return candidates
 
+    @staticmethod
+    def _nonoverlapping_tree_bytes(candidates: list[StorageCandidate]) -> int:
+        roots: list[Path] = []
+        total = 0
+        for item in sorted(candidates, key=lambda value: len(Path(value.relative_path).parts)):
+            path = Path(item.relative_path)
+            if any(path.is_relative_to(parent) for parent in roots):
+                continue
+            roots.append(path)
+            total += item.byte_size
+        return total
+
     def _tree_candidate(
         self,
         category: _StorageCategory,
@@ -1191,7 +1228,7 @@ class StorageLifecycleService:
         object_store_bytes = snapshot_tree(self.paths.objects).byte_size
         temp_bytes = snapshot_tree(self.paths.runtime / "tmp").byte_size
         report_bytes = snapshot_tree(self.paths.reports).byte_size
-        ephemeral_bytes = sum(item.byte_size for item in bounded)
+        ephemeral_bytes = self._nonoverlapping_tree_bytes(bounded)
         volume_free_bytes = shutil.disk_usage(self.paths.root).free
         identity = self._plan_identity_payload(bounded, scan_truncated=False)
         return StorageLifecyclePlan(
@@ -1372,12 +1409,24 @@ class StorageLifecycleService:
             )
 
         if category == "QUALITY_RUN_TMP":
-            quality_root = self.paths.root / ".ai-bridge" / "quality-runs"
-            try:
-                relative = path.relative_to(quality_root.resolve())
-            except ValueError:
-                return False
-            return len(relative.parts) == 2 and relative.parts[-1] == "tmp"
+            roots = [self.paths.root]
+            worktree_parent = (self.paths.runtime / "worktrees").resolve()
+            roots.extend(
+                linked for linked in active_linked_worktree_roots(self.paths.root)
+                if linked.parent == worktree_parent
+                and not linked.is_symlink() and not linked.is_junction()
+            )
+            for base in roots:
+                quality_root = base / ".ai-bridge" / "quality-runs"
+                try:
+                    relative = path.relative_to(quality_root.resolve())
+                except ValueError:
+                    continue
+                if len(relative.parts) == 2 and relative.parts[-1] == "tmp":
+                    # Reject redirection at every component, including Windows junctions.
+                    chain = [base / ".ai-bridge", quality_root, path.parent, path]
+                    return not any(item.is_symlink() or item.is_junction() for item in chain)
+            return False
         if category == "LONGRUN_SCRATCH":
             longrun_root = self.paths.runtime / "longrun"
             try:

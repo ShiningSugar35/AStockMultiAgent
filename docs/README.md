@@ -129,6 +129,7 @@ Skill 是单个专业角色的方法与工具合同，不是自由人格提示�
 ### 跨能力流程
 
 - [Workflow 索引](workflows/README.md)
+- [十股三季报观察与组合跟踪](workflows/workflow-ten-stock-q3-watch.md)
 
 ### 历史研究
 

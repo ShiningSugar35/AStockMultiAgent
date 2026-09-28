@@ -101,6 +101,20 @@ rules:
       - tests/unit/test_investor_orchestration_guards.py
       - tests/unit/test_public_capital_privacy.py
       - tests/unit/test_wp25_shareable_acceptance.py
+  - name: scheduled-watch-and-storage-lifecycle
+    changed:
+      - configs/chat_invocation_policy_v1.yaml
+      - src/astock/investor_orchestration/host_continuation.py
+      - src/astock/investor_orchestration/watch_campaign.py
+      - src/astock/operations.py
+    tests:
+      - tests/unit/test_host_continuation_policy.py
+      - tests/unit/test_watch_campaign.py
+      - tests/unit/test_scheduled_run_ownership.py
+      - tests/unit/test_investor_subject_projection.py
+      - tests/unit/test_continuous_monitoring.py
+      - tests/unit/test_storage_lifecycle.py
+      - tests/unit/test_original_instruction_contract.py
   - name: validation-tooling
     changed:
       - scripts/plan_validation.py

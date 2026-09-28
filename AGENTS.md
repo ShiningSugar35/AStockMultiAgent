@@ -124,9 +124,9 @@ Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`pr
 
 ## Agent 宿主、研究接力与荐股交付口径
 
-- 宿主由调用环境显式确认：`CHATGPT_CHAT` 或 `OTHER_AGENT`，不得根据模型名称猜测。对于 ChatGPT chat，单次响应实际耗时超过 2400 秒且有证据的完成进度严格小于 2/3 时，先保存同一请求的 checkpoint，再用该会话真实可调用的 Scheduled 工具创建每小时一次的续接，首次请求立即或平台允许的最近时刻运行。必须保留 opaque task ID 与真实创建回执；仅写提示词/配置不等于创建成功。尚未实际运行的首轮不得声称已执行，无法创建或无法访问本地 MCP 必须明确登记阻断。
+- **CHATGPT_CHAT**：单次激活以真实开始时间计时，阈值唯一来源为 `configs/chat_invocation_policy_v1.yaml`：1800秒开始停止启动新长任务并收口，2100秒前结束本次激活；不再以2/3完成率决定是否续接。先保存同一request/round的已核验结果、缺口与owner checkpoint；只有当前任务已有用户授权且绑定了经核验的通知通道时，才通过该通道提交当前部分结果，未绑定时只保存checkpoint并由当前响应交付，不得默认假定QQ。交互式ChatGPT会话在平台允许时可真实创建或复用子Scheduled并保存opaque task ID；**Scheduled automation自身不得动态新建另一条automation时，必须使用预先绑定的每小时continuation watcher**，把该绑定ID写入round，watcher只恢复同一未完成轮，不重新全量抓取。周期频率不高于每小时一次，不能承诺亚小时周期；平台/权限或预绑定缺失必须明确记录，不能把提示词或本地配置当成已创建任务。此限制约束激活，不截断逻辑研究；相同owner重入不得重置开始时刻。
 - `OTHER_AGENT` 不设置总体研究/单轮的 35、40、45 分钟截断；单个 HTTP、重试、并发批次与资源预算仍然有界，批次预算耗尽应保留并续接总请求，不能据此缩短研究或冒充终态。超过 2/3 也不代表允许在时限处草率交付。进度只能来自冻结工作项与已核验完成证据，不能把空计划、失败、跳过算完成；上下文压缩和重试不得重置总请求的耗时。
-- 同一请求允许跨 ChatGPT 激活轮次延续，但不允许跨 request_id 借用其他任务的正式结论。续接先检查最新 checkpoint、输入版本与 owner lease；没有取得唯一写入权不得并发改同一工作树。任务真正完成后，只停用为该任务创建的临时 Scheduled，不动其他任务。
+- 同一请求允许跨 ChatGPT 激活轮次延续，但不允许跨 request_id 借用其他任务的正式结论。续接先检查最新 checkpoint、输入版本与 owner lease；没有取得唯一写入权不得并发改同一工作树。任务真正完成后，只停用为该任务临时创建的 Scheduled，不动其他任务；预绑定的长期 continuation watcher 不属于临时子任务，单个 round 完成不得停用，只有其整个 campaign/日常跟踪明确结束时才允许停。
 - 宽泛荐股/新增组合的交付目标为至少 3 只、优先 5 只真正满足当前或明确近期入场条件的标的，用户明确的不同数量优先；单股分析不套多标的配额。WATCH、未触发条件、无有效当前报价、没有正配置权重或未通过正式门的标的不计入当前可建仓数量。尚未触发的近期方案必须分栏注明条件与失效，不能写成现在可买。
 - 首批不足时继续研究已验证 CURRENT Universe 内尚未完成的增量候选，保留 pure blind tranche，扩行业和机会覆盖而不放宽财务/估值/Committee/组合/Publication 硬门。只有合格 Universe、公共恢复或明确资源预算真实耗尽等可证明的停止理由才能报告目标不足；流程故障、离线小样本、旧回执不能解释成全市场没有机会。研究完成、正式可发布与用户数量目标满足是不同判断，不能以两个 WATCH 宣称多标的荐股已完成。
 - 开发和恢复诊断优先使用 `.venv\\Scripts\\python.exe -B -m astock.diagnostics` 的 `schema`、`artifacts`、`artifact` 子命令。它只读规范库、分页显示摘要，不产生研究或交易权威。Windows 复杂参数用结构化 argv 或项目内 UTF-8 JSON/脚本，避免 PowerShell 嵌套 `python -c` 引号。
@@ -169,3 +169,7 @@ Provider/reference 稳定入口包括：`provider-list`、`provider-probe`、`pr
 并发任务只暂存和提交自己认领的路径/片段。终局 worktree clean 指**本任务负责范围 clean**；其他会话的未提交文件必须登记并保留，不得 reset、回滚、代提交或为了 clean 结束其进程。代码测试期间不修改相同验证输入；仅其他会话文档变化时，应记录代码树哈希和实际影响，不机械作废所有已通过代码测试。
 
 门禁盘点用 `scripts/audit_gate_inventory.py` 重跑；默认扫描只产生候选点，不能把扫描覆盖率宣称为全部门禁完成优化。需要形成语义审计闭环时，使用项目内 `--semantic-review-index` 绑定独立完整文件审阅：只有候选文件 SHA 与审阅输入精确一致、全部候选文件均有审阅 receipt、且审阅 findings 已显式裁决时，才允许 `semantic_audit_complete=true`；任一文件漂移、漏审、扫描错误或未裁决 finding 都自动保持未闭环。完整文件语义审阅仍不能替代动态负向测试、外部 live 证据或跨文件不变量验证。实现及边界见 `docs/architecture/adaptive-recovery-and-validation-v1.md`。
+
+## 有界运行资料与研究推送
+
+当前Markdown与蒸馏工作摘要原位覆盖，不按每日/轮次新增同主题历史副本；以Git承担源码/文档历史。观察标的的基本面、新闻面和报告维护当前有效状态与必要增量引用，禁止累积全文或复制整套原件为每日备份。用户确认成交后的买入快照及其事实依赖保留，原始官方证据、账本与仍被当前/买入快照引用的对象不属于垃圾；失效蒸馏衍生对象走既有引用审计GC。已注册worktree仅保护源码/状态，不豁免内部白名单pytest临时产物；成功quality-run在保留JUnit/结果日志后立即回收tmp，失败/孤儿按原TTL回收。每日十股任务见 `docs/workflows/workflow-ten-stock-q3-watch.md`；QQ的inbox接收与实际群送达必须分开记录。

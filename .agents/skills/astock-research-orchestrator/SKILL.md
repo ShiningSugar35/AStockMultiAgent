@@ -34,7 +34,7 @@ description: Route broad or multi-step A-share research requests across candidat
 
 ## 宿主接力与结果目标
 
-遵循 AGENTS 的“Agent 宿主、研究接力与荐股交付口径”。`CHATGPT_CHAT` 超过 2400 秒且核验完成量小于 2/3，保存同一 request_id 的断点，真实创建每小时一次且首轮立即/最近时刻启动的 Scheduled；记录真实 task ID 和创建回执，不把提示词文件称作已创建。`OTHER_AGENT` 不执行总体 35/40/45 分钟截断，但单个请求、批次和资源预算仍有界。Same-request 指研究身份与证据链连续，不强迫一个 ChatGPT 激活轮次容纳所有工作。接力必须检查 owner lease，完成后只停用对应临时任务。
+- **CHATGPT_CHAT**：单次激活以真实开始时间计时，阈值唯一来源为 `configs/chat_invocation_policy_v1.yaml`：1800秒开始停止启动新长任务并收口，2100秒前结束本次激活；不再以2/3完成率决定是否续接。先保存同一request/round的已核验结果、缺口与owner checkpoint，只有当前任务已有用户授权且绑定了经核验的通知通道时才提交当前部分结果，未绑定时只保存checkpoint并由当前响应交付，不得默认假定QQ；随后真实创建或复用一个子Scheduled并保存opaque task ID；子轮只恢复同一未完成轮，不重新全量抓取。周期频率不高于每小时一次，首轮仅请求平台允许的最近时刻，不能承诺亚小时周期。平台/权限失败必须明确记录，不能把提示词或本地配置当成已创建任务。此限制约束激活，不截断逻辑研究；相同owner重入不得重置开始时刻。
 
 宽泛荐股与新增组合默认最低 3 只、目标 5 只符合当前或明确近期建仓条件的证券，用户明确数量优先；单股分析不套配额。WATCH 和尚未触发的条件不计入当前可建仓数。先验证 CURRENT Universe 的真实覆盖与 LIVE 来源，再按未研究候选增量扩池，不能复用离线三五只样本声称全市场研究，更不能拿其他 request_id 的旧 WATCH 回执作为本次结论。候选不足时继续扩行业、补证与深研；无合格机会只能以真实已穷尽的漏斗证据解释，不能降低财务/Committee/Portfolio/Publication 门或强行 BUY 凑数。
 

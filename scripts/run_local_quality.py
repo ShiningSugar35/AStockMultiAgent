@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -140,6 +141,17 @@ def main() -> int:
     (directory / "result.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    # Unique --basetemp directories otherwise survive forever. Keep bounded logs,
+    # result/JUnit evidence, not gigabytes of successful test databases and raw copies.
+    if child_exit_code == 0:
+        try:
+            shutil.rmtree(temporary)
+            result["temporary_cleanup"] = "REMOVED"
+        except OSError as exc:
+            result["temporary_cleanup"] = f"DEFERRED:{type(exc).__name__}"
+        (directory / "result.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return child_exit_code if child_exit_code else (0 if before == after else 3)
 

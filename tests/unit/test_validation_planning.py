@@ -27,6 +27,24 @@ def test_local_financial_fix_runs_financial_negative_suite_not_every_domain():
     assert plan["test_file_count"] < plan["repository_test_file_count"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "configs/chat_invocation_policy_v1.yaml",
+        "src/astock/investor_orchestration/host_continuation.py",
+        "src/astock/investor_orchestration/watch_campaign.py",
+        "src/astock/operations.py",
+    ],
+)
+def test_scheduled_watch_storage_changes_have_bounded_impact_plan(path: str) -> None:
+    plan = plan_validation(ROOT, [path])
+    assert plan["scope"] == "IMPACT", plan["full_suite_reasons"]
+    assert "tests/unit/test_host_continuation_policy.py" in plan["tests"]
+    assert "tests/unit/test_watch_campaign.py" in plan["tests"]
+    assert "tests/unit/test_storage_lifecycle.py" in plan["tests"]
+    assert plan["test_file_count"] < plan["repository_test_file_count"]
+
+
 @pytest.mark.parametrize("path", [
     "migrations/999_change.sql", "src/astock/core/state.py", "unknown.py",
     "tests/helpers/shared_case.py", "tests/fixtures/shared.json",

@@ -24,3 +24,10 @@ work_packages:
     priority: P1
     owner_lane: wp54-chatgpt-qq-stock-subscription
     depends_on: []
+  - id: WP-55
+    order: 55
+    title: 十股财报观察、ChatGPT限时接力与有界存储
+    status: BLOCKED
+    priority: P1
+    owner_lane: wp55-watch-campaign-retention
+    depends_on: [WP-54]

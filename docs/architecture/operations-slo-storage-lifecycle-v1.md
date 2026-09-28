@@ -20,7 +20,7 @@ R-03 为现有运行时补充有界存储治理和业务 SLO 视图，不建立�
 
 当前自动类别：
 
-- `.ai-bridge/quality-runs/<run>/tmp`：同级已有 `result.json` 时按 2 小时 TTL 删除；没有 `result.json` 的运行先保护 24 小时，超过 orphan grace 且整树不再变化时才可回收，避免崩溃/磁盘满导致的永久临时树；`result.json`、`junit.xml`、`output.log` 等小体积回执继续保留。
+- `.ai-bridge/quality-runs/<run>/tmp`：覆盖主工作树和已注册 `runtime/worktrees/*` 内相同精确目录；同级已有 `result.json` 时按 2 小时 TTL 删除，没有 `result.json` 的运行先保护 24 小时，超过 orphan grace 且整树不再变化时才可回收。候选扫描在测量前即拒绝 `.ai-bridge`、`quality-runs`、run root 或 `tmp` 任一层的 symlink/junction，删除前仍重复执行路径边界与整树快照校验；`result.json`、`junit.xml`、`output.log` 等小体积回执继续保留。
 - `runtime/longrun` 内的 `pytest*`、`cache-*`、`process-tmp`、`tmp*`：24 小时 TTL，按 owned tree 删除；authority receipt、checkpoint、正式输出等不按目录整体删除。
 - `runtime/worktrees/*`：48 小时 TTL，并且必须不在 Git 自身 `.git/worktrees/*/gitdir` 注册集合中。计划后若重新注册，执行时再次保护。
 - runtime 根级 `pytest-*`、`uv-cache-*`：24 小时 TTL。

@@ -539,6 +539,38 @@ def test_instrument_market_binding_and_official_index_lineage(tmp_path: Path) ->
     assert manifest.official_index_snapshot_id != manifest.official_snapshot_id
 
 
+def test_historical_financial_manifest_uses_as_of_instrument_binding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _service(tmp_path)
+    report = service.sync(
+        "000001",
+        Market.XSHE,
+        PERIOD_END,
+        FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+    )
+    row = service.repository.get(
+        "000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value
+    )
+    assert row is not None
+
+    original = service.state.get_market_reference_release
+    observed_as_of: list[datetime | None] = []
+
+    def historical_reference(dataset_kind: str, scope_key: str, *, as_of=None):
+        observed_as_of.append(as_of)
+        assert as_of is not None
+        return original(dataset_kind, scope_key, as_of=as_of)
+
+    monkeypatch.setattr(service.state, "get_market_reference_release", historical_reference)
+    manifest = service._verified_manifest(row)
+
+    assert manifest.release_id == report.release_id
+    assert observed_as_of
+    assert all(value == manifest.available_to_system_at for value in observed_as_of)
+
+
 def test_bjse_without_exact_item_capture_fails_closed_without_exhaustive_claim(
     tmp_path: Path,
 ) -> None:

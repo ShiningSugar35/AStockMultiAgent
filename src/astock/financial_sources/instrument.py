@@ -53,20 +53,22 @@ class FinancialInstrumentResolver:
     ) -> FinancialInstrumentBinding:
         if market is Market.INDEX:
             raise ValueError("financial sources require an explicit stock exchange")
-        _ = as_of
         row = self.state.get_market_reference_release(
             ReferenceDatasetKind.INSTRUMENT_MASTER.value,
             f"{market.value}:{company_id}",
+            as_of=as_of,
         )
         if row is None:
             row = self.state.get_market_reference_release(
                 ReferenceDatasetKind.INSTRUMENT_MASTER.value,
                 market.value,
+                as_of=as_of,
             )
         if row is None:
             row = self.state.get_market_reference_release(
                 ReferenceDatasetKind.INSTRUMENT_MASTER.value,
                 "ALL",
+                as_of=as_of,
             )
         if row is None:
             raise ValueError("financial source instrument release is unavailable")

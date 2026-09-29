@@ -171,3 +171,33 @@ def test_reused_financial_service_serializes_non_thread_safe_sync(
         [future.result() for future in futures]
 
     assert max_active == 1
+
+
+def test_identity_attempt_reuses_verified_canonical_master_before_live_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    market_service = service._market_service()
+    master = market_service.sync_instruments(Market.XSHG)
+    assert master.release_id is not None
+    assert master.raw_snapshot_ids
+
+    def fail_live_identity(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError(
+            "live identity lookup must not run when canonical master already proves identity"
+        )
+
+    monkeypatch.setattr(market_service, "sync_instrument_identity", fail_live_identity)
+
+    attempt = service._identity_attempt(
+        "600519",
+        Market.XSHG,
+        trusted_identity_capture_ids=(),
+    )
+
+    assert attempt.status.value == "SUCCEEDED"
+    assert attempt.record_count == 1
+    assert attempt.fallback_used is False
+    assert attempt.internal_reason_codes == ["CANONICAL_INSTRUMENT_MASTER_REUSED"]
+    assert attempt.source_snapshot_ids == master.raw_snapshot_ids

@@ -16,6 +16,7 @@ from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents.repository import DocumentRepository
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
+from astock.financial_sources.instrument import FinancialInstrumentResolver
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
 from astock.research.policy import (
     CapabilityGraph,
@@ -28,6 +29,7 @@ from astock.schemas import (
     OfficialWebDocumentCapture,
     OperationalSeverity,
     ReferenceCoverageStatus,
+    ReferenceDatasetKind,
     SourceClass,
 )
 from astock.schemas.adaptation import ValidatedResearchPlan
@@ -649,6 +651,9 @@ class CurrentResearchAcquisitionService:
         *,
         trusted_identity_capture_ids: tuple[str, ...],
     ) -> AcquisitionAttempt:
+        canonical = self._canonical_instrument_identity_attempt(company_id, market)
+        if canonical is not None:
+            return canonical
         structured = self._reference_attempt(
             AcquisitionCapability.INSTRUMENT_IDENTITY,
             lambda: self._market_service().sync_instrument_identity(
@@ -685,6 +690,62 @@ class CurrentResearchAcquisitionService:
                 dict.fromkeys([*structured.source_snapshot_ids, *source_snapshot_ids])
             ),
         )
+
+
+    def _canonical_instrument_identity_attempt(
+        self,
+        company_id: str,
+        market: Market,
+    ) -> AcquisitionAttempt | None:
+        """Reuse one verified canonical Instrument Master before any live identity fetch."""
+
+        started = perf_counter()
+        try:
+            binding = FinancialInstrumentResolver(
+                self.state,
+                self.objects,
+                self.paths.parquet,
+            ).resolve(
+                company_id,
+                market,
+                as_of=datetime.now(UTC),
+            )
+        except (OSError, ValueError):
+            return None
+
+        service = self._market_service()
+        scopes = (f"{market.value}:{company_id}", market.value)
+        for scope_key in scopes:
+            status = service.status(ReferenceDatasetKind.INSTRUMENT_MASTER, scope_key)
+            release = status.get("release")
+            if (
+                status.get("status") != "AVAILABLE"
+                or not isinstance(release, dict)
+                or release.get("release_id") != binding.release_id
+            ):
+                continue
+            raw_snapshot_ids = [
+                str(item)
+                for item in release.get("raw_snapshot_ids", [])
+                if isinstance(item, str) and item
+            ]
+            if not raw_snapshot_ids:
+                return None
+            provider_id = str(release.get("provider_id") or "")
+            provider_path = self._source_path(raw_snapshot_ids)
+            if not provider_path and provider_id:
+                provider_path = [provider_id]
+            return AcquisitionAttempt(
+                capability=AcquisitionCapability.INSTRUMENT_IDENTITY,
+                status=AcquisitionAttemptStatus.SUCCEEDED,
+                provider_path=provider_path,
+                fallback_used=False,
+                record_count=1,
+                latency_ms=_latency_ms(started),
+                internal_reason_codes=["CANONICAL_INSTRUMENT_MASTER_REUSED"],
+                source_snapshot_ids=raw_snapshot_ids,
+            )
+        return None
 
     def _trusted_exchange_identity_capture(
         self,

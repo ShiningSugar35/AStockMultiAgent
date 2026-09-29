@@ -120,7 +120,7 @@ class CurrentResearchAcquisitionService:
         )
         current_date, daily_market_end = _shanghai_acquisition_dates(started_at)
         start = current_date - timedelta(days=resolved_lookback)
-        reused_attempts, reused_report_hash = self._reusable_attempts(
+        reuse_candidates, candidate_report_hash = self._reusable_attempts(
             reuse_report_artifact_id,
             company_id=company_id,
             market=market,
@@ -129,29 +129,64 @@ class CurrentResearchAcquisitionService:
             current_schedule=schedule,
             started_at=started_at,
         )
-        reused_report_id = reuse_report_artifact_id if reused_attempts else None
 
         financial_capabilities = {
             AcquisitionCapability.FINANCIAL_ANNUAL,
             AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
         }
-        if financial_capabilities.difference(reused_attempts):
-            financial_specs, period_discovery_reasons = self._discover_financial_periods(
-                company_id, market, current_date
-            )
-        else:
-            financial_specs, period_discovery_reasons = [], []
-        financial_by_capability = {
-            capability: (period_end, period_type)
-            for capability, period_end, period_type in financial_specs
-        }
-        attempts = list(reused_attempts.values())
-        attempt_by_capability = dict(reused_attempts)
+        financial_by_capability: dict[
+            AcquisitionCapability, tuple[date, FinancialPeriodType]
+        ] = {}
+        period_discovery_reasons: list[str] = []
+        financial_discovery_done = False
+        attempts: list[AcquisitionAttempt] = []
+        attempt_by_capability: dict[AcquisitionCapability, AcquisitionAttempt] = {}
+        reused_attempts: dict[AcquisitionCapability, AcquisitionAttempt] = {}
         for stage in sorted({step.stage for step in schedule.steps}):
-            tasks: dict[AcquisitionCapability, Callable[[], AcquisitionAttempt]] = {}
-            for step in schedule.steps:
-                if step.stage != stage or step.capability in attempt_by_capability:
+            stage_steps = [
+                step
+                for step in schedule.steps
+                if step.stage == stage and step.capability not in attempt_by_capability
+            ]
+            for step in stage_steps:
+                candidate = reuse_candidates.get(step.capability)
+                if candidate is None:
                     continue
+                if any(
+                    (
+                        dependency_attempt := attempt_by_capability.get(dependency)
+                    )
+                    is None
+                    or dependency_attempt.status is not AcquisitionAttemptStatus.SUCCEEDED
+                    for dependency in step.dependencies
+                ):
+                    continue
+                attempts.append(candidate)
+                attempt_by_capability[step.capability] = candidate
+                reused_attempts[step.capability] = candidate
+
+            live_stage_steps = [
+                step
+                for step in schedule.steps
+                if step.stage == stage and step.capability not in attempt_by_capability
+            ]
+            if (
+                not financial_discovery_done
+                and any(
+                    step.capability in financial_capabilities for step in live_stage_steps
+                )
+            ):
+                financial_specs, period_discovery_reasons = self._discover_financial_periods(
+                    company_id, market, current_date
+                )
+                financial_by_capability = {
+                    capability: (period_end, period_type)
+                    for capability, period_end, period_type in financial_specs
+                }
+                financial_discovery_done = True
+
+            tasks: dict[AcquisitionCapability, Callable[[], AcquisitionAttempt]] = {}
+            for step in live_stage_steps:
                 identity_attempt = attempt_by_capability.get(
                     AcquisitionCapability.INSTRUMENT_IDENTITY
                 )
@@ -186,6 +221,9 @@ class CurrentResearchAcquisitionService:
                 ]
             attempts.extend(stage_results)
             attempt_by_capability.update({item.capability: item for item in stage_results})
+
+        reused_report_id = reuse_report_artifact_id if reused_attempts else None
+        reused_report_hash = candidate_report_hash if reused_attempts else None
 
         attempts = sorted(attempts, key=lambda item: item.capability.value)
         external_needs = self._external_needs(company_id, market, attempts)
@@ -373,7 +411,6 @@ class CurrentResearchAcquisitionService:
             if (
                 attempt is None
                 or attempt.status is not AcquisitionAttemptStatus.SUCCEEDED
-                or any(dependency not in reusable for dependency in step.dependencies)
                 or not self._attempt_snapshots_reusable(attempt, started_at)
             ):
                 continue

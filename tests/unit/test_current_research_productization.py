@@ -868,6 +868,132 @@ def test_same_request_reuse_reruns_only_failed_capability_and_preserves_lineage(
     assert str(first_record["object_hash"]) in second_record["input_hashes"]
 
 
+def test_same_request_reuse_waits_for_recovered_dependency_before_reusing_downstream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    paths.ensure_directories()
+    state = StateStore(paths.state_db, PROJECT_ROOT / "migrations")
+    state.migrate()
+    objects = ObjectStore(paths.objects)
+    times = iter(
+        [
+            NOW,
+            NOW + timedelta(seconds=1),
+            NOW + timedelta(seconds=2),
+            NOW + timedelta(seconds=3),
+        ]
+    )
+    service = CurrentResearchAcquisitionService(
+        paths,
+        state,
+        objects,
+        clock=lambda: next(times),
+    )
+    discovery_calls = 0
+
+    def fake_discover(
+        *_args: object,
+    ) -> tuple[
+        list[tuple[AcquisitionCapability, date, FinancialPeriodType]],
+        list[str],
+    ]:
+        nonlocal discovery_calls
+        discovery_calls += 1
+        return (
+            [
+                (
+                    AcquisitionCapability.FINANCIAL_ANNUAL,
+                    date(2025, 12, 31),
+                    FinancialPeriodType.ANNUAL,
+                ),
+                (
+                    AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+                    date(2026, 6, 30),
+                    FinancialPeriodType.SEMIANNUAL,
+                ),
+            ],
+            [],
+        )
+
+    monkeypatch.setattr(service, "_discover_financial_periods", fake_discover)
+    calls: list[AcquisitionCapability] = []
+    counts: dict[AcquisitionCapability, int] = {}
+
+    def fake_task(
+        capability: AcquisitionCapability,
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[[], AcquisitionAttempt]:
+        def run() -> AcquisitionAttempt:
+            calls.append(capability)
+            current = counts.get(capability, 0) + 1
+            counts[capability] = current
+            ref = objects.put_json(
+                {
+                    "capability": capability.value,
+                    "attempt": current,
+                }
+            )
+            snapshot = SourceSnapshot(
+                snapshot_id=f"snapshot:dependency-reuse:{capability.value}:{current}",
+                source_id="test-current-research",
+                object_sha256=ref.sha256,
+                fetched_at=NOW,
+                available_to_system_at=NOW,
+                fetch_status=FetchStatus.SUCCEEDED,
+                source_url="https://example.invalid/current-research",
+                mime="application/json",
+                byte_size=ref.byte_size,
+                headers_hash="d" * 64,
+                rights_status="PUBLIC_REFERENCE_DATA",
+                created_at=NOW,
+            )
+            state.register_snapshot(snapshot)
+            status = AcquisitionAttemptStatus.SUCCEEDED
+            if capability is AcquisitionCapability.INSTRUMENT_IDENTITY and current == 1:
+                status = AcquisitionAttemptStatus.PARTIAL
+            return AcquisitionAttempt(
+                capability=capability,
+                status=status,
+                provider_path=["test-current-research"],
+                fallback_used=False,
+                record_count=1,
+                latency_ms=10,
+                internal_reason_codes=[],
+                source_snapshot_ids=[snapshot.snapshot_id],
+                created_at=NOW,
+            )
+
+        return run
+
+    monkeypatch.setattr(service, "_task_for_capability", fake_task)
+
+    first = service.acquire("600938", Market.XSHG)
+    first_call_count = len(calls)
+    second = service.acquire(
+        "600938",
+        Market.XSHG,
+        reuse_report_artifact_id=first.report_id,
+    )
+    second_calls = calls[first_call_count:]
+
+    assert first_call_count == len(first.attempts) == 5
+    assert second_calls == [AcquisitionCapability.INSTRUMENT_IDENTITY]
+    assert discovery_calls == 1
+    assert second.reused_report_artifact_id == first.report_id
+    assert second.status is CurrentResearchAcquisitionStatus.READY
+    reused_capabilities = {
+        item.capability
+        for item in second.attempts
+        if "SAME_REQUEST_VERIFIED_REUSE" in item.internal_reason_codes
+    }
+    assert AcquisitionCapability.DAILY_MARKET in reused_capabilities
+    assert AcquisitionCapability.FINANCIAL_ANNUAL in reused_capabilities
+    assert AcquisitionCapability.FINANCIAL_LATEST_INTERIM in reused_capabilities
+
+
 def test_same_request_reuse_rejects_tampered_snapshot(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     paths.ensure_directories()

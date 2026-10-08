@@ -22,10 +22,7 @@ from astock.investor_orchestration.host_continuation import (
     HostContinuationPolicy,
 )
 from astock.investor_orchestration.models import StrictModel
-from astock.investor_orchestration.run_ownership import (
-    ScheduledRunInProgress,
-    schedule_run_ownership,
-)
+from astock.investor_orchestration.run_ownership import schedule_run_ownership
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
 
@@ -37,6 +34,7 @@ class CampaignRound(StrictModel):
     slot: Literal["am", "pm"]
     status: Literal["PENDING", "PARTIAL", "COMPLETE"] = "PENDING"
     owner: str = ""
+    lease_generation: int = Field(default=0, ge=0)
     invocation_started_at: datetime
     deadline_at: datetime
     checkpoint: str = Field(default="", max_length=12000)
@@ -44,7 +42,21 @@ class CampaignRound(StrictModel):
     total_units: int = Field(default=1, ge=1)
     child_task_id: str | None = None
     report_file: str | None = None
-    submit_status: Literal["NOT_SUBMITTED", "SENT", "FAILED", "UNKNOWN"] = "NOT_SUBMITTED"
+    submit_status: Literal[
+        "NOT_SUBMITTED", "SUBMITTED", "SENT", "FAILED", "UNKNOWN"
+    ] = "NOT_SUBMITTED"
+
+
+class CampaignBeginResult(CampaignRound):
+    lease_acquired: bool
+    lease_disposition: Literal[
+        "ACQUIRED", "REUSED", "LIVE_OWNER", "ALREADY_COMPLETE", "EXPIRED_LEASE"
+    ]
+
+
+class CampaignCheckpointResult(CampaignRound):
+    checkpoint_applied: bool
+    checkpoint_disposition: Literal["APPLIED", "STALE_LEASE"]
 
 
 class Campaign(StrictModel):
@@ -139,7 +151,7 @@ class WatchCampaignService:
         owner: str,
         *,
         now: datetime | None = None,
-    ) -> CampaignRound:
+    ) -> CampaignBeginResult:
         if not owner.strip() or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", bucket):
             raise ValueError("owner and YYYY-MM-DD Shanghai schedule bucket required")
         at = now or datetime.now(UTC)
@@ -155,17 +167,37 @@ class WatchCampaignService:
                 and current.status == "COMPLETE"
                 and current.round_id == target_id
             ):
-                return current
+                return CampaignBeginResult.model_validate(
+                    {
+                        **current.model_dump(),
+                        "lease_acquired": False,
+                        "lease_disposition": "ALREADY_COMPLETE",
+                    }
+                )
             if current is not None and current.status != "COMPLETE":
                 if current.owner == owner:
-                    return current  # Retry cannot reset this invocation's clock.
+                    return CampaignBeginResult.model_validate(
+                        {
+                            **current.model_dump(),
+                            "lease_acquired": current.deadline_at > at,
+                            "lease_disposition": (
+                                "REUSED" if current.deadline_at > at else "EXPIRED_LEASE"
+                            ),
+                        }
+                    )  # Retry cannot reset this invocation's clock.
                 if current.owner and current.deadline_at > at:
-                    raise ScheduledRunInProgress(
-                        "campaign activation already has a live owner"
+                    return CampaignBeginResult.model_validate(
+                        {
+                            **current.model_dump(),
+                            "lease_acquired": False,
+                            "lease_disposition": "LIVE_OWNER",
+                        }
                     )
                 current = current.model_copy(
                     update={
+                        "status": "PENDING",
                         "owner": owner,
+                        "lease_generation": current.lease_generation + 1,
                         "invocation_started_at": at,
                         "deadline_at": at
                         + timedelta(seconds=limits.hard_limit_seconds),
@@ -176,20 +208,30 @@ class WatchCampaignService:
                     round_id=target_id,
                     slot=slot,
                     owner=owner,
+                    lease_generation=(current.lease_generation + 1 if current else 1),
                     invocation_started_at=at,
                     deadline_at=at + timedelta(seconds=limits.hard_limit_seconds),
                     child_task_id=campaign.bindings.get("continuation"),
                 )
             campaign.rounds[slot] = current
             self._save(campaign)
-            return current
+            return CampaignBeginResult.model_validate(
+                {
+                    **current.model_dump(),
+                    "lease_acquired": True,
+                    "lease_disposition": "ACQUIRED",
+                }
+            )
 
     def checkpoint(
         self,
         slot: str,
         owner: str,
         payload: dict[str, object],
-    ) -> CampaignRound:
+        *,
+        round_id: str | None = None,
+        lease_generation: int | None = None,
+    ) -> CampaignCheckpointResult:
         allowed = {
             "checkpoint",
             "completed_units",
@@ -201,11 +243,30 @@ class WatchCampaignService:
         }
         if set(payload) - allowed:
             raise ValueError("checkpoint payload contains unsupported fields")
+        if (round_id is None) != (lease_generation is None):
+            raise ValueError("round id and lease generation must be supplied together")
+        if lease_generation is not None and lease_generation < 0:
+            raise ValueError("lease generation must be non-negative")
         with schedule_run_ownership(self.database, SCOPE, self.campaign_id):
             campaign = self.load()
             current = campaign.rounds[slot]
-            if not owner or current.owner != owner:
-                raise ScheduledRunInProgress("only the current owner may checkpoint")
+            explicit_lease = round_id is not None
+            if explicit_lease:
+                lease_matches = (
+                    bool(current.owner)
+                    and current.round_id == round_id
+                    and current.lease_generation == lease_generation
+                )
+            else:
+                lease_matches = bool(current.owner) and bool(owner) and current.owner == owner
+            if not lease_matches or current.deadline_at <= datetime.now(UTC):
+                return CampaignCheckpointResult.model_validate(
+                    {
+                        **current.model_dump(),
+                        "checkpoint_applied": False,
+                        "checkpoint_disposition": "STALE_LEASE",
+                    }
+                )
             revised = CampaignRound.model_validate(
                 {**current.model_dump(), **payload}
             )
@@ -216,7 +277,9 @@ class WatchCampaignService:
                 and revised.completed_units != revised.total_units
             ):
                 raise ValueError("incomplete work cannot be marked complete")
-            if revised.report_file:
+            # A missing old report projection must not block saving research progress.
+            # Newly registered reports still require an existing project-local file.
+            if "report_file" in payload and revised.report_file:
                 path = Path(revised.report_file).resolve()
                 if (
                     not path.is_relative_to(self.database.parent.parent)
@@ -227,7 +290,13 @@ class WatchCampaignService:
                 revised = revised.model_copy(update={"owner": ""})
             campaign.rounds[slot] = revised
             self._save(campaign)
-            return revised
+            return CampaignCheckpointResult.model_validate(
+                {
+                    **revised.model_dump(),
+                    "checkpoint_applied": True,
+                    "checkpoint_disposition": "APPLIED",
+                }
+            )
 
     @staticmethod
     def _official_q3_release(
@@ -386,6 +455,8 @@ def main() -> None:
     parser.add_argument("--slot", choices=["am", "pm"])
     parser.add_argument("--bucket")
     parser.add_argument("--owner")
+    parser.add_argument("--round-id")
+    parser.add_argument("--lease-generation", type=int)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--receipt-id")
     args = parser.parse_args()
@@ -412,6 +483,8 @@ def main() -> None:
             args.slot or "",
             args.owner or "",
             json.loads(args.input.read_text(encoding="utf-8")),
+            round_id=args.round_id,
+            lease_generation=args.lease_generation,
         ).model_dump(mode="json")
     elif args.action == "readiness":
         result = service.finalization_readiness(args.receipt_id)

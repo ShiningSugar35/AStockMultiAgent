@@ -11,8 +11,10 @@ from typer.testing import CliRunner
 
 from astock.investor_orchestration.cli import app
 from astock.investor_orchestration.qqbot_stock_subscription import (
+    MAX_STOCK_SUBSCRIPTION_PAYLOAD_BYTES,
     QQBotStockSubscriptionConfig,
     QQBotStockSubscriptionSubmitter,
+    StockSubscriptionQueryStatus,
     StockSubscriptionSubmitResult,
     StockSubscriptionSubmitStatus,
     build_stock_subscription_item,
@@ -82,7 +84,7 @@ def test_submit_success_is_one_ssh_call_and_passes_json_on_stdin(tmp_path: Path)
         created_at=datetime(2026, 9, 28, 2, 0, tzinfo=UTC),
     )
 
-    assert result.status is StockSubscriptionSubmitStatus.SENT
+    assert result.status is StockSubscriptionSubmitStatus.SUBMITTED
     assert result.remote_file == "report-test.json"
     assert len(calls) == 1
     args, kwargs = calls[0]
@@ -95,6 +97,83 @@ def test_submit_success_is_one_ssh_call_and_passes_json_on_stdin(tmp_path: Path)
         "bash /srv/qqbot/control/ops/astock_feed_submit.sh",
     ]
     assert kwargs["timeout"] == 30
+
+
+def test_submit_with_pinned_known_hosts_uses_strict_yes(tmp_path: Path) -> None:
+    config_path = _config(tmp_path)
+    text = config_path.read_text(encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    config_path.write_text(
+        text.replace(
+            "remote_command:",
+            f"known_hosts_file: {known_hosts}\nremote_command:",
+        ),
+        encoding="utf-8",
+    )
+    cfg = QQBotStockSubscriptionConfig.load(config_path)
+    calls: list[list[str]] = []
+
+    def run(args, **_kwargs):
+        calls.append(args)
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"ok":true,"status":"submitted","file":"report-test.json"}',
+            stderr="",
+        )
+
+    result = QQBotStockSubscriptionSubmitter(cfg, runner=run).submit("正文")
+
+    assert result.status is StockSubscriptionSubmitStatus.SUBMITTED
+    assert len(calls) == 1
+    assert f"UserKnownHostsFile={known_hosts}" in calls[0]
+    assert "StrictHostKeyChecking=yes" in calls[0]
+    assert "StrictHostKeyChecking=accept-new" not in calls[0]
+
+
+def test_query_report_id_distinguishes_submitted_and_absent(tmp_path: Path) -> None:
+    cfg = QQBotStockSubscriptionConfig.load(_config(tmp_path))
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        status = "accepted" if args[-1].endswith("report-1") else "absent"
+        payload = {"ok": True, "status": status}
+        if status == "accepted":
+            payload["file"] = "report-test.json"
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+
+    submitter = QQBotStockSubscriptionSubmitter(cfg, runner=run)
+    accepted = submitter.query("report-1")
+    absent = submitter.query("report-2")
+
+    assert accepted.status is StockSubscriptionQueryStatus.SUBMITTED
+    assert accepted.remote_file == "report-test.json"
+    assert absent.status is StockSubscriptionQueryStatus.ABSENT
+    assert len(calls) == 2
+    assert all("--query-id" in args[-1] for args, _ in calls)
+    assert all(kwargs["input"] == "" for _, kwargs in calls)
+    assert all("StrictHostKeyChecking=yes" in args for args, _ in calls)
+
+
+def test_payload_limit_fails_before_ssh(tmp_path: Path) -> None:
+    cfg = QQBotStockSubscriptionConfig.load(_config(tmp_path))
+    calls = 0
+
+    def run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("oversize payload must fail before ssh")
+
+    body = "测" * (MAX_STOCK_SUBSCRIPTION_PAYLOAD_BYTES // 3 + 1024)
+    result = QQBotStockSubscriptionSubmitter(cfg, runner=run).submit(body)
+
+    assert calls == 0
+    assert result.status is StockSubscriptionSubmitStatus.FAILED
+    assert "UTF-8 bytes" in result.detail
 
 
 def test_submit_nonzero_is_failed_without_retry(tmp_path: Path) -> None:
@@ -140,7 +219,7 @@ def test_success_exit_with_unreadable_receipt_is_unknown(tmp_path: Path) -> None
     assert result.status is StockSubscriptionSubmitStatus.UNKNOWN
 
 
-def test_cli_reads_utf8_file_and_emits_sent_receipt(
+def test_cli_reads_utf8_file_and_emits_submitted_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -153,7 +232,7 @@ def test_cli_reads_utf8_file_and_emits_sent_receipt(
         captured["text"] = text
         captured["report_id"] = report_id
         return StockSubscriptionSubmitResult(
-            status=StockSubscriptionSubmitStatus.SENT,
+            status=StockSubscriptionSubmitStatus.SUBMITTED,
             report_id=report_id or "generated",
             remote_file="remote.json",
             return_code=0,
@@ -174,7 +253,7 @@ def test_cli_reads_utf8_file_and_emits_sent_receipt(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["status"] == "SENT"
+    assert payload["status"] == "SUBMITTED"
     assert captured == {"text": "第一行\n第二行", "report_id": "scheduled-am"}
 
 

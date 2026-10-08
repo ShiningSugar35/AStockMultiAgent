@@ -35,6 +35,7 @@ from astock.investor_orchestration.public_cli import register_public_commands
 from astock.investor_orchestration.qqbot_stock_subscription import (
     QQBotStockSubscriptionConfig,
     QQBotStockSubscriptionSubmitter,
+    StockSubscriptionQueryStatus,
     StockSubscriptionSubmitStatus,
 )
 from astock.investor_orchestration.regime import MarketRegimeService
@@ -671,5 +672,33 @@ def qqbot_stock_submit(
     except (OSError, UnicodeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     _dump(result.as_dict())
-    if result.status is not StockSubscriptionSubmitStatus.SENT:
+    if result.status not in {
+        StockSubscriptionSubmitStatus.SUBMITTED,
+        StockSubscriptionSubmitStatus.SENT,
+    }:
+        raise typer.Exit(code=4)
+
+
+@app.command("qqbot-stock-status")
+def qqbot_stock_status(
+    report_id: str = typer.Argument(...),
+    config_path: Path = typer.Option(
+        Path("runtime/local/qqbot_stock_subscription.yaml"),
+        exists=True,
+        readable=True,
+        dir_okay=False,
+    ),
+) -> None:
+    """Read QQBot inbox admission state for one report id; never resubmit it."""
+
+    try:
+        config = QQBotStockSubscriptionConfig.load(config_path)
+        result = QQBotStockSubscriptionSubmitter(config).query(report_id)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _dump(result.as_dict())
+    if result.status in {
+        StockSubscriptionQueryStatus.FAILED,
+        StockSubscriptionQueryStatus.UNKNOWN,
+    }:
         raise typer.Exit(code=4)

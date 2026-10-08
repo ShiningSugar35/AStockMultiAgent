@@ -8,6 +8,7 @@ subscription polling/dedup/delivery after the report reaches the remote inbox.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -18,9 +19,21 @@ from typing import Any
 
 import yaml
 
+MAX_STOCK_SUBSCRIPTION_PAYLOAD_BYTES = 1_048_576
+
 
 class StockSubscriptionSubmitStatus(StrEnum):
+    SUBMITTED = "SUBMITTED"
+    # Legacy compatibility for persisted/watch-campaign state written before the
+    # transport/inbox distinction was made explicit.
     SENT = "SENT"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+class StockSubscriptionQueryStatus(StrEnum):
+    ABSENT = "ABSENT"
+    SUBMITTED = "SUBMITTED"
     FAILED = "FAILED"
     UNKNOWN = "UNKNOWN"
 
@@ -85,6 +98,24 @@ class StockSubscriptionSubmitResult:
         }
 
 
+@dataclass(frozen=True)
+class StockSubscriptionQueryResult:
+    status: StockSubscriptionQueryStatus
+    report_id: str
+    detail: str = ""
+    remote_file: str = ""
+    return_code: int | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "report_id": self.report_id,
+            "detail": self.detail,
+            "remote_file": self.remote_file,
+            "return_code": self.return_code,
+        }
+
+
 def build_stock_subscription_item(
     text: str,
     *,
@@ -122,6 +153,33 @@ class QQBotStockSubscriptionSubmitter:
         self.config = config
         self._runner = runner
 
+    def _ssh_args(self, remote_command: str) -> list[str]:
+        args = ["ssh", "-T"]
+        if self.config.identity_file:
+            args.extend(["-i", self.config.identity_file])
+        if self.config.known_hosts_file:
+            args.extend(
+                [
+                    "-o",
+                    f"UserKnownHostsFile={self.config.known_hosts_file}",
+                ]
+            )
+        args.extend(
+            [
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                f"ConnectTimeout={self.config.connect_timeout_seconds}",
+                "-o",
+                "ConnectionAttempts=1",
+                self.config.ssh_host,
+                remote_command,
+            ]
+        )
+        return args
+
     def submit(
         self,
         text: str,
@@ -135,30 +193,17 @@ class QQBotStockSubscriptionSubmitter:
             created_at=created_at,
         )
         payload = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-        args = ["ssh", "-T"]
-        if self.config.identity_file:
-            args.extend(["-i", self.config.identity_file])
-        if self.config.known_hosts_file:
-            args.extend(
-                [
-                    "-o",
-                    f"UserKnownHostsFile={self.config.known_hosts_file}",
-                    "-o",
-                    "StrictHostKeyChecking=accept-new",
-                ]
+        payload_bytes = payload.encode("utf-8")
+        if len(payload_bytes) > MAX_STOCK_SUBSCRIPTION_PAYLOAD_BYTES:
+            return StockSubscriptionSubmitResult(
+                status=StockSubscriptionSubmitStatus.FAILED,
+                report_id=item["id"],
+                detail=(
+                    "report envelope exceeds "
+                    f"{MAX_STOCK_SUBSCRIPTION_PAYLOAD_BYTES} UTF-8 bytes"
+                ),
             )
-        args.extend(
-            [
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                f"ConnectTimeout={self.config.connect_timeout_seconds}",
-                "-o",
-                "ConnectionAttempts=1",
-                self.config.ssh_host,
-                self.config.remote_command,
-            ]
-        )
+        args = self._ssh_args(self.config.remote_command)
         try:
             proc = self._runner(
                 args,
@@ -211,16 +256,95 @@ class QQBotStockSubscriptionSubmitter:
                 return_code=0,
             )
         return StockSubscriptionSubmitResult(
-            status=StockSubscriptionSubmitStatus.SENT,
+            status=StockSubscriptionSubmitStatus.SUBMITTED,
             report_id=item["id"],
+            remote_file=str(receipt.get("file") or ""),
+            return_code=0,
+        )
+
+    def query(self, report_id: str) -> StockSubscriptionQueryResult:
+        ident = str(report_id or "").strip()
+        if not ident:
+            raise ValueError("stock subscription report_id must not be empty")
+        if len(ident) > 200:
+            raise ValueError("stock subscription report_id must be at most 200 characters")
+
+        remote_command = (
+            f"{self.config.remote_command} --query-id {shlex.quote(ident)}"
+        )
+        args = self._ssh_args(remote_command)
+        try:
+            proc = self._runner(
+                args,
+                input="",
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                timeout=self.config.command_timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return StockSubscriptionQueryResult(
+                status=StockSubscriptionQueryStatus.UNKNOWN,
+                report_id=ident,
+                detail="SSH query timed out; inbox state is unknown",
+            )
+        except OSError as exc:
+            return StockSubscriptionQueryResult(
+                status=StockSubscriptionQueryStatus.FAILED,
+                report_id=ident,
+                detail=f"SSH query process could not start: {type(exc).__name__}: {exc}",
+            )
+
+        stdout = str(proc.stdout or "").strip()
+        stderr = str(proc.stderr or "").strip()
+        if int(proc.returncode) != 0:
+            return StockSubscriptionQueryResult(
+                status=StockSubscriptionQueryStatus.FAILED,
+                report_id=ident,
+                detail=(stderr or stdout or "remote query command failed")[:500],
+                return_code=int(proc.returncode),
+            )
+        try:
+            receipt = json.loads(stdout or "{}")
+        except json.JSONDecodeError:
+            return StockSubscriptionQueryResult(
+                status=StockSubscriptionQueryStatus.UNKNOWN,
+                report_id=ident,
+                detail="remote query returned an unreadable receipt",
+                return_code=0,
+            )
+        if not isinstance(receipt, dict) or receipt.get("ok") is not True:
+            return StockSubscriptionQueryResult(
+                status=StockSubscriptionQueryStatus.FAILED,
+                report_id=ident,
+                detail=str(
+                    receipt.get("error") if isinstance(receipt, dict) else receipt
+                )[:500],
+                return_code=0,
+            )
+
+        remote_status = str(receipt.get("status") or "").lower()
+        if remote_status == "accepted":
+            status = StockSubscriptionQueryStatus.SUBMITTED
+        elif remote_status == "absent":
+            status = StockSubscriptionQueryStatus.ABSENT
+        else:
+            status = StockSubscriptionQueryStatus.UNKNOWN
+        return StockSubscriptionQueryResult(
+            status=status,
+            report_id=ident,
             remote_file=str(receipt.get("file") or ""),
             return_code=0,
         )
 
 
 __all__ = [
+    "MAX_STOCK_SUBSCRIPTION_PAYLOAD_BYTES",
     "QQBotStockSubscriptionConfig",
     "QQBotStockSubscriptionSubmitter",
+    "StockSubscriptionQueryResult",
+    "StockSubscriptionQueryStatus",
     "StockSubscriptionSubmitResult",
     "StockSubscriptionSubmitStatus",
     "build_stock_subscription_item",

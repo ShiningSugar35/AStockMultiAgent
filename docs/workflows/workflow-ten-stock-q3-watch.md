@@ -1,9 +1,9 @@
-# Workflow: 十股三季报观察与组合跟踪
+# Workflow: 10+三季报观察与组合跟踪
 
 > 状态：CURRENT（执行工作流；各能力的真实启用/送达以运行回执为准）
-> 更新：2026-10-02
+> 更新：2026-10-08
 > 当前实现：watch_campaign 元数据接口、代际 lease/CAS 续接、既有研究/QQ传输；定时创建、专项回归和端到端送达状态见本次进度验收，不能从本文推断已全部验收。
-> 研究范围：用户明确指定的十只A股；不宣称全市场选股；不下真实或模拟订单。
+> 研究范围：原十股 + 知乎问题2082115587866637459引出的8只身份核验候选，目前18股，今后以ResearchSubjectRegistry动态投影为准；不宣称全市场选股；不下真实或模拟订单。
 
 ## When to use
 
@@ -28,19 +28,19 @@ canonical campaign=`ten-stock-q3-2026`，元数据保存在现有SQLite checkpoi
 
 先恢复本地持仓投影、当前研究事实、待处理事件；未发生的交易不导入，不把用户的“我会买入”视为成交。执行适用canonical Skills：continuous-investment-monitor、company-deep-research、financial-integrity-audit、industry-value-chain、catalyst-event-research、governance-management-quality、macro-policy-regime、investment-red-team、portfolio-manager。增量只重算受影响模块，不能每轮全市场扫描或整库蒸馏。
 
-十股观察每日覆盖：收盘价、涨跌幅、成交额/换手与量能、估值变化；公司正式公告与财报；行业、上下游与政策；增量对原研究逻辑的加强/削弱/不变；尚缺证据与下次检查条件。关键事实回到交易所/CNINFO/发行人/监管官方源，多源交叉。新闻采集失败写清“本轮未完整核验”，不能写“无新闻”。旧半年报数据必须重新核验，未披露的报告不编造。
+10+观察每日覆盖：收盘价、涨跌幅、成交额/换手与量能、估值变化；公司正式公告与财报；行业、上下游与政策；增量对原研究逻辑的加强/削弱/不变；尚缺证据与下次检查条件。关键事实回到交易所/CNINFO/发行人/监管官方源，多源交叉。新闻采集失败写清“本轮未完整核验”，不能写“无新闻”。旧半年报数据必须重新核验，未披露的报告不编造。
 
-深研按十股分片推进并保存已核验证据ID：最新PE/PB/现金流估值及其适用性、可获得区间内的历史估值分位（明确窗口、亏损/异常值处理）、公司指引与有来源一致预期修正、交易活跃度/机构覆盖等关注度代理。市场聚焦AI不自动证明低估；并表、授权收入、汇兑、低基数与一次性收益单独拆分；医药同品规同税率净价/销量分别验证。
+深研按当前成员分片推进并保存已核验证据ID：最新PE/PB/现金流估值及其适用性、可获得区间内的历史估值分位（明确窗口、亏损/异常值处理）、公司指引与有来源一致预期修正、交易活跃度/机构覆盖等关注度代理。市场聚焦AI不自动证明低估；并表、授权收入、汇兑、低基数与一次性收益单独拆分；医药同品规同税率净价/销量分别验证。
 
 ### 三季报停止与组合转换
 
-必须逐家公司核对**报告期截至2026-09-30的正式第三季度报告**及实际披露时间。预约披露日、业绩预告、快报、分析师预测均不等价。保留十家公司本轮已核验的报告source_snapshot_id / Evidence / 财务工件引用，来源冲突或缺报时继续观察，不能到10月31日机械宣布齐全。
+必须逐家公司核对**报告期截至2026-09-30的正式第三季度报告**及实际披露时间。预约披露日、业绩预告、快报、分析师预测均不等价。保留所有已登记公司本轮已核验的报告source_snapshot_id / Evidence / 财务工件引用，来源冲突或缺报时继续观察，不能到10月31日机械宣布齐全。
 
-十家正式财报齐全后，使用前三季度累计减半年报推导Q3单季（合并/单位/重述口径一致），完成各股财务质量、经营驱动、估值、独立多空/Reviewer/Red Team、Committee与Portfolio和正式RecommendationResearchReceipt/Publication Gate。仅从这十股中形成不超过5只的组合，允许少于5只乃至暂不配置，不强行凑数；说明权重、现金、行业集中度、相关风险、买入条件与失效/退出条件。预算/风险参数优先已核实用户记录；未知则明确规划假设，不伪造账户事实。
+全部观察公司正式财报齐全后，使用前三季度累计减半年报推导Q3单季（合并/单位/重述口径一致），完成各股财务质量、经营驱动、估值、独立多空/Reviewer/Red Team、Committee与Portfolio和正式RecommendationResearchReceipt/Publication Gate。仅从当前全部观察成员中形成不超过5只的组合，允许少于5只乃至暂不配置，不强行凑数；说明权重、现金、行业集中度、相关风险、买入条件与失效/退出条件。预算/风险参数优先已核实用户记录；未知则明确规划假设，不伪造账户事实。
 
-机器转换入口为 `watch_campaign readiness --receipt-id <RecommendationResearchReceipt>` 与 `watch_campaign finalize --receipt-id <RecommendationResearchReceipt>`。`finalize` 只在以下条件同时成立时把 campaign 从 `OBSERVING` 转为 `PORTFOLIO_MONITORING`：十个成员各自存在报告期 `2026-09-30`、`QUARTERLY`、`CERTIFIED` 的 v2 财务 release，且 lineage 必须来自 CNINFO 完整枚举或正式官网 exact-item admission（recorded fixture/legacy lineage 不算）；正式 RecommendationResearchReceipt 必须通过 canonical replay，候选全集精确等于本 campaign 十股，Publication 为正式 `PUBLISH` 且允许发布，最终正权重标的必须是观察池子集、去重且 1–5 只。readiness 只读，条件不满足时保持 `OBSERVING`；finalize 只保存 release/receipt 引用，不复制财务或组合事实，也不写账户/订单。真实季报尚未披露时，测试夹具只能证明门禁行为，不能把 campaign 提前转换。
+机器转换入口为 `watch_campaign readiness --receipt-id <RecommendationResearchReceipt>` 与 `watch_campaign finalize --receipt-id <RecommendationResearchReceipt>`。`finalize` 只在以下条件同时成立时把 campaign 从 `OBSERVING` 转为 `PORTFOLIO_MONITORING`：所有当前成员各自存在报告期 `2026-09-30`、`QUARTERLY`、`CERTIFIED` 的 v2 财务 release，且 lineage 必须来自 CNINFO 完整枚举或正式官网 exact-item admission（recorded fixture/legacy lineage 不算）；正式 RecommendationResearchReceipt 必须通过 canonical replay，候选全集精确等于本 campaign 当前全部成员，Publication 为正式 `PUBLISH` 且允许发布，最终正权重标的必须是观察池子集、去重且 1–5 只。readiness 只读，条件不满足时保持 `OBSERVING`；finalize 只保存 release/receipt 引用，不复制财务或组合事实，也不写账户/订单。真实季报尚未披露时，测试夹具只能证明门禁行为，不能把 campaign 提前转换。
 
-最终组合报告实际形成并通过发布后，停止“十股财报观察”对应platform任务；盘前/盘后组合任务保留，目标从正式Portfolio工件读取，不另建持仓事实。还未选出组合时，组合任务只消费共享观察进度，不给虚构的组合盈亏。用户确认实际买入后才使用canonical external-account导入/快照入口保留买入时价格、估值、逻辑、原件引用与风险条件，不自动创建交易。
+最终组合报告实际形成并通过发布后，停止“10+三季报观察”对应platform任务；盘前/盘后组合任务保留，目标从正式Portfolio工件读取，不另建持仓事实。还未选出组合时，组合任务只消费共享观察进度，不给虚构的组合盈亏。用户确认实际买入后才使用canonical external-account导入/快照入口保留买入时价格、估值、逻辑、原件引用与风险条件，不自动创建交易。
 
 ### 30分钟收口 / 35分钟激活上限
 
@@ -76,5 +76,5 @@ Scheduled automation运行时不动态创建另一条automation。本campaign使
 
 - 单个日常 round 在当轮增量、报告写入与必要 checkpoint 完成后停止。
 - 未完成 round 仅通过同一 round 的受控续接恢复，不创建平行研究身份。
-- 十股观察仅在十家公司正式三季度报告均核验、正式研究链和不超过5只组合报告均完成后停止。
+- 10+观察仅在所有已登记公司正式三季度报告均核验、正式研究链和不超过5只组合报告均完成后停止。
 - 盘前/盘后组合跟踪在观察阶段结束后继续，直到用户另行停止。

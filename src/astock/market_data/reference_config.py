@@ -23,6 +23,8 @@ class ReferenceRouteStep:
     provider_id: str
     operation: str
     markets: frozenset[Market] | None = None
+    # Resolution of upstream daily volume before conversion to shares.
+    daily_volume_quantum_shares: int = 1
 
     def supports(self, market: Market | None) -> bool:
         return self.markets is None or (market is not None and market in self.markets)
@@ -77,6 +79,11 @@ def load_market_reference_config(
                 raise ValueError("Market reference route step must be an object")
             provider_id = str(value["provider_id"])
             operation = str(value["operation"])
+            raw_quantum = value.get("daily_volume_quantum_shares", 1)
+            if type(raw_quantum) is not int or not 1 <= raw_quantum <= 100:
+                raise ValueError("daily volume quantum must be integer shares within [1,100]")
+            if "daily_volume_quantum_shares" in value and capability != "market.daily_unadjusted":
+                raise ValueError("daily volume quantum is valid only for daily stock routes")
             raw_markets = value.get("markets")
             markets: frozenset[Market] | None = None
             if raw_markets is not None:
@@ -116,7 +123,12 @@ def load_market_reference_config(
                         f"{base_capability}"
                     )
             steps.append(
-                ReferenceRouteStep(provider_id=provider_id, operation=operation, markets=markets)
+                ReferenceRouteStep(
+                    provider_id=provider_id,
+                    operation=operation,
+                    markets=markets,
+                    daily_volume_quantum_shares=raw_quantum,
+                )
             )
         if len({(item.provider_id, item.operation, item.markets) for item in steps}) != len(steps):
             raise ValueError(f"Market reference route contains duplicate steps: {capability}")

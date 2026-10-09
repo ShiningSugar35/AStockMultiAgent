@@ -25,7 +25,7 @@ routes:
     - {provider_id: baostock-reference, operation: baostock-calendar}
   market.daily_unadjusted:
     - {provider_id: baostock-reference, operation: baostock-daily}
-    - {provider_id: eastmoney-reference, operation: eastmoney-daily}
+    - {provider_id: eastmoney-reference, operation: eastmoney-daily, daily_volume_quantum_shares: 100}
     - {provider_id: sina-reference, operation: sina-daily}
   corporate_actions.structured_hint:
     - {provider_id: baostock-reference, operation: baostock-corporate-hint}

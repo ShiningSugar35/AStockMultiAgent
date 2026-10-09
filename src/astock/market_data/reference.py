@@ -567,6 +567,9 @@ class MarketReferenceService:
         market: Market,
     ) -> tuple[bool, list[str], datetime, list[str]]:
         latest = max(primary_records, key=lambda item: item.session_date)
+        daily_volume_quantums = {
+            step.provider_id: step.daily_volume_quantum_shares for step in route
+        }
         for provider_id, observed in observed_by_provider.items():
             if provider_id == primary_provider_id:
                 continue
@@ -576,18 +579,26 @@ class MarketReferenceService:
             )
             if shadow is None:
                 continue
-            if _daily_bars_conflict(latest, shadow):
+            if _daily_bars_conflict(
+                latest,
+                shadow,
+                primary_volume_quantum_shares=daily_volume_quantums.get(primary_provider_id, 1),
+                secondary_volume_quantum_shares=daily_volume_quantums.get(provider_id, 1),
+            ):
                 return (
                     True,
                     [],
                     _EARLIEST_UTC,
                     [f"OHLCV_CONFLICTED:{primary_provider_id}:{provider_id}"],
                 )
+            detail = (
+                "VOLUME_QUANTIZED" if latest.volume != shadow.volume else "VALIDATED"
+            )
             return (
                 False,
                 [],
                 _EARLIEST_UTC,
-                [f"OHLCV_SECONDARY_VALIDATED:{provider_id}"],
+                [f"OHLCV_SECONDARY_{detail}:{provider_id}"],
             )
 
         validation_snapshots: list[str] = []
@@ -659,12 +670,20 @@ class MarketReferenceService:
             )
             if shadow is None:
                 continue
-            if _daily_bars_conflict(latest, shadow):
+            if _daily_bars_conflict(
+                latest,
+                shadow,
+                primary_volume_quantum_shares=daily_volume_quantums.get(primary_provider_id, 1),
+                secondary_volume_quantum_shares=daily_volume_quantums.get(step.provider_id, 1),
+            ):
                 validation_reasons.append(
                     f"OHLCV_CONFLICTED:{primary_provider_id}:{step.provider_id}"
                 )
                 return True, validation_snapshots, validation_available, validation_reasons
-            validation_reasons.append(f"OHLCV_SECONDARY_VALIDATED:{step.provider_id}")
+            detail = (
+                "VOLUME_QUANTIZED" if latest.volume != shadow.volume else "VALIDATED"
+            )
+            validation_reasons.append(f"OHLCV_SECONDARY_{detail}:{step.provider_id}")
             return False, validation_snapshots, validation_available, validation_reasons
 
         validation_reasons.append("OHLCV_SECONDARY_VALIDATION_UNAVAILABLE")
@@ -3339,6 +3358,9 @@ def _is_legacy_release_row(row: dict[str, Any]) -> bool:
 def _daily_bars_conflict(
     primary: DailyBarObservation,
     secondary: DailyBarObservation,
+    *,
+    primary_volume_quantum_shares: int = 1,
+    secondary_volume_quantum_shares: int = 1,
 ) -> bool:
     if (
         primary.instrument_id != secondary.instrument_id
@@ -3349,9 +3371,35 @@ def _daily_bars_conflict(
         return True
     if any(
         getattr(primary, field) != getattr(secondary, field)
-        for field in ("open", "high", "low", "close", "volume")
+        for field in ("open", "high", "low", "close")
     ):
         return True
+    if primary.volume != secondary.volume:
+        if primary_volume_quantum_shares == secondary_volume_quantum_shares:
+            return True
+        if primary_volume_quantum_shares > secondary_volume_quantum_shares:
+            coarse, coarse_q, fine, fine_q = (
+                primary.volume,
+                primary_volume_quantum_shares,
+                secondary.volume,
+                secondary_volume_quantum_shares,
+            )
+        else:
+            coarse, coarse_q, fine, fine_q = (
+                secondary.volume,
+                secondary_volume_quantum_shares,
+                primary.volume,
+                primary_volume_quantum_shares,
+            )
+        # A whole-lot source may differ from an exact-share source by rounding.
+        # Reject a larger difference, a non-multiple, or incomparable precision.
+        if (
+            coarse_q % fine_q != 0
+            or coarse % coarse_q != 0
+            or fine % fine_q != 0
+            or abs(coarse - fine) >= Decimal(coarse_q) / 2
+        ):
+            return True
     if (
         primary.amount is not None
         and secondary.amount is not None

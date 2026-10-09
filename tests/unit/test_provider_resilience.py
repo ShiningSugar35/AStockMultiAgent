@@ -1257,6 +1257,73 @@ def test_reference_acquisition_never_calls_health_unavailable_fallback(
     assert "BAOSTOCK_REFERENCE_HEALTH_UNAVAILABLE" in reasons
 
 
+def test_daily_volume_granularity_only_accepts_proven_lot_rounding() -> None:
+    from astock.market_data.reference import _daily_bars_conflict
+
+    fine = _daily_bar('sina-reference', '10.50').model_copy(
+        update={'volume': Decimal('29851058')}
+    )
+    coarse = _daily_bar('eastmoney-reference', '10.50').model_copy(
+        update={'volume': Decimal('29851100')}
+    )
+    def compare(a: DailyBarObservation, b: DailyBarObservation, x: int, y: int) -> bool:
+        return _daily_bars_conflict(
+            a, b, primary_volume_quantum_shares=x, secondary_volume_quantum_shares=y
+        )
+    assert not compare(coarse, fine, 100, 1)
+    assert not compare(fine, coarse, 1, 100)  # primary/shadow order must not matter
+    assert compare(coarse, fine, 1, 1)  # undeclared quantization stays strict
+    assert compare(coarse, fine.model_copy(update={'volume': Decimal('29851049')}), 100, 1)
+    assert compare(coarse, fine.model_copy(update={'volume': Decimal('29851050')}), 100, 1)
+    assert compare(coarse.model_copy(update={'volume': Decimal('29851099')}), fine, 100, 1)
+    assert compare(coarse, fine.model_copy(update={'high': Decimal('26.76')}), 100, 1)
+    assert compare(coarse, fine.model_copy(update={'instrument_id': 'XSHE:002475'}), 100, 1)
+    assert compare(coarse, fine.model_copy(update={'amount': Decimal('1')}), 100, 1)
+
+
+def test_daily_shadow_accepts_declared_quantized_source(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / 'state.sqlite', PROJECT_ROOT / 'migrations')
+    state.migrate()
+    service = MarketReferenceService(
+        state,
+        ObjectStore(tmp_path / 'objects'),
+        ReferenceParquetStore(tmp_path / 'parquet'),
+        PROJECT_ROOT / 'tests' / 'fixtures' / 'reference',
+    )
+    coarse = _daily_bar('eastmoney-reference', '10.50').model_copy(
+        update={'volume': Decimal('29851100')}
+    )
+    fine = _daily_bar('sina-reference', '10.50').model_copy(
+        update={'volume': Decimal('29851058')}
+    )
+    route = [
+        ReferenceRouteStep(
+            provider_id='eastmoney-reference',
+            operation='eastmoney-daily',
+            daily_volume_quantum_shares=100,
+        ),
+        ReferenceRouteStep(provider_id='sina-reference', operation='sina-daily'),
+    ]
+    conflicted, _, _, reasons = service._validate_latest_daily_shadow(
+        route=route, selected_step_index=0, primary_provider_id='eastmoney-reference',
+        primary_records=[coarse], observed_by_provider={'sina-reference': [fine]},
+        attempted_provider_ids=set(), symbol='600519', market=Market.XSHG,
+    )
+    assert not conflicted
+    assert 'OHLCV_SECONDARY_VOLUME_QUANTIZED:sina-reference' in reasons
+
+
+def test_daily_quantum_config_requires_daily_int_shares() -> None:
+    registry = load_provider_registry(PROJECT_ROOT / 'configs' / 'provider_registry.yaml')
+    config = load_market_reference_config(
+        PROJECT_ROOT / 'configs' / 'market_reference.yaml', registry
+    )
+    routed = config.route('market.daily_unadjusted')
+    eastmoney = next(x for x in routed if x.operation == 'eastmoney-daily')
+    sina = next(x for x in routed if x.operation == 'sina-daily')
+    assert eastmoney.daily_volume_quantum_shares == 100
+    assert sina.daily_volume_quantum_shares == 1
+
 def test_live_daily_ohlcv_conflict_is_typed_and_not_published(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

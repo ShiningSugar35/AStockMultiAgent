@@ -67,7 +67,9 @@ def iter_matching_tree_roots(root: Path, patterns: list[str], *, max_depth: int)
             continue
         try:
             children = [
-                item for item in current.iterdir() if item.is_dir() and not item.is_symlink()
+                item
+                for item in current.iterdir()
+                if item.is_dir() and not item.is_symlink() and not item.is_junction()
             ]
         except OSError:
             continue

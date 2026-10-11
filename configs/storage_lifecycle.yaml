@@ -46,6 +46,11 @@ ai_bridge_tmp:
   patterns: ["tmp*"]
   max_depth: 1
 
+task_scratchpad:
+  retention_hours: 1
+  patterns: ["*"]
+  max_depth: 1
+
 automation:
   enabled: true
   interval_hours: 6

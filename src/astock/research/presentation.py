@@ -10,7 +10,12 @@ from pathlib import PurePath, PureWindowsPath
 from astock.research.capital_privacy import capital_disclosure_findings, redact_capital_amounts
 from astock.research.internal_vocabulary import internal_vocabulary_terms
 from astock.research.presentation_policy import PresentationPolicy, load_presentation_policy
-from astock.research.report_style import public_status_text, style_findings, terminology_note
+from astock.research.public_polish import PRIVATE_PATH_PATTERN, polish_public_text
+from astock.research.report_style import (
+    explain_terms_at_first_use,
+    public_status_text,
+    style_findings,
+)
 from astock.schemas.presentation import (
     BudgetStatus,
     ConclusionStrength,
@@ -143,7 +148,7 @@ _SECRET_PATTERNS = (
     r"(?i)cookie\s*[:=]\s*\S+",
     r"(?i)(?:password|passwd|pwd|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*\S+",
 )
-_PRIVATE_PATH_PATTERN = re.compile(r"(?i)(?:[A-Z]:\\Users\\[^\\\s]+|/home/[^/\s]+|/Users/[^/\s]+)")
+_PRIVATE_PATH_PATTERN = PRIVATE_PATH_PATTERN
 _URL_PATTERN = re.compile(r"https?://[^\s)）]+", flags=re.IGNORECASE)
 _DIRECTION_TERMS = (
     "买入",
@@ -173,7 +178,14 @@ _LEADING_FILLERS = (
     "不难发现",
     "可以看出",
 )
+_NON_BLOCKING_PRESENTATION_FINDINGS = {
+    "PUBLIC_ANSWER_TOO_MANY_BULLETS",
+    "PUBLIC_ANSWER_HEADING_TOO_DEEP",
+    "PUBLIC_ANSWER_REPETITIVE",
+}
+
 _INTERNAL_FINDING_CODES = {
+    "PUBLIC_INTERNAL_PROCESS_EXPOSED",
     "INTERNAL_PROTOCOL_TERM_EXPOSED",
     "CLI_OR_PIPELINE_EXPOSED",
     "RAW_MACHINE_STATE_EXPOSED",
@@ -269,6 +281,7 @@ class ResponseGateway:
         ):
             context = context.model_copy(update={"task_type": narrative.task_type})
 
+        narrative = _polish_narrative(narrative, context=context, policy=self.policy)
         payload = _investor_payload(narrative, context=context, policy=self.policy)
         text = normalize_public_text(
             _render_investor_text(payload, self.policy), policy=self.policy
@@ -355,6 +368,42 @@ class ResponseGateway:
             safe_fallback_used=fallback_used,
             raw_draft_exposed=False,
         )
+
+
+def _polish_narrative(
+    narrative: ResearchNarrativeBundle,
+    *,
+    context: ResponseContext,
+    policy: PresentationPolicy,
+) -> ResearchNarrativeBundle:
+    """One semantic-safe editorial pass shared with ordinary Agent/QQ output."""
+
+    def clean(text: str) -> str:
+        return polish_public_text(
+            text,
+            policy=policy,
+            request_text=context.request_text,
+            explain_terms=False,
+        ).text
+
+    empty = "当前暂无可展示的投资结论。"
+
+    def clean_items(items: list[str]) -> list[str]:
+        return [value for item in items if (value := clean(item)) != empty]
+
+    subject = clean(narrative.subject)
+    if subject == empty:
+        subject = "研究对象"
+    return narrative.model_copy(
+        update={
+            "subject": subject,
+            "headline": clean(narrative.headline),
+            "valuation_or_odds": clean_items(narrative.valuation_or_odds),
+            "reasons": clean_items(narrative.reasons),
+            "risks": clean_items(narrative.risks),
+            "change_conditions": clean_items(narrative.change_conditions),
+        }
+    )
 
 
 def classify_response_mode(
@@ -539,9 +588,7 @@ def audit_public_answer(
     privacy_request_text = (
         request_text if request_text is not None else resolved_context.request_text
     )
-    findings.update(
-        capital_disclosure_findings(stripped, request_text=privacy_request_text)
-    )
+    findings.update(capital_disclosure_findings(stripped, request_text=privacy_request_text))
     secret_exposed = _contains_secret(stripped)
     if secret_exposed:
         findings.add("SECRET_OR_CREDENTIAL_EXPOSED")
@@ -557,6 +604,11 @@ def audit_public_answer(
     lowered = scan_text.casefold()
     if any(term.casefold() in lowered for term in internal_vocabulary_terms()):
         findings.add("DYNAMIC_INTERNAL_VOCABULARY_EXPOSED")
+    if any(
+        re.search(pattern, scan_text, re.IGNORECASE)
+        for pattern in selected.public_internal_process_patterns
+    ):
+        findings.add("PUBLIC_INTERNAL_PROCESS_EXPOSED")
     internal_exposed = bool(findings.intersection(_INTERNAL_FINDING_CODES))
 
     checked = source_text is not None or required_fingerprint is not None
@@ -612,13 +664,26 @@ def audit_public_answer(
         secret_exposed=secret_exposed,
         private_path_exposed=private_path_exposed,
         internal_implementation_exposed=internal_exposed,
-        # Style-only rework is distinct from missing investment evidence.
+        # Style and length warnings on verified facts must not impersonate missing research.
         # Unverified drafts still fail; checked facts retain every safety gate.
         safe_to_send=not ordered
         or (
             checked
             and not fact_drift
-            and all(code.startswith("CHINESE_STYLE_") for code in ordered)
+            and all(
+                code.startswith("CHINESE_STYLE_")
+                or code in _NON_BLOCKING_PRESENTATION_FINDINGS
+                or (
+                    code == "PUBLIC_ANSWER_TOO_LONG"
+                    and resolved_context.task_type
+                    in {
+                        ResponseTaskType.DEEP_RESEARCH,
+                        ResponseTaskType.FULL_RESEARCH_RECOMMENDATION,
+                        ResponseTaskType.FORMAL_REPORT,
+                    }
+                )
+                for code in ordered
+            )
         ),
         raw_answer_echoed=False,
     )
@@ -806,11 +871,13 @@ def _developer_payload(
         correlation_id=redact_sensitive_text(diagnostics.correlation_id, request_text=request_text),
         stage=(
             redact_sensitive_text(diagnostics.stage, request_text=request_text)
-            if diagnostics.stage else None
+            if diagnostics.stage
+            else None
         ),
         next_action=(
             redact_sensitive_text(diagnostics.next_action, request_text=request_text)
-            if diagnostics.next_action else None
+            if diagnostics.next_action
+            else None
         ),
     )
 
@@ -888,9 +955,7 @@ def _render_investor_text(
         paragraphs.append(f"若出现以下变化，需要重新审视上述判断：{payload.change_condition}")
     if payload.data_as_of:
         paragraphs.append(f"以上资料截至{payload.data_as_of}。")
-    note = terminology_note("\n".join(paragraphs), policy.term_explanations if policy else {})
-    if note:
-        paragraphs.append(note)
+    paragraphs = explain_terms_at_first_use(paragraphs, policy.term_explanations if policy else {})
     if payload.report_reference:
         paragraphs.append(f"相关报告：{payload.report_reference.file_name}")
     if payload.citations:

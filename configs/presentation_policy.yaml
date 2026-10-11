@@ -1,7 +1,16 @@
 schema_version: presentation-policy-v1
 locale: zh-CN
 default_mode: INVESTOR
-safe_fallback_text: "现有资料尚不足以支持可靠的投资判断，本次不作买卖建议。"
+reader_profile: beginner_no_economics_industry_or_policy_background
+safe_fallback_text: "当前研究报告尚有内容需要核实或修订，暂时无法可靠呈现投资判断。"
+# Only investment facts reach public prose. Workflow and delivery receipts stay internal.
+public_internal_process_patterns:
+  - '(?i)(?:report_id|DeliveryLedger|SourceSnapshot|Publication Gate|FinancialSourceRelease)'
+  - '(?i)\breport_id\b|\bDeliveryLedger\b|\bSourceSnapshot\b|\bPublication Gate\b'
+  - '(?:QQ投递|正式推荐收据|认证及研究收据|官方公告索引)'
+  - '(?:本轮|本次)(?:机器|本地|系统)(?:状态|核验|读取)'
+  - '(?:项目正式|内部)(?:官方|认证|入库)'
+  - '(?:未生成|不生成|不下|未下)(?:实际|模拟|真实|任何)?(?:订单|持仓收益)'
 prose_style_patterns:
   - '(?:不是|并非|不只是|不仅仅是)[^。！？\n]{1,100}[，,；;][^。！？\n]{0,8}而是'
   - '[，,；;]\s*而不是[^。！？\n]{1,100}'
@@ -14,6 +23,13 @@ term_explanations:
   风险平价: 按风险贡献分配仓位的方法
   盈利修正: 对未来利润预期的上调或下调
   尾部风险: 低概率但损失可能很大的风险
+  市盈率: 股价相当于公司每股利润的多少倍
+  市净率: 股价相当于每股净资产的多少倍
+  ROE: 公司用股东投入资本创造利润的效率
+  毛利率: 营业收入扣除直接成本后剩余的比例
+  经营现金流: 公司日常经营真正流入和流出的现金
+  自由现金流: 经营产生的现金扣除维持业务所需投资后的余额
+  估值分位: 当前估值在一段历史估值区间中的相对位置
 max_bullets: 8
 max_heading_level: 2
 semantic_duplicate_threshold: 0.92

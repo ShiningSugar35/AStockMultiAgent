@@ -16,7 +16,7 @@ R-03 为现有运行时补充有界存储治理和业务 SLO 视图，不建立�
 
 ### Ephemeral 自动通道
 
-`storage-lifecycle-auto` 只生成明确列入 `_AUTO_TREE_CATEGORIES` 的整树候选；默认 dry-run，`--apply` 才执行。它永远不把 ObjectStore、正式报告、SQLite state、Artifact/SourceSnapshot/Evidence 或用户状态放进自动删除集合。
+`storage-lifecycle-auto` 只生成明确列入 `_AUTO_TREE_CATEGORIES` 的整树候选；默认 dry-run，`--apply` 才执行。对于一般任务临时目录采用显式 `.cleanup-ready` 归属证明；质量测试产生的 `quality-<run-id>` 目录还可依据相同 run-id 的完整 `result.json` 终态回执判定归属，在计划与执行间再次核验。它不会将 ObjectStore、正式报告、SQLite state、Artifact/SourceSnapshot/Evidence 或用户状态放入这一自动整树删除集合；正式对象继续使用既有引用审计及单独的对象级 GC。
 
 当前自动类别：
 
@@ -25,6 +25,7 @@ R-03 为现有运行时补充有界存储治理和业务 SLO 视图，不建立�
 - `runtime/worktrees/*`：48 小时 TTL，并且必须不在 Git 自身 `.git/worktrees/*/gitdir` 注册集合中。计划后若重新注册，执行时再次保护。
 - runtime 根级 `pytest-*`、`uv-cache-*`：24 小时 TTL。
 - `.ai-bridge/tmp*`：24 小时 TTL。
+- `.scratchpad/<任务ID>`：统一临时区。一般目录只有任务主动创建 `.cleanup-ready` 标记、整树超过配置 TTL 且计划后内容未变化才可回收；特殊 `quality-<run-id>` 目录需匹配已终态质量回执，并在执行时重新验证。未能验证归属的活动/未知文件保持保护。正常结束的测试 tmp 由 quality runner 立即清理。
 
 大规模临时数据不再逐文件制造数十万候选；计划记录整树的字节数、文件数、目录数和最新 mtime，执行前重新测量。任一指标变化即 `CHANGED_SINCE_PLAN`，整树跳过。Windows 打开句柄导致删除失败时同样跳过，不强制破坏活动任务。
 

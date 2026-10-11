@@ -35,7 +35,9 @@ class PresentationPolicy:
     protected_terms: tuple[str, ...]
     budgets: dict[ResponseTaskType, ResponseBudget]
     prose_style_patterns: tuple[str, ...] = ()
+    public_internal_process_patterns: tuple[str, ...] = ()
     term_explanations: dict[str, str] = field(default_factory=dict)
+    reader_profile: str = "beginner_no_economics_industry_or_policy_background"
 
     def budget(self, task_type: ResponseTaskType) -> ResponseBudget:
         try:
@@ -95,7 +97,10 @@ def load_presentation_policy(path: Path | None = None) -> PresentationPolicy:
         raise ValueError("Presentation policy locale and safe fallback text are required")
 
     patterns = tuple(str(value) for value in raw.get("prose_style_patterns", ()))
-    for pattern in patterns:
+    internal_patterns = tuple(
+        str(value) for value in raw.get("public_internal_process_patterns", ())
+    )
+    for pattern in (*patterns, *internal_patterns):
         re.compile(pattern)
     explanations = raw.get("term_explanations", {})
     if not isinstance(explanations, dict) or any(
@@ -104,8 +109,12 @@ def load_presentation_policy(path: Path | None = None) -> PresentationPolicy:
     ):
         raise ValueError("term_explanations must contain non-empty text pairs")
 
+    reader_profile = str(raw.get("reader_profile") or "").strip()
+    if reader_profile != "beginner_no_economics_industry_or_policy_background":
+        raise ValueError("Investor reader profile must target general beginners")
     return PresentationPolicy(
         schema_version="presentation-policy-v1",
+        reader_profile=reader_profile,
         locale=locale,
         default_mode=ResponseMode(str(raw.get("default_mode"))),
         safe_fallback_text=safe_fallback_text,
@@ -119,6 +128,7 @@ def load_presentation_policy(path: Path | None = None) -> PresentationPolicy:
         protected_terms=protected,
         budgets=budgets,
         prose_style_patterns=patterns,
+        public_internal_process_patterns=internal_patterns,
         term_explanations=dict(explanations),
     )
 

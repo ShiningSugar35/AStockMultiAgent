@@ -19,6 +19,7 @@ from astock.investor_orchestration.models import (
     StrictModel,
 )
 from astock.research.presentation import audit_public_answer
+from astock.research.public_polish import polish_public_text
 
 
 class ScheduledEventContext(StrictModel):
@@ -69,9 +70,10 @@ def minimal_analysis_context(
                 and normalized_instrument(event.instrument_id) != target
             ):
                 continue
-            if not audit_public_answer(event.summary).safe_to_send:
-                raise ValueError("monitor summary failed the public disclosure audit")
-            events.append(event.model_copy(deep=True))
+            summary = polish_public_text(event.summary, explain_terms=False).text
+            if not audit_public_answer(summary, source_text=summary).safe_to_send:
+                raise ValueError("monitor summary still contains sensitive content")
+            events.append(event.model_copy(deep=True, update={"summary": summary}))
     return ScheduledAnalysisContext(
         as_of=preflight.as_of,
         context=ScheduledEventContext(material_events=tuple(events)),

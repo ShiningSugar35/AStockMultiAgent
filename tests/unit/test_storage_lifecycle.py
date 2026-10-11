@@ -1141,6 +1141,43 @@ class TestEndToEndFlow:
 # ---------------------------------------------------------------------------
 
 
+def test_task_scratchpad_only_reaps_explicitly_finished_unchanged_tree(tmp_path: Path) -> None:
+    paths = _make_paths(tmp_path)
+    paths.ensure_directories()
+    service = StorageLifecycleService(
+        paths, _make_state(tmp_path), ObjectStore(paths.objects), _make_policy(),
+    )
+    now = datetime(2026, 10, 9, tzinfo=UTC)
+    old = (now - timedelta(hours=3)).timestamp()
+    scratch = paths.root / ".scratchpad" / "wp57-demo"
+    _write_file(scratch / "debug.sqlite", b"ephemeral")
+    _age_tree(scratch, old)
+
+    pending = service.automatic_plan(now=now)
+    candidate = next(item for item in pending.candidates if item.category == "TASK_SCRATCHPAD")
+    assert candidate.referenced and not candidate.eligible
+    assert candidate.reason == "TASK_SCRATCHPAD_OWNERSHIP_UNVERIFIED"
+    service.run(pending, confirm=True)
+    assert (scratch / "debug.sqlite").is_file()
+
+    _write_file(scratch / ".cleanup-ready", b"task-finished")
+    _age_tree(scratch, old)
+    finished = service.automatic_plan(now=now)
+    candidate = next(item for item in finished.candidates if item.category == "TASK_SCRATCHPAD")
+    assert candidate.eligible
+    _write_file(scratch / "late-activity", b"still-running")
+    changed = service.run(finished, confirm=True)
+    assert any(reason.startswith("CHANGED_SINCE_PLAN") for reason in changed.skip_reasons)
+    assert scratch.is_dir()
+
+    _age_tree(scratch, old)
+    final = service.automatic_plan(now=now)
+    assert service.audit(final).status == "PASS"
+    run = service.run(final, confirm=True)
+    assert run.deleted_file_count == 3
+    assert not scratch.exists()
+
+
 class TestEphemeralTreeRetention:
     def _service(self, tmp_path: Path, policy: StorageLifecyclePolicy | None = None):
         paths = _make_paths(tmp_path)

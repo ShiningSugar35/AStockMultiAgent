@@ -542,7 +542,8 @@ def test_gateway_never_echoes_internal_investor_text_on_audit_failure() -> None:
     assert "research-plan" not in rendered.text
     assert "NEEDS_INFO" not in rendered.text
     assert "artifact_id" not in rendered.text
-    assert rendered.safe_fallback_used is True
+    assert "当前暂无可展示的投资结论" in rendered.text
+    assert rendered.audit.safe_to_send
     assert rendered.raw_draft_exposed is False
 
 
@@ -555,7 +556,7 @@ def test_safe_fallback_never_echoes_an_unsafe_subject() -> None:
             headline="先跑 research-plan 后再判断。",
         ),
     )
-    assert rendered.safe_fallback_used is True
+    assert rendered.audit.safe_to_send
     assert "alice" not in rendered.text
     assert "portfolio.json" not in rendered.text
     assert "research-plan" not in rendered.text
@@ -670,6 +671,25 @@ def test_machine_status_is_rendered_as_natural_investor_language_without_false_m
     assert normalize_public_text("NEEDS_INFO") == "信息尚未核实完整，暂不形成投资结论。"
     audit = audit_public_answer(normalize_public_text("NEEDS_INFO"))
     assert audit.status == "PASS"
+
+
+@pytest.mark.parametrize("text", [
+    "QQ投递：固定report_id=stock-123，DeliveryLedger仍待核对。",
+    "一手披露原件尚未作为项目正式SourceSnapshot完成入库。",
+    "部分官方公告索引尚未逐项完整枚举。",
+    "本轮本地状态核验显示研究已通过Publication Gate。",
+])
+def test_investor_audit_blocks_backend_process_language(text: str) -> None:
+    audit = audit_public_answer(text)
+    assert audit.internal_implementation_exposed
+    assert "PUBLIC_INTERNAL_PROCESS_EXPOSED" in audit.finding_codes
+    assert not audit.safe_to_send
+
+
+def test_investor_audit_preserves_real_negative_business_risk() -> None:
+    audit = audit_public_answer("经营现金流为负，新产品尚未盈利，继续观察。")
+    assert not audit.internal_implementation_exposed
+    assert "PUBLIC_INTERNAL_PROCESS_EXPOSED" not in audit.finding_codes
 
 
 def test_investor_render_uses_narrative_paragraphs_and_explains_advanced_term() -> None:

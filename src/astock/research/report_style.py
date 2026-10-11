@@ -72,16 +72,28 @@ def style_findings(text: str, patterns: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(found))
 
 
-def terminology_note(text: str, explanations: Mapping[str, str]) -> str | None:
-    """Add an explanation once, without injecting data, confidence or an investment view."""
-    missing: list[str] = []
-    for term, explanation in explanations.items():
-        pattern = (
-            rf"(?<![A-Za-z]){re.escape(term)}(?![A-Za-z])" if term.isascii() else re.escape(term)
-        )
-        if not re.search(pattern, text, re.I):
-            continue
-        if explanation in text or re.search(pattern + r"[（(][^）)\n]{2,120}[）)]", text, re.I):
-            continue
-        missing.append(f"{term}指{explanation}")
-    return "术语说明：" + "；".join(missing) + "。" if missing else None
+def explain_terms_at_first_use(
+    paragraphs: list[str], explanations: Mapping[str, str],
+) -> list[str]:
+    """Explain relevant finance terms within their first paragraph, without altering claims."""
+    explained: set[str] = set()
+    rendered: list[str] = []
+    for paragraph in paragraphs:
+        prose = _QUOTES.sub("", paragraph)
+        notes: list[str] = []
+        for term, explanation in explanations.items():
+            if term in explained:
+                continue
+            pattern = (
+                rf"(?<![A-Za-z]){re.escape(term)}(?![A-Za-z])"
+                if term.isascii() else re.escape(term)
+            )
+            if re.search(pattern, prose, re.I) is None:
+                continue
+            explained.add(term)
+            if explanation not in paragraph:
+                notes.append(f"{term}指{explanation}")
+        if notes:
+            paragraph += "（" + "；".join(notes) + "）"
+        rendered.append(paragraph)
+    return rendered

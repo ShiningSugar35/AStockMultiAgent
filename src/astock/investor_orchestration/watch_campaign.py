@@ -158,6 +158,9 @@ class WatchCampaignService:
         if at.tzinfo is None:
             raise ValueError("timezone-aware clock required")
         limits = ChatInvocationPolicy.load()
+        # Campaign owner leases retain their established 35-minute expiry.
+        # The ChatGPT host's 45-minute hard stop is a separate activation limit.
+        lease_seconds = limits.closeout_after_seconds
         with schedule_run_ownership(self.database, SCOPE, self.campaign_id):
             campaign = self.load()
             current = campaign.rounds.get(slot)
@@ -200,7 +203,7 @@ class WatchCampaignService:
                         "lease_generation": current.lease_generation + 1,
                         "invocation_started_at": at,
                         "deadline_at": at
-                        + timedelta(seconds=limits.hard_limit_seconds),
+                        + timedelta(seconds=lease_seconds),
                     }
                 )
             else:
@@ -210,7 +213,7 @@ class WatchCampaignService:
                     owner=owner,
                     lease_generation=(current.lease_generation + 1 if current else 1),
                     invocation_started_at=at,
-                    deadline_at=at + timedelta(seconds=limits.hard_limit_seconds),
+                    deadline_at=at + timedelta(seconds=lease_seconds),
                     child_task_id=campaign.bindings.get("continuation"),
                 )
             campaign.rounds[slot] = current

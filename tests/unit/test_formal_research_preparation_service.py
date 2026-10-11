@@ -366,37 +366,45 @@ def test_research_preparation_open_evidence_conflict_needs_info(
     assert _artifact_count(state, "FrozenEvidencePack") == 0
 
 
-@pytest.mark.parametrize(
-    ("mismatch", "error_match"),
-    [
-        ("company", "financial audit company mismatch"),
-        ("as_of", "financial audit is newer"),
-    ],
-)
-def test_research_preparation_rejects_financial_company_or_as_of_mismatch(
+def test_research_preparation_rejects_financial_company_mismatch(
     state,
     object_store,
-    mismatch: str,
-    error_match: str,
 ) -> None:
-    seed = (
-        _seed(state, object_store, financial_company_id="000001")
-        if mismatch == "company"
-        else _seed(
-            state,
-            object_store,
-            financial_as_of=datetime(2026, 7, 1, tzinfo=UTC),
-        )
-    )
-    with pytest.raises(ResearchPreparationRejectedError, match=error_match):
+    # Exact issuer identity is an immutable financial evidence invariant.
+    seed = _seed(state, object_store, financial_company_id="000001")
+    with pytest.raises(
+        ResearchPreparationRejectedError, match="financial audit company mismatch"
+    ):
         seed.service.prepare(seed.request)
     assert _artifact_count(state, "ResearchPreparationManifest") == 0
 
 
-def test_research_preparation_missing_pit_needs_info(
+def test_research_preparation_current_accepts_newer_verified_financial_audit(
     state,
     object_store,
 ) -> None:
+    # Current research may use a report obtained after its original request
+    # time; the audit's source identity and immutable lineage must still pass.
+    seed = _seed(
+        state,
+        object_store,
+        financial_as_of=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    assert seed.request.as_of == AS_OF
+    execution = seed.service.prepare(seed.request)
+    assert execution.manifest.status is ResearchPreparationStatus.READY_FOR_BASE_CASE
+    assert execution.manifest.financial_audit_run_id == seed.financial_audit_run_id
+    assert execution.manifest.blocking_codes == []
+    assert execution.manifest.frozen_evidence_pack_id is not None
+    assert _artifact_count(state, "FrozenEvidencePack") == 1
+
+
+def test_research_preparation_current_missing_optional_pit_keeps_verified_evidence(
+    state,
+    object_store,
+) -> None:
+    # Historical PIT metadata remains useful for recorded/backtests but is
+    # not an additional admission gate for CURRENT source evidence.
     seed = _seed(state, object_store)
     with state.transaction() as connection:
         connection.execute(
@@ -404,9 +412,11 @@ def test_research_preparation_missing_pit_needs_info(
             (seed.evidence_snapshot_id,),
         )
     execution = seed.service.prepare(seed.request)
-    assert execution.manifest.status is ResearchPreparationStatus.NEEDS_INFO
-    assert execution.manifest.required_action_codes == ["PIT_METADATA_REQUIRED"]
-    assert _artifact_count(state, "FrozenEvidencePack") == 0
+    assert execution.manifest.status is ResearchPreparationStatus.READY_FOR_BASE_CASE
+    assert execution.manifest.required_action_codes == []
+    assert execution.manifest.frozen_evidence_pack_id is not None
+    assert object_store.verify(execution.manifest_object_sha256)
+    assert _artifact_count(state, "FrozenEvidencePack") == 1
 
 
 @pytest.mark.parametrize(

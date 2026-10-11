@@ -1,4 +1,5 @@
 schema_version: chat-invocation-policy-v1
-closeout_after_seconds: 1800
-hard_limit_seconds: 2100
+closeout_after_seconds: 2100
+binding_check_after_seconds: 2400
+hard_limit_seconds: 2700
 continuation_cadence_seconds: 3600

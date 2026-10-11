@@ -98,7 +98,7 @@ def test_release_closeout_workflow_is_machine_enforced() -> None:
         "才允许调用 `long_run_complete`",
         "无 GitHub Release / 纯文档流程任务不得形成自引用提交循环",
         "一次 final closeout commit/push 即可",
-        "临时文件清理硬门",
+        "代码卫生与临时清理硬门",
         "L0 文档/流程/注释",
         "禁止为 L0/L1 机械跑全仓 pytest",
     ):

@@ -20,27 +20,40 @@ from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
 from astock.research.capital_privacy import CapitalDisclosureError, capital_disclosure_findings
 from astock.research.presentation import audit_public_answer, normalize_public_text
+from astock.research.public_polish import polish_public_text
 
 _LOG = logging.getLogger(__name__)
 
 
 
 
-def _localized_investor_draft(draft: InvestorAnswerDraft) -> InvestorAnswerDraft:
-    """Localize public prose after economic verification without changing facts."""
+def _localized_investor_draft(
+    draft: InvestorAnswerDraft, *, request_text: str = "",
+) -> InvestorAnswerDraft:
+    """Apply the shared public editor only after source-bound decision verification."""
+
+    empty = "当前暂无可展示的投资结论。"
 
     def clean(value: str | None) -> str | None:
-        return normalize_public_text(value) if value is not None else None
+        if value is None:
+            return None
+        return normalize_public_text(
+            polish_public_text(value, request_text=request_text).text
+        )
+
+    def clean_many(values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            value for item in values
+            if (value := clean(item)) and value != empty
+        )
 
     return draft.model_copy(
         update={
-            "conclusion": normalize_public_text(draft.conclusion),
-            "reasons": tuple(normalize_public_text(item) for item in draft.reasons),
-            "risks": tuple(normalize_public_text(item) for item in draft.risks),
-            "actions": tuple(normalize_public_text(item) for item in draft.actions),
-            "change_conditions": tuple(
-                normalize_public_text(item) for item in draft.change_conditions
-            ),
+            "conclusion": clean(draft.conclusion) or empty,
+            "reasons": clean_many(draft.reasons),
+            "risks": clean_many(draft.risks),
+            "actions": clean_many(draft.actions),
+            "change_conditions": clean_many(draft.change_conditions),
             "actual_holding_section": clean(draft.actual_holding_section),
             "paper_holding_section": clean(draft.paper_holding_section),
         }
@@ -297,7 +310,7 @@ class InvestorAnswerGateway:
             except (ValueError, OSError, StorageError):
                 return self._safe_answer(draft, preflight)
 
-        public_draft = _localized_investor_draft(draft)
+        public_draft = _localized_investor_draft(draft, request_text=request_text)
         actual_section = (
             public_draft.actual_holding_section if preflight.context.actual.positions else None
         )
@@ -313,9 +326,11 @@ class InvestorAnswerGateway:
             actual_section or "",
             paper_section or "",
         ]
+        public_text = "\n".join(part for part in public_parts if part)
+        # Domain inputs were authenticated above; editing style is not an
+        # investment research failure. Privacy and internal leakage still fail.
         audit = audit_public_answer(
-            "\n".join(part for part in public_parts if part),
-            request_text=request_text,
+            public_text, source_text=public_text, request_text=request_text,
         )
         if not audit.safe_to_send:
             _LOG.warning("investor output rejected: %s", audit.finding_codes)

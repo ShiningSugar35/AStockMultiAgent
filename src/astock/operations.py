@@ -29,6 +29,7 @@ from astock.storage_retention import (
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _StorageCategory = Literal[
+    "TASK_SCRATCHPAD",
     "OBJECT_STORE",
     "RUNTIME_TMP",
     "REPORT_STAGING",
@@ -41,6 +42,7 @@ _StorageCategory = Literal[
     "AI_BRIDGE_TMP",
 ]
 _AUTO_TREE_CATEGORIES = {
+    "TASK_SCRATCHPAD",
     "QUALITY_RUN_TMP",
     "LONGRUN_SCRATCH",
     "STALE_WORKTREE",
@@ -145,6 +147,9 @@ class StorageLifecyclePolicy(_Model):
         default_factory=lambda: StorageTreePolicy(
             retention_hours=24, patterns=["tmp*"], max_depth=1
         )
+    )
+    task_scratchpad: StorageTreePolicy = Field(
+        default_factory=lambda: StorageTreePolicy(retention_hours=1, patterns=["*"], max_depth=1)
     )
     automation: StorageAutomationPolicy = Field(
         default_factory=lambda: StorageAutomationPolicy(
@@ -643,6 +648,9 @@ class StorageLifecycleService:
                     skipped.append(f"BECAME_ACTIVE_STAGING:{item.relative_path}")
                     continue
             if item.entry_type == "TREE":
+                if item.category == "TASK_SCRATCHPAD" and not self._task_scratchpad_terminal(path):
+                    skipped.append(f"TASK_NOT_DISPOSABLE:{item.relative_path}")
+                    continue
                 if not path.exists():
                     skipped.append(f"ALREADY_MISSING:{item.relative_path}")
                     continue
@@ -1010,6 +1018,19 @@ class StorageLifecycleService:
     def _ephemeral_tree_candidates(self, instant: datetime) -> list[StorageCandidate]:
         candidates: list[StorageCandidate] = []
 
+        # A task explicitly marks disposable scratch after its work has completed.
+        # Unknown or active directories remain untouched regardless of age.
+        for target in iter_matching_tree_roots(
+            self.paths.root / ".scratchpad",
+            self.policy.task_scratchpad.patterns,
+            max_depth=self.policy.task_scratchpad.max_depth,
+        ):
+            ready = self._task_scratchpad_terminal(target)
+            candidates.append(self._tree_candidate(
+                "TASK_SCRATCHPAD", target, self.policy.task_scratchpad, instant,
+                referenced=not ready, protected_reason="TASK_SCRATCHPAD_OWNERSHIP_UNVERIFIED",
+            ))
+
         quality_roots = [self.paths.root / ".ai-bridge" / "quality-runs"]
         # A registered worktree protects source, not its own expired pytest workspace.
         # Reuse identical TTL/orphan/change-since-plan checks; never recurse into source.
@@ -1158,6 +1179,16 @@ class StorageLifecycleService:
                 )
             )
         return candidates
+
+    def _task_scratchpad_terminal(self, path: Path) -> bool:
+        """A matching quality receipt or explicit task marker proves completion."""
+        if path.name.startswith("quality-"):
+            run_id = path.name.removeprefix("quality-")
+            return bool(run_id) and (
+                self.paths.root / ".ai-bridge" / "quality-runs" / run_id / "result.json"
+            ).is_file()
+        marker = path / ".cleanup-ready"
+        return marker.is_file() and not marker.is_symlink() and not marker.is_junction()
 
     @staticmethod
     def _nonoverlapping_tree_bytes(candidates: list[StorageCandidate]) -> int:
@@ -1442,6 +1473,18 @@ class StorageLifecycleService:
         if category == "RUNTIME_TEST_SCRATCH":
             return direct_child(self.paths.runtime) and matches(
                 self.policy.runtime_test_scratch.patterns
+            )
+        if category == "TASK_SCRATCHPAD":
+            scratch_root = self.paths.root / ".scratchpad"
+            marker = path / ".cleanup-ready"
+            return (
+                direct_child(scratch_root)
+                and matches(self.policy.task_scratchpad.patterns)
+                and not any(
+                    item.is_symlink() or item.is_junction()
+                    for item in (scratch_root, path, marker)
+                )
+                and path.is_dir()
             )
         if category == "AI_BRIDGE_TMP":
             return direct_child(self.paths.root / ".ai-bridge") and matches(

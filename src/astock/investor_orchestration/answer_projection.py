@@ -29,6 +29,7 @@ from astock.research.capital_privacy import (
     requested_personal_detail_categories,
 )
 from astock.research.presentation import audit_public_answer
+from astock.research.public_polish import polish_public_text
 from astock.schemas.entry_quality import EntryQualityState
 from astock.schemas.external_accounts import ExternalAccountOperationReceipt
 from astock.schemas.full_research import RecommendationResearchReceipt
@@ -606,10 +607,12 @@ class VerifiedAnswerProjector:
             draft.actual_holding_section or "",
             draft.paper_holding_section or "",
         ]
-        audit = audit_public_answer(
+        public_text = polish_public_text(
             "\n".join(part for part in visible if part),
-            context=None,
-            source_text=None,
+            request_text=request.raw_text, explain_terms=False,
+        ).text
+        audit = audit_public_answer(
+            public_text, context=None, source_text=public_text,
             request_text=request.raw_text,
         )
         if "PRIVATE_CAPITAL_AMOUNT_EXPOSED" in audit.finding_codes:

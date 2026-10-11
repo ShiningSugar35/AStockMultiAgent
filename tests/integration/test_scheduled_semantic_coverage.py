@@ -208,13 +208,15 @@ def _canonical_market_anchor(bank: RecordedBank, *, symbol: str = COMPANY) -> st
     fixtures = root / "scheduled-reference-fixtures"
     shutil.copytree(PROJECT_ROOT / "tests/fixtures/reference", fixtures)
     at = datetime.now(UTC)
+    from astock.market_data.official_calendar import load_official_trading_calendar
+
     day = at.astimezone(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=1)
-    days = []
-    while len(days) < 3:
-        if day.weekday() < 5:
-            days.append(day)
-        day -= timedelta(days=1)
-    days.reverse()
+    calendar = load_official_trading_calendar(
+        PROJECT_ROOT / "configs" / "official_trading_calendar.yaml"
+    )
+    available_sessions = calendar.open_dates(Market.XSHG, day - timedelta(days=40), day)
+    assert available_sessions is not None and len(available_sessions) >= 3
+    days = list(available_sessions[-3:])
     path = fixtures / "baostock/market_daily_unadjusted.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw["request_started_at"] = (at - timedelta(seconds=1)).isoformat()
@@ -227,6 +229,7 @@ def _canonical_market_anchor(bank: RecordedBank, *, symbol: str = COMPANY) -> st
         bank.state, bank.objects, ReferenceParquetStore(root / "data/parquet"), fixtures
     )
     report = reference.sync_daily(symbol, Market.XSHG, days[0], days[-1])
+    assert report.status.value == "COMPLETE", report.reason_codes
     assert report.release_id
     views = CanonicalRegimeReferenceViews(bank.state, bank.objects)
     at = datetime.now(UTC)

@@ -1,4 +1,4 @@
-"""Host-specific invocation budgets; logical research survives activation boundaries."""
+"""Host activation policy; a checkpoint is not a partial investment report."""
 from __future__ import annotations
 
 from enum import StrEnum
@@ -19,13 +19,18 @@ class AgentHost(StrEnum):
 class ChatInvocationPolicy(StrictModel):
     schema_version: Literal["chat-invocation-policy-v1"] = "chat-invocation-policy-v1"
     closeout_after_seconds: int = Field(gt=0)
-    hard_limit_seconds: int = Field(gt=0, le=2100)
+    binding_check_after_seconds: int = Field(gt=0)
+    hard_limit_seconds: int = Field(gt=0)
     continuation_cadence_seconds: int = Field(ge=3600)
 
     @model_validator(mode="after")
     def ordered(self) -> ChatInvocationPolicy:
-        if self.closeout_after_seconds >= self.hard_limit_seconds:
-            raise ValueError("closeout must precede the hard invocation limit")
+        if not (
+            self.closeout_after_seconds
+            < self.binding_check_after_seconds
+            < self.hard_limit_seconds
+        ):
+            raise ValueError("closeout < binding check < hard invocation limit required")
         return self
 
     @classmethod
@@ -52,7 +57,11 @@ class HostContinuationDecision(StrictModel):
     existing_platform_task_id: str | None = None
     reason_code: str
     invocation_stop_required: bool = False
+    # Retained for persisted consumers; handoff never mandates a partial report.
     partial_delivery_required: bool = False
+    checkpoint_required: bool = False
+    binding_verification_required: bool = False
+    continuation_binding_verified: bool = False
     remaining_invocation_seconds: int | None = None
 
 
@@ -66,6 +75,8 @@ class HostContinuationPolicy:
         completed_units: int,
         total_units: int,
         existing_platform_task_id: str | None = None,
+        platform_binding_verified: bool = False,
+        platform_hard_limit_seconds: int | None = None,
         policy: ChatInvocationPolicy | None = None,
     ) -> HostContinuationDecision:
         host = AgentHost(host)
@@ -75,29 +86,45 @@ class HostContinuationPolicy:
             raise ValueError("completed_units must stay within total_units")
         if existing_platform_task_id is not None and not existing_platform_task_id.strip():
             raise ValueError("existing platform task id cannot be blank")
-        limits = policy or ChatInvocationPolicy.load()
+        if platform_binding_verified and existing_platform_task_id is None:
+            raise ValueError("verified binding requires a platform task id")
+        if platform_hard_limit_seconds is not None and platform_hard_limit_seconds <= 0:
+            raise ValueError("platform hard limit must be positive")
+
         chat = host is AgentHost.CHATGPT_CHAT
         incomplete = completed_units < total_units
-        handoff = chat and incomplete and elapsed_seconds >= limits.closeout_after_seconds
-        stop = chat and elapsed_seconds >= limits.hard_limit_seconds
+        # Other hosts do not inherit ChatGPT configuration or its wall-clock budget.
+        limits = (policy or ChatInvocationPolicy.load()) if chat else None
+        hard = limits.hard_limit_seconds if limits else None
+        if chat and platform_hard_limit_seconds is not None:
+            hard = min(hard or platform_hard_limit_seconds, platform_hard_limit_seconds)
+        # Preserve the configured handoff reserve when a platform ends earlier.
+        reserve = limits.hard_limit_seconds - limits.closeout_after_seconds if limits else 0
+        closeout = max(0, (hard or 0) - reserve)
+        verification_at = (
+            max(0, (hard or 0) - (limits.hard_limit_seconds - limits.binding_check_after_seconds))
+            if limits else 0
+        )
+        handoff = chat and incomplete and elapsed_seconds >= closeout
+        stop = chat and hard is not None and elapsed_seconds >= hard
         create = handoff and existing_platform_task_id is None
+        verify = handoff and elapsed_seconds >= verification_at and not platform_binding_verified
         if not chat:
             reason = "OTHER_AGENT_NO_OVERALL_RESEARCH_DEADLINE"
         elif stop:
             reason = "CHATGPT_INVOCATION_HARD_STOP"
         elif not incomplete:
             reason = "CHATGPT_ROUND_COMPLETED"
+        elif verify:
+            reason = "CHATGPT_CONTINUATION_BINDING_VERIFICATION_REQUIRED"
         elif handoff:
             reason = (
                 "CHATGPT_CONTINUATION_ALREADY_BOUND"
-                if not create
+                if platform_binding_verified
                 else "CHATGPT_CONTINUATION_REQUIRED"
             )
         else:
             reason = "CHATGPT_WITHIN_PRIMARY_TURN_WINDOW"
-        remaining_seconds = (
-            max(0, limits.hard_limit_seconds - elapsed_seconds) if chat else None
-        )
         return HostContinuationDecision(
             host=host,
             elapsed_seconds=elapsed_seconds,
@@ -105,20 +132,24 @@ class HostContinuationPolicy:
             total_units=total_units,
             progress_numerator=completed_units,
             progress_denominator=total_units,
-            # The logical request has no overall deadline; only this activation is bounded.
             overall_deadline_enforced=False,
             activation_deadline_enforced=chat,
             continuation_required=handoff,
             scheduled_creation_required=create,
             schedule_cadence_seconds=(
-                limits.continuation_cadence_seconds if handoff else None
+                limits.continuation_cadence_seconds if handoff and limits else None
             ),
             run_immediately=create,
             existing_platform_task_id=existing_platform_task_id,
             reason_code=reason,
             invocation_stop_required=stop,
-            partial_delivery_required=handoff,
-            remaining_invocation_seconds=remaining_seconds,
+            partial_delivery_required=False,
+            checkpoint_required=handoff,
+            binding_verification_required=verify,
+            continuation_binding_verified=platform_binding_verified,
+            remaining_invocation_seconds=(
+                max(0, hard - elapsed_seconds) if hard is not None else None
+            ),
         )
 
 

@@ -44,9 +44,9 @@ canonical campaign=`ten-stock-q3-2026`，元数据保存在现有SQLite checkpoi
 
 最终组合报告实际形成并通过发布后，停止“10+三季报观察”对应platform任务；盘前/盘后组合任务保留，目标从正式Portfolio工件读取，不另建持仓事实。还未选出组合时，组合任务只消费共享观察进度，不给虚构的组合盈亏。用户确认实际买入后才使用canonical external-account导入/快照入口保留买入时价格、估值、逻辑、原件引用与风险条件，不自动创建交易。
 
-### 30分钟收口 / 35分钟激活上限
+### 35分钟准备交接 / 40分钟核验 / 45分钟项目上限
 
-`configs/chat_invocation_policy_v1.yaml`为唯一阈值配置。CHATGPT_CHAT每次激活1800秒起停止启动新长任务；2100秒前保存本轮已验证部分及缺口，并在已有用户授权且通知通道可验证时提交当前结果，然后释放owner。进度达到2/3或99%仍不能延长。OTHER_AGENT不继承总体截断。
+`configs/chat_invocation_policy_v1.yaml`为唯一阈值配置。CHATGPT_CHAT每次激活2100秒起停止启动新长任务并保存同一轮已验证进度；2400秒前核验真实平台续接绑定；2700秒前完成激活收口与lease释放。若平台更早结束则提前留出交接余量。中途只保存checkpoint，不要求向QQ提交未完成研究正文，完整且独立审计通过的当轮报告才可送达。OTHER_AGENT没有总体研究时限；批次预算耗尽后恢复同一研究请求。
 
 Scheduled automation运行时不动态创建另一条automation。本campaign使用预先绑定的每小时continuation watcher：新round自动继承该opaque task ID，watcher只续接同一未完成round，不重新抓已满足来源；周期最高每小时一次，不能承诺亚小时周期。交互式ChatGPT会话只有在平台明确允许时才可创建新的子Scheduled；预绑定/平台权限失败必须写入断点，不能把提示词或本地配置冒充已创建任务。云平台在收口前中断时无法保证本次推送，此时从已落地checkpoint恢复，不以提示词保证平台永不retry。
 

@@ -1225,6 +1225,7 @@ class ScheduledResearchService:
         digests: Sequence[MaterialChangeDigest],
     ) -> None:
         from astock.research.presentation import audit_public_answer
+        from astock.research.public_polish import polish_public_text
 
         action_labels = {
             "WAIT": "继续观察",
@@ -1240,8 +1241,8 @@ class ScheduledResearchService:
             f"{digest.instrument_id}：{digest.change_summary}；建议：{action_labels[digest.action]}"
             for digest in digests
         ]
-        body = "\n".join(lines)
-        audit = audit_public_answer(body)
+        body = polish_public_text("\n".join(lines), explain_terms=False).text
+        audit = audit_public_answer(body, source_text=body)
         if not audit.safe_to_send:
             raise ValueError("notification public-content audit failed")
         self.outbox.publish(

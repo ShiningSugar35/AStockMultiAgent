@@ -52,6 +52,7 @@ from astock.investor_orchestration.source_audit_cli import register_source_audit
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
 from astock.investor_orchestration.utils import content_hash, utc_now
+from astock.research.public_polish import polish_public_text
 from astock.schemas.full_research import FullResearchComponentType, RecommendationResearchReceipt
 
 app = typer.Typer(
@@ -649,6 +650,23 @@ def schedule_tick(
         raise typer.Exit(code=3)
 
 
+@app.command("public-polish")
+def investor_public_polish(
+    text_file: Path = typer.Argument(..., exists=True, readable=True, dir_okay=False),
+) -> None:
+    """Polish a completed public investment draft for any Agent or delivery channel.
+
+    This editor never grants publication permission; callers must first satisfy
+    the canonical investment fact, research and authorization requirements.
+    """
+
+    try:
+        draft = text_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise typer.BadParameter("无法读取待润色的正文") from exc
+    typer.echo(polish_public_text(draft).text)
+
+
 @app.command("qqbot-stock-submit")
 def qqbot_stock_submit(
     report_file: Path = typer.Argument(..., exists=True, readable=True, dir_okay=False),
@@ -664,6 +682,9 @@ def qqbot_stock_submit(
 
     try:
         text = report_file.read_text(encoding="utf-8")
+        # The same public editor serves ChatGPT, other Agents and QQ transport.
+        # Reuse the formatted text without modifying an already-submitted report.
+        text = polish_public_text(text).text
         config = QQBotStockSubscriptionConfig.load(config_path)
         result = QQBotStockSubscriptionSubmitter(config).submit(
             text,

@@ -257,6 +257,61 @@ def test_cli_reads_utf8_file_and_emits_submitted_receipt(
     assert captured == {"text": "第一行\n第二行", "report_id": "scheduled-am"}
 
 
+def test_cli_polishes_internal_status_and_still_submits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = tmp_path / "report.txt"
+    report.write_text(
+        "结论：继续观察。QQ投递：report_id=internal-123；DeliveryLedger未更新。",
+        encoding="utf-8",
+    )
+    config = _config(tmp_path)
+    sent: list[str] = []
+
+    def fake_submit(_self: object, text: str, *, report_id=None, created_at=None):
+        sent.append(text)
+        return StockSubscriptionSubmitResult(
+            status=StockSubscriptionSubmitStatus.SUBMITTED,
+            report_id=report_id or "report",
+        )
+
+    monkeypatch.setattr(QQBotStockSubscriptionSubmitter, "submit", fake_submit)
+    result = CliRunner().invoke(
+        app, ["qqbot-stock-submit", str(report), "--config-path", str(config)],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(sent) == 1
+    assert "继续观察" in sent[0]
+    assert "report_id" not in sent[0]
+    assert "DeliveryLedger" not in sent[0]
+    assert "QQ投递" not in sent[0]
+
+
+def test_cli_preserves_material_negative_investment_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = tmp_path / "report.txt"
+    prose = "经营现金流为负，公司仍未达到盈亏平衡，建议继续观察。"
+    report.write_text(prose, encoding="utf-8")
+    config = _config(tmp_path)
+    seen: list[str] = []
+    def fake_submit(_self: object, text: str, *, report_id=None, created_at=None):
+        seen.append(text)
+        return StockSubscriptionSubmitResult(
+            status=StockSubscriptionSubmitStatus.SUBMITTED,
+            report_id=report_id or "report",
+        )
+    monkeypatch.setattr(QQBotStockSubscriptionSubmitter, "submit", fake_submit)
+    result = CliRunner().invoke(
+        app, ["qqbot-stock-submit", str(report), "--config-path", str(config)],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(seen) == 1
+    assert seen[0].startswith(prose)
+    assert "经营现金流指" in seen[0]
+    assert "仍未达到盈亏平衡" in seen[0]
+
+
 def test_cli_non_sent_returns_nonzero(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

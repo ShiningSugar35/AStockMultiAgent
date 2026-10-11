@@ -58,8 +58,9 @@ def main() -> int:
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     directory = ROOT / ".ai-bridge" / "quality-runs" / run_id
     directory.mkdir(parents=True, exist_ok=False)
-    temporary = directory / "tmp"
-    temporary.mkdir()
+    # Retain small audit receipts, not temporary test databases or caches.
+    temporary = ROOT / ".scratchpad" / f"quality-{run_id}"
+    temporary.mkdir(parents=True, exist_ok=False)
     environment = os.environ.copy()
     environment.update(
         {

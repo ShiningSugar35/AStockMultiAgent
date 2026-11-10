@@ -1,7 +1,7 @@
 schema_version: project-work-package-manifest-v1
 plan_id: investor-orchestration-and-regime-plan-v1
 status: CURRENT
-updated_on: 2026-10-11
+updated_on: 2026-11-10
 
 authority:
   machine_index: planning/work_packages_v1.yaml
@@ -20,7 +20,7 @@ work_packages:
   - id: WP-54
     order: 54
     title: ChatGPT 持仓报告到 QQBot 股票订阅提交链
-    status: IN_PROGRESS
+    status: BLOCKED
     priority: P1
     owner_lane: wp54-chatgpt-qq-stock-subscription
     depends_on: []
@@ -31,3 +31,24 @@ work_packages:
     priority: P1
     owner_lane: wp55-watch-campaign-retention
     depends_on: [WP-54]
+  - id: WP-58
+    order: 58
+    title: 新闻完整性修复与雪球/知乎零付费舆情采集
+    status: PLANNED
+    priority: P0
+    owner_lane: wp58-social-capture-and-news-coverage
+    depends_on: []
+  - id: WP-59
+    order: 59
+    title: 多场景舆情解释与投研流程一体化
+    status: PLANNED
+    priority: P1
+    owner_lane: wp59-social-research-integration
+    depends_on: [WP-58]
+  - id: WP-60
+    order: 60
+    title: 投研与工程架构质量审计、性能及存储治理
+    status: PLANNED
+    priority: P1
+    owner_lane: wp60-architecture-efficiency-hygiene
+    depends_on: []

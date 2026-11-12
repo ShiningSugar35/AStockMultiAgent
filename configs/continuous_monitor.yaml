@@ -2,10 +2,12 @@ schema_version: continuous-monitor-v1
 policy_version: continuous-monitor-v1
 wake_interval_seconds: 60
 max_targets_per_cycle: 50
+community_max_targets_per_cycle: 1
 source_cadence_seconds:
   MARKET_60M: 900
   CNINFO: 900
   GDELT: 1800
+  COMMUNITY: 3600
   CATALYST: 3600
   SCHEDULE: 3600
   PAPER: 900
@@ -20,6 +22,7 @@ market:
 news:
   endpoint: https://api.gdeltproject.org/api/v2/doc/doc
   max_records_per_target: 20
+  max_search_requests_per_target: 8
   lookback_minutes: 180
   timeout_seconds: 15
   authority: LEAD_ONLY

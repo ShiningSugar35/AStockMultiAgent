@@ -23,6 +23,7 @@ Workflow 是跨 Skill 的**用户任务编排层**。它不替代 `.agents/skill
 | [Holding Rebalance Decision](workflow-holding-rebalance-decision.md) | “我已经持有 X，要不要加仓、减仓或调整组合？” | `$holding-monitor` | persisted user state / event-aware HOLD·ADD·TRIM·EXIT / target band |
 | [Holding Monitoring](workflow-holding-monitoring.md) | “持仓有什么变化，要不要加减仓？” | `$holding-monitor` | HoldingReviewPack / action proposal |
 | [Continuous Investment Monitoring](workflow-continuous-investment-monitoring.md) | “研究/荐股后继续盯着，什么时候该准备买卖？” | `$continuous-investment-monitor` | Watch target / MonitorEvent / leased research task / incremental review |
+| [Community Sentiment](workflow-community-sentiment.md) | “最近七天雪球知乎对这家公司怎么看？” | `$company-deep-research` / `$continuous-investment-monitor` | SocialSearchResult / Monitor NEWS_LEAD / evidence review |
 | [Paper Trading](workflow-paper-trading.md) | “模拟盘恢复、回放、状态是否正常？” | `$paper-trading-recovery` | paper status / replay checkpoint / NAV |
 | [Knowledge Ingest](workflow-knowledge-ingest.md) | “把这个作者/书籍方法沉淀进知识库” | `$knowledge-ingest` | coverage / immutable source / reviewed Skills |
 | [Prospective Evaluation](workflow-prospective-evaluation.md) | “怎么积累前瞻样本、判断系统是否真的有效？” | `$astock-research-orchestrator` | Phase 7/11/12 prospective evidence |

@@ -1,0 +1,8 @@
+{
+  "schema_version": "provider-self-probe-v1",
+  "provider_id": "social-browser-search",
+  "operation": "community-search",
+  "record_count": 2,
+  "quality": true,
+  "checked_capabilities": ["news.community.lead"]
+}

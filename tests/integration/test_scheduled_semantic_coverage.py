@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -343,8 +344,8 @@ def _five_family_source_report(
             DisclosureSearchRequest(
                 symbol=symbol,
                 exchange=DisclosureExchange.SSE,
-                start_date=interval_start.date(),
-                end_date=interval_end.date(),
+                start_date=interval_start.astimezone(ZoneInfo("Asia/Shanghai")).date(),
+                end_date=interval_end.astimezone(ZoneInfo("Asia/Shanghai")).date(),
             )
         )
     disclosure_ids = []

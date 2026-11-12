@@ -20,6 +20,8 @@ description: Persist complete user-declared external trades, restore holding pos
 
 ## Workflows
 
+- [社区舆情补充工作流](../../../docs/workflows/workflow-community-sentiment.md)
+
 - [`docs/workflows/workflow-holding-rebalance-decision.md`](../../../docs/workflows/workflow-holding-rebalance-decision.md)
 - [`docs/workflows/workflow-holding-monitoring.md`](../../../docs/workflows/workflow-holding-monitoring.md)
 - [`docs/workflows/workflow-portfolio-transition-and-hedging.md`](../../../docs/workflows/workflow-portfolio-transition-and-hedging.md)

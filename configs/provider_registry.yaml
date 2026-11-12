@@ -1,4 +1,4 @@
-registry_version: provider-registry-v8
+registry_version: provider-registry-v9
 capability_gaps:
   - corporate_actions.ledger_ready
   - model.inference
@@ -279,6 +279,23 @@ providers:
     probe_operation: news-lead
     probe_target: {symbol: "600519", name: "贵州茅台"}
     recorded_fixture: tests/fixtures/providers/gdelt-news-leads-success.json
+  - provider_id: social-browser-search
+    adapter_class: astock.social_sources.provider:SocialBrowserSearchProvider
+    capabilities: [news.community.lead]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics: {news.community.lead: DISCOVERY_ONLY}
+    independence_group: COMMUNITY_SOCIAL
+    cache_ttl_seconds: 600
+    cost_class: LOW
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 120
+    priority: 65
+    probe_operation: community-search
+    probe_target: {symbol: "002475", name: "立讯精密"}
+    recorded_fixture: tests/fixtures/providers/social-browser-search-success.json
   - provider_id: nbs-statistical-release
     adapter_class: astock.providers.macro_authority:NbsStatisticalReleaseProvider
     capabilities: [macro.statistical_release]

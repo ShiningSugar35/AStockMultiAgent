@@ -15,6 +15,7 @@ from astock.schemas.research_continuation import (
     CurrentResearchContinuationRequest,
     CurrentResearchEvidenceBinding,
 )
+from astock.social_sources.cli import register_social_commands
 
 
 def register_current_research_continuation_commands(
@@ -25,6 +26,7 @@ def register_current_research_continuation_commands(
     """Register durable acquisition, evidence binding, team, and readiness transitions."""
 
     register_supplemental_commands(app, services, emit)
+    register_social_commands(app, services, emit)
 
     def continuation() -> CurrentResearchContinuationService:
         paths, state, objects = services()

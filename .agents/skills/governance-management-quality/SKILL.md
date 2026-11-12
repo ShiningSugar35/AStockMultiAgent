@@ -41,6 +41,8 @@ Abstain and leave `GOVERNANCE_QUALITY=false` when ownership/control lineage is i
 
 ## Workflows
 
+- [社区舆情补充工作流](../../../docs/workflows/workflow-community-sentiment.md)
+
 - [`docs/workflows/workflow-governance-management-quality.md`](../../../docs/workflows/workflow-governance-management-quality.md)
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 

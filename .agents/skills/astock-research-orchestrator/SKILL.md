@@ -40,7 +40,11 @@ description: Route broad or multi-step A-share research requests across candidat
 
 开发/恢复时优先执行 `python -B -m astock.diagnostics artifacts --type SeedPromotionReport --limit 5` 或按精确 ID 的 `artifact`、指定表的 `schema`。该入口只显示有界诊断，不初始化数据库，不产生推荐权威。复杂 Windows 参数使用结构化 argv 或项目内 UTF-8 JSON 文件，避免嵌套 shell 引号与全表探测。
 
+投资研究的行业、公司、事件、持仓、模拟盘和组合风险路径统一从 [社区舆情流程](../../../docs/workflows/workflow-community-sentiment.md) 获取近七日雪球原发与知乎非视频线索；复用有审计的 `SocialSearchResult` 工件和 `SOCIAL_SENTIMENT` 可选能力节点。仅在增量变化时复核相关模块，不进行并行的研究数据库或整轮重复搜索。
+
 ## Workflows
+
+- [社区舆情补充工作流](../../../docs/workflows/workflow-community-sentiment.md)
 
 - [`docs/workflows/workflow-full-market-research-team.md`](../../../docs/workflows/workflow-full-market-research-team.md)
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)

@@ -90,6 +90,38 @@ rules:
       - tests/unit/test_scheduled_preparation.py
       - tests/integration/test_scheduled_input_coverage.py
       - tests/integration/test_scheduled_semantic_coverage.py
+  - name: community-search-and-monitor-integration
+    changed:
+      - src/astock/social_sources/*
+      - src/astock/monitoring/service.py
+      - src/astock/monitoring/config.py
+      - src/astock/schemas/continuous_monitoring.py
+      - configs/continuous_monitor.yaml
+      - configs/social_search.yaml
+      - browser_extension/*
+    tests:
+      - tests/unit/test_social_*.py
+      - tests/unit/test_news_coverage_watermark.py
+      - tests/unit/test_continuous_monitoring.py
+      - tests/unit/test_news_capture_scope.py
+      - tests/unit/test_scheduled_preparation.py
+      - tests/unit/test_source_*.py
+      - tests/unit/test_external_capabilities.py
+      - tests/integration/test_scheduled_input_coverage.py
+      - tests/integration/test_scheduled_semantic_coverage.py
+  - name: investor-social-capability-contract
+    changed:
+      - src/astock/investor_orchestration/capabilities.py
+      - src/astock/investor_orchestration/output_validation.py
+      - src/astock/investor_orchestration/domain_contracts.py
+    tests:
+      - tests/unit/test_social_*.py
+      - tests/unit/test_investor_orchestration.py
+      - tests/unit/test_investor_orchestration_guards.py
+      - tests/unit/test_investor_domain_contracts.py
+      - tests/unit/test_capability_driven_architecture.py
+      - tests/unit/test_full_research_recommendation.py
+      - tests/integration/test_scheduled_semantic_coverage.py
   - name: investor-publication-and-language
     changed:
       - src/astock/investor_orchestration/gateway.py

@@ -19,6 +19,8 @@ description: Keep analyzed, recommended, held, catalyst-bound, and open-paper-or
 
 ## Workflows
 
+- [社区舆情补充工作流](../../../docs/workflows/workflow-community-sentiment.md)
+
 - [`docs/workflows/workflow-holding-rebalance-decision.md`](../../../docs/workflows/workflow-holding-rebalance-decision.md)
 - [`docs/workflows/workflow-portfolio-transition-and-hedging.md`](../../../docs/workflows/workflow-portfolio-transition-and-hedging.md)
 - [`docs/workflows/workflow-continuous-investment-monitoring.md`](../../../docs/workflows/workflow-continuous-investment-monitoring.md)

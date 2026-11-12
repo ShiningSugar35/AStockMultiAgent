@@ -36,11 +36,17 @@ class SupplementalRequest(BaseModel):
         "market.reference.hint",
         "news.discovery.lead",
         "news.global.lead",
+        "news.community.lead",
     ] = "market.reference.hint"
     symbol: str = Field(default="", pattern=r"^(?:\d{6})?$")
     market: Market = Market.XSHG
     start: date
     end: date
+    company_id: str = Field(default="", max_length=80)
+    company_names: tuple[str, ...] = ()
+    aliases: tuple[str, ...] = ()
+    industry_keywords: tuple[str, ...] = ()
+    management_keywords: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_window(self) -> SupplementalRequest:
@@ -441,8 +447,13 @@ class SupplementalEvidenceService:
              if request.capability in item.capabilities]
         )
         captures, attempts = [], []
-        collect_all_independent_news_sources = request.capability == "news.discovery.lead"
-        budget = float(self.factory.source_breaker.policy.default_elapsed_budget_seconds)
+        collect_all_independent_news_sources = request.capability in {
+            "news.discovery.lead", "news.community.lead",
+        }
+        budget = (
+            150.0 if request.capability == "news.community.lead" else
+            float(self.factory.source_breaker.policy.default_elapsed_budget_seconds)
+        )
         deadline = time.monotonic() + budget
         for definition in definitions:
             if time.monotonic() >= deadline:
@@ -473,7 +484,14 @@ class SupplementalEvidenceService:
                     payload = json.loads(
                         (self.root / definition.recorded_fixture).read_text(encoding="utf-8"),
                     )
-                    if payload.get("request") != request.model_dump(mode="json"):
+                    expected_request = request.model_dump(mode="json")
+                    if request.capability != "news.community.lead":
+                        for field in (
+                            "company_id", "company_names", "aliases",
+                            "industry_keywords", "management_keywords",
+                        ):
+                            expected_request.pop(field, None)
+                    if payload.get("request") != expected_request:
                         raise ProviderError(
                             "Recorded fixture request mismatch",
                             failure_class=FailureClass.DATA_QUALITY,
@@ -483,7 +501,7 @@ class SupplementalEvidenceService:
                     persistence.provider_id = provider_id
                     persistence.object_store, persistence.state = self.objects, self.state
                     snapshot = persistence.persist_envelope(payload, "fixture://" + provider_id)
-                if not records:
+                if not records and request.capability != "news.community.lead":
                     raise ProviderError(
                         "No requested supplemental records",
                         failure_class=FailureClass.DATA_QUALITY,
@@ -496,6 +514,7 @@ class SupplementalEvidenceService:
                     "source_object_hash": snapshot.object_sha256,
                     "mode": "LIVE" if live else "RECORDED", "formal_use_allowed": False,
                     "full_universe_proven": False,
+                    "coverage_complete": snapshot.fetch_status.value == "SUCCEEDED",
                 }
                 ref = self.objects.put_json(envelope)
                 artifact_id = "SupplementalEvidenceCapture:" + ref.sha256
@@ -508,6 +527,7 @@ class SupplementalEvidenceService:
                     "artifact_id": artifact_id, "provider_id": provider_id,
                     "record_count": len(records), "source_snapshot_id": snapshot.snapshot_id,
                     "independence_group": definition.independence_group,
+                    "coverage_complete": snapshot.fetch_status.value == "SUCCEEDED",
                 })
                 self.factory.record_capability_success(provider_id, request.capability, live=live)
                 attempts.append({"provider_id": provider_id, "status": "CAPTURED"})

@@ -307,7 +307,30 @@ class InvestorOrchestrationService:
         )
         # Fixed request-time, preflight, registry and gateway handlers are safety
         # boundaries and cannot be replaced by scenario- or model-provided code.
-        merged_handlers = {**handlers, **self._built_in_handlers()}
+        # Bind the optional live community search only for normal requests.
+        # Replayed/registered execution must consume frozen artifacts instead.
+        from pathlib import Path
+
+        from astock.social_sources.investor_handler import paired_social_handler
+
+        project_root = Path(__file__).resolve().parents[3]
+        # The implicit live browser adapter belongs exclusively to the
+        # canonical project runtime. Isolated recorded banks, test fixtures
+        # and replay stores must never acquire new evidence from the user's
+        # browser merely because Chrome has been paired on this machine.
+        runtime_root = (project_root / "runtime").resolve()
+        canonical_live_store = self.store.path.resolve().is_relative_to(runtime_root)
+        social_handler = (
+            paired_social_handler(self.store, project_root)
+            if canonical_live_store else None
+        )
+        optional_handlers = (
+            {"SOCIAL_SENTIMENT": social_handler}
+            if social_handler is not None else {}
+        )
+        merged_handlers = {
+            **optional_handlers, **handlers, **self._built_in_handlers()
+        }
         coverage = CapabilityExecutor(merged_handlers, store=self.store).execute(
             plan,
             request,

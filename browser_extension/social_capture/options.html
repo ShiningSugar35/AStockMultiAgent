@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AStock Social Capture</title>
+  <style>
+    body { font: 14px/1.55 system-ui, sans-serif; margin: 28px; max-width: 680px; color: #1f2937; }
+    label { display: block; margin: 14px 0 5px; font-weight: 600; }
+    input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 7px; }
+    button { margin-top: 18px; padding: 9px 16px; border: 0; border-radius: 7px; background: #155eef; color: white; cursor: pointer; }
+    #status { margin-top: 14px; white-space: pre-wrap; }
+    .muted { color: #64748b; }
+  </style>
+</head>
+<body>
+  <h1>AStock 社区舆情连接</h1>
+  <p class="muted">连接本机 AStock 搜索任务桥。扩展会在当前 Chrome 配置文件中打开后台搜索标签，并使用该配置文件的站点登录会话。</p>
+  <label for="bridgeUrl">本地桥接地址</label>
+  <input id="bridgeUrl" value="http://127.0.0.1:8766">
+  <label for="bridgeKey">连接密钥</label>
+  <input id="bridgeKey" type="password" autocomplete="off" spellcheck="false">
+  <button id="save">保存并连接</button>
+  <div id="status" role="status"></div>
+  <script src="options.js"></script>
+</body>
+</html>

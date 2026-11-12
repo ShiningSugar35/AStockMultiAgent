@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
@@ -41,6 +42,7 @@ from astock.schemas.paper import (
     ReplayExecutionReport,
 )
 from astock.schemas.research_team import ResearchRoleOutput
+from astock.social_sources.models import SocialSearchResult
 
 PROJECTION_POLICY = "verified-investor-answer-projection-v1"
 _LOCAL = frozenset(
@@ -105,6 +107,65 @@ def _text(value: str) -> str:
 
 def _unique(values: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _community_projection(
+    outputs: tuple[BaseModel, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Bounded, explicitly non-authoritative prose from verified community leads."""
+    if not outputs:
+        return (), ()
+    reasons: list[str] = []
+    risks: list[str] = []
+    platform_names = {"XUEQIU": "雪球", "ZHIHU": "知乎"}
+    for output in outputs:
+        if not isinstance(output, SocialSearchResult):
+            raise ValueError("community report has an unexpected output schema")
+        channel_names = "、".join(
+            platform_names.get(item.platform.value, item.platform.value)
+            for item in output.coverage
+        )
+        if not output.complete:
+            risks.append(
+                f"近七日{channel_names or '社区'}检索尚未覆盖完整窗口，"
+                "不能据此判断不存在风险信息。"
+            )
+        if not output.leads:
+            if output.complete:
+                reasons.append(
+                    f"近七日{channel_names or '社区'}已完成具名检索，"
+                    "未发现符合本次筛选条件的讨论线索；这不代表不存在相关信息。"
+                )
+            continue
+        reasons.append(
+            f"近七日{channel_names or '社区'}取得{len(output.leads)}条"
+            "相关社区讨论线索，仅供多空观点与风险排查参考。"
+        )
+        for lead in sorted(
+            output.leads,
+            key=lambda item: (item.published_at, item.lead_id),
+            reverse=True,
+        )[:3]:
+            title = " ".join(lead.title.split())[:80]
+            label = platform_names.get(lead.platform.value, lead.platform.value)
+            clock = lead.published_at.astimezone(
+                ZoneInfo("Asia/Shanghai")
+            ).strftime("%Y-%m-%d")
+            date_label = (
+                f"{clock}，日期精度仅到日"
+                if lead.published_precision == "DAY"
+                else clock
+            )
+            reasons.append(
+                f"{label}讨论（{date_label}，尚未作为公司事实核实）："
+                f"{title}；原文：{lead.url}。"
+            )
+    if reasons:
+        risks.append(
+            "社区讨论、情绪标签和转述不能替代公司公告与财务证据，"
+            "不可单独作为买卖或模拟成交依据。"
+        )
+    return _unique(reasons), _unique(risks)
 
 
 @dataclass(frozen=True)
@@ -588,6 +649,15 @@ class VerifiedAnswerProjector:
             # post-write receipts. Never turn this read-only projection into an
             # economic executor or imply that a prepared order was filled.
             raise ValueError("this intent requires its canonical economic-operation presenter")
+        social_reasons, social_risks = _community_projection(
+            inputs.outputs.get("SOCIAL_SENTIMENT", ())
+        )
+        if social_reasons or social_risks:
+            fields = {
+                **fields,
+                "reasons": _unique([*fields.get("reasons", ()), *social_reasons]),
+                "risks": _unique([*fields.get("risks", ()), *social_risks]),
+            }
         draft = InvestorAnswerDraft(
             request_id=request.request_id,
             evidence_as_of=inputs.preflight.as_of,

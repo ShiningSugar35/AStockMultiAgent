@@ -63,6 +63,7 @@ _SCHEMA_MODULES = {
     "ResearchTeamPlan": "astock.schemas.research_team",
     "ResearchRoleResult": "astock.schemas.research_team",
     "ResearchSeedReport": "astock.schemas.research_seeds",
+    "SocialSearchResult": "astock.social_sources.models",
 }
 _LOCAL_OUTPUTS = frozenset(
     {

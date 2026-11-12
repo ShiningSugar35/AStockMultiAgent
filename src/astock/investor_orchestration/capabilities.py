@@ -138,6 +138,14 @@ _BASE_NODES: dict[str, CapabilityNode] = {
         output_schema="ResearchRoleOutput",
         parallel_group="company-risk",
     ),
+    "SOCIAL_SENTIMENT": CapabilityNode(
+        capability_id="SOCIAL_SENTIMENT",
+        requirement=CapabilityRequirement.OPTIONAL,
+        dependencies=("ENTITY_IDENTITY",),
+        conditional_reason="recent original community discussion may improve investment research",
+        output_schema="SocialSearchResult",
+        parallel_group="research-input",
+    ),
     "FORECAST_VALUATION": CapabilityNode(
         capability_id="FORECAST_VALUATION",
         requirement=CapabilityRequirement.CONDITIONAL,
@@ -357,6 +365,22 @@ class CapabilityPlanner:
                 requirement = CapabilityRequirement.OPTIONAL
             nodes[capability_id] = template.model_copy(update={"requirement": requirement})
 
+        if (
+            "SOCIAL_SENTIMENT" not in overrides
+            and request.normalized_intent in {
+                RequestIntent.RESEARCH,
+                RequestIntent.FULL_RESEARCH_RECOMMENDATION,
+                RequestIntent.PAPER_PREPARE,
+                RequestIntent.PAPER_CONFIRM,
+                RequestIntent.PAPER_STATUS,
+                RequestIntent.MONITOR,
+            }
+        ):
+            # Non-blocking research input; it cannot become an execution or
+            # publication dependency, and never runs on account-only writes.
+            nodes["SOCIAL_SENTIMENT"] = nodes["SOCIAL_SENTIMENT"].model_copy(
+                update={"requirement": CapabilityRequirement.CONDITIONAL}
+            )
         holding_context_required = bool(request.metadata.get("full_research_holding_context"))
         if holding_context_required:
             nodes["HOLDING_REVIEW"] = nodes["HOLDING_REVIEW"].model_copy(

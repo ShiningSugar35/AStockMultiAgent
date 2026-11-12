@@ -41,6 +41,8 @@ Abstain and leave `INDUSTRY_PROFILE=false` when business segmentation is materia
 
 ## Workflows
 
+- [社区舆情补充工作流](../../../docs/workflows/workflow-community-sentiment.md)
+
 - [`docs/workflows/workflow-industry-value-chain.md`](../../../docs/workflows/workflow-industry-value-chain.md)
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 - [`docs/workflows/workflow-full-market-research-team.md`](../../../docs/workflows/workflow-full-market-research-team.md)

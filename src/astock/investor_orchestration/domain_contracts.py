@@ -32,9 +32,11 @@ from astock.schemas.research_team import (
     ResearchRoleResult,
     ResearchTeamPlan,
 )
+from astock.social_sources.models import SocialSearchResult
 
 if TYPE_CHECKING:
     from astock.investor_orchestration.output_validation import RegisteredOutputVerifier
+
 
 _ROLE_CONTRACTS = {
     "GOVERNANCE": ("GOVERNANCE", "GOVERNANCE_QUALITY"),
@@ -71,7 +73,36 @@ class DomainContractAudit:
         request: InvestorRequestEnvelope,
     ) -> None:
         payload = output.model_dump(mode="json")
-        if isinstance(output, ReplayExecutionReport):
+        if isinstance(output, SocialSearchResult):
+            if artifact_id != output.result_artifact_id:
+                raise ValueError("social research artifact identity differs from result")
+            if not output.coverage or output.complete != all(
+                item.complete for item in output.coverage
+            ):
+                raise ValueError("social research coverage is internally inconsistent")
+            recorded = set(output.snapshot_ids)
+            for lead in output.leads:
+                # Registered bytes alone do not bind a community result to
+                # this investor request. Reject a valid but unrelated issuer's
+                # cached social artifact at this one domain-admission boundary.
+                if request.entity_ids and (
+                    not lead.symbol
+                    or not any(
+                        self.verifier._same_identity(lead.symbol, target)
+                        for target in request.entity_ids
+                    )
+                ):
+                    raise ValueError("community lead belongs to another security")
+                if lead.snapshot_id not in recorded:
+                    raise ValueError("community lead missing its source snapshot reference")
+            for snapshot_id in recorded:
+                snapshot = self.verifier.state.get_snapshot(snapshot_id)
+                if (
+                    snapshot is None
+                    or not self.verifier.objects.verify(snapshot.object_sha256)
+                ):
+                    raise ValueError("community source snapshot is unavailable")
+        elif isinstance(output, ReplayExecutionReport):
             from astock.investor_orchestration.replay_output import verify_replay_output
 
             verify_replay_output(self.verifier, output, request)

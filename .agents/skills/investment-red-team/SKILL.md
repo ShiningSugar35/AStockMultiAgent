@@ -41,6 +41,8 @@ Abstain and leave `INDEPENDENT_REVIEW=false` when Bull/Bear independence cannot 
 
 ## Workflows
 
+- [社区舆情补充工作流](../../../docs/workflows/workflow-community-sentiment.md)
+
 - [`docs/workflows/workflow-investment-red-team.md`](../../../docs/workflows/workflow-investment-red-team.md)
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 - [`docs/workflows/workflow-full-market-research-team.md`](../../../docs/workflows/workflow-full-market-research-team.md)

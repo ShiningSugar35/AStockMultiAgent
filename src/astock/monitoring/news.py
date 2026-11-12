@@ -8,6 +8,7 @@ Raw bodies are deduplicated in ObjectStore; capture identities retain query/time
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from urllib.parse import parse_qs, urlparse
@@ -67,6 +68,19 @@ class NewsSearchReceipt:
         return not self.limit_reached and self.rejected_count == 0
 
 
+class CheckedNewsLeads(list[NewsLead]):
+    """List-compatible checked search with a truthful coverage watermark."""
+
+    def __init__(
+        self, leads: list[NewsLead], *, complete: bool, checked_through: datetime,
+        request_count: int,
+    ) -> None:
+        super().__init__(leads)
+        self.complete = complete
+        self.checked_through = checked_through
+        self.request_count = request_count
+
+
 class GdeltNewsLeadProvider:
     provider_id = "gdelt-news-leads"
     capability = "news.discovery.lead"
@@ -86,6 +100,7 @@ class GdeltNewsLeadProvider:
         self.state = state
         self.endpoint = endpoint
         self.breaker = SourceCircuitBreaker(state)
+        self.max_search_requests = 8  # Overridden by the versioned monitor policy.
         self.client = client or httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=False,
@@ -101,15 +116,56 @@ class GdeltNewsLeadProvider:
         end: datetime,
         max_records: int,
     ) -> list[NewsLead]:
-        """Compatibility list API over the same checked request and raw capture."""
-        return list(
-            self.search_checked(
-                names=names,
-                symbol=symbol,
-                start=start,
-                end=end,
-                max_records=max_records,
-            ).leads
+        """List-compatible API that never silently certifies truncated results."""
+        return self.search_covered(
+            names=names, symbol=symbol, start=start, end=end,
+            max_records=max_records, max_requests=self.max_search_requests,
+        )
+
+    def search_covered(
+        self, *, names: list[str], symbol: str, start: datetime, end: datetime,
+        max_records: int, max_requests: int,
+    ) -> CheckedNewsLeads:
+        """Bisect saturated time windows, oldest first, under a bounded budget.
+
+        Partial captures retain their usable leads but cannot advance the
+        monitor watermark. One-second intervals cannot be split further
+        because upstream requests use whole-second timestamps.
+        """
+        start, end = _validate_interval(start, end)
+        if not 1 <= max_requests <= 64:
+            raise ValueError("news search request budget must be in 1..64")
+        pending = [(start, end)]
+        by_id: OrderedDict[str, NewsLead] = OrderedDict()
+        requests = 0
+        checked_through = start
+        complete = True
+        while pending:
+            if requests >= max_requests:
+                complete = False
+                break
+            interval_start, interval_end = pending.pop(0)
+            result = self.search_checked(
+                names=names, symbol=symbol, start=interval_start,
+                end=interval_end, max_records=max_records,
+            )
+            requests += 1
+            for lead in result.leads:
+                by_id.setdefault(lead.lead_id, lead)
+            if result.limit_reached and (interval_end - interval_start).total_seconds() > 2:
+                middle = interval_start + timedelta(
+                    seconds=int((interval_end - interval_start).total_seconds() // 2)
+                )
+                pending[:0] = [(interval_start, middle), (middle, interval_end)]
+                continue
+            if not result.checked_successfully:
+                complete = False
+                break
+            checked_through = interval_end
+        leads = sorted(by_id.values(), key=lambda x: (x.seen_at, x.url))
+        return CheckedNewsLeads(
+            leads, complete=complete, checked_through=checked_through,
+            request_count=requests,
         )
 
     def fetch_hints(self, request: object) -> tuple[list[dict[str, str]], SourceSnapshot]:

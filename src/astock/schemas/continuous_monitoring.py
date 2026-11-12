@@ -31,6 +31,7 @@ class MonitorSource(StrEnum):
     MARKET_60M = "MARKET_60M"
     CNINFO = "CNINFO"
     GDELT = "GDELT"
+    COMMUNITY = "COMMUNITY"
     CATALYST = "CATALYST"
     SCHEDULE = "SCHEDULE"
     PAPER = "PAPER"

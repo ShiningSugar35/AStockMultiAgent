@@ -23,6 +23,7 @@ class MonitorMarketConfig:
 class MonitorNewsConfig:
     endpoint: str
     max_records_per_target: int
+    max_search_requests_per_target: int
     lookback_minutes: int
     timeout_seconds: float
     material_keywords: tuple[str, ...]
@@ -47,6 +48,7 @@ class ContinuousMonitorConfig:
     news: MonitorNewsConfig
     daemon: MonitorDaemonConfig
     scheduled_review_days: int = 30
+    community_max_targets_per_cycle: int = 1
 
     def cadence(self, source: MonitorSource) -> int:
         return self.source_cadence_seconds[source]
@@ -101,6 +103,7 @@ def load_continuous_monitor_config(path: Path) -> ContinuousMonitorConfig:
         news=MonitorNewsConfig(
             endpoint=str(news["endpoint"]),
             max_records_per_target=int(news["max_records_per_target"]),
+            max_search_requests_per_target=int(news.get("max_search_requests_per_target", 8)),
             lookback_minutes=int(news["lookback_minutes"]),
             timeout_seconds=float(news["timeout_seconds"]),
             material_keywords=tuple(str(item).casefold() for item in news["material_keywords"]),
@@ -112,9 +115,14 @@ def load_continuous_monitor_config(path: Path) -> ContinuousMonitorConfig:
             log_file=str(daemon["log_file"]),
         ),
         scheduled_review_days=int(payload.get("scheduled_review_days", 30)),
+        community_max_targets_per_cycle=int(payload.get("community_max_targets_per_cycle", 1)),
     )
+    if not (1 <= config.news.max_search_requests_per_target <= 64):
+        raise ValueError("news search request budget must be 1..64")
     if not (30 <= config.wake_interval_seconds <= 3600):
         raise ValueError("continuous monitor wake interval must be in 30..3600 seconds")
+    if not (0 <= config.community_max_targets_per_cycle <= 2):
+        raise ValueError("community source budget must be 0..2 targets per cycle")
     if not (1 <= config.max_targets_per_cycle <= 500):
         raise ValueError("continuous monitor max target budget must be in 1..500")
     if not (60 <= config.daemon.lease_seconds <= 3600):

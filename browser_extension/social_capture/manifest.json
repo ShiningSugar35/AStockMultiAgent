@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "AStock Social Capture",
+  "version": "1.0.0",
+  "description": "Connects the current Chrome profile's signed-in Xueqiu and Zhihu pages to the local AStock research bridge.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu4gIIkKq7WAYWuz+B6RFBDjIgRmarYdg2LvLKXLZG2SQ895RjtFvyYvj4xePoeUIDCC2yhjL0fGQ6CnQcw03jHIIam843vssRnyc1UpXP3MVTtXT5m/OxbDCGPM1z0RGZLipKQ2AaqMfxbBvvY8oeOhPJ6haMrVlJIRYxIY0/vuMKs9fPco69fnTr+S7Uu4kInkzWUtdcKAz4DpxIPEVKFpbsarrAIDd6XCdfctq0WdCXg/pssbEZ5DGo6EghTYxUthJhbLu4dUKJkP6D4drDIFEVk7DQxj+wyzX8K7OnZDvXOMA5ktTyyf3DGE4art8nfZcxx8C2iX3aDOsRweyIwIDAQAB",
+  "permissions": ["storage", "tabs", "alarms"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://xueqiu.com/*",
+    "https://www.xueqiu.com/*",
+    "https://www.zhihu.com/*",
+    "https://zhuanlan.zhihu.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://xueqiu.com/*",
+        "https://www.xueqiu.com/*",
+        "https://www.zhihu.com/*",
+        "https://zhuanlan.zhihu.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "AStock Social Capture"
+  }
+}

@@ -80,6 +80,12 @@ def main() -> int:
             "PYTHONIOENCODING": "utf-8",
         }
     )
+    # An isolated Git worktree may share a virtualenv whose editable install
+    # points at the original checkout. Always test THIS checkout's source.
+    # Prepended only for this child process; no global Python changes.
+    environment["PYTHONPATH"] = os.pathsep.join(
+        value for value in (str(ROOT / "src"), environment.get("PYTHONPATH", "")) if value
+    )
     command = [sys.executable, "-B"]
     if args.tool != "python":
         command += ["-m", args.tool]

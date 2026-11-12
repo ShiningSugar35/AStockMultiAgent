@@ -31,6 +31,7 @@ EXPECTED_WORKFLOWS = {
     "workflow-adaptive-edge.md",
     "workflow-research-tech-scout.md",
     "workflow-continuous-investment-monitoring.md",
+    "workflow-community-sentiment.md",
     "workflow-ten-stock-q3-watch.md",
 }
 

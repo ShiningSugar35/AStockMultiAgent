@@ -107,6 +107,8 @@ Skill 是单个专业角色的方法与工具合同，不是自由人格提示�
 - [当前研究性能与 Agent Skills](architecture/current-research-performance-and-agent-skills-v1.md)
 - [组合与持仓决策](architecture/portfolio-holding-decision-v1.md)
 - [连续投资研究](architecture/continuous-investment-research-v1.md)
+- [近七日社区舆情接入](architecture/community-sentiment-v1.md)
+- [投研与工程质量审查](architecture/investment-engineering-audit-v1.md)
 - [全市场研究团队](architecture/full-market-research-team-v1.md)
 - [推荐广度、入场质量与企业事件情报](architecture/recommendation-breadth-entry-event-intelligence-v1.md)
 - [Serenity 方法层](architecture/serenity-method-layer-v1.md)

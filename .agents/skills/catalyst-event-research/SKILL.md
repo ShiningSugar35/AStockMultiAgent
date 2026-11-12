@@ -44,6 +44,8 @@ Abstain and leave `CATALYST_RISK=false` when a material event exists only in rum
 
 ## Workflows
 
+- [社区舆情补充工作流](../../../docs/workflows/workflow-community-sentiment.md)
+
 - [`docs/workflows/workflow-catalyst-event-research.md`](../../../docs/workflows/workflow-catalyst-event-research.md)
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 

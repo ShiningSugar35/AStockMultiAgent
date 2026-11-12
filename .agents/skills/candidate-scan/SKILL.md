@@ -27,6 +27,8 @@ description: Build an evidence-bounded A-share research candidate or observation
 
 ## Workflows
 
+- [社区舆情补充工作流](../../../docs/workflows/workflow-community-sentiment.md)
+
 - [`docs/workflows/workflow-candidate-discovery.md`](../../../docs/workflows/workflow-candidate-discovery.md)
 
 ## Output boundary

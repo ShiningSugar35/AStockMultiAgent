@@ -18,6 +18,7 @@ from astock.schemas import (
     Market,
     ProviderDefinition,
 )
+from astock.social_sources.models import SocialSearchResult
 
 if TYPE_CHECKING:
     from astock.providers.runtime import ProviderFactory
@@ -78,6 +79,22 @@ class ProviderSelfProbeRunner:
             record_count, quality = self._disclosure_search(provider, definition.probe_target)
         elif operation == "news-lead":
             record_count, quality = self._news_lead(provider, definition.probe_target)
+        elif operation == "community-search":
+            fetch = getattr(provider, "search_checked", None)
+            if not callable(fetch):
+                record_count, quality = 0, False
+            else:
+                now = datetime.now(UTC)
+                result = fetch(
+                    symbol=str(definition.probe_target["symbol"]),
+                    company_names=(str(definition.probe_target["name"]),),
+                    start=now - timedelta(days=7),
+                    end=now,
+                )
+                if not isinstance(result, SocialSearchResult):
+                    raise ValueError("community search probe result contract mismatch")
+                record_count = len(result.coverage)
+                quality = bool(result.complete and record_count >= 2)
         elif operation == "macro-indicator":
             record_count, quality = self._macro_indicator(provider, definition.probe_target)
         else:
@@ -322,6 +339,8 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
         selected = [item for item in capabilities if item == "disclosure.discover"]
     elif operation == "news-lead":
         selected = [item for item in capabilities if item == "news.discovery.lead"]
+    elif operation == "community-search":
+        selected = [item for item in capabilities if item == "news.community.lead"]
     elif operation == "macro-indicator":
         selected = [item for item in capabilities if item.startswith("macro.")]
     else:

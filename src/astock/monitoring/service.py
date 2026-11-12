@@ -131,6 +131,8 @@ class ContinuousMonitorService:
                 GdeltNewsLeadProvider.capability,
                 GdeltNewsLeadProvider,
             )
+        if isinstance(self.news, GdeltNewsLeadProvider):
+            self.news.max_search_requests = config.news.max_search_requests_per_target
 
     def enroll(
         self,
@@ -334,6 +336,53 @@ class ContinuousMonitorService:
                     )
                     success[source] += 1
                 assert_lease()
+        # Community search is a slow, browser-bound supplementary lane. Run it
+        # after existing market/announcement/paper work, at most one target per
+        # cycle by default; it cannot delay the primary target handlers.
+        if live and self.config.community_max_targets_per_cycle:
+            from astock.social_sources.config import load_social_search_config
+
+            try:
+                social_config = load_social_search_config(
+                    self.paths.root, create_local=False
+                )
+            except (OSError, ValueError):
+                social_config = None
+            if social_config is not None and social_config.enabled:
+                attempted = 0
+                for target in targets:
+                    if attempted >= self.config.community_max_targets_per_cycle:
+                        break
+                    source = MonitorSource.COMMUNITY
+                    if not self.repo.source_due(
+                        target.target_id, source, at=started,
+                        cadence=self.config.cadence(source),
+                    ):
+                        continue
+                    attempted += 1
+                    assert_lease()
+                    try:
+                        events, tasks, cursor = self._process_community(
+                            target, started, lease_guard=assert_lease
+                        )
+                    except Exception as exc:
+                        assert_lease()
+                        failure[source] += 1
+                        count = self.repo.source_failure(
+                            target.target_id, source, at=started,
+                            retry_backoff_seconds=self.config.retry_backoff_seconds,
+                        )
+                        findings.append(
+                            f"{target.target_id}:COMMUNITY:{type(exc).__name__}:attempt={count}"
+                        )
+                    else:
+                        assert_lease()
+                        event_count += events
+                        task_count += tasks
+                        self.repo.source_success(
+                            target.target_id, source, cursor=cursor, at=started
+                        )
+                        success[source] += 1
         assert_lease()
         ended = datetime.now(UTC)
         run_status = (
@@ -569,7 +618,13 @@ class ContinuousMonitorService:
         assert_lease()
         cursor = self.repo.cursor(target.target_id, MonitorSource.GDELT)
         cursor_dt = _cursor_datetime(cursor)
-        start = cursor_dt or now - timedelta(minutes=self.config.news.lookback_minutes)
+        # Bounded overlap catches late-indexed leads while stable dedupe avoids
+        # repeated research tasks. The cursor is the checked window end, not
+        # the newest lead timestamp.
+        start = (
+            cursor_dt - timedelta(minutes=self.config.news.lookback_minutes)
+            if cursor_dt else now - timedelta(minutes=self.config.news.lookback_minutes)
+        )
         leads = self.news.search(
             names=[target.display_name, *target.aliases],
             symbol=target.symbol,
@@ -619,7 +674,51 @@ class ContinuousMonitorService:
             assert_lease()
             _, task_inserted = self.repo.ensure_task(stored)
             tasks += int(task_inserted)
-        return events, tasks, (latest.astimezone(UTC).isoformat() if latest else now.isoformat())
+        if not getattr(leads, "complete", True):
+            # Results already persisted and deduplicated. Do not certify or
+            # advance the watermark of an incomplete news search.
+            raise RuntimeError("GDELT_NEWS_WINDOW_INCOMPLETE")
+        return events, tasks, now.isoformat()
+
+    def _process_community(
+        self,
+        target: ContinuousMonitorTarget,
+        now: datetime,
+        *,
+        lease_guard: Callable[[], None] | None = None,
+    ) -> tuple[int, int, str | None]:
+        """Capture community leads for one watched security, without trading."""
+        from astock.social_sources.monitor import SocialWatchIngestionService
+        from astock.social_sources.provider import SocialBrowserSearchProvider
+
+        assert_lease = lease_guard or (lambda: None)
+        assert_lease()
+        company_names = (
+            (target.display_name,)
+            if target.display_name and target.display_name != target.symbol else ()
+        )
+        result = SocialBrowserSearchProvider(
+            self.objects, self.state, self.paths.root
+        ).search_checked(
+            symbol=target.symbol,
+            company_id=target.company_id,
+            company_names=company_names,
+            aliases=tuple(target.aliases),
+            start=now - timedelta(days=7),
+            end=now,
+        )
+        assert_lease()
+        receipt = SocialWatchIngestionService(
+            self.paths.root, self.state, self.objects
+        ).ingest(result, at=now)
+        if not result.complete:
+            # Keep the old cursor; captured leads already have stable event IDs.
+            raise RuntimeError("COMMUNITY_WINDOW_INCOMPLETE")
+        return (
+            receipt["inserted_events"],
+            receipt["inserted_research_tasks"],
+            now.isoformat(),
+        )
 
     def _process_catalysts(
         self,
@@ -868,15 +967,17 @@ class ContinuousMonitorService:
         news_lead_only: bool = False,
     ) -> MonitorEvent:
         payload_hash = content_hash(payload)
-        dedupe_key = content_hash(
-            {
-                "target_id": target.target_id,
-                "event_type": event_type.value,
-                "source": source.value,
-                "suffix": dedupe_suffix,
-                "payload_hash": payload_hash,
-            }
-        )
+        # Lead identities must survive a re-fetch: snapshot IDs are expected
+        # to change even for the same article, and must not create new events.
+        dedupe_fields = {
+            "target_id": target.target_id,
+            "event_type": event_type.value,
+            "source": source.value,
+            "suffix": dedupe_suffix,
+        }
+        if event_type is not MonitorEventType.NEWS_LEAD:
+            dedupe_fields["payload_hash"] = payload_hash
+        dedupe_key = content_hash(dedupe_fields)
         return MonitorEvent(
             event_id="monitor-event:" + dedupe_key,
             target_id=target.target_id,

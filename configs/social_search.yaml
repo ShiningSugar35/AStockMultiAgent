@@ -1,0 +1,50 @@
+schema_version: social-search-v1
+enabled: true
+bridge:
+  host: 127.0.0.1
+  port: 8766
+  extension_id: fbnbpechaglgicjjfipdiaaffiedmamc
+  request_timeout_seconds: 120
+  poll_wait_seconds: 15
+  job_lease_seconds: 180
+  max_request_bytes: 2097152
+search:
+  lookback_days: 7
+  max_queries_per_platform: 4
+  max_scrolls: 4
+  max_items_per_query: 80
+  minimum_text_characters: 12
+  maximum_text_characters: 12000
+  default_management_terms:
+    - 董事长
+    - 总经理
+    - 实际控制人
+    - 董秘
+    - 高管
+  positive_hint_terms:
+    - 利好
+    - 增长
+    - 超预期
+    - 新订单
+    - 放量
+    - 涨价
+    - 受益
+    - 改善
+    - 回购
+    - 增持
+    - 突破
+  negative_hint_terms:
+    - 利空
+    - 暴雷
+    - 亏损
+    - 下滑
+    - 减持
+    - 诉讼
+    - 处罚
+    - 调查
+    - 造假
+    - 裁员
+    - 降价
+    - 砍单
+    - 停产
+    - 风险

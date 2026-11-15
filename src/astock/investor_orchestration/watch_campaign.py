@@ -42,9 +42,6 @@ class CampaignRound(StrictModel):
     total_units: int = Field(default=1, ge=1)
     child_task_id: str | None = None
     report_file: str | None = None
-    submit_status: Literal[
-        "NOT_SUBMITTED", "SUBMITTED", "SENT", "FAILED", "UNKNOWN"
-    ] = "NOT_SUBMITTED"
 
 
 class CampaignBeginResult(CampaignRound):
@@ -241,7 +238,6 @@ class WatchCampaignService:
             "total_units",
             "child_task_id",
             "report_file",
-            "submit_status",
             "status",
         }
         if set(payload) - allowed:

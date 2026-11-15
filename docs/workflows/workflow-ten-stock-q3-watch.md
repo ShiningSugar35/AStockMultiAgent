@@ -1,8 +1,8 @@
 # Workflow: 10+三季报观察与组合跟踪
 
-> 状态：CURRENT（执行工作流；各能力的真实启用/送达以运行回执为准）
+> 状态：CURRENT（执行工作流；实际启用以本地运行回执为准）
 > 更新：2026-10-08
-> 当前实现：watch_campaign 元数据接口、代际 lease/CAS 续接、既有研究/QQ传输；定时创建、专项回归和端到端送达状态见本次进度验收，不能从本文推断已全部验收。
+> 当前实现：watch_campaign 元数据接口、代际 lease/CAS 续接、已有增量研究与本地报告投影；实际调度、专项回归以运行回执为准，不能从本文推断全部能力均已验收。
 > 研究范围：原十股 + 知乎问题2082115587866637459引出的8只身份核验候选，目前18股，今后以ResearchSubjectRegistry动态投影为准；不宣称全市场选股；不下真实或模拟订单。
 
 ## When to use
@@ -20,9 +20,9 @@ canonical campaign=`ten-stock-q3-2026`，元数据保存在现有SQLite checkpoi
 .venv\Scripts\python.exe -B -m astock.investor_orchestration.watch_campaign begin --slot pm --bucket YYYY-MM-DD --owner 本次唯一激活ID
 ```
 
-时间均为Asia/Shanghai。观察任务每日16:00；组合任务07:30、16:00。07:30是盘前，价格使用上一交易日正式收盘并明确日期，不存在当天开盘价；休市日仅刷新有变化的新闻/政策，价格明确注明最近交易日。同日16点观察与组合使用同一pm round/lease，未取得lease的任务不重复研究或推送；先取得者输出一份合并日终报告。
+时间均为Asia/Shanghai。观察任务每日16:00；组合任务07:30、16:00。07:30是盘前，价格使用上一交易日正式收盘并明确日期，不存在当天开盘价；休市日仅刷新有变化的新闻/政策，价格明确注明最近交易日。同日16点观察与组合使用同一pm round/lease，未取得lease的任务不重复研究或生成报告；先取得者保存一份合并日终报告。
 
-每次激活先记录真实开始时刻并执行`begin`。返回的`round_id + lease_generation`是后续checkpoint的CAS身份，owner仅作诊断及旧调用兼容；相同owner重入不能重置时钟，到期后返回`lease_acquired=false / EXPIRED_LEASE`；不得改名伪造新activation来延长本次35分钟窗口。空checkpoint只确认当前lease、不续租；到期的显式token和旧owner-only调用均返回`STALE_LEASE`。新激活遇到未过期live lease时，`begin`正常返回`lease_acquired=false / LIVE_OWNER`并立即静默结束，而不是把Scheduled任务打成失败；同一目标轮已`COMPLETE`时返回`ALREADY_COMPLETE`并同样不重复研究/推送。旧轮释放或租期到期后，续接保持原round_id和已有进度、递增lease_generation，并把活动状态恢复为`PENDING`，使本activation的中途checkpoint/提交前lease校验不会因继承旧`PARTIAL`状态而再次释放lease；不因跨日或平台retry另起平行轮。一个slot只保留当前轮次和必要checkpoint，非累积流水。`COMPLETE`表示本轮覆盖完成，不等于已完成选股或已送达QQ。
+每次激活先记录真实开始时刻并执行`begin`。返回的`round_id + lease_generation`是后续checkpoint的CAS身份，owner仅作诊断及旧调用兼容；相同owner重入不能重置时钟，到期后返回`lease_acquired=false / EXPIRED_LEASE`；不得改名伪造新activation来延长本次35分钟窗口。空checkpoint只确认当前lease、不续租；到期的显式token和旧owner-only调用均返回`STALE_LEASE`。新激活遇到未过期live lease时，`begin`正常返回`lease_acquired=false / LIVE_OWNER`并立即静默结束，而不是把Scheduled任务打成失败；同一目标轮已`COMPLETE`时返回`ALREADY_COMPLETE`并同样不重复研究/生成报告。旧轮释放或租期到期后，续接保持原round_id和已有进度、递增lease_generation，并把活动状态恢复为`PENDING`，使本activation的中途checkpoint/提交前lease校验不会因继承旧`PARTIAL`状态而再次释放lease；不因跨日或平台retry另起平行轮。一个slot只保留当前轮次和必要checkpoint，非累积流水。`COMPLETE`表示本轮覆盖完成，不等于正式投资决策已完成。
 
 ### 每轮内容与证据
 
@@ -30,7 +30,7 @@ canonical campaign=`ten-stock-q3-2026`，元数据保存在现有SQLite checkpoi
 
 10+观察每日覆盖：收盘价、涨跌幅、成交额/换手与量能、估值变化；公司正式公告与财报；行业、上下游与政策；增量对原研究逻辑的加强/削弱/不变；尚缺证据与下次检查条件。关键事实回到交易所/CNINFO/发行人/监管官方源，多源交叉。新闻采集失败写清“本轮未完整核验”，不能写“无新闻”。旧半年报数据必须重新核验，未披露的报告不编造。
 
-行情正式数据口径（2026-10-09增量）：单股`sync-daily`生成的`DAILY_UNADJUSTED`当日可追溯release代表项目已登记该交易日时点行情，不能在缺少`OHLCV_SECONDARY_VALIDATED`时进一步声称交易所官方或独立双源确认；Sina等来源没有交易额时不以收盘价乘股数冒充真实成交额。原生整手（100股）来源与逐股来源比对时，按`configs/market_reference.yaml`具名路由的`daily_volume_quantum_shares`声明核验整数份额，保留完整OHLC/身份/日期/复权/有值成交额严格比较，容忍量纲舍入仅限小于原生半个量化单位并显式留`OHLCV_SECONDARY_VOLUME_QUANTIZED`。源熔断或未抓到有效双源时仍按单源登记并说明缺口，不伪造双源确认。按本轮有效报告更新本地`latest-am.md`不会改写已受理的QQBot原收件正文，同report_id仍不可盲重发。
+行情正式数据口径（2026-10-09增量）：单股`sync-daily`生成的`DAILY_UNADJUSTED`当日可追溯release代表项目已登记该交易日时点行情，不能在缺少`OHLCV_SECONDARY_VALIDATED`时进一步声称交易所官方或独立双源确认；Sina等来源没有交易额时不以收盘价乘股数冒充真实成交额。原生整手（100股）来源与逐股来源比对时，按`configs/market_reference.yaml`具名路由的`daily_volume_quantum_shares`声明核验整数份额，保留完整OHLC/身份/日期/复权/有值成交额严格比较，容忍量纲舍入仅限小于原生半个量化单位并显式留`OHLCV_SECONDARY_VOLUME_QUANTIZED`。源熔断或未抓到有效双源时仍按单源登记并说明缺口，不伪造双源确认。按本轮有效证据更新本地`latest-am.md`，但报告文件不代替正式已登记的研究工件。
 
 深研按当前成员分片推进并保存已核验证据ID：最新PE/PB/现金流估值及其适用性、可获得区间内的历史估值分位（明确窗口、亏损/异常值处理）、公司指引与有来源一致预期修正、交易活跃度/机构覆盖等关注度代理。市场聚焦AI不自动证明低估；并表、授权收入、汇兑、低基数与一次性收益单独拆分；医药同品规同税率净价/销量分别验证。
 
@@ -46,9 +46,9 @@ canonical campaign=`ten-stock-q3-2026`，元数据保存在现有SQLite checkpoi
 
 ### 35分钟准备交接 / 40分钟核验 / 45分钟项目上限
 
-`configs/chat_invocation_policy_v1.yaml`为唯一阈值配置。CHATGPT_CHAT每次激活2100秒起停止启动新长任务并保存同一轮已验证进度；2400秒前核验真实平台续接绑定；2700秒前完成激活收口与lease释放。若平台更早结束则提前留出交接余量。中途只保存checkpoint，不要求向QQ提交未完成研究正文，完整且独立审计通过的当轮报告才可送达。OTHER_AGENT没有总体研究时限；批次预算耗尽后恢复同一研究请求。
+`configs/chat_invocation_policy_v1.yaml`为唯一阈值配置。CHATGPT_CHAT每次激活2100秒起停止启动新长任务并保存同一轮已验证进度；2400秒前核验真实平台续接绑定；2700秒前完成激活收口与lease释放。若平台更早结束则提前留出交接余量。中途只保存 checkpoint，不发布未完成研究正文；完整且独立审计通过的报告才可进入既有正式展示流程。OTHER_AGENT没有总体研究时限；批次预算耗尽后恢复同一研究请求。
 
-Scheduled automation运行时不动态创建另一条automation。本campaign使用预先绑定的每小时continuation watcher：新round自动继承该opaque task ID，watcher只续接同一未完成round，不重新抓已满足来源；周期最高每小时一次，不能承诺亚小时周期。交互式ChatGPT会话只有在平台明确允许时才可创建新的子Scheduled；预绑定/平台权限失败必须写入断点，不能把提示词或本地配置冒充已创建任务。云平台在收口前中断时无法保证本次推送，此时从已落地checkpoint恢复，不以提示词保证平台永不retry。
+Scheduled automation运行时不动态创建另一条automation。本campaign使用预先绑定的每小时continuation watcher：新round自动继承该opaque task ID，watcher只续接同一未完成round，不重新抓已满足来源；周期最高每小时一次，不能承诺亚小时周期。交互式ChatGPT会话只有在平台明确允许时才可创建新的子Scheduled；预绑定/平台权限失败必须写入断点，不能把提示词或本地配置冒充已创建任务。云平台在收口前中断时，按已落地 checkpoint 恢复剩余研究和报告生成，不假定平台永不 retry。
 
 通过JSON输入保存checkpoint（最多64KiB；内容覆盖，不追加历史）。新调用必须使用`begin`返回的完整lease token：
 
@@ -56,21 +56,13 @@ Scheduled automation运行时不动态创建另一条automation。本campaign使
 .venv\Scripts\python.exe -B -m astock.investor_orchestration.watch_campaign checkpoint --slot pm --round-id <begin返回round_id> --lease-generation <begin返回lease_generation> --input runtime/watch-campaign/checkpoint.json
 ```
 
-字段：checkpoint（已完成证据/缺口/下一节点，最多12000字）、completed_units/total_units、child_task_id、report_file、submit_status、status（PENDING/PARTIAL/COMPLETE）。`round_id`与`lease_generation`必须成对传入；二者匹配且lease仍活动时才应用写入。过期、已释放或已被新activation接管的旧lease返回`checkpoint_applied=false / STALE_LEASE`，不覆盖当前进度、不把调用打成异常，也不得继续覆盖报告或执行QQ提交。旧的owner-only调用暂保留兼容，但owner字符串不再是新流程的并发正确性凭据。真实证据决定完成单位；PARTIAL/COMPLETE释放lease。交互式会话临时创建的子Scheduled只在其逻辑请求完成后停自身；本campaign预绑定的每小时continuation watcher不是临时子任务，单个am/pm round完成时不得停用，只有campaign及相关日常跟踪明确结束时才停。
+字段：checkpoint（已完成证据/缺口/下一节点，最多12000字）、completed_units/total_units、child_task_id、report_file、status（PENDING/PARTIAL/COMPLETE）。`round_id`与`lease_generation`必须成对传入；二者匹配且lease仍活动时才应用写入。过期、已释放或已被新activation接管的旧lease返回`checkpoint_applied=false / STALE_LEASE`，不覆盖当前进度、不把调用打成异常，也不得继续覆盖报告。旧的owner-only调用暂保留兼容，但owner字符串不再是新流程的并发正确性凭据。真实证据决定完成单位；PARTIAL/COMPLETE释放lease。交互式会话临时创建的子Scheduled只在其逻辑请求完成后停自身；本campaign预绑定的每小时continuation watcher不是临时子任务，单个am/pm round完成时不得停用，只有campaign及相关日常跟踪明确结束时才停。
 
-### QQ推送与有界留存
+### 报告投影与有界留存
 
-研究checkpoint、报告投影和QQ送达分别处理：不修改`report_file`的checkpoint不重新检查旧报告是否仍存在，因此报告丢失/生成失败不能阻塞保存证据、进度和PARTIAL释放；新增或重新登记`report_file`时仍校验项目内真实文件。历史路径引用不是本轮报告可发送的证明。发送前必须核对本轮正文、报告身份与当前lease；文件写入失败只记录报告阶段缺口，SSH失败只记录提交阶段缺口，不把有效研究进度清零，不为恢复推送重跑已满足来源。
+研究 checkpoint 与报告投影分别处理：保存证据、进度及 PARTIAL 释放不依赖历史报告文件存在；只有显式新增或重新登记 `report_file` 时才校验项目内的真实文件。文件生成或覆盖失败仅影响本轮报告投影，不清空已完成的研究，也不重跑已核验的来源。
 
-`checkpoint_applied=true`只证明本次元数据写入被接纳，不是下一次文件覆盖或SSH外部动作的事务锁，更不是发送成功回执。当前generation CAS不宣称跨文件/SSH的exactly-once；同一待提交报告应先在原`checkpoint`文本内保存固定`report_id`（不新增顶层JSON字段），并沿用原submit的`--report-id`参数，不能在模糊结果后生成新ID重发。QQ端同ID去重及查询仍由原transport承担。MCP工作区路径可用、文件写入成功、checkpoint成功、inbox接收与QQ群送达必须各自有原始回执，不能互相替代。
-
-正文保存固定路径`runtime/watch-campaign/latest-am.md`或`latest-pm.md`，覆盖写入。原有命令：
-
-```
-.venv\Scripts\python.exe -B -m astock investor qqbot-stock-submit runtime/watch-campaign/latest-pm.md
-```
-
-只发送研究/观察结果，不代发订单。QQBot现有订阅负责目标群与最终送达，LLM不接管。新提交的 `SUBMITTED` 仅代表 inbox 接收（旧 checkpoint 的 `SENT` 仅兼容读取）；只有 QQBot 实际 delivery 回执才可说已推送到群。`UNKNOWN` 不盲目重发；先按 report_id 核对远端既有 inbox/delivery，再决定是否恢复。16点两任务共用round，并只由owner提交一次正文。
+`checkpoint_applied=true` 仅表示本轮元数据写入成功，并非跨文件操作的事务锁或报告发布许可。正文可以覆盖保存至 `runtime/watch-campaign/latest-am.md` 或 `latest-pm.md`；正式投资结论仍须由现有完整研究链与发布门认证。16点的观察和组合任务共享同一 pm round，并只保存一次合并报告。
 
 当前md覆盖维护；基本面/新闻摘要按当前有效证据增量替换，不把全文天天累加。高频重算中间态、成功pytest目录立即清理；过期失败/孤儿缓存由原retention白名单回收，包括注册worktree内部quality-runs/tmp。买入快照、账本、当前引用的官方原件/正式receipt不是垃圾；失效蒸馏/未引用衍生对象只能经原canonical引用审计与GC删除，不用rmtree删整个ObjectStore。旧原件需要维持精简的历史估值/财务比较所需数据，不复制整套原件为“每日备份”。
 

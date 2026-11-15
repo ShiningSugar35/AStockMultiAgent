@@ -674,7 +674,7 @@ def test_machine_status_is_rendered_as_natural_investor_language_without_false_m
 
 
 @pytest.mark.parametrize("text", [
-    "QQ投递：固定report_id=stock-123，DeliveryLedger仍待核对。",
+    "内部状态：固定report_id=stock-123，DeliveryLedger仍待核对。",
     "一手披露原件尚未作为项目正式SourceSnapshot完成入库。",
     "部分官方公告索引尚未逐项完整枚举。",
     "本轮本地状态核验显示研究已通过Publication Gate。",

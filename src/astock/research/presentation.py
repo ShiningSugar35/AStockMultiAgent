@@ -376,7 +376,7 @@ def _polish_narrative(
     context: ResponseContext,
     policy: PresentationPolicy,
 ) -> ResearchNarrativeBundle:
-    """One semantic-safe editorial pass shared with ordinary Agent/QQ output."""
+    """One semantic-safe editorial pass shared with ordinary Agent and report output."""
 
     def clean(text: str) -> str:
         return polish_public_text(

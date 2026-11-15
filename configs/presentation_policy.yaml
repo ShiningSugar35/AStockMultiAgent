@@ -7,7 +7,7 @@ safe_fallback_text: "当前研究报告尚有内容需要核实或修订，暂�
 public_internal_process_patterns:
   - '(?i)(?:report_id|DeliveryLedger|SourceSnapshot|Publication Gate|FinancialSourceRelease)'
   - '(?i)\breport_id\b|\bDeliveryLedger\b|\bSourceSnapshot\b|\bPublication Gate\b'
-  - '(?:QQ投递|正式推荐收据|认证及研究收据|官方公告索引)'
+  - '(?:正式推荐收据|认证及研究收据|官方公告索引)'
   - '(?:本轮|本次)(?:机器|本地|系统)(?:状态|核验|读取)'
   - '(?:项目正式|内部)(?:官方|认证|入库)'
   - '(?:未生成|不生成|不下|未下)(?:实际|模拟|真实|任何)?(?:订单|持仓收益)'

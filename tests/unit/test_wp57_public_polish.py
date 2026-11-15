@@ -1,4 +1,4 @@
-"""WP-57 public editor must be shared by agent and QQ without inventing or hiding business facts."""
+"""Public editor shared by investor-facing surfaces without changing business facts."""
 from __future__ import annotations
 
 import pytest
@@ -24,14 +24,14 @@ def test_business_fact_and_negative_risk_are_preserved(original: str) -> None:
     assert result.text == original
 
 
-def test_qq_metadata_including_chinese_adjacent_identifier_is_removed() -> None:
+def test_internal_metadata_including_chinese_adjacent_identifier_is_removed() -> None:
     original = (
-        "结论：继续观察。QQ投递：report_id=internal-123；"
+        "结论：继续观察。报告投递：report_id=internal-123；"
         "DeliveryLedger未更新。"
     )
     result = polish_public_text(original, explain_terms=False)
     assert "继续观察" in result.text
-    for forbidden in ("QQ投递", "report_id", "internal-123", "DeliveryLedger"):
+    for forbidden in ("报告投递", "report_id", "internal-123", "DeliveryLedger"):
         assert forbidden not in result.text
 
 
@@ -39,13 +39,13 @@ def test_process_prose_is_removed_but_explicit_business_uncertainty_survives() -
     original = (
         "部分官方公告索引尚未逐项完整枚举。\n"
         "估值区间为20元至25元，正式季报尚未披露。\n"
-        "QQ投递：报告已提交，群送达待确认。"
+        "报告投递：报告已提交，消息送达待确认。"
     )
     result = polish_public_text(original, explain_terms=False)
     assert "公告尚待核实" in result.text
     assert "20元至25元" in result.text
     assert "季报尚未披露" in result.text
-    assert "群送达" not in result.text
+    assert "消息送达" not in result.text
 
 
 def test_sensitive_data_is_redacted_without_losing_citations_or_valuation() -> None:
@@ -97,7 +97,7 @@ def test_process_label_must_not_erase_inline_investment_facts(
 
 
 def test_polisher_is_idempotent_and_does_not_invent_claims() -> None:
-    text = "结论：看跌，参考价27.30元。[S1]\nQQ投递：report_id=x1。"
+    text = "结论：看跌，参考价27.30元。[S1]\n报告投递：report_id=x1。"
     first = polish_public_text(text, explain_terms=False)
     second = polish_public_text(first.text, explain_terms=False)
     assert first.text == second.text
@@ -118,8 +118,8 @@ def test_nested_windows_user_profile_is_redacted_without_losing_investment_facts
     assert not audit_public_answer(result.text).private_path_exposed
 
 
-def test_agent_public_polish_cli_uses_same_editor_as_qq(tmp_path) -> None:
-    draft = "建议继续观察，参考价20元。[S1]\nQQ投递：report_id=internal-x。"
+def test_agent_public_polish_cli_uses_same_editor_as_reports(tmp_path) -> None:
+    draft = "建议继续观察，参考价20元。[S1]\n报告投递：report_id=internal-x。"
     text_file = tmp_path / "agent-draft.txt"
     text_file.write_text(draft, encoding="utf-8")
     result = CliRunner().invoke(app, ["public-polish", str(text_file)])
@@ -130,7 +130,7 @@ def test_agent_public_polish_cli_uses_same_editor_as_qq(tmp_path) -> None:
 
 
 def test_technical_process_only_input_does_not_become_buy_advice() -> None:
-    result = polish_public_text("QQ投递：report_id=x。", explain_terms=False)
+    result = polish_public_text("报告投递：report_id=x。", explain_terms=False)
     assert "买入" not in result.text
     assert "看涨" not in result.text
-    assert "QQ投递" not in result.text
+    assert "报告投递" not in result.text

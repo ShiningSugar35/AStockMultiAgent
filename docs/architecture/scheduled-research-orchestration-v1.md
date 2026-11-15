@@ -55,8 +55,8 @@ ChatGPT / Work / Codex Scheduled Task（语义研究/通知平面，按时唤醒
 逻辑研究与单次激活分别计时。宿主必须显式标明 `CHATGPT_CHAT` 或 `OTHER_AGENT`，模型名、进程名和CLI入口不能代替宿主身份。
 
 - **CHATGPT_CHAT**：单次激活以真实开始时间计时，唯一项目阈值为 `configs/chat_invocation_policy_v1.yaml` 的 2100/2400/2700 秒：35 分钟后保存已验证工作并准备交接、40 分钟前核验真实平台续接绑定、45 分钟内完成本次激活；若平台实际更早结束则提前准备。保存同一 request/round 的 checkpoint、待核实缺口、下一执行节点，不因为到达交接时间自动对外发布半成品投资报告。经事实与输出审核的完整独立阶段结果可以依用户授权发送。交互会话只在平台实际允许时创建或复用子 Scheduled；Scheduled 自身不能动态创建 Scheduled 时沿用预绑定的每小时 watcher。仅有 opaque task ID 不能证明续接已经核验，权限或绑定缺失应留存状态；平台续接不覆盖正在运行的其他任务。该限制约束单次激活，不截断逻辑研究；相同 owner 重入不能重置计时。
-- campaign续接的并发正确性使用`round_id + lease_generation`做代际CAS，owner字符串只保留诊断与旧调用兼容。live lease冲突、同轮已COMPLETE、同activation租期到期均返回正常no-acquire结果，不把预期编排状态当异常；到期begin返回`EXPIRED_LEASE`且不重置时钟。旧generation、已释放、被接管或到期lease的checkpoint返回`STALE_LEASE`安全no-op，不覆盖新进度；调用方收到no-op不得继续覆盖报告或QQ提交。OS级`schedule_run_ownership`只承担同主机极短临界区互斥，不能替代durable lease，也不锁住之后的文件/SSH动作。
-- 研究metadata与报告投影解耦：checkpoint只有显式登记`report_file`时才验证项目内真实文件，不因历史报告缺失阻断普通进度保存或PARTIAL释放。报告失败、提交失败、inbox接收和实际delivery各自记状态；不把局部故障传播成已完成研究清零。提交前checkpoint只证明该次metadata接纳，不能当跨文件/SSH的原子提交或exactly-once证明；报告固定ID与QQ既有inbox去重/query、UNKNOWN不盲重发仍是外部副作用恢复契约。
+- campaign续接的并发正确性使用`round_id + lease_generation`做代际CAS，owner字符串只保留诊断与旧调用兼容。live lease冲突、同轮已COMPLETE、同activation租期到期均返回正常no-acquire结果，不把预期编排状态当异常；到期begin返回`EXPIRED_LEASE`且不重置时钟。旧generation、已释放、被接管或到期lease的checkpoint返回`STALE_LEASE`安全no-op，不覆盖新进度；调用方收到no-op不得继续覆盖报告。OS级`schedule_run_ownership`只承担同主机极短临界区互斥，不能替代durable lease，也不锁住之后的文件/SSH动作。
+- 研究metadata与报告投影解耦：checkpoint只有显式登记`report_file`时才验证项目内真实文件，不因历史报告缺失阻断普通进度保存或PARTIAL释放。报告投影失败仅影响对应本地文件的生成与展示，不清空已核验的研究进度；checkpoint接纳只证明元数据完成写入，不承担跨文件操作的原子事务。
 - `OTHER_AGENT`：不设置整体研究时限，不因 35/40/45 分钟截断 Research Team、公司深研或最终报告。该规则只取消总体 wall-clock 截断；HTTP timeout、provider retry、单任务 lease、并发上限、内存/候选数和显式花费预算仍保持有界，卡死 worker 仍可被 lease 取消。
 - 进度仅计算已有终态证据的工作项；失败、跳过和排队不算完成。进度不能豁免45分钟项目激活上限；35分钟是准备交接时点，新增必要工作保留在原round的版本化工作图。
 - 主对话与 Scheduled 续接共享逻辑 request id，但每次唤醒都必须重新核对输入 revision、round/lease generation 与已完成 checkpoint，避免重复深研、重复写 receipt 或双写。逻辑请求完成后只停用该请求临时创建的 Scheduled，不影响其它自动化；预绑定的长期 continuation watcher 不随单个 round 完成而停用，只有其 campaign/日常跟踪整体明确结束时才停止。
@@ -148,22 +148,6 @@ ChatGPT / Work / Codex Scheduled Task（语义研究/通知平面，按时唤醒
 - 结束：公告落地、订单终结、催化剂窗口结束、达到最大运行次数或需要用户裁决。
 
 默认不建议创建多个按公司拆分的小时任务；应按“组合/研究集合 + 重大增量”聚合，以节省活动任务槽、模型额度和通知噪声。
-
-### 4.4 ChatGPT 报告同步到 QQBot 股票订阅
-
-当用户明确要求把 Scheduled Task 的最终投资者报告同步到 QQ 群时，**ChatGPT Scheduled Task 仍是唯一报告时钟**。AStock 不再创建第二个 Windows/本地报告定时器，也不把这条通知接入 `scheduled_notifications`；它只提供一个确定性的 transport CLI：`uv run astock investor qqbot-stock-submit REPORT_FILE`。
-
-链路固定为：
-
-```text
-ChatGPT Scheduled Task → AStock 增量研究/最终正文
-  → qqbot-stock-submit（单次 SSH stdin）
-  → QQBot packs/astock inbox
-  → QQBot 现有 subscriptions / FeedRunner
-  → 统一 PUSH delivery → 目标群
-```
-
-公开报告、Agent 文本和 QQ transport 统一在事实认证后经 `public_polish` 轻量润色：先自动去除技术状态、凭据和私人路径及重复元话语，再使用同一公共审计；不因普通文风问题停止发送，真正的事实授权缺口仍按原发布门处理。对于绕开 ResponseGateway 的 Agent 草稿，使用 `astock investor public-polish TEXT_FILE` 处理后再发送。QQBot 的 `astock_report` 订阅不配置 `prompt`，因此不调用 QQBot Brain/LLM；AStock 不知道 QQ 群号，目标仍由 QQBot 的运行配置管理。transport 不维护第二套 scheduler、消息总线或独立 delivery ledger，也不对模糊超时自动重试。状态语义必须分层：`SUBMITTED` 只表示 QQBot inbox 已接受 envelope；`DELIVERED` 只能由 QQBot 的 FeedRunner / per-destination DeliveryLedger 证明，AStock 的 SSH 成功不得冒充群送达；确定失败为 `FAILED`，超时或不可读回执为 `UNKNOWN`。`SENT` 仅作为旧 checkpoint 的兼容值，不再作为新提交的成功回执。发送端与接收端共同限制 envelope 为 1 MiB UTF-8 bytes；已配置专用 `known_hosts` 时使用 `StrictHostKeyChecking=yes`，禁止 `accept-new`/关闭 host-key checking。QQBot inbox 以 `report_id` 做幂等准入：同 id 同正文返回 `already_accepted`，同 id 不同正文明确 conflict。`UNKNOWN` 仍禁止自动重发；恢复入口使用 `uv run astock investor qqbot-stock-status REPORT_ID` 查询 QQBot inbox 准入状态：`SUBMITTED` 表示已存在、`ABSENT` 才允许进入人工/受控重试判断；群级 `DELIVERED` 仍以 QQBot DeliveryLedger 为唯一权威。SSH 账号的长期目标是 dedicated ingest identity + `authorized_keys` forced-command，禁 shell/PTY/port-forward/agent-forward；在服务器变更准备和回滚证据齐全前只保留设计，不直接改生产账号。
 
 ## 5. 执行位置选择
 

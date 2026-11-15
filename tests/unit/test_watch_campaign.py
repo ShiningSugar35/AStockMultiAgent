@@ -402,7 +402,20 @@ def test_missing_old_report_does_not_block_research_checkpoint_or_release(
     resumed = campaign.begin("pm", "2026-10-02", "successor")
     assert resumed.round_id == started.round_id
     assert resumed.checkpoint == saved.checkpoint
-    assert resumed.submit_status == "NOT_SUBMITTED"
+    assert resumed.report_file == saved.report_file
+
+
+def test_campaign_round_keeps_strict_metadata_contract(
+    campaign: WatchCampaignService,
+) -> None:
+    from astock.investor_orchestration.watch_campaign import CampaignRound
+
+    existing = campaign.begin("pm", "2026-10-02", "owner")
+    invalid = {**existing.model_dump(mode="python"), "unexpected_extension": "not_admitted"}
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        CampaignRound.model_validate(invalid)
+    with pytest.raises(ValueError, match="unsupported fields"):
+        campaign.checkpoint("pm", "owner", {"unexpected_extension": "not_admitted"})
 
 
 def test_new_report_reference_still_requires_existing_project_file(

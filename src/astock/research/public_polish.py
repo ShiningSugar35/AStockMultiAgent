@@ -1,4 +1,4 @@
-"""Shared editorial pass for ordinary investor-facing Agent, report and QQ prose.
+"""Shared editorial pass for ordinary investor-facing Agent and formal report prose.
 
 This module is not a research/valuation engine and never grants publication authority.
 It removes administrative narration, redacts private data, and keeps investment claims.
@@ -25,12 +25,12 @@ PRIVATE_PATH_PATTERN = re.compile(
 )
 _SECTION = re.compile(
     r"^\s*#{1,6}\s*(?:研究边界|后台运行记录|内部运行状态|"
-    r"任务编排记录|QQ投递明细|内部技术说明)\s*$",
+    r"任务编排记录|内部技术说明)\s*$",
     re.I,
 )
 _HEADING = re.compile(r"^\s*#{1,6}\s+\S")
 _META_START = re.compile(
-    r"^\s*(?:[-*•]\s*)?(?:QQ投递|QQ群送达|投递前先|"
+    r"^\s*(?:[-*•]\s*)?(?:报告投递|投递前先|"
     r"本轮账户只读核验|截至本轮读取机器状态|"
     r"正式推荐收据|技术运行状态|系统运行记录|"
     r"研究边界|内部状态|全部\d+只身份均来自当前registry)"
@@ -117,7 +117,7 @@ def _edit_segment(segment: str) -> tuple[str, int]:
 
     # Split off an administrative suffix while keeping the preceding thesis.
     match = re.search(
-        r"(?:QQ投递|本轮账户只读核验|截至本轮读取机器状态|"
+        r"(?:本轮账户只读核验|截至本轮读取机器状态|"
         r"(?:报告|消息)投递|(?:本轮|本次)系统状态)[:：，]?",
         text,
         re.I,

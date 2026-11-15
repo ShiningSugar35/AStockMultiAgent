@@ -32,12 +32,6 @@ from astock.investor_orchestration.models import (
 from astock.investor_orchestration.paper_replay import CanonicalConfirmedPaperReplayAdapter
 from astock.investor_orchestration.preflight import InvestorSessionPreflightService
 from astock.investor_orchestration.public_cli import register_public_commands
-from astock.investor_orchestration.qqbot_stock_subscription import (
-    QQBotStockSubscriptionConfig,
-    QQBotStockSubscriptionSubmitter,
-    StockSubscriptionQueryStatus,
-    StockSubscriptionSubmitStatus,
-)
 from astock.investor_orchestration.regime import MarketRegimeService
 from astock.investor_orchestration.schedule_clock import (
     DailyTrackingSchedule,
@@ -665,61 +659,3 @@ def investor_public_polish(
     except (OSError, UnicodeError) as exc:
         raise typer.BadParameter("无法读取待润色的正文") from exc
     typer.echo(polish_public_text(draft).text)
-
-
-@app.command("qqbot-stock-submit")
-def qqbot_stock_submit(
-    report_file: Path = typer.Argument(..., exists=True, readable=True, dir_okay=False),
-    report_id: str | None = typer.Option(None),
-    config_path: Path = typer.Option(
-        Path("runtime/local/qqbot_stock_subscription.yaml"),
-        exists=True,
-        readable=True,
-        dir_okay=False,
-    ),
-) -> None:
-    """Submit one already-written investor report to QQBot's stock subscription inbox."""
-
-    try:
-        text = report_file.read_text(encoding="utf-8")
-        # The same public editor serves ChatGPT, other Agents and QQ transport.
-        # Reuse the formatted text without modifying an already-submitted report.
-        text = polish_public_text(text).text
-        config = QQBotStockSubscriptionConfig.load(config_path)
-        result = QQBotStockSubscriptionSubmitter(config).submit(
-            text,
-            report_id=report_id,
-        )
-    except (OSError, UnicodeError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    _dump(result.as_dict())
-    if result.status not in {
-        StockSubscriptionSubmitStatus.SUBMITTED,
-        StockSubscriptionSubmitStatus.SENT,
-    }:
-        raise typer.Exit(code=4)
-
-
-@app.command("qqbot-stock-status")
-def qqbot_stock_status(
-    report_id: str = typer.Argument(...),
-    config_path: Path = typer.Option(
-        Path("runtime/local/qqbot_stock_subscription.yaml"),
-        exists=True,
-        readable=True,
-        dir_okay=False,
-    ),
-) -> None:
-    """Read QQBot inbox admission state for one report id; never resubmit it."""
-
-    try:
-        config = QQBotStockSubscriptionConfig.load(config_path)
-        result = QQBotStockSubscriptionSubmitter(config).query(report_id)
-    except (OSError, UnicodeError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    _dump(result.as_dict())
-    if result.status in {
-        StockSubscriptionQueryStatus.FAILED,
-        StockSubscriptionQueryStatus.UNKNOWN,
-    }:
-        raise typer.Exit(code=4)

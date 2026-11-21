@@ -1,7 +1,7 @@
 schema_version: project-work-package-manifest-v1
 plan_id: investor-orchestration-and-regime-plan-v1
 status: CURRENT
-updated_on: 2026-11-15
+updated_on: 2026-11-21
 
 authority:
   machine_index: planning/work_packages_v1.yaml
@@ -17,31 +17,115 @@ rules:
   markdown_consistency_check_required: true
 
 work_packages:
+  - id: WP-67
+    order: 10
+    title: 金融计算与组合约束正确性修复
+    status: PLANNED
+    priority: P0
+    owner_lane: wp67-numeric-correctness
+    depends_on: []
+  - id: WP-68
+    order: 20
+    title: 只读诊断、黄金评测与成本基线
+    status: PLANNED
+    priority: P0
+    owner_lane: wp68-evaluation-observability
+    depends_on: []
+  - id: WP-69
+    order: 30
+    title: 指令地图、能力装载与Agent折叠实验
+    status: PLANNED
+    priority: P0
+    owner_lane: wp69-context-capability
+    depends_on: [WP-68]
+  - id: WP-70
+    order: 40
+    title: 进程生命周期与架构机械约束
+    status: PLANNED
+    priority: P0
+    owner_lane: wp70-process-architecture
+    depends_on: []
+  - id: WP-71
+    order: 50
+    title: 同请求持久补证、预算与退出语义
+    status: PLANNED
+    priority: P0
+    owner_lane: wp71-durable-recovery
+    depends_on: [WP-68, WP-70]
+  - id: WP-72
+    order: 60
+    title: Tushare权益兑现与统一数据能力适配
+    status: PLANNED
+    priority: P0
+    owner_lane: wp72-data-capabilities
+    depends_on: []
+  - id: WP-73
+    order: 70
+    title: 主动联网、研报预测与分级PDF补证
+    status: PLANNED
+    priority: P0
+    owner_lane: wp73-web-research-evidence
+    depends_on: [WP-71, WP-72]
+  - id: WP-62
+    order: 80
+    title: 专业技术分析确定性内核
+    status: IN_PROGRESS
+    priority: P0
+    owner_lane: wp62-technical-kernel
+    depends_on: []
+  - id: WP-63
+    order: 90
+    title: 统一策略实验与样本外验证
+    status: IN_PROGRESS
+    priority: P0
+    owner_lane: wp63-strategy-validation
+    depends_on: [WP-67, WP-72, WP-62]
+  - id: WP-74
+    order: 100
+    title: 透明Quantamental候选漏斗与因子诊断
+    status: PLANNED
+    priority: P1
+    owner_lane: wp74-quantamental-discovery
+    depends_on: [WP-68, WP-72, WP-62, WP-63]
+  - id: WP-75
+    order: 110
+    title: 经营驱动、预期差与可检验投资论点
+    status: PLANNED
+    priority: P1
+    owner_lane: wp75-institutional-thesis
+    depends_on: [WP-72, WP-73]
+  - id: WP-65
+    order: 120
+    title: 争议驱动投研与成熟决策复盘
+    status: IN_PROGRESS
+    priority: P1
+    owner_lane: wp65-debate-outcomes
+    depends_on: [WP-68, WP-71]
+  - id: WP-76
+    order: 130
+    title: 组合优化插件、风险情景与观点校准
+    status: PLANNED
+    priority: P1
+    owner_lane: wp76-portfolio-optimization
+    depends_on: [WP-67, WP-63]
+  - id: WP-77
+    order: 140
+    title: 事实绑定与自然中文投资表达
+    status: PLANNED
+    priority: P1
+    owner_lane: wp77-investor-narrative
+    depends_on: [WP-68]
+  - id: WP-66
+    order: 150
+    title: 盘前盘中盘后研究与决策呈现
+    status: IN_PROGRESS
+    priority: P1
+    owner_lane: wp66-investor-research-experience
+    depends_on: [WP-71, WP-62, WP-65, WP-77]
   - id: WP-55
-    order: 55
-    title: 十股财报观察、ChatGPT限时接力与有界存储
+    order: 160
+    title: 财报观察任务收口与有界存储
     status: BLOCKED
     priority: P1
     owner_lane: wp55-watch-campaign-retention
-    depends_on: []
-  - id: WP-58
-    order: 58
-    title: 新闻完整性修复与雪球/知乎零付费舆情采集
-    status: PLANNED
-    priority: P0
-    owner_lane: wp58-social-capture-and-news-coverage
-    depends_on: []
-  - id: WP-59
-    order: 59
-    title: 多场景舆情解释与投研流程一体化
-    status: PLANNED
-    priority: P1
-    owner_lane: wp59-social-research-integration
-    depends_on: [WP-58]
-  - id: WP-60
-    order: 60
-    title: 投研与工程架构质量审计、性能及存储治理
-    status: PLANNED
-    priority: P1
-    owner_lane: wp60-architecture-efficiency-hygiene
-    depends_on: []
+    depends_on: [WP-71, WP-72, WP-73]

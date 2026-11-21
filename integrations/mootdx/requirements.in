@@ -1,0 +1,3 @@
+# Isolated SDK: never install these pins into the application's .venv.
+mootdx==0.11.7
+tdxpy==0.2.7

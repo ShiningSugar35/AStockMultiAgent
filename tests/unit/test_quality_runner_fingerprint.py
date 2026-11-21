@@ -51,3 +51,21 @@ def test_quality_fingerprint_ignores_its_output_and_bulk_runtime_data(
     noise.parent.mkdir(parents=True)
     noise.write_bytes(b"not an input to the source-tree quality gate")
     assert run_local_quality.fingerprint() == before
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["integrations/mootdx/worker.py", "integrations/mootdx/setup.py",
+     "integrations/mootdx/requirements.lock", "skills/README.md", ".gitignore", ".gitattributes"],
+)
+def test_quality_fingerprint_tracks_versioned_validation_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str,
+) -> None:
+    monkeypatch.setattr(run_local_quality, "ROOT", tmp_path)
+    source = tmp_path / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("before\n", encoding="utf-8")
+    before = run_local_quality.fingerprint()
+    source.write_text("after\n", encoding="utf-8")
+
+    assert run_local_quality.fingerprint() != before

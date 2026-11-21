@@ -24,7 +24,7 @@ EXPECTED = {
     "continuous-investment-monitor": ("continuous", "monitoring"),
     "paper-trading-recovery": ("paper", "recovery"),
     "portfolio-manager": ("portfolio", "allocation"),
-    "knowledge-ingest": ("allowlisted", "history"),
+    "knowledge-ingest": ("approved", "local"),
     "evidence-investigation": ("evidence", "gap"),
     "research-tech-scout": ("external", "scout"),
 }
@@ -318,3 +318,39 @@ def test_session_portfolio_commands_keep_orders_and_fills_separate() -> None:
     )
     assert "Default replay resolution is **60m**" in recovery
     assert "--resolution 5m" in recovery
+
+
+def test_knowledge_ingest_contract_is_local_with_online_collection_retired() -> None:
+    body = (SKILLS_ROOT / "knowledge-ingest" / "SKILL.md").read_text(encoding="utf-8")
+    workflow = _read_workflow("workflow-knowledge-ingest.md")
+    ui = yaml.safe_load(
+        (SKILLS_ROOT / "knowledge-ingest" / "agents" / "openai.yaml").read_text(encoding="utf-8")
+    )
+    for text in (body, workflow):
+        assert "private-pdf-ingest" in text and "private-docx-ingest" in text
+        assert "retired" in text.lower()
+        assert "local coverage" in text.lower()
+        assert "Use verified local/API transport first" not in text
+        assert "Traverse each configured content type/page/cursor" not in text
+    assert "local" in ui["interface"]["default_prompt"]
+    assert "Produce `AuthorCollectionCoverageReport` for every author" not in body
+
+
+def _read_workflow(name: str) -> str:
+    return (PROJECT_ROOT / "docs" / "workflows" / name).read_text(encoding="utf-8")
+
+
+def test_evidence_skill_uses_observed_host_tools_and_endpoint_contracts() -> None:
+    body = (SKILLS_ROOT / "evidence-investigation" / "SKILL.md").read_text(encoding="utf-8")
+    commands = {command.name for command in app.registered_commands if command.name}
+    for command in (
+        "web-tool-schema", "web-tool-run", "web-tool-complete", "web-tool-cancel",
+        "tushare-schema", "tushare-query",
+    ):
+        assert command in commands
+        assert command in body
+    for term in (
+        "search_web", "read_url_content", "INCLUDED", "configs/web_tools.yaml",
+        "configs/tushare_access.yaml", "formal PDF",
+    ):
+        assert term in body or term in _read_workflow("workflow-evidence-recovery.md")

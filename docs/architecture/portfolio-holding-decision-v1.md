@@ -72,6 +72,14 @@ ex-date 的单股经济财富按正式条款计算：
 
 再链式构造研究 pseudo-price。未来可见公司行动不能改变过去序列；未验证 action 不应用并产生 degradation warning。若正式 corporate-action release 不存在，风险分析可降级到 raw series，但必须标记 `TOTAL_RETURN_RESEARCH_SERIES_PARTIAL`，不能静默宣称已调整。
 
+### 3.1 数值边界与既有报告
+
+`src/astock/portfolio/analytics.py` 的风险序列是每日固定权重研究收益，未分配现金按零收益计算，并非真实账户净值。最大回撤的峰值从初始净值 1 开始；初始值不作为额外的日收益/CDaR/VaR/年化样本。连续两日 -10% 对应最大回撤 19%；50% 风险资产加50%零收益现金时，对应 9.75%。
+
+`constrain_scores` 同时满足请求目标总暴露、单股和分组上限；约束下不可分配的部分保留现金。混合正分/零分时零分不补权；全零（含既有负分裁剪后的全零）保留原等权回退策略。非有限分数/边界拒绝，有限负分仍裁为零；巨大有限分数按比例缩放以避免溢出。此修复不新增 allocator 或业务政策。
+
+算法版本由本次 Git revision/源码 hash 定位；报告自身仍绑定其 metrics/proposals 和输入身份。旧风险/权重报告不覆盖、不原位改数，需要时用修复后的代码重新计算，生成对应内容的新 report_id 并重新评估受影响结论。定向数值不变量及下游 proposal 回归证明这些已修边界，不代表全量风险指标、策略收益或正式 DSR/PBO 已获验证。
+
 ## 4. 组合迁移核心
 
 现有四个 allocator 保持不变：

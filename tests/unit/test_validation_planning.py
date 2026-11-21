@@ -56,6 +56,35 @@ def test_shared_or_unknown_impact_cannot_silently_skip_tests(path):
     assert plan["test_file_count"] == plan["repository_test_file_count"]
 
 
+@pytest.mark.parametrize(
+    ("changed", "required"),
+    [
+        ("src/astock/technical/service.py", "tests/integration/test_technical_registered.py"),
+        ("src/astock/schemas/technical.py", "tests/unit/test_technical_analysis.py"),
+        ("src/astock/schemas/research_team.py", "tests/unit/test_technical_research_team.py"),
+        ("src/astock/research/team.py", "tests/unit/test_technical_research_team.py"),
+        ("src/astock/experiments/selection_seal.py", "tests/unit/test_selection_seal.py"),
+        ("src/astock/experiments/validation.py", "tests/integration/test_shadow_evaluation.py"),
+        ("src/astock/research/web_discovery.py", "tests/unit/test_web_discovery.py"),
+        ("src/astock/web_discovery_cli.py", "tests/integration/test_cli.py"),
+        ("configs/web_discovery_lead.yaml", "tests/unit/test_source_policy_gate.py"),
+        ("src/astock/research/session_brief.py", "tests/integration/test_research_quality_cli.py"),
+        ("src/astock/investor_orchestration/regime_reference_views.py",
+         "tests/integration/test_regime_reference_views.py"),
+    ],
+)
+def test_wp62_to_wp66_impact_mapping_keeps_negative_and_integration_regressions(
+    changed: str, required: str
+) -> None:
+    plan = plan_validation(ROOT, [changed], shards=3)
+    assert plan["scope"] == "IMPACT", plan["full_suite_reasons"]
+    assert required in plan["tests"]
+    assert "tests/unit/test_document_governance.py" in plan_validation(
+        ROOT, [changed, "开发计划.md"]
+    )["tests"]
+    assert 0 < plan["test_file_count"] < plan["repository_test_file_count"]
+
+
 def test_shards_cover_each_selected_test_file_exactly_once():
     plan = plan_validation(ROOT, ["src/astock/research/continuation.py"], shards=3)
     flattened = [path for shard in plan["shards"] for path in shard]

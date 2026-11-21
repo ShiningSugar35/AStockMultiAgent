@@ -446,11 +446,15 @@ class ScheduledSourcePreparationService:
         market, symbol = self._security(instrument)
         runtime = self.store.path.parent
         canonical = CanonicalMarketStore(runtime / "data" / "parquet", runtime / "manifests")
+        from astock.providers.mootdx_fallback import build_intraday_fallback_providers
+
         sync = MarketSyncService(
-            [
-                EastMoney5mProvider(self.objects, self.state),
-                Sina5mProvider(self.objects, self.state),
-            ],
+            build_intraday_fallback_providers(
+                self.objects, self.state, primary_providers=[
+                    EastMoney5mProvider(self.objects, self.state),
+                    Sina5mProvider(self.objects, self.state),
+                ],
+            ),
             self.state,
             ParquetMarketStore(runtime / "data" / "parquet", "market_observation"),
             canonical,

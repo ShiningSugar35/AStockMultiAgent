@@ -1,0 +1,22 @@
+schema_version: technical-analysis-policy-v1
+policy_version: technical-analysis-policy-v1
+# Parent release still requires full verification; cap its scan budget on 16 GiB hosts.
+max_history_bars: 512
+max_release_rows: 4096
+indicators:
+  ema_fast: 12
+  ema_slow: 26
+  macd_signal: 9
+  rsi_period: 14
+  atr_period: 14
+  bollinger_period: 20
+  bollinger_std: 2.0
+  volume_period: 20
+  breakout_period: 20
+  breakout_volume_multiplier: 2.0
+safety:
+  daily_only_initial_release: true
+  network_allowed: false
+  gpu_required: false
+  standalone_recommendation_allowed: false
+  paper_order_authority_allowed: false

@@ -185,13 +185,30 @@ def test_scheduled_research_blueprint_keeps_fact_and_execution_planes_separate()
     assert "controlled-live" in blueprint and "回滚" in blueprint
 
 
-def test_redundant_historical_plan_is_removed_and_audit_report_is_frozen() -> None:
-    retired_plan = PROJECT_ROOT / "低成本A股多Agent投研系统方案.md"
-    audit_report = _read("docs/architecture/AStockMultiAgent系统体验与投研能力深度研究报告.md")
-    assert not retired_plan.exists()
-    assert "低成本A股多Agent投研系统方案" not in _read("README.md")
-    assert "低成本A股多Agent投研系统方案" not in _read("docs/README.md")
-    assert "文档状态：HISTORICAL" in audit_report[:1000]
+def test_superseded_historical_plan_and_audit_are_removed() -> None:
+    retired = (
+        "低成本A股多Agent投研系统方案.md",
+        "docs/architecture/AStockMultiAgent系统体验与投研能力深度研究报告.md",
+    )
+    for relative in retired:
+        assert not (PROJECT_ROOT / relative).exists()
+        for navigation in ("README.md", "docs/README.md"):
+            assert Path(relative).name not in _read(navigation)
+    for current in (
+        "public-response-contract-v1.md", "formal-reporting-v1.md",
+        "external-dependency-resilience-v1.md",
+    ):
+        assert (PROJECT_ROOT / "docs" / "architecture" / current).is_file()
+        assert current in _read("docs/README.md")
+
+
+def test_global_agent_rules_have_a_bounded_always_loaded_budget() -> None:
+    assert (PROJECT_ROOT / "AGENTS.md").stat().st_size <= 8 * 1024
+    rules = _read("AGENTS.md")
+    assert "point-in-time" in rules
+    assert "source-access-policy" in rules
+    assert "planning/work_packages_v1.yaml" in rules
+    assert "scripts/run_local_quality.py" in rules
 
 
 def test_local_markdown_links_in_new_navigation_docs_exist() -> None:

@@ -15,6 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from astock.core.credentials import CredentialSource, resolve_credential
@@ -27,6 +28,7 @@ from astock.providers.base import HttpProviderBase
 from astock.providers.config import load_provider_registry
 from astock.providers.http_resilience import HttpClientLike
 from astock.providers.runtime import ProviderFactory, TransportProfile, load_transport_profiles
+from astock.providers.tushare_structured import TushareQueryRequest, TushareStructuredProvider
 from astock.schemas import Market, SourceSnapshot
 
 
@@ -224,51 +226,43 @@ class _CredentialHttpProvider(HttpProviderBase):
         return _credentials(name, project_root=self.project_root)
 
 
-class TushareHintProvider(_CredentialHttpProvider):
+class TushareHintProvider:
+    """Existing hint surface delegated to the same quota, cache and HTTP query adapter."""
+
     provider_id = "tushare-reference-hints"
+
+    def __init__(
+        self, objects: ObjectStore, state: StateStore, *,
+        client: httpx.Client | None = None, timeout_seconds: float = 20,
+        project_root: Path | None = None,
+    ) -> None:
+        self.structured = TushareStructuredProvider(
+            objects, state, client=client, project_root=project_root,
+            timeout_seconds=timeout_seconds,
+        )
+        self.state = state
+
+    def close(self) -> None:
+        self.structured.close()
 
     def fetch_hints(
         self, request: SupplementalRequest,
     ) -> tuple[list[dict[str, str]], SourceSnapshot]:
         if request.capability != "market.reference.hint":
             raise ValueError("Tushare hint capability mismatch")
-        credential = self.credential("TUSHARE_TOKEN")
-        response, _ = self._request(
-            "POST", "https://api.tushare.pro",
-            json={
-                "api_name": "daily", "token": credential,
-                "params": {
-                    "ts_code": request.ts_code,
-                    "start_date": request.start.strftime("%Y%m%d"),
-                    "end_date": request.end.strftime("%Y%m%d"),
-                },
-                "fields": "ts_code,trade_date,open,high,low,close,vol,amount",
+        result = self.structured.query(TushareQueryRequest(
+            endpoint="daily",
+            params={
+                "ts_code": request.ts_code,
+                "start_date": request.start.strftime("%Y%m%d"),
+                "end_date": request.end.strftime("%Y%m%d"),
             },
-        )
-        if credential.encode() in response.content:
-            raise _invalid("Tushare response echoed authentication")
-        payload = response.json()
-        if not isinstance(payload, dict) or payload.get("code") != 0:
-            raise ProviderError(
-                "Tushare interface entitlement or quota unavailable",
-                failure_class=FailureClass.ACCESS_RESTRICTED,
-            )
-        snapshot = self._persist_response(response)
-        data = payload.get("data")
-        if (
-            not isinstance(data, dict)
-            or not isinstance(data.get("fields"), list)
-            or not isinstance(data.get("items"), list)
-        ):
-            raise _invalid("Tushare data shape changed")
-        fields = data["fields"]
-        if not all(isinstance(key, str) for key in fields) or len(fields) != len(set(fields)):
-            raise _invalid("Tushare duplicate or invalid columns")
-        try:
-            raw_rows = [dict(zip(fields, values, strict=True)) for values in data["items"]]
-        except (ValueError, TypeError):
-            raise _invalid("Tushare row shape changed") from None
-        return normalize_daily(raw_rows, request, kind="tushare"), snapshot
+            fields=("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"),
+        ))
+        snapshot = self.state.get_snapshot(result["source_snapshot_id"])
+        if snapshot is None:
+            raise _invalid("Tushare shared query snapshot is unavailable")
+        return normalize_daily(result["rows"], request, kind="tushare"), snapshot
 
 
 class FinnhubNewsHintProvider(_CredentialHttpProvider):

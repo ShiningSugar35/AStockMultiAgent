@@ -1,76 +1,50 @@
 ---
 name: company-deep-research
-description: Build a cited current or historical deep A-share company research case and final committee decision. Use for deep analysis of a named company, business quality, valuation, industry position, risks, whether the stock is worth a paper position, what evidence would change the view, or how to interpret entry and exit rules.
+description: Build cited deep A-share company research and a final committee decision. Use for a named company's business quality, valuation, industry position, risks, investment case, or evidence that changes the view.
 ---
 
 # 公司深度研究
 
-1. Resolve the company to one six-digit A-share identity. For a **current** opinion, run `uv run astock research-acquire-current <company_id> --market <market>` first; do not begin with `probe` or the user's question-time cutoff. Historical/recorded research uses an explicit `research-plan <company_id> --as-of <timestamp>`.
-2. Exhaust policy-driven automatic recovery before asking the user for data. Use the active policy budget from `current-research-policy`; retry transient failures, route a `ProviderRecoveryProposal` only through deterministic validation, and treat unknown drift through raw-first `SchemaRepair` rather than guessed facts. Then use authoritative Web research. Aggregate any unavoidable manual request and ask once; provider/debug/artifact details remain internal and never belong in the investor answer.
-3. Reuse audited evidence, financial, BaseCase, specialist and memo artifacts while their company/source lineage remains applicable. Current research freezes one decision snapshot after acquisition; historical/prospective work keeps strict source-availability/PIT boundaries.
-4. Run `$financial-integrity-audit` before treating a low multiple as an opportunity. Secondary structured feeds may locate facts, but material financial claims return to official reports or equivalently authoritative sources.
-5. For a formal current opinion, build the institutional fundamental path: evidence sufficiency → industry/company economics → driver tree → Bull/Base/Bear forecast → valuation/sensitivity → decision context. Keep explicit Bull/Base/Bear scenario analysis; forecast and valuation are deterministic calculations over evidence-bound assumptions.
-6. Build BaseCase once. Route only bounded incremental specialists and audited Knowledge Skills. Private/blogger Skills are **edge-only**: uneven Skill density across industries may deepen research where good methods exist, but must never become a discovery prior, substitute for missing industry/evidence coverage, or rescue a company whose core ResearchCoverage fails. Conversely, an industry with sparse private Skills may still pass through universal research + industry archetype + authoritative Evidence when those core thresholds are met. Community/OCR material remains methodology or lead evidence, never sole support for a material company fact.
-7. Separate research readiness from execution readiness. Missing current trading-rule/company-action detail may block a simulated order without blocking a months/years conclusion about company quality and valuation.
-8. The committee receives frozen artifacts only. Use `committee-schema`, `committee-plan`, relevant audits and the formal outcome states. The committee cannot browse.
-9. When exact entry/exit/stop mechanics are needed, use `uv run astock trade-plan-view <ClassifiedTradeProtocol_artifact_id>`. Never invent an exact price. If the formal result permits simulation, the current entry condition is satisfied, and local `auto_ai_paper_order_on_approved_entry=true`, proceed into the existing paper account/order-confirmation flow; do **not** call it a position until replay records a fill.
-10. A direct user instruction to buy/sell overrides the model's opinion, not execution mechanics. Do not veto the user's simulated order because research is bearish; route it to the paper-order path immediately while preserving cash/position availability, lot size, verified tradability, price-band, account-confirmation and fill checks.
-11. Require `research-chain-audit` and final runtime/committee audits for a formal certified chain. For durable internal provenance use `uv run astock codex-run-init <request> --artifact-id <artifact_id> --require-registered-output`, `codex-run-import`, and `codex-run-audit`; these identities stay internal.
-12. After a formal current opinion is complete, invoke `$continuous-investment-monitor`: enroll the resolved stock as `ANALYZED`, and persist only evidence-backed typed entry/review/exit thresholds that already exist in structured outputs. This enrollment is required even when the conclusion is WATCH or the stock is not held, so later price, disclosure, news-lead and catalyst changes can be reviewed incrementally.
-13. Build one canonical `ResearchNarrativeBundle` and render public output through `ResponseGateway`. The stable machine commands `research-investor-view` and `research-acquisition-investor-view` remain JSON contracts; use `research-public-view` or `research-acquisition-public-view` for audited public presentation. Never delete the subject, conclusion strength, valuation/odds, largest risk, change condition, data cutoff, required citations, or safe report reference merely to meet a length budget.
-14. After a completed deep-research task, publish a formal report from the same frozen narrative and registered input artifacts. Default to DOCX, use Markdown only as deterministic fallback, and generate PDF only when an available converter succeeds validation. Return only the safe report reference in the investor answer; report generation must never become a second research fact source.
-
-## Workflows
-
-- [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
-- [`docs/workflows/workflow-committee-trade-plan.md`](../../../docs/workflows/workflow-committee-trade-plan.md)
-- [`docs/workflows/workflow-paper-trading.md`](../../../docs/workflows/workflow-paper-trading.md)
-- [`docs/workflows/workflow-adaptive-edge.md`](../../../docs/workflows/workflow-adaptive-edge.md)
-- [`docs/architecture/public-response-contract-v1.md`](../../../docs/architecture/public-response-contract-v1.md)
-- [`docs/architecture/formal-reporting-v1.md`](../../../docs/architecture/formal-reporting-v1.md)
-
-## Output
-
-Keep the investor answer compact: **主体 → 结论与强度 → 估值/赔率 → 2–4个决定性理由 → 最大风险 → 改变判断的条件 → 数据时间与必要引用**. Add catalyst detail only when it changes the decision. Avoid saying the same thing again under “总结”. If a technical term, empirical paper result or formula is necessary, explain it once in a short parenthesis, e.g. “CVaR（最差那部分行情里的平均亏损）”. Translate unresolved evidence into investment language rather than backend terminology. Length reduction may remove only non-critical reasons; mandatory fields must survive or the answer uses a no-echo safe fallback. Before sending, apply `research-investor-answer-audit` and the canonical public response contract.
-
-## Prohibitions
-
-- Do not stop current research after the first provider fails if another automatic or authoritative source can answer the same bounded question.
-- Do not use community content as sole support for a key company fact.
-- Do not invent BUY/SELL prices to hide uncertainty.
-- Do not treat a submitted but unfilled paper order as a holding.
-- Do not bypass paper-account mechanics merely because the user overrode the research opinion.
-- Do not submit a real brokerage order.
+1. Resolve one security and market. Start or recover the same investor request; direct acquisition remains `uv run astock research-acquire-current <company_id> --market <market>`. CURRENT freezes after acquisition and does not use the user's question-time cutoff. Explicit historical/OOS work requires genuinely available historical inputs.
+2. Reuse valid same-request evidence and read the active policy budget from `current-research-policy`. Use validated `ProviderRecoveryProposal`, raw-first `SchemaRepair` and bounded authoritative Web recovery. Manual help is only for private input/authorization after checking existing records; diagnostic and artifact details remain internal.
+3. Run `$financial-integrity-audit`, industry, governance and catalyst research where required. Secondary data and community methods may locate evidence but do not certify material financial claims. Read `tushare-schema --endpoint ...` only for a relevant structured supplement; the formal statement/report lineage remains separate.
+4. Build institutional fundamentals once: evidence sufficiency → industry/company economics → driver tree → Bull/Base/Bear forecast → valuation/sensitivity → decision context. Python computes numerical outputs from evidence-bound assumptions. Retain the scenario, key economic drivers, accounting quality, counter-case and falsifiers.
+5. Reuse BaseCase and route bounded incremental specialists/Knowledge. Private methods are edge-only; their density cannot determine blind candidates or excuse missing core industry/evidence coverage. Do not create a second valuation ledger, technical agent or publication gate.
+6. Preserve independent Bull/Bear contexts, downstream Reviewer/Red Team and required model-risk work. Committee uses `committee-schema / committee-plan` and frozen inputs only; it cannot browse. Run `research-chain-audit` and applicable final runtime/committee audits. For registered provenance use `uv run astock codex-run-init REQUEST --require-registered-output`, `codex-run-import` and `codex-run-audit`.
+7. Separate fundamental judgment from executable mechanics. Use `uv run astock trade-plan-view <ClassifiedTradeProtocol_artifact_id>` for entry/exit details. User simulated-trade instructions override model opinion, while available cash/shares, instrument rules, confirmation and replay remain binding; only a fill changes a position.
+8. On completion invoke `$continuous-investment-monitor`, enroll the target as `ANALYZED`, and register only existing evidence-backed typed thresholds. Queueing a task is not an executed review. Render one `ResearchNarrativeBundle` via `ResponseGateway` and `research-investor-answer-audit`; preserve stable machine JSON views.
 
 ## Same-request automatic continuation contract
 
-For a current-company investment question, an acquisition gap is an internal workflow state,
-not a user-facing answer. The Agent must keep the original request active and drive the
-continuation until it reaches one of the explicit terminal states below.
+Read the linked workflow and the relevant local schema on demand; do not copy all fields into a prompt.
 
-1. Start or recover the durable `CurrentResearchContinuation` for the investor request with `uv run astock research-current-continuation-start REQUEST.json` / `uv run astock research-current-continuation-status <continuation_id>`; the underlying direct acquisition entry remains `uv run astock research-acquire-current <company_id> --market <market>` for diagnostics and compatibility.
-2. While the status is `AUTO_RESOLUTION_REQUIRED`, inspect unresolved external tasks and use
-   approved Web/Search or authoritative-source adapters as discovery only. Fetch the exact
-   official document, freeze it through the official capture/ObjectStore path, emit a typed
-   `CurrentResearchAutomaticResolution`, submit it with `uv run astock research-current-continuation-resolve RESOLUTION.json`, and resume the same continuation. Public captures are validated and bound atomically; `research-current-continuation-bind` is reserved for later user-supplied private material. Never ask the user to perform public Web research on the Agent's behalf.
-3. While the status is `TEAM_RESEARCH_REQUIRED`, read `uv run astock research-team-status <plan_id>` and execute every ready non-gate task in the frozen research-team DAG. Route Macro/Policy to `$macro-policy-regime`, Industry to `$industry-value-chain`, Governance to `$governance-management-quality`, Catalyst to `$catalyst-event-research`, the independent Reviewer to `$investment-red-team`, and model/backtest validation to `$model-risk-backtest-validation`; register every typed output/result and advance the same continuation. Do not skip fundamental, financial-integrity, valuation, independent Bull/Bear, reviewer, model-risk, red-team, or committee dependencies merely to improve latency.
-4. `READY_FOR_INVESTOR_VIEW` permits a formal recommendation only when every readiness gate
-   passes. `OBSERVATION_ONLY_FOR_INVESTOR_VIEW` permits an explicitly labelled observation
-   view after the whole team has completed but a formal gate remains unsatisfied; it must not
-   be presented as a formal buy/sell recommendation.
-5. `NEEDS_USER_INPUT` is allowed only when all approved automatic public channels have
-   exhausted their bounded attempts, or when the required formal material is genuinely
-   private. Material later supplied by the user must bind to the same continuation lineage
-   and resume from the interrupted task rather than opening a new research chain.
-6. Intermediate statuses must set `investment_conclusion_blocked=true`; they are not an
-   excuse to return an incomplete conclusion. Broker execution remains forbidden in every
-   state. Do not end the user turn with “下一步可以继续跑财报/行业/估值/多空/仓位”等本 Skill 本就能自动完成的工作；continue the same request until a legal terminal state.
+| State | Required action |
+|---|---|
+| `AUTO_RESOLUTION_REQUIRED` | Inspect the bounded gap, obtain exact authoritative evidence, submit `CurrentResearchAutomaticResolution` via `research-current-continuation-resolve`, and resume the same request |
+| `TEAM_RESEARCH_REQUIRED` | Execute ready tasks in DAG waves through the appropriate professional Skills; register typed role outputs/results before advancing |
+| `READY_FOR_INVESTOR_VIEW` | Publish only after complete lineage, final receipt and Publication Gate permit it |
+| `OBSERVATION_ONLY_FOR_INVESTOR_VIEW` | After the whole team completes, clearly label the observation; do not imply formal buy/sell permission |
+| `PUBLIC_DATA_UNAVAILABLE` | Record exhausted public attempts and the remaining uncertainty; do not manufacture a demand for private material |
+| `NEEDS_USER_INPUT` | Ask once for genuinely required private input/authorization; later input resumes the same lineage |
 
-The runtime may use `CurrentResearchContinuationService.run_to_terminal` with an Agent-owned
-external resolver and team executor. The CLI-equivalent loop uses
-`research-current-continuation-resolve`, `research-current-continuation-resume`, typed
-`research-team-role-output` / `research-team-task-result`, and
-`research-current-continuation-advance`; `research-current-continuation-bind` resumes later
-private-material input on the same lineage. Python owns deterministic budgets, current-source
-lineage/integrity, verified same-request acquisition reuse, state validation and final safety
-gates; historical anti-lookahead/PIT reconstruction is confined to explicit historical work. The Agent owns discovery, authoritative Web recovery and research judgement.
+Start/status use `research-current-continuation-start REQUEST.json` and `research-current-continuation-status`; public resolution uses `resolve/resume/advance`, while `research-current-continuation-bind` is for later user material. Intermediate states keep `investment_conclusion_blocked=true`. Do not stop with routine work that can still be executed. Broker execution remains forbidden; no broker permission field is added to research contracts.
+
+## Workflows
+
+- [Current company and host evidence continuation](../../../docs/workflows/workflow-current-company-research.md)
+- [Committee and trade plan](../../../docs/workflows/workflow-committee-trade-plan.md)
+- [Paper trading](../../../docs/workflows/workflow-paper-trading.md)
+- [Formal reporting](../../../docs/architecture/formal-reporting-v1.md)
+
+## Output
+
+For an investment decision give a complete report: subject and judgment strength; current valuation/odds; economic and earnings drivers; financial/governance quality; industry and catalysts; decisive disagreement; portfolio/risk implications; entry, exit and invalidation conditions; data cutoff and citations. Simple factual queries can be short. Never compress away required evidence or risks.
+
+Publish DOCX from the same frozen narrative and registered inputs; Markdown is the existing fallback, PDF only after available conversion passes validation. Return a safe report reference and substantive findings, without exposing private paths. Writing repair must preserve numbers, units, dates, direction, probabilities and provenance.
+
+## Prohibitions
+
+- Do not stop on the first provider failure, ask the user to research public sources, or endlessly rerun a completed graph.
+- Do not turn a snippet, Markdown fetch, Tushare hint or community/OCR method into formal report evidence.
+- Do not invent prices, forecasts, weights, completed research, current ETF execution permission or filled holdings.
+- Do not let missing optional technical/execution detail invalidate an unrelated supported fundamental conclusion.

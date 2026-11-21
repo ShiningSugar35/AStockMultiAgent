@@ -3,21 +3,9 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-import httpx
 import pytest
 
-from astock.documents.ocr import OcrResult
 from astock.knowledge.visual_pipeline import ZhihuVisualPipelineService
-from astock.schemas.knowledge_visual import ZhihuVisualPackStatus
-
-
-class _RecordedOcr:
-    name = "recorded-ocr"
-    version = "1"
-
-    def recognize(self, image_bytes: bytes) -> OcrResult:
-        assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-        return OcrResult(text="收入 100\n利润 20", average_confidence=0.95)
 
 
 def _seed_semantic_image_case(state, object_store, *, image_count: int = 1) -> str:
@@ -178,15 +166,9 @@ def _seed_semantic_image_case(state, object_store, *, image_count: int = 1) -> s
     return author
 
 
-def _png_bytes() -> bytes:
-    # The capture contract identifies PNG from the signature. The remaining bytes are a
-    # deterministic recorded fixture; OCR is stubbed in these unit tests.
-    return b"\x89PNG\r\n\x1a\nrecorded-visual-fixture"
-
-
 def test_visual_plan_maps_frozen_image_to_placeholder_exactly(state, object_store) -> None:
     author = _seed_semantic_image_case(state, object_store)
-    service = ZhihuVisualPipelineService(state, object_store, ocr_engine=_RecordedOcr())
+    service = ZhihuVisualPipelineService(state, object_store)
 
     first = service.plan(author)
     second = service.plan(author)
@@ -203,59 +185,6 @@ def test_visual_plan_maps_frozen_image_to_placeholder_exactly(state, object_stor
     assert entry.affected_argument_unit_ids == ["argument:test:1"]
 
 
-def test_visual_pipeline_captures_and_publishes_pack(state, object_store) -> None:
-    author = _seed_semantic_image_case(state, object_store)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.host.endswith("zhimg.com")
-        return httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes())
-
-    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
-    service = ZhihuVisualPipelineService(
-        state,
-        object_store,
-        client=client,
-        ocr_engine=_RecordedOcr(),
-    )
-
-    first = service.run(author)
-    second = service.run(author)
-
-    assert first.complete is True
-    assert first.pack_status is ZhihuVisualPackStatus.READY
-    assert first.captured_count == 1
-    assert first.pack_artifact_id is not None
-    assert first.pack_object_hash is not None
-    assert second.captured_count == 0
-    assert second.skipped_existing_count == 1
-    assert second.pack_artifact_id == first.pack_artifact_id
-    assert second.pack_object_hash == first.pack_object_hash
-    status = service.capture_service.status()
-    assert status["asset_count"] == 1
-    assert status["placement_count"] == 1
-
-
-def test_visual_pipeline_pauses_on_access_restriction(state, object_store) -> None:
-    author = _seed_semantic_image_case(state, object_store)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(403, headers={"content-type": "text/html"}, content=b"blocked")
-
-    service = ZhihuVisualPipelineService(
-        state,
-        object_store,
-        client=httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False),
-        ocr_engine=_RecordedOcr(),
-    )
-
-    report = service.run(author)
-
-    assert report.complete is False
-    assert report.pack_status is ZhihuVisualPackStatus.NEEDS_INFO
-    assert report.blocked_fetch_count == 1
-    assert service.capture_service.status()["placement_count"] == 0
-
-
 def test_visual_plan_fails_closed_on_image_placeholder_drift(state, object_store) -> None:
     author = _seed_semantic_image_case(state, object_store, image_count=2)
     with state.transaction() as connection:
@@ -269,4 +198,4 @@ def test_visual_plan_fails_closed_on_image_placeholder_drift(state, object_store
         )
 
     with pytest.raises(ValueError, match="VISUAL_IMAGE_PLACEHOLDER_COUNT_MISMATCH"):
-        ZhihuVisualPipelineService(state, object_store, ocr_engine=_RecordedOcr()).plan(author)
+        ZhihuVisualPipelineService(state, object_store).plan(author)

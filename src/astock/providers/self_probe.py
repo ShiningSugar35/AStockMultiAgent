@@ -64,8 +64,24 @@ class ProviderSelfProbeRunner:
             if not isinstance(rows, list):
                 raise ValueError("supplemental capture rows must be a list")
             record_count, quality = len(rows), bool(rows)
+        elif operation == "tushare-structured":
+            from astock.providers.tushare_structured import (
+                TushareQueryRequest,
+                TushareStructuredProvider,
+            )
+
+            if not isinstance(provider, TushareStructuredProvider):
+                raise ValueError("Tushare structured probe adapter mismatch")
+            capture = provider.query(TushareQueryRequest(
+                endpoint="stock_basic",
+                params={"ts_code": str(definition.probe_target["ts_code"]), "list_status": "L"},
+            ))
+            record_count = int(capture["record_count"])
+            quality = record_count > 0
         elif operation == "market-bars":
             record_count, quality = self._market_bars(provider, definition.probe_target)
+        elif operation == "mootdx-intraday":
+            record_count, quality = self._mootdx_intraday(provider, definition.probe_target)
         elif operation == "reference-identity":
             record_count, quality = self._reference_identity(provider, definition.probe_target)
         elif operation == "quote-batch":
@@ -120,6 +136,33 @@ class ProviderSelfProbeRunner:
         batch = fetch(request)
         count = int(getattr(batch, "bar_count", 0))
         return count, count > 0
+
+    @staticmethod
+    def _mootdx_intraday(provider: object, target: dict[str, str | int]) -> tuple[int, bool]:
+        from astock.market_data.quality import validate_batch
+        from astock.providers.mootdx_fallback import MootdxFallbackProvider
+        from astock.schemas import QualityStatus
+
+        if not isinstance(provider, MootdxFallbackProvider):
+            return 0, False
+        # One declared probe budget covers quote + two frequencies, including
+        # process startup. Do not mutate the factory's provider shared with callers.
+        probe = MootdxFallbackProvider(
+            provider.objects, provider.state, project_root=provider.project_root,
+            settings=provider.settings, timeout_seconds=provider.timeout_seconds / 3,
+        )
+        market, symbol = Market(str(target["market"])), str(target["symbol"])
+        quote, _snapshot = probe.fetch_quote(symbol, market)
+        count, quality = 1, quote["price"] > 0
+        now = datetime.now(UTC)
+        for frequency in (Frequency.H1, Frequency.M5):
+            batch = probe.fetch_bars(BarRequest(
+                symbol=symbol, market=market, frequency=frequency,
+                requested_start=now - timedelta(days=7), requested_end=now, limit=800,
+            ))
+            count += batch.bar_count
+            quality = quality and validate_batch(batch).quality_status is not QualityStatus.FAIL
+        return count, bool(quality)
 
     @staticmethod
     def _reference_identity(provider: object, target: dict[str, str | int]) -> tuple[int, bool]:
@@ -304,8 +347,14 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
             item for item in capabilities
             if item in {"market.reference.hint", "news.global.lead"}
         ]
+    elif operation == "tushare-structured":
+        selected = [item for item in capabilities if item == "tushare.structured.query"]
     elif operation == "market-bars":
         selected = [item for item in capabilities if item.startswith("market.raw_")]
+    elif operation == "mootdx-intraday":
+        selected = [item for item in capabilities if item in {
+            "market.raw_60m", "market.raw_5m", "market.quote"
+        }]
     elif operation == "reference-identity":
         selected = [item for item in capabilities if item == "instrument.identity"]
     elif operation == "quote-batch":

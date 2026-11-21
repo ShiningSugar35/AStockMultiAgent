@@ -12,7 +12,7 @@
 
 - 图片不是独立蒸馏单元，也不能单独生成 `SkillCandidate`。图片 Paragraph 必须保持 `standalone_distillable=false`。
 - 图表位于论点与结论之间时，必须按原始页面或 DOM 顺序执行 `MERGE_WITH_BOTH`，把前文论点、图表 OCR/说明和后文结论合并为一个完整 `ArgumentUnit`；不得只根据 OCR 文本孤立判断。
-- `[图片]` 占位符不构成证据。知乎图片只有在 `source_snapshot_id → image_snapshot_hash → DOM locator → OCR input/text hashes → paragraph_id → argument_unit_id` 全链可重建后，才可进入本任务。
+- `[图片]` 占位符不构成证据。来源图片只有在 `source_snapshot_id → image_snapshot_hash → DOM locator → OCR input/text hashes → paragraph_id → argument_unit_id` 全链可重建后，才可进入本任务。
 - `CHART`、`TABLE`、`DIAGRAM`、`TEXT_IMAGE` 可作为所在 AU 的证据；`OCR_FAILED`、`OCR_LOW_CONFIDENCE`、`OCR_NO_TEXT` 但疑似信息图、`UNKNOWN` 或上下文不完整时，决策必须为 `REVIEW`，不得猜测图中事实。
 - 模型只筛选已经重建的完整 AU，不联网、不下载图片、不自行补 OCR。浏览器登录态、Chrome Profile、Cookie/会话材料与原图由本地采集层按用户授权边界处理；语义蒸馏只接收已经冻结、去敏且属于当前 AU 的文本与视觉证据引用，不把登录材料作为模型输入。
 - 视觉候选必须通过 `evidence_paragraph_ids` 引用同一 AU 内带 `visual_evidence_ids` 的真实视觉 Paragraph。未在结果 Schema 声明的字段不得擅自增加。

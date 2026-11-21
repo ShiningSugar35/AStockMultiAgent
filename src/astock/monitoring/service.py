@@ -335,6 +335,37 @@ class ContinuousMonitorService:
                     success[source] += 1
                 assert_lease()
         assert_lease()
+        # Reuse the local draft projection inside this existing leased cycle.
+        # This creates neither a scheduler nor an outbound delivery surface.
+        from astock.market_data.official_calendar import load_official_trading_calendar
+        from astock.research.debate_evaluation import load_quality_policy
+        from astock.research.quality_cli import QualityServices
+        from astock.research.session_brief import SessionBriefReuseService
+
+        try:
+            briefs = SessionBriefReuseService(
+                QualityServices(
+                    self.state,
+                    self.objects,
+                    None,
+                    load_official_trading_calendar(
+                        self.paths.root / "configs/official_trading_calendar.yaml"
+                    ),
+                    load_quality_policy(self.paths.root / "configs/research_quality.yaml"),
+                )
+            )
+            for target in targets:
+                assert_lease()
+                result = briefs.project_monitor_target(target, now=started)
+                self.state.set_checkpoint(
+                    scope_type="monitor-session-brief",
+                    scope_key=target.target_id,
+                    cursor=result,
+                    status="DRAFT",
+                )
+        except (ValueError, OSError):
+            findings.append("MONITOR_BRIEF_REGISTERED_INPUT_UNAVAILABLE")
+        assert_lease()
         ended = datetime.now(UTC)
         run_status = (
             MonitorRunStatus.SUCCEEDED
@@ -841,11 +872,16 @@ class ContinuousMonitorService:
     def _market_sync(self) -> MarketSyncService:
         if self._market_sync_factory is not None:
             return self._market_sync_factory()
+        from astock.providers.mootdx_fallback import build_intraday_fallback_providers
+
         return MarketSyncService(
-            [
-                EastMoney5mProvider(self.objects, self.state),
-                Sina5mProvider(self.objects, self.state),
-            ],
+            build_intraday_fallback_providers(
+                self.objects, self.state, project_root=self.paths.root,
+                primary_providers=[
+                    EastMoney5mProvider(self.objects, self.state),
+                    Sina5mProvider(self.objects, self.state),
+                ],
+            ),
             self.state,
             ParquetMarketStore(self.paths.parquet, "market_observation"),
             self.canonical,

@@ -1,0 +1,14 @@
+# Capabilities are supplied per invocation, never inferred from the host name.
+schema_version: web-tool-policy-v1
+host_capability_max_age_seconds: 1800
+max_results: 8
+max_response_bytes: 1048576
+timeout_seconds: 30
+# Only used after an explicit host capability gap; missing/unknown host is a handoff.
+deepseek_enabled: true
+max_paid_per_request: 4
+max_paid_per_day: 100
+max_paid_per_month: 2000
+max_paid_concurrency: 2
+min_paid_interval_seconds: 1.0
+paid_request_price_cny: "0.005"

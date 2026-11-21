@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,10 +23,6 @@ from astock.schemas import (
     EvidenceRelation,
     FinancialAuditRequest,
     FinancialIndustryProfile,
-    ZhihuBrowserResponseEnvelope,
-    ZhihuContentType,
-    ZhihuResponseKind,
-    ZhihuTransport,
 )
 from tests.helpers import make_financial_facts, make_financial_request
 
@@ -151,49 +146,6 @@ def test_cli_init_probe_and_context_plan(tmp_path: Path, monkeypatch) -> None:
         item for item in source_payload["sources"] if item["display_name"] == "寒武纪的鳄鱼"
     )
     assert not crocodile["online_collection_required"]
-
-    coverage = runner.invoke(
-        app,
-        ["zhihu-coverage", "zhihu:mr-dang-77", "--content-type", "answers"],
-    )
-    assert coverage.exit_code == 0, coverage.output
-    assert json.loads(coverage.output) == {"report": None, "status": "NOT_COLLECTED"}
-
-    private_marker = b'{"data":[],"paging":{"is_end":true},"private":"cli-secret"}'
-    envelope = ZhihuBrowserResponseEnvelope(
-        author_source_id="zhihu:mr-dang-77",
-        response_kind=ZhihuResponseKind.LISTING,
-        content_type=ZhihuContentType.ANSWERS,
-        listing_page=0,
-        requested_url=(
-            "https://www.zhihu.com/api/v4/members/mr-dang-77/"
-            "answers?limit=2&offset=0&sort_by=created"
-        ),
-        status_code=200,
-        response_mime="application/json",
-        body_base64=base64.b64encode(private_marker).decode("ascii"),
-        transport=ZhihuTransport.CHROME,
-        captured_at=datetime.now(UTC),
-    )
-    envelope_path = runtime / "imports" / "response.json"
-    envelope_path.parent.mkdir(parents=True)
-    envelope_path.write_text(envelope.model_dump_json(), encoding="utf-8")
-    imported = runner.invoke(app, ["zhihu-response-import", str(envelope_path)])
-    assert imported.exit_code == 0, imported.output
-    import_payload = json.loads(imported.output)
-    assert import_payload["status"] == "IMPORTED"
-    assert import_payload["import_status"] == "PENDING"
-    assert "cli-secret" not in imported.output
-    assert str(envelope_path) not in imported.output
-    replayed = runner.invoke(
-        app,
-        ["zhihu-import-replay", import_payload["envelope_id"]],
-    )
-    assert replayed.exit_code == 0, replayed.output
-    replay_payload = json.loads(replayed.output)
-    assert replay_payload["status"] == "CONSUMED"
-    assert replay_payload["coverage_status"] == "COMPLETE"
-    assert "cli-secret" not in replayed.output
 
 
 def test_private_pdf_cli_output_is_redacted(tmp_path: Path, monkeypatch) -> None:

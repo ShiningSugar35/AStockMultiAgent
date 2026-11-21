@@ -213,7 +213,6 @@ class KillableResearchWorker:
             # with callers that pass a temporary request directory while the
             # repository root is the real ownership boundary.
             if (root / "src" / "astock").is_dir():
-                scratch_root.mkdir(parents=True, exist_ok=True)
                 scratch = root / "runtime" / "workers"
             else:
                 raise ValueError("research worker scratch must stay inside its project")
@@ -231,6 +230,12 @@ class KillableResearchWorker:
     def alive(self) -> bool:
         with self._lock:
             return self._process is not None and self._process.is_alive()
+
+    @property
+    def cleanup_confirmed(self) -> bool:
+        """The owned process was reaped and its job/group cleanup completed."""
+        with self._lock:
+            return self._process is None and self._job is None
 
     def cancel(self) -> None:
         self._cancelled.set()
@@ -266,7 +271,7 @@ class KillableResearchWorker:
         if self.deadline_at is not None and datetime.now(UTC) >= self.deadline_at:
             raise WorkerDeadlineError("research request deadline expired")
 
-    def __call__(self, task: ResearchSchedulerTask) -> str:
+    def __call__(self, task: ResearchSchedulerTask | None = None) -> str:
         with self._lock:
             if self._cancelled.is_set():
                 raise WorkerCancelledError("research worker cancelled before start")

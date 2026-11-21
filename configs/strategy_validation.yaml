@@ -1,0 +1,11 @@
+version: strategy-validation-policy-v1
+max_request_bytes: 1048576
+max_artifact_bytes: 2097152
+max_bars: 10000
+max_candidates: 16
+max_folds: 8
+max_stresses: 9
+max_parameter_bytes: 4096
+max_work_units: 1000000
+max_cpu_seconds: 30
+max_cached_evidence: 8

@@ -368,25 +368,6 @@ def register_knowledge_completion_commands(
             }
         )
 
-    @app.command("knowledge-zhihu-visual-run")
-    def visual_run(
-        author_source_id: Annotated[str, typer.Argument()],
-        max_images: Annotated[int | None, typer.Option("--max-images", min=1)] = None,
-        request_interval_seconds: Annotated[
-            float,
-            typer.Option("--request-interval-seconds", min=0.0),
-        ] = 0.0,
-        workers: Annotated[int, typer.Option("--workers", min=1, max=8)] = 4,
-    ) -> None:
-        _, state, objects = services()
-        emit(
-            ZhihuVisualPipelineService(state, objects).run(
-                author_source_id,
-                max_images=max_images,
-                request_interval_seconds=request_interval_seconds,
-                workers=workers,
-            )
-        )
 
     @app.command("knowledge-zhihu-visual-run-status")
     def visual_run_status(author_source_id: Annotated[str, typer.Argument()]) -> None:

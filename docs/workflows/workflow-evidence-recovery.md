@@ -2,64 +2,34 @@
 
 ## When to use
 
-Use when one bounded decision-relevant fact is unsupported, conflicting, stale, provider-blocked, or returned as a Committee/Research `NEEDS_INFO` gap.
-
-Primary skill: `$evidence-investigation`.
+Use `$evidence-investigation` for one unsupported, conflicting, stale or unavailable decision-relevant fact. Preserve the original request/task identity.
 
 ## Flow
 
-1. **Name the exact gap and decision impact**
-   - Do not begin with unrestricted browsing.
-   - If this is a committee task, inspect `committee-task-status` and keep the investigation scoped to that reason.
+1. **Scope and reuse.** Name the claim and decision impact, inspect an existing committee task when applicable, then reuse valid registered snapshots and body content before making another request.
+2. **Diagnose within policy.** The active Current Research policy owns the budget. `SourceAccessRouter` ranks registered routes by capability/authority/health/freshness/cost; retry transient faults only. A provider failure is not evidence against a fact. Record sent/returned/handled separately. `ProviderRecoveryProposal` needs deterministic validation; Schema Repair is raw-first and cannot directly modify formal facts or active dialect. For supported basic/market/financial/macro supplements, use the Tushare route below before generic Web recovery.
+3. **Authoritative Web fallback.** Use observed host capabilities, with exchange/CNINFO/issuer/regulator sources preferred. A dynamic source passes `source-proposal-check` before admission. Search is discovery; exact-item admission proves only that document, with `official_exhaustive_proof_allowed=false`. Exhaustive absence requires a capable enumeration route, terminal pagination and complete source lineage.
+4. **Complete the host operation.** Read only relevant `web-tool-schema` / `src/astock/schemas/web_tools.py` contracts. Record SEARCH and FETCH availability, exact observed tool and billing separately for this invocation. Antigravity `search_web` and `read_url_content` can be `INCLUDED` only when observed. `UNKNOWN`, expiry or a fabricated tool name cannot authorize paid backup.
+5. **Freeze evidence and resume.** Preserve exact page/section/DOM/source dates through the existing official capture/ObjectStore path. A search hit or fetched Markdown body does not satisfy a formal PDF requirement. Submit the typed automatic resolution to the same continuation; a committee gap gets `committee-task-resolve` followed by a new committee decision. Only invalidate affected downstream artifacts.
+6. **Manual intervention is last.** Exhaust bounded local/provider/authoritative Web paths. `PUBLIC_DATA_UNAVAILABLE` records unresolved public facts with no demand for private materials. `NEEDS_USER_INPUT` is limited to necessary private input/authorization and one consolidated checklist.
 
-2. **Reuse existing frozen evidence**
-   - Check registered snapshots/artifacts and their audit status before fetching again.
-   - A valid existing source is preferred to duplicate collection.
+## Host tool dispatch
 
-3. **Diagnose, repair and fallback deterministically**
-   - Current-investment recovery uses the active Current Research policy's automatic budget (currently 1800 seconds), not a second Workflow constant.
-   - Diagnose whether the failure is transport, rate-limit/access, provider schema drift, request-binding drift, or data-quality failure; preserve that detail internally.
-   - SourceAccessRouter ranks automated options by officiality/capability/health/freshness/latency/cost/auth/retryability; strong official evidence retains hard priority and Manual remains last.
-   - Retry only retryable transient errors with bounded attempts/circuit breaking. Health and breaker state are keyed by provider/source + capability; an OPEN breaker or active HALF_OPEN claim moves directly to an approved fallback, while a stale claim may be reclaimed without allowing concurrent probes. If adaptive provider recovery is needed, Agent may submit `ProviderRecoveryProposal`, but only `adaptive-recovery-validate` may approve registered, capability-compatible, health-eligible paths.
-   - Provider status may be trusted only when pointer → event → artifact → object → typed probe report verifies end-to-end. A damaged pointer/event/artifact/object/report is `UNAVAILABLE/CORRUPT`, never “probably healthy”.
-   - Unknown provider schema must remain raw-first. Preserve the SourceSnapshot, then use the Schema Repair path in `workflow-adaptive-edge.md`; AI mapping cannot directly enter formal facts or mutate the active dialect.
-   - Do not interpret a provider failure as evidence against the underlying fact. Record separately whether the external request was sent, what the Provider actually returned, and whether resilience handled that result correctly.
+Use `uv run astock web-tool-run REQUEST.json --host-capabilities HOST.json`. For a host dispatch, invoke the actually observed tool and return `web-tool-complete RESULT.json`; use `web-tool-cancel <operation-id>` for abandoned work. Python owns operation identity, leases, budgets and registration; the Agent owns host invocation. Reuse sufficient content returned by search or a prior fetch.
 
-4. **Authoritative Web fallback**
-   - If local/provider paths remain insufficient, automatically search the Web. Agent/Search may propose a query/domain/URL, but deterministic `SourcePolicyGate` decides capability, authority class and formal admission; the proposal itself is never evidence.
-   - Priority: exchange → CNINFO/legal disclosure → issuer IR → regulator → reputable professional sources for corroboration.
-   - Prefer pages/files that require no login/API key/user intervention and freeze the exact admitted source into an immutable snapshot before formal use.
-   - Discovery/Search cannot prove exhaustive absence. `disclosure.enumerate` / corporate-action negative proof requires a route with complete pagination, terminal proof and complete snapshot lineage; duplicate/truncated/terminal-page contradictions fail closed. An `OFFICIAL_WEB_EXACT_ITEM_ADMISSION` proves only one known admitted document and must never be reinterpreted as exhaustive enumeration. If no exhaustive route is available, remain `ENUMERATION_INCOMPLETE / NEEDS_INFO`.
-   - For material contested facts, cross-check independent authoritative sources where practical.
+Only an explicit host capability gap enables configured backup. DeepSeek fallback uses `POST /v1/tools/search` and `POST /v1/tools/fetch`; no chat-completions substitute or undocumented endpoint. Use `configs/web_tools.yaml` for limits and policy rather than copying them into this workflow.
 
-5. **Freeze evidence when an importer exists**
-   - When the repository supports deterministic capture/import, store raw source material immutably before advancing the chain.
-   - Preserve exact page/section/DOM/snapshot locator and source availability.
-   - Web material that cannot yet enter a formal artifact may support a clearly labelled provisional explanation, but cannot silently satisfy a frozen formal gate.
+## Structured supplements
 
-6. **Manual intervention is last**
-   - Exhaust provider and authoritative Web recovery before escalation. Request manual user help only for explicitly identified private input or user authorization; a remaining public gap is an unresolved public-data result.
-   - Aggregate all remaining requests into one checklist: exact document/action, why it matters, and what will resume after it is supplied.
-
-7. **Close the named gap only**
-   - If a new frozen artifact resolves a Committee task, link it with `committee-task-resolve`; the Committee still needs a new formal plan/decision.
-   - Do not broaden one resolved fact into a full research rerun unless the change invalidates downstream artifacts.
+For basic/market/financial/macro gaps read `tushare-schema --endpoint ...`, then a bounded `tushare-query`. Official endpoint links and limits live in `configs/tushare_access.yaml`; examples live in `integrations/tushare/README.md`. Do not load all upstream interfaces or claim this replaces formal financial_sources certification. Existing optional `research-supplemental-acquire` hints / Finnhub leads and established BaoStock routes remain applicable.
 
 ## Output
 
-Normal investor-facing output should say the resolved fact or plain-language remaining uncertainty and its decision impact. Provider IDs, exception classes, artifact IDs/hashes and command logs stay in diagnostics unless debugging is explicitly requested.
+Return the verified fact, exact provenance, remaining uncertainty and decision impact. Diagnostics, operation IDs, provider errors and hashes stay internal unless the user asks for development detail.
 
 ## Stop conditions
 
-- Never bypass access controls, captchas, signatures or rate limits.
-- Never call “no search result” proof of nonexistence.
-- Never upgrade community content into statutory/official authority.
-- Never ask the user to fetch a public authoritative source the Agent can obtain automatically.
-
-## Recovery and optional source supplement
-
-Before returning any public-data `NEEDS_INFO`/unavailable result, the Agent must attempt the existing canonical acquisition, applicable alternate providers, and authoritative Web recovery within the current request budget. Use `research-supplemental-schema` and `research-supplemental-acquire <request.json> --live` for `market.reference.hint` (AKShare/Tushare) or `news.global.lead` (Finnhub) when relevant. Missing optional keys are a source availability issue, not missing investor input. BaoStock stays on the established reference route. Register the returned capture, inspect original-source provenance, and bring verified facts back through the failed canonical node; hint captures are not financial certification, independent EASTMONEY cross-checks, complete Universe proof, or publication permission.
-
-After public recovery is genuinely exhausted, `PUBLIC_DATA_UNAVAILABLE` records a bounded unresolved attempt with no private-material demand. Preserve acquired evidence and describe only the remaining uncertainty. Ask for user input only when it is actually private or requires their authorization. Do not let an unavailable source, incomplete intermediate artifact or exhausted budget trigger an endless full-graph rerun. LLM query/source/parse proposals remain allowed; truth, accounting, historical PIT and execution checks remain deterministic.
-
-Current implementation, validation scope and known limitations: `docs/architecture/adaptive-recovery-and-validation-v1.md`.
+- Do not bypass access controls or expand a bounded gap into an unrestricted collector.
+- Do not refetch sufficient bodies, trigger paid fallback from unknown host state or invent completed dispatches.
+- Do not call no-search-result proof of absence, relabel Markdown as a formal PDF or promote community authority.
+- Do not ask the user to fetch available public sources or rerun the whole graph after a local repair.

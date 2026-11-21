@@ -1,0 +1,15 @@
+schema_version: mootdx-fallback-v1
+enabled: true
+protocol: MAC_COMPAT
+# One isolated SDK installation; rebuild with integrations/mootdx/setup.py.
+# Explicit public MAC TDX servers from the pinned easy_tdx source (see integration notice).
+# Standard Mootdx protocol was verified unavailable; the narrow compatibility patch is explicit.
+servers:
+  - {host: "121.36.248.138", port: 7709}
+  - {host: "123.60.47.136", port: 7709}
+timeout_seconds: 30
+connect_timeout_seconds: 3
+max_pages: 8
+page_size: 700
+max_output_bytes: 4194304
+# No heartbeat, SDK retries, adjustment, financial API, or automatic best-IP lookup.

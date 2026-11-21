@@ -2,127 +2,42 @@
 
 ## When to use
 
-Use for a named A-share current-investment question such as “现在买中国海油合适吗”“这家公司现在估值贵不贵”“未来半年到一年赔率如何”。
-
-Primary skills: `$astock-research-orchestrator` → `$company-deep-research`, with `$evidence-investigation` and `$financial-integrity-audit` as bounded subflows.
+Use for a named A-share investment question. Start with `$astock-research-orchestrator`, then `$company-deep-research`; evidence and financial integrity are bounded subflows.
 
 ## Flow
 
-1. **Refresh local portfolio, then resolve identity**
-   - If the paper account exists, run `local-portfolio-sync-paper`, read the Git-ignored local portfolio, and catch up pending orders before the main research question.
-   - Review existing holdings incrementally in parallel with the requested company analysis; do not rerun every held company from scratch.
-   - Resolve one six-digit A-share code and explicit market. Do not ask the user for internal artifact IDs.
-
-2. **Current acquisition first**
-   - Run `uv run astock research-acquire-current <company_id> --market <market>`.
-   - The command reads the active `current-research-policy`; default/min/max lookback, core/optional capabilities, dependency stages, worker count and automatic-resolution budget are policy facts, not CLI/Python constants.
-   - For a bounded non-default question, an Agent may first submit a `ResearchPlannerProposal` through `adaptive-plan-validate`, then pass the frozen `ValidatedResearchPlan` with `--planner-plan-artifact-id`. The planner can add/skip optional work but cannot remove active core capabilities.
-   - This is the current-investment acquisition layer, not a historical replay. The user's question timestamp is not the research cutoff; the current decision snapshot is frozen after acquisition.
-
-3. **Parallel acquisition where safe**
-   - Execute the frozen `CurrentResearchSchedule` stage-by-stage; only same-stage tasks run in parallel.
-   - Acquire current daily market data, optional corporate-action evidence, latest annual financial hints and the **latest actually disclosed** interim/quarterly period according to the schedule; do not guess the latest report solely from the calendar month. Ordinary CURRENT research finishes using the latest formally disclosed data available at the decision time; only an explicitly report-dependent watch campaign waits for a specified future financial report. Never present a future report as already disclosed.
-   - Provider candidates come from capability registry + active provider health/route policy. A preferred-provider failure must not stop independent downstream collection; UNAVAILABLE/CORRUPT live providers are skipped.
-   - Current daily OHLCV uses the existing canonical/local chain first and capability-routed structured fallback. The latest key trading day is shadow-checked against an independent source when available; normalized value disagreement is `CONFLICTED` and must not silently publish/overwrite the canonical release.
-   - If secondary financial providers are unavailable, a named-company run may recover from the exact official annual/interim/quarterly report. CNINFO report discovery must exhaust pagination (`search_all`) before treating the exact report as unavailable; first-page search is never negative proof. A CNINFO `ProviderError` is recorded once for that recovery attempt, then the workflow moves to an approved exact-item source rather than repeatedly hitting the same failed capability.
-   - The resulting financial release must carry typed official lineage. `CNINFO_EXHAUSTIVE_ENUMERATION` may support all-page proof; `OFFICIAL_WEB_EXACT_ITEM_ADMISSION` proves only the admitted known document and must keep `official_exhaustive_proof_allowed=false`.
-   - Retry only retryable transient failures; use one acquisition-boundary retry layer, provider+capability circuit breaking and the versioned total elapsed-time budget rather than indefinite waiting. OPEN or an active HALF_OPEN claim immediately moves this task to an approved fallback without contaminating other capabilities of the same Provider.
-
-4. **Resolve unresolved capabilities automatically**
-   - Use the active Current Research policy's automatic resolution budget (currently 1800 seconds) before considering manual help.
-   - `SourceAccessRouter` is policy-driven rather than a fixed API→Browser chain: officiality, capability match, health, freshness, latency, cost/auth friction and retryability are scored, while strong official evidence retains hard priority and Manual remains last.
-   - If a provider path needs adaptive recovery, Agent may propose a `ProviderRecoveryProposal`; only `adaptive-recovery-validate` may admit allowlisted capability-compatible paths.
-   - Route unresolved bounded evidence questions to `$evidence-investigation` and cross-check material facts across independent authoritative sources where practical.
-   - After automatic provider and authoritative Web paths are exhausted, ask for help only for an explicitly identified private input or user authorization; consolidate such actions into one checklist. Public unavailability alone is not a user-material requirement.
-
-5. **Plan and formalize the research chain**
-   - For current live research use `uv run astock research-plan <company_id> --mode LIVE` or `uv run astock research-run-company <company_id> --mode LIVE --institutional-research-required` without a question-time `--as-of`.
-   - Reuse valid frozen evidence, FinancialIntegrity, BaseCase, specialist, memo and institutional artifacts when applicable.
-   - Build missing evidence, then the institutional chain when formal certification is required:
-     `EvidenceSufficiencyReport → IndustryProfile / CompanyEconomicsProfile → DriverTree → ForecastPack → ValuationPack → FundamentalModelBundle → InstitutionalDecisionContext`.
-   - A research-safe `NEEDS_INFO / PARTIAL` financial pack may support a bounded qualitative view, but it cannot set `FINANCIAL_INTEGRITY=true`, cannot open precise `VALUATION=true`, and cannot enable formal recommendation. Those checks require an ObjectStore-verified typed `FinancialIntegrityEvidencePack` with `status=SUCCEEDED / coverage_status=COMPLETE`.
-
-6. **Build one common research case**
-   - Build BaseCase once.
-   - Route bounded specialist/Knowledge deltas only where applicable; do not let multiple Agents reread the same raw corpus.
-   - Preserve Bull/Base/Bear scenario analysis, key-driver sensitivity, counter-case and falsifiers.
-
-7. **Committee only after frozen research inputs**
-   - Committee is offline and cannot fetch evidence.
-   - Use `committee-input-resolve`, `committee-plan`, decision/audit paths only after decision-relevant research gaps are closed enough for a formal verdict.
-
-8. **Separate research from execution**
-   - Missing TradingClassification/corporate-action execution detail may block a simulated executable protocol but does not by itself block a months/years fundamental assessment.
-   - If the formal result permits simulation and the entry condition is currently satisfied, local standing settings may continue into the paper order/confirmation workflow; the position changes only after replay confirms a fill.
-   - A direct user simulated-trade instruction overrides the research opinion but not cash/lot/tradability/price-band/fill mechanics.
-
-9. **Render and audit the investor answer**
-   - INVESTOR_MODE is the default for a stock question even if repo-skill discovery or one tool call fails. A system error string and a negated request such as “不要看日志” must not switch the mode.
-   - Build one canonical `ResearchNarrativeBundle`, then project it through `ResponseGateway`; do not construct a parallel response object in a Workflow or Skill.
-   - 对“能不能买/完整分析/持仓处置”等 material decision 使用完整结构：**主体 → 结论与强度 → 当前价格与估值/赔率 → 公司质量与盈利驱动 → 行业/宏观位置 → 财务完整性/治理 → 催化 → Bull/Bear/Reviewer/Red Team 的决定性分歧 → 自然语言交易分类 → 仓位/风险预算 → 入场条件 → 退出/止盈止损/基本面失效条件 → 数据时间与必要引用**。只有一般性非决策事实问题才压缩成 2–4 个理由。Do not add a second summary that repeats the same conclusion.
-   - Length reduction may remove only non-critical reasons. It must never delete the subject, conclusion, conclusion strength, valuation/odds, largest risk, change condition, data cutoff, required citation or safe report reference; if mandatory content still exceeds the budget, return the safe fallback without echoing the draft.
-   - Explain unfamiliar finance/statistics terms briefly on first use, then continue in plain language.
-   - Keep provider paths, internal Agents/committee stages, protocol/schema/class names, machine states, reason codes, artifact IDs/hashes, SQL/SQLite, CLI logs and developer meta commentary in diagnostics only.
-   - Preserve the stable machine contracts `research-investor-view` and `research-acquisition-investor-view`. Public rendering uses `research-public-view` or `research-acquisition-public-view`.
-   - Before sending, apply `research-investor-answer-audit` and `docs/architecture/public-response-contract-v1.md`. A failed audit means **safe rewrite/fallback**, not “show the audit”, “show the backend blockers”, or echo the rejected draft.
-
-10. **Publish the formal report from the same frozen facts**
-   - A completed deep-research request builds `ReportRequest` from the same `ResearchNarrativeBundle` and registered input artifacts; the report layer does not refetch or reinterpret research facts.
-   - DOCX is the default renderer, Markdown is the deterministic fallback, and PDF is optional only when the configured converter succeeds output validation.
-   - Bind citation/asset manifests, privacy level, input hashes, renderer/converter version and output SHA-256 in `ReportManifest`; unsupported asset rights are recorded and excluded rather than silently embedded.
-   - Publish through staging, integrity validation and atomic replace. Matching idempotency checkpoints recover the existing report instead of republishing it.
-   - The investor answer returns only the safe report reference together with the core conclusion and limitations; private absolute report paths remain internal.
-
-## Stop conditions
-
-- Automatic provider/endpoint/Web paths must be exhausted before requesting user material.
-- If authoritative evidence is sufficient for a useful research view but not for precise execution rules, give the research view and explain the investment-relevant uncertainty only.
-- Never fabricate BUY authority, target price, position weight, stop, or entry range to hide uncertainty.
-- Never turn a backend state into the headline of a normal investor answer.
-- **No real brokerage execution**.
+1. **Recover state and identity.** Restore the account/holdings/monitor projection, review material deltas and resolve one company/market. Reuse verified same-request acquisition and registered evidence; do not repeat every held-company analysis.
+2. **Acquire current facts.** Use `uv run astock research-acquire-current <company_id> --market <market>` or the continuation below. `current-research-policy` owns lookback, capability DAG, retry and resource budgets. The question timestamp is not the current research cutoff. Freeze the decision snapshot after acquisition; historical/OOS uses its own real availability boundary.
+3. **Recover only missing capabilities.** `SourceAccessRouter` uses registered capability/authority/health/cost policy, not a hardcoded provider order. Execute independent tasks by DAG wave. Check the latest actually disclosed financial period; do not infer disclosure from the calendar. Preserve raw source responses and independent-source disagreements rather than silently overwriting facts.
+4. **Recover official evidence.** Route gaps through `$evidence-investigation` and [evidence recovery](workflow-evidence-recovery.md). Use authoritative Web and observed host tools; read `web-tool-schema` / `src/astock/schemas/web_tools.py` only when needed. Reuse body content, use configured backup only after an explicit host gap, and never relabel search/Markdown as a PDF. Exact official documents prove their admitted item; only exhaustive pagination/terminal proof supports enumeration or negative claims. Preserve `official_exhaustive_proof_allowed=false` for exact-item admission.
+5. **Build one research case.** Complete `EvidenceSufficiencyReport → IndustryProfile / CompanyEconomicsProfile → DriverTree → ForecastPack → ValuationPack → FundamentalModelBundle → InstitutionalDecisionContext`. Python computes evidence-bound assumptions and sensitivity. Incomplete financial evidence can support a clearly bounded qualitative observation, but cannot assert financial integrity, precise valuation or formal recommendation.
+6. **Dispatch specialists and independent review.** Use registered BaseCase and incremental deltas. Route macro/policy, industry, catalyst, governance, reviewer and model-risk to the corresponding canonical Skills. Bull and Bear use independent contexts; Reviewer follows both. Optional registered technical context reuses `MarketContextPack` / existing factor references, adds no parallel technical Agent and does not block otherwise supported fundamentals.
+7. **Freeze before Committee and Portfolio.** Committee cannot fetch evidence. Register typed role outputs/results, run required audits, then finish committee, trade classification, portfolio and final receipt/publication. A missing execution rule may block simulation without invalidating an unrelated long-term fundamental observation. Submitted orders never imply filled positions.
+8. **Publish from the same facts.** Build `ResearchNarrativeBundle`, render through `ResponseGateway` and run `research-investor-answer-audit`. Material decisions cover economic drivers, accounting/governance, valuation, decisive disagreement, catalysts, portfolio risk and entry/exit/invalidation conditions with citations. Keep required content; style repair cannot change facts or add a research gate. Formal reports reuse the same narrative; see [reporting](../architecture/formal-reporting-v1.md).
 
 ## Same-request automatic continuation
 
-The current-company workflow is one durable request, not a sequence of user prompts.
+Start/recover with `research-current-continuation-start REQUEST.json` and `research-current-continuation-status`. Do not create a new request merely because one provider or page fails.
 
-- Start or recover it with `uv run astock research-current-continuation-start REQUEST.json` and
-  `uv run astock research-current-continuation-status <continuation_id>`.
-- `AUTO_RESOLUTION_REQUIRED`: the Agent automatically discovers and freezes exact official
-  evidence, submits a typed automatic-resolution artifact through
-  `uv run astock research-current-continuation-resolve RESOLUTION.json`, and resumes. Public
-  captures are validated and bound atomically; search snippets and secondary summaries are never
-  accepted as the fact artifact.
-- `TEAM_RESEARCH_REQUIRED`: the Agent runs all ready research-team tasks in DAG waves and
-  advances the gate without returning an interim investment conclusion.
-- `READY_FOR_INVESTOR_VIEW`: the complete lineage supports a formal recommendation.
-- `OBSERVATION_ONLY_FOR_INVESTOR_VIEW`: the complete lineage supports an explicitly labelled
-  observation view, but at least one formal recommendation gate failed.
-- `NEEDS_USER_INPUT`: only genuinely private source material or authorization may trigger a user request. Public-channel exhaustion uses `PUBLIC_DATA_UNAVAILABLE` without manual actions. User-supplied private material resumes the same continuation.
+| State | Continuation |
+|---|---|
+| `AUTO_RESOLUTION_REQUIRED` | Discover and freeze exact official evidence; submit a typed automatic-resolution artifact through `research-current-continuation-resolve RESOLUTION.json`, then resume |
+| `TEAM_RESEARCH_REQUIRED` | Execute all ready research-team tasks, register role outputs/results and advance the same DAG |
+| `READY_FOR_INVESTOR_VIEW` | Complete lineage plus final receipt/publication permits the formal answer |
+| `OBSERVATION_ONLY_FOR_INVESTOR_VIEW` | Complete the team first, then label the bounded observation; no formal buy/sell permission |
+| `PUBLIC_DATA_UNAVAILABLE` | Public attempts are exhausted; preserve evidence and state remaining uncertainty without a private-material demand |
+| `NEEDS_USER_INPUT` | Only genuinely private source material or required authorization; later input binds to the same request |
 
-Every internal continuation status must preserve `investment_conclusion_blocked=true`,
-`same_request_continuation_required=true`; normal investor answers must not expose those backend fields. The active research contract has no real-broker execution permission field. Public-source
-work must never be delegated back to the user merely because one provider or page failed.
+Intermediate states keep `same_request_continuation_required=true` and `investment_conclusion_blocked=true`; normal investor answers must not expose those backend fields. Public resolution is atomic; later user material uses `research-current-continuation-bind`. Runtime or CLI continuation must obey the same lineage and terminal contract.
 
-## Required specialist Skills
+## Structured supplements
 
-The team DAG must dispatch the following canonical Repo Skills when their corresponding roles
-become ready; role labels alone are not an implementation:
+Read `tushare-schema --endpoint ...` and the exact official reference linked by `configs/tushare_access.yaml` for basic/market/financial/macro needs. `tushare-query` is a supplementary structured route, not the existing formal financial_sources statement certification. Retain applicable `research-supplemental-acquire` hints and Finnhub news leads; missing optional credentials are source availability, not missing investor data. BaoStock remains on its established reference route. Do not load an entire provider skill or repeat a satisfied query.
 
-- `.agents/skills/macro-policy-regime/SKILL.md` for `macro` and `policy`.
-- `.agents/skills/industry-value-chain/SKILL.md` for `industry`.
-- `.agents/skills/catalyst-event-research/SKILL.md` for `catalyst`.
-- `.agents/skills/governance-management-quality/SKILL.md` for `governance`.
-- Existing `bull` and `bear` tasks remain separate, independent contexts; `.agents/skills/investment-red-team/SKILL.md` is dispatched only for the downstream `reviewer` after both complete.
-- `.agents/skills/model-risk-backtest-validation/SKILL.md` for `model-risk`.
+## Stop conditions
 
-Each Skill returns the exact typed role output, freezes its evidence lineage, records
-contradictions and abstains when its formal gate cannot be supported. The committee may consume
-only registered typed outputs from completed dependencies.
-
-## Recovery and optional source supplement
-
-Before returning any public-data `NEEDS_INFO`/unavailable result, the Agent must attempt the existing canonical acquisition, applicable alternate providers, and authoritative Web recovery within the current request budget. Use `research-supplemental-schema` and `research-supplemental-acquire <request.json> --live` for `market.reference.hint` (AKShare/Tushare) or `news.global.lead` (Finnhub) when relevant. Missing optional keys are a source availability issue, not missing investor input. BaoStock stays on the established reference route. Register the returned capture, inspect original-source provenance, and bring verified facts back through the failed canonical node; hint captures are not financial certification, independent EASTMONEY cross-checks, complete Universe proof, or publication permission.
-
-After public recovery is genuinely exhausted, `PUBLIC_DATA_UNAVAILABLE` records a bounded unresolved attempt with no private-material demand. Preserve acquired evidence and describe only the remaining uncertainty. Ask for user input only when it is actually private or requires their authorization. Do not let an unavailable source, incomplete intermediate artifact or exhausted budget trigger an endless full-graph rerun. LLM query/source/parse proposals remain allowed; truth, accounting, historical PIT and execution checks remain deterministic.
-
-Current implementation, validation scope and known limitations: `docs/architecture/adaptive-recovery-and-validation-v1.md`.
+- Do not publish a Candidate, acquisition gap or unfinished team as a completed investment decision.
+- Exhaust applicable bounded providers and authoritative Web before marking public unavailability; ask for user material only when private or authorization-dependent.
+- Never invent a report disclosure, BUY price, target weight, negative proof or completed source enumeration.
+- Keep identity, provenance, financial/accounting correctness, final publication and paper-account mechanics deterministic.
+- Do not add real brokerage execution or expose backend diagnostics in an ordinary investor report.

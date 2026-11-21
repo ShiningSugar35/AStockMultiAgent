@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import math
 import os
 import re
 import shutil
@@ -23,11 +24,14 @@ from astock.settings import ProjectPaths
 from astock.storage_retention import (
     active_linked_worktree_roots,
     iter_matching_tree_roots,
+    path_has_redirect,
+    process_identity,
     remove_tree,
     snapshot_tree,
 )
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_REFERENCE_SCAN_LIMIT = 100_000
 _StorageCategory = Literal[
     "TASK_SCRATCHPAD",
     "OBJECT_STORE",
@@ -40,6 +44,8 @@ _StorageCategory = Literal[
     "STALE_WORKTREE",
     "RUNTIME_TEST_SCRATCH",
     "AI_BRIDGE_TMP",
+    "QUALITY_RUN_EVIDENCE",
+    "REVIEWED_SCRATCH",
 ]
 _AUTO_TREE_CATEGORIES = {
     "TASK_SCRATCHPAD",
@@ -48,7 +54,17 @@ _AUTO_TREE_CATEGORIES = {
     "STALE_WORKTREE",
     "RUNTIME_TEST_SCRATCH",
     "AI_BRIDGE_TMP",
+    "QUALITY_RUN_EVIDENCE",
+    "REVIEWED_SCRATCH",
 }
+_REVIEWED_SCRATCH_ROOTS = (
+    "scratch", ".scratchpad", ".ai-bridge/reviews", "runtime/longrun",
+    "runtime/acceptance", "runtime/baseline-gate-check", "runtime/validation",
+    "runtime/pytest", "runtime/tool-cache", "runtime/owner-override",
+    "runtime/live-validation-v2", "runtime/phase6-evidence-run", "runtime/workers",
+    "runtime/tmp", "runtime/backups", "runtime/uv-cache",
+)
+_TERMINAL_RUN_STATUSES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "ABORTED"}
 
 
 class _Model(BaseModel):
@@ -72,6 +88,8 @@ class StorageTreePolicy(_Model):
     orphan_retention_hours: int | None = Field(default=None, ge=1)
     patterns: list[str] = Field(default_factory=list)
     max_depth: int = Field(default=1, ge=1, le=8)
+    keep_latest: int = Field(default=0, ge=0, le=1000)
+    scan_limit: int = Field(default=10_000, ge=1, le=100_000)
 
 
 class StorageAutomationPolicy(_Model):
@@ -148,6 +166,17 @@ class StorageLifecyclePolicy(_Model):
             retention_hours=24, patterns=["tmp*"], max_depth=1
         )
     )
+    quality_run_evidence: StorageTreePolicy = Field(
+        default_factory=lambda: StorageTreePolicy(
+            retention_hours=720, orphan_retention_hours=720,
+            patterns=["*"], max_depth=1, keep_latest=20,
+        )
+    )
+    reviewed_scratch: StorageTreePolicy = Field(
+        default_factory=lambda: StorageTreePolicy(
+            retention_hours=24, patterns=["*"], max_depth=4,
+        )
+    )
     task_scratchpad: StorageTreePolicy = Field(
         default_factory=lambda: StorageTreePolicy(retention_hours=1, patterns=["*"], max_depth=1)
     )
@@ -171,6 +200,8 @@ class StorageCandidate(_Model):
     file_count: int = Field(default=1, ge=0)
     dir_count: int = Field(default=0, ge=0)
     referenced: bool = False
+    tree_fingerprint: str | None = None
+    scan_complete: bool = True
     eligible: bool
     reason: str = Field(min_length=1)
 
@@ -212,6 +243,7 @@ class StorageLifecycleRun(_Model):
     confirmed: Literal[True]
     deleted_file_count: int = Field(ge=0)
     deleted_bytes: int = Field(ge=0)
+    deleted_directory_count: int = Field(default=0, ge=0)
     skipped_file_count: int = Field(ge=0)
     skip_reasons: list[str]
 
@@ -432,10 +464,13 @@ class StorageLifecycleService:
 
         candidates.sort(key=lambda item: (item.category, item.relative_path))
         eligible = [item for item in candidates if item.eligible]
-        runtime_bytes = snapshot_tree(self.paths.runtime).byte_size
-        object_store_bytes = snapshot_tree(self.paths.objects).byte_size
-        temp_bytes = snapshot_tree(self.paths.runtime / "tmp").byte_size
-        report_bytes = snapshot_tree(self.paths.reports).byte_size
+        sizes = [snapshot_tree(path) for path in (
+            self.paths.runtime, self.paths.objects, self.paths.runtime / "tmp", self.paths.reports,
+        )]
+        runtime_bytes, object_store_bytes, temp_bytes, report_bytes = (
+            value.byte_size for value in sizes
+        )
+        truncated |= not all(value.complete for value in sizes)
         ephemeral_bytes = self._nonoverlapping_tree_bytes(tree_candidates)
         volume_free_bytes = shutil.disk_usage(self.paths.root).free
         watermark_status = self._watermark(
@@ -589,7 +624,7 @@ class StorageLifecycleService:
         if plan.scan_truncated:
             findings.add("SCAN_TRUNCATED")
         for item in plan.candidates:
-            path = (self.paths.root / item.relative_path).resolve()
+            path = self.paths.root / item.relative_path
             if not self._allowed_candidate_path(path, item.category):
                 findings.add("CANDIDATE_OUTSIDE_ALLOWED_ROOT")
                 blocking.add("CANDIDATE_OUTSIDE_ALLOWED_ROOT")
@@ -599,6 +634,9 @@ class StorageLifecycleService:
             if item.entry_type == "FILE" and item.category in _AUTO_TREE_CATEGORIES:
                 findings.add("EPHEMERAL_TREE_CATEGORY_NOT_TREE")
                 blocking.add("EPHEMERAL_TREE_CATEGORY_NOT_TREE")
+            if not item.scan_complete and item.eligible:
+                findings.add("INCOMPLETE_TREE_MARKED_FOR_DELETE")
+                blocking.add("INCOMPLETE_TREE_MARKED_FOR_DELETE")
             if item.referenced and item.eligible:
                 findings.add("REFERENCED_CANDIDATE_MARKED_FOR_DELETE")
                 blocking.add("REFERENCED_CANDIDATE_MARKED_FOR_DELETE")
@@ -619,16 +657,23 @@ class StorageLifecycleService:
         audit = self.audit(plan)
         if audit.status != "PASS":
             raise ValueError("storage lifecycle plan failed audit")
-        referenced = self._referenced_hashes()
-        referenced_reports = self._referenced_report_output_names()
-        active_staging_keys = self._active_report_staging_keys()
+        selected = {item.category for item in plan.candidates if item.eligible}
+        referenced = self._referenced_hashes() if "OBJECT_STORE" in selected else set()
+        referenced_reports = (
+            self._referenced_report_output_names() if "REPORT_OUTPUT" in selected else set()
+        )
+        active_staging_keys = (
+            self._active_report_staging_keys() if "REPORT_STAGING" in selected else set()
+        )
+        retention_refs, refs_complete = self._retention_references()
         deleted_count = 0
+        deleted_directories = 0
         deleted_bytes = 0
         skipped: list[str] = []
         for item in plan.candidates:
             if not item.eligible:
                 continue
-            path = (self.paths.root / item.relative_path).resolve()
+            path = self.paths.root / item.relative_path
             if not self._allowed_candidate_path(path, item.category):
                 skipped.append(f"OUTSIDE_ALLOWED_ROOT:{item.relative_path}")
                 continue
@@ -648,7 +693,15 @@ class StorageLifecycleService:
                     skipped.append(f"BECAME_ACTIVE_STAGING:{item.relative_path}")
                     continue
             if item.entry_type == "TREE":
-                if item.category == "TASK_SCRATCHPAD" and not self._task_scratchpad_terminal(path):
+                owner_reason = self._ancestor_owner_protection(path)
+                if owner_reason:
+                    skipped.append(f"{owner_reason}:{item.relative_path}")
+                    continue
+                if item.category in {
+                    "TASK_SCRATCHPAD", "REVIEWED_SCRATCH", "STALE_WORKTREE",
+                } and not (
+                    self._task_scratchpad_terminal(path)
+                ):
                     skipped.append(f"TASK_NOT_DISPOSABLE:{item.relative_path}")
                     continue
                 if not path.exists():
@@ -659,19 +712,25 @@ class StorageLifecycleService:
                 ):
                     skipped.append(f"BECAME_ACTIVE_WORKTREE:{item.relative_path}")
                     continue
-                if (
-                    item.category == "QUALITY_RUN_TMP"
-                    and item.reason != "QUALITY_RUN_ORPHAN_EXPIRED"
-                    and not (path.parent / "result.json").is_file()
-                ):
-                    skipped.append(f"QUALITY_RUN_NOT_TERMINAL:{item.relative_path}")
-                    continue
+                if item.category in {"QUALITY_RUN_TMP", "QUALITY_RUN_EVIDENCE"}:
+                    run_root = path.parent if item.category == "QUALITY_RUN_TMP" else path
+                    if self._quality_run_state(run_root) not in {"TERMINAL", "ORPHAN"}:
+                        skipped.append(f"QUALITY_RUN_OWNER_UNVERIFIED:{item.relative_path}")
+                        continue
+                    if item.category == "QUALITY_RUN_EVIDENCE" and (
+                        not refs_complete or self._reference_mentions(run_root, retention_refs)
+                    ):
+                        skipped.append(f"BECAME_REFERENCED_QUALITY_RUN:{item.relative_path}")
+                        continue
                 current = snapshot_tree(path)
                 if (
-                    current.byte_size != item.byte_size
+                    not current.complete
+                    or current.byte_size != item.byte_size
                     or current.file_count != item.file_count
                     or current.dir_count != item.dir_count
                     or current.latest_mtime_ns != item.mtime_ns
+                    or (item.tree_fingerprint is not None
+                        and current.fingerprint != item.tree_fingerprint)
                 ):
                     skipped.append(f"CHANGED_SINCE_PLAN:{item.relative_path}")
                     continue
@@ -681,6 +740,7 @@ class StorageLifecycleService:
                     skipped.append(f"DELETE_FAILED:{item.relative_path}")
                     continue
                 deleted_count += item.file_count
+                deleted_directories += item.dir_count + 1
                 deleted_bytes += item.byte_size
                 continue
             try:
@@ -706,6 +766,7 @@ class StorageLifecycleService:
             confirmed=True,
             deleted_file_count=deleted_count,
             deleted_bytes=deleted_bytes,
+            deleted_directory_count=deleted_directories,
             skipped_file_count=len(skipped),
             skip_reasons=sorted(skipped),
         )
@@ -718,6 +779,7 @@ class StorageLifecycleService:
                 "kind": "storage_lifecycle_execution",
                 "plan_id": run.plan_id,
                 "deleted_file_count": run.deleted_file_count,
+                "deleted_directory_count": run.deleted_directory_count,
                 "deleted_bytes": run.deleted_bytes,
                 "skip_reasons": run.skip_reasons,
             }
@@ -979,10 +1041,12 @@ class StorageLifecycleService:
                     try:
                         rows = connection.execute(
                             f'SELECT DISTINCT "{column}" FROM "{table}" '
-                            f'WHERE "{column}" IS NOT NULL LIMIT 100000'
+                            f'WHERE "{column}" IS NOT NULL LIMIT {_REFERENCE_SCAN_LIMIT + 1}'
                         ).fetchall()
-                    except sqlite3.Error:
-                        continue
+                    except sqlite3.Error as exc:
+                        raise ValueError("object reference inventory is incomplete") from exc
+                    if len(rows) > _REFERENCE_SCAN_LIMIT:
+                        raise ValueError("object reference inventory exceeds its bounded scan")
                     for row in rows:
                         self._collect_hashes(row[0], result)
         return result
@@ -1018,6 +1082,8 @@ class StorageLifecycleService:
     def _ephemeral_tree_candidates(self, instant: datetime) -> list[StorageCandidate]:
         candidates: list[StorageCandidate] = []
 
+        retention_refs, refs_complete = self._retention_references()
+
         # A task explicitly marks disposable scratch after its work has completed.
         # Unknown or active directories remain untouched regardless of age.
         for target in iter_matching_tree_roots(
@@ -1026,8 +1092,20 @@ class StorageLifecycleService:
             max_depth=self.policy.task_scratchpad.max_depth,
         ):
             ready = self._task_scratchpad_terminal(target)
+            scratch_policy = self.policy.task_scratchpad
+            if target.name.startswith("quality-"):
+                run_root = self.paths.root / ".ai-bridge" / "quality-runs" / (
+                    target.name.removeprefix("quality-")
+                )
+                if self._quality_run_state(run_root) == "ORPHAN":
+                    hours = self.policy.quality_run_tmp.orphan_retention_hours
+                    ready = ready and hours is not None
+                    if hours is not None:
+                        scratch_policy = scratch_policy.model_copy(
+                            update={"retention_hours": hours}
+                        )
             candidates.append(self._tree_candidate(
-                "TASK_SCRATCHPAD", target, self.policy.task_scratchpad, instant,
+                "TASK_SCRATCHPAD", target, scratch_policy, instant,
                 referenced=not ready, protected_reason="TASK_SCRATCHPAD_OWNERSHIP_UNVERIFIED",
             ))
 
@@ -1056,62 +1134,51 @@ class StorageLifecycleService:
                 quality_runs = list(quality_root.iterdir())
             except OSError:
                 quality_runs = []
-            for run_root in quality_runs:
-                if run_root.is_symlink() or run_root.is_junction():
+            quality_runs = sorted(
+                (path for path in quality_runs if path.is_dir()),
+                key=lambda path: path.name, reverse=True,
+            )
+            retained = set(quality_runs[:self.policy.quality_run_evidence.keep_latest])
+            for run_root in quality_runs[:self.policy.quality_run_evidence.scan_limit]:
+                if path_has_redirect(self.paths.root, run_root):
                     continue
+                state = self._quality_run_state(run_root)
+                terminal = state == "TERMINAL"
+                orphan = state == "ORPHAN"
+                evidence_protected = (
+                    not (terminal or orphan) or run_root in retained
+                    or not refs_complete or self._reference_mentions(run_root, retention_refs)
+                )
+                evidence = self._tree_candidate(
+                    "QUALITY_RUN_EVIDENCE", run_root,
+                    self.policy.quality_run_evidence, instant,
+                    referenced=evidence_protected,
+                    protected_reason=(
+                        "QUALITY_RUN_OWNER_UNVERIFIED" if not (terminal or orphan)
+                        else "QUALITY_RUN_RECENT_PROTECTED" if run_root in retained
+                        else "QUALITY_RUN_REFERENCE_PROTECTED"
+                    ),
+                )
+                candidates.append(evidence)
                 target = run_root / "tmp"
-                if (
-                    not target.is_dir()
-                    or target.is_symlink()
-                    or target.is_junction()
-                ):
+                if not target.is_dir() or path_has_redirect(self.paths.root, target):
                     continue
-                terminal = (run_root / "result.json").is_file()
                 quality_policy = self.policy.quality_run_tmp
-                if terminal:
-                    candidates.append(
-                        self._tree_candidate(
-                            "QUALITY_RUN_TMP",
-                            target,
-                            quality_policy,
-                            instant,
-                        )
-                    )
-                    continue
-                orphan_hours = quality_policy.orphan_retention_hours
-                if orphan_hours is None:
-                    candidates.append(
-                        self._tree_candidate(
-                            "QUALITY_RUN_TMP",
-                            target,
-                            quality_policy,
-                            instant,
-                            referenced=True,
-                            protected_reason="QUALITY_RUN_NOT_TERMINAL_PROTECTED",
-                        )
-                    )
-                    continue
-                orphan_policy = quality_policy.model_copy(
-                    update={"retention_hours": orphan_hours}
+                hours = quality_policy.orphan_retention_hours if orphan else None
+                policy = (
+                    quality_policy.model_copy(update={"retention_hours": hours})
+                    if hours is not None else quality_policy
                 )
-                orphan = self._tree_candidate(
-                    "QUALITY_RUN_TMP",
-                    target,
-                    orphan_policy,
-                    instant,
+                candidate = self._tree_candidate(
+                    "QUALITY_RUN_TMP", target, policy, instant,
+                    referenced=not (terminal or (orphan and hours is not None)),
+                    protected_reason="QUALITY_RUN_NOT_TERMINAL_PROTECTED",
                 )
-                candidates.append(
-                    orphan.model_copy(
-                        update=(
-                            {"reason": "QUALITY_RUN_ORPHAN_EXPIRED"}
-                            if orphan.eligible
-                            else {
-                                "referenced": True,
-                                "reason": "QUALITY_RUN_NOT_TERMINAL_PROTECTED",
-                            }
-                        )
+                if orphan and candidate.eligible:
+                    candidate = candidate.model_copy(
+                        update={"reason": "QUALITY_RUN_ORPHAN_EXPIRED"}
                     )
-                )
+                candidates.append(candidate)
 
         longrun_root = self.paths.runtime / "longrun"
         for target in iter_matching_tree_roots(
@@ -1145,8 +1212,11 @@ class StorageLifecycleService:
                         target,
                         self.policy.stale_worktrees,
                         instant,
-                        referenced=active,
-                        protected_reason="ACTIVE_GIT_WORKTREE_PROTECTED",
+                        referenced=active or not self._task_scratchpad_terminal(target),
+                        protected_reason=(
+                            "ACTIVE_GIT_WORKTREE_PROTECTED" if active
+                            else "WORKTREE_OWNERSHIP_UNVERIFIED"
+                        ),
                     )
                 )
 
@@ -1178,17 +1248,260 @@ class StorageLifecycleService:
                     instant,
                 )
             )
-        return candidates
+        candidates.extend(self._reviewed_scratch_candidates(instant))
+        # A disposable parent already includes its children; count and delete once.
+        disposable = [
+            Path(item.relative_path) for item in candidates
+            if item.eligible and item.entry_type == "TREE"
+        ]
+        unique: dict[str, StorageCandidate] = {}
+        for item in candidates:
+            child = Path(item.relative_path)
+            if any(child != parent and child.is_relative_to(parent) for parent in disposable):
+                continue
+            previous = unique.get(item.relative_path)
+            if previous is None or item.eligible:
+                unique[item.relative_path] = item
+        return list(unique.values())
+
+    @staticmethod
+    def _read_control_json(path: Path, *, max_bytes: int = 65_536) -> dict[str, object] | None:
+        try:
+            if path.is_symlink() or path.is_junction() or path.stat().st_size > max_bytes:
+                return None
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else None
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _owner_identity_state(owner: dict[str, object]) -> str:
+        pid = owner.get("owner_pid")
+        created = owner.get("owner_create_time")
+        if (
+            not isinstance(pid, int) or isinstance(pid, bool)
+            or not isinstance(created, (int, float)) or isinstance(created, bool)
+            or not math.isfinite(created)
+            or owner.get("owned_worker_reaped") is False
+        ):
+            return "UNKNOWN"
+        actual = process_identity(pid)
+        if actual.status == "UNKNOWN":
+            return "UNKNOWN"
+        if actual.status == "ALIVE":
+            if actual.creation_time is None:
+                return "UNKNOWN"
+            if abs(actual.creation_time - created) <= 0.001:
+                return "ACTIVE"
+        return "DEAD"
+
+    def _ancestor_owner_protection(self, path: Path) -> str | None:
+        for current in (path, *path.parents):
+            if current == self.paths.root or not current.is_relative_to(self.paths.root):
+                break
+            marker = current / "owner.json"
+            if marker.exists() or marker.is_symlink():
+                owner = self._read_control_json(marker)
+                if owner is None or owner.get("schema_version") != "astock-owned-run-v1":
+                    return "OWNER_IDENTITY_UNVERIFIED"
+                state = self._owner_identity_state(owner)
+                if state != "DEAD":
+                    return "ACTIVE_OWNER_PROTECTED" if state == "ACTIVE" else (
+                        "OWNER_IDENTITY_UNVERIFIED"
+                    )
+        return None
+
+    def _quality_run_state(self, run_root: Path) -> str:
+        """Unknown owner/permissions never become an age-only orphan deletion."""
+        if path_has_redirect(self.paths.root, run_root):
+            return "UNKNOWN"
+        owner_path = run_root / "owner.json"
+        owner: dict[str, object] | None = None
+        if owner_path.exists() or owner_path.is_symlink() or owner_path.is_junction():
+            owner = self._read_control_json(owner_path)
+            if (
+                owner is None or owner.get("schema_version") != "astock-owned-run-v1"
+                or owner.get("owned_worker_reaped") is False
+            ):
+                return "UNKNOWN"
+            try:
+                declared_root = Path(str(owner.get("project_root"))).resolve()
+                if (
+                    owner.get("run_id") != run_root.name
+                    or declared_root != run_root.parents[2].resolve()
+                    or owner.get("status") not in _TERMINAL_RUN_STATUSES | {"RUNNING"}
+                ):
+                    return "UNKNOWN"
+                scratch = Path(str(owner.get("scratch_dir")))
+                expected_scratch = {
+                    run_root / "tmp",
+                    run_root.parents[2] / ".scratchpad" / f"quality-{run_root.name}",
+                }
+                if scratch not in expected_scratch or path_has_redirect(self.paths.root, scratch):
+                    return "UNKNOWN"
+                identity = self._owner_identity_state(owner)
+                if identity in {"ACTIVE", "UNKNOWN"}:
+                    return identity
+            except (OSError, ValueError, TypeError):
+                return "UNKNOWN"
+        result = self._read_control_json(run_root / "result.json")
+        if result is not None and (
+            result.get("owned_worker_reaped") is False
+            or result.get("failure_reason") == "TERMINATION_UNCONFIRMED"
+        ):
+            return "UNKNOWN"
+        if result is not None and result.get("run_id", run_root.name) == run_root.name and (
+            type(result.get("child_exit_code")) is int
+            or type(result.get("returncode")) is int
+        ):
+            return "TERMINAL"
+        if owner is not None:
+            return "TERMINAL" if owner.get("status") in _TERMINAL_RUN_STATUSES else "ORPHAN"
+        return "UNKNOWN"
+
+    def _disposal_marker(self, path: Path) -> dict[str, object] | None:
+        marker = path / ".cleanup-ready"
+        if path_has_redirect(self.paths.root, marker) or not marker.is_file():
+            return None
+        try:
+            if marker.stat().st_size > 65_536:
+                return None
+        except OSError:
+            return None
+        value = self._read_control_json(marker)
+        if value is None:
+            # Existing plain terminal markers remain compatible, without immediate bypass.
+            try:
+                raw = marker.read_text(encoding="utf-8")
+                if raw.strip() and not raw.lstrip().startswith("{"):
+                    return {"legacy": True}
+                return None
+            except (OSError, UnicodeError):
+                return None
+        try:
+            if (
+                value.get("schema_version") != "astock-disposable-scratch-v1"
+                or Path(str(value.get("project_root"))).resolve() != self.paths.root.resolve()
+                or value.get("relative_path") != path.relative_to(self.paths.root).as_posix()
+                or not isinstance(value.get("run_id"), str) or not value["run_id"]
+                or not isinstance(value.get("reason"), str) or not value["reason"]
+            ):
+                return None
+            reviewed = datetime.fromisoformat(str(value.get("reviewed_at")))
+            if reviewed.tzinfo is None:
+                return None
+        except (OSError, ValueError, TypeError):
+            return None
+        return value
 
     def _task_scratchpad_terminal(self, path: Path) -> bool:
-        """A matching quality receipt or explicit task marker proves completion."""
-        if path.name.startswith("quality-"):
+        """A matching terminal/dead-owner receipt or explicit review proves disposal."""
+        if path.parent == self.paths.root / ".scratchpad" and path.name.startswith("quality-"):
             run_id = path.name.removeprefix("quality-")
-            return bool(run_id) and (
-                self.paths.root / ".ai-bridge" / "quality-runs" / run_id / "result.json"
-            ).is_file()
-        marker = path / ".cleanup-ready"
-        return marker.is_file() and not marker.is_symlink() and not marker.is_junction()
+            root = self.paths.root / ".ai-bridge" / "quality-runs" / run_id
+            return bool(run_id) and self._quality_run_state(root) in {"TERMINAL", "ORPHAN"}
+        if (path / "owner.json").exists():
+            return False  # Only the quality-run owner contract is understood here.
+        return self._disposal_marker(path) is not None
+
+    def _reviewed_scratch_bases(self) -> list[Path]:
+        bases = [self.paths.root / name for name in _REVIEWED_SCRATCH_ROOTS]
+        worktree_parent = self.paths.runtime / "worktrees"
+        for linked in sorted(active_linked_worktree_roots(self.paths.root)):
+            if linked.parent != worktree_parent or path_has_redirect(self.paths.root, linked):
+                continue
+            bases.append(linked / "runtime" / "tmp")
+            # Only recognisable temporary/cache subtrees may carry a reviewed marker.
+            # A registered worktree's root, sources and durable control files are excluded.
+            bases.extend(iter_matching_tree_roots(
+                linked / ".ai-bridge",
+                ["tmp", "tmp-*", "pytest-*", "*-pytest-tmp", "process-tmp",
+                 "uv-cache", "npm-cache", "xdg-cache", "quality-cache"],
+                max_depth=3,
+            ))
+        return bases
+
+    def _reviewed_scratch_candidates(self, instant: datetime) -> list[StorageCandidate]:
+        rows: list[StorageCandidate] = []
+        remaining = self.policy.reviewed_scratch.scan_limit
+        for base in self._reviewed_scratch_bases():
+            if not base.is_dir() or path_has_redirect(self.paths.root, base):
+                continue
+            stack = [(base, 0)]
+            while stack and remaining > 0:
+                path, depth = stack.pop()
+                remaining -= 1
+                if path_has_redirect(self.paths.root, path):
+                    continue
+                marker = self._disposal_marker(path)
+                if marker is not None:
+                    candidate = self._tree_candidate(
+                        "REVIEWED_SCRATCH", path, self.policy.reviewed_scratch, instant,
+                        referenced=not self._task_scratchpad_terminal(path),
+                        protected_reason="SCRATCH_OWNER_UNVERIFIED",
+                    )
+                    if (
+                        marker.get("allow_immediate") is True and candidate.scan_complete
+                        and not candidate.referenced
+                    ):
+                        candidate = candidate.model_copy(update={
+                            "eligible": True, "reason": "REVIEWED_DISPOSABLE_SCRATCH",
+                        })
+                    rows.append(candidate)
+                    continue
+                if depth < self.policy.reviewed_scratch.max_depth:
+                    try:
+                        stack.extend(
+                            (child, depth + 1) for child in path.iterdir()
+                            if child.is_dir() and not child.is_symlink() and not child.is_junction()
+                        )
+                    except OSError:
+                        continue
+        return rows
+
+    def _retention_references(self) -> tuple[str, bool]:
+        """Keep receipts referenced by current docs or unfinished durable work."""
+        files = list(self.paths.root.glob("*.md"))
+        for folder, pattern in (("docs", "*.md"), ("planning", "*.yaml")):
+            base = self.paths.root / folder
+            if base.is_dir() and not path_has_redirect(self.paths.root, base):
+                files.extend(base.rglob(pattern))
+        bridge = self.paths.root / ".ai-bridge"
+        files.extend(bridge / name for name in ("current-plan.md", "agent-status.md"))
+        long_runs = bridge / "long-runs"
+        if long_runs.is_dir() and not path_has_redirect(self.paths.root, long_runs):
+            for path in long_runs.glob("*.json"):
+                data = self._read_control_json(path, max_bytes=2 * 1024**2)
+                if data is None:
+                    return "", False
+                if str(data.get("status", "")).lower() not in {
+                    "done", "completed", "cancelled", "failed", "aborted", "archived", "superseded",
+                }:
+                    files.append(path)
+        chunks: list[str] = []
+        remaining = 16 * 1024**2
+        for path in files[:2000]:
+            if not path.exists():
+                continue
+            if path_has_redirect(self.paths.root, path):
+                return "", False
+            try:
+                size = path.stat().st_size
+                if size > min(remaining, 2 * 1024**2):
+                    return "", False
+                chunks.append(path.read_text(encoding="utf-8"))
+                remaining -= size
+            except (OSError, UnicodeError):
+                return "", False
+        references = "\n".join(chunks).replace("\\\\", "/").replace("\\", "/").casefold()
+        return references, len(files) <= 2000
+
+    def _reference_mentions(self, path: Path, references: str) -> bool:
+        relative = path.relative_to(self.paths.root).as_posix().casefold()
+        return relative in references or (
+            bool(re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", path.name))
+            and path.name.casefold() in references
+        )
 
     @staticmethod
     def _nonoverlapping_tree_bytes(candidates: list[StorageCandidate]) -> int:
@@ -1212,11 +1525,15 @@ class StorageLifecycleService:
         referenced: bool = False,
         protected_reason: str = "TREE_PROTECTED",
     ) -> StorageCandidate:
+        owner_reason = self._ancestor_owner_protection(path)
+        if owner_reason:
+            referenced = True
+            protected_reason = owner_reason
         snapshot = snapshot_tree(path)
         cutoff = instant - timedelta(hours=policy.retention_hours)
         modified = datetime.fromtimestamp(snapshot.latest_mtime_ns / 1_000_000_000, UTC)
         expired = modified <= cutoff
-        eligible = expired and not referenced
+        eligible = expired and not referenced and snapshot.complete
         relative = path.resolve().relative_to(self.paths.root.resolve()).as_posix()
         return StorageCandidate(
             category=category,
@@ -1226,10 +1543,14 @@ class StorageLifecycleService:
             entry_type="TREE",
             file_count=snapshot.file_count,
             dir_count=snapshot.dir_count,
+            tree_fingerprint=snapshot.fingerprint,
+            scan_complete=snapshot.complete,
             referenced=referenced,
             eligible=eligible,
             reason=(
-                protected_reason
+                "TREE_SCAN_INCOMPLETE"
+                if not snapshot.complete
+                else protected_reason
                 if referenced
                 else f"{category}_EXPIRED"
                 if eligible
@@ -1255,13 +1576,18 @@ class StorageLifecycleService:
             bounded.append(item)
         bounded.sort(key=lambda item: (item.category, item.relative_path))
         eligible = [item for item in bounded if item.eligible]
-        runtime_bytes = snapshot_tree(self.paths.runtime).byte_size
-        object_store_bytes = snapshot_tree(self.paths.objects).byte_size
-        temp_bytes = snapshot_tree(self.paths.runtime / "tmp").byte_size
-        report_bytes = snapshot_tree(self.paths.reports).byte_size
+        sizes = [snapshot_tree(path) for path in (
+            self.paths.runtime, self.paths.objects, self.paths.runtime / "tmp", self.paths.reports,
+        )]
+        runtime_bytes, object_store_bytes, temp_bytes, report_bytes = (
+            value.byte_size for value in sizes
+        )
+        truncated = not all(value.complete for value in sizes) or any(
+            not item.scan_complete for item in bounded
+        )
         ephemeral_bytes = self._nonoverlapping_tree_bytes(bounded)
         volume_free_bytes = shutil.disk_usage(self.paths.root).free
-        identity = self._plan_identity_payload(bounded, scan_truncated=False)
+        identity = self._plan_identity_payload(bounded, scan_truncated=truncated)
         return StorageLifecyclePlan(
             plan_id=content_hash(identity),
             generated_at=instant,
@@ -1271,7 +1597,7 @@ class StorageLifecycleService:
             eligible_file_count=sum(item.file_count for item in eligible),
             eligible_bytes=sum(item.byte_size for item in eligible),
             referenced_object_count=0,
-            scan_truncated=False,
+            scan_truncated=truncated,
             runtime_bytes=runtime_bytes,
             object_store_bytes=object_store_bytes,
             temp_bytes=temp_bytes,
@@ -1412,6 +1738,9 @@ class StorageLifecycleService:
         return "OK"
 
     def _allowed_candidate_path(self, path: Path, category: str) -> bool:
+        if path_has_redirect(self.paths.root, path):
+            return False
+        path = path.absolute()
         file_roots = {
             "OBJECT_STORE": self.paths.objects,
             "RUNTIME_TMP": self.paths.runtime / "tmp",
@@ -1439,7 +1768,7 @@ class StorageLifecycleService:
                 for pattern in patterns
             )
 
-        if category == "QUALITY_RUN_TMP":
+        if category in {"QUALITY_RUN_TMP", "QUALITY_RUN_EVIDENCE"}:
             roots = [self.paths.root]
             worktree_parent = (self.paths.runtime / "worktrees").resolve()
             roots.extend(
@@ -1453,11 +1782,20 @@ class StorageLifecycleService:
                     relative = path.relative_to(quality_root.resolve())
                 except ValueError:
                     continue
-                if len(relative.parts) == 2 and relative.parts[-1] == "tmp":
+                if (
+                    (category == "QUALITY_RUN_TMP" and len(relative.parts) == 2
+                     and relative.parts[-1] == "tmp")
+                    or (category == "QUALITY_RUN_EVIDENCE" and len(relative.parts) == 1)
+                ):
                     # Reject redirection at every component, including Windows junctions.
                     chain = [base / ".ai-bridge", quality_root, path.parent, path]
                     return not any(item.is_symlink() or item.is_junction() for item in chain)
             return False
+        if category == "REVIEWED_SCRATCH":
+            return any(
+                path == base or path.is_relative_to(base)
+                for base in self._reviewed_scratch_bases()
+            )
         if category == "LONGRUN_SCRATCH":
             longrun_root = self.paths.runtime / "longrun"
             try:
@@ -1484,7 +1822,7 @@ class StorageLifecycleService:
                     item.is_symlink() or item.is_junction()
                     for item in (scratch_root, path, marker)
                 )
-                and path.is_dir()
+                and (path.is_dir() or not path.exists())
             )
         if category == "AI_BRIDGE_TMP":
             return direct_child(self.paths.root / ".ai-bridge") and matches(

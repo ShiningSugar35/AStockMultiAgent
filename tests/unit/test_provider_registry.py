@@ -16,6 +16,7 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
     assert [item.provider_id for item in registry.providers] == [
         "eastmoney-5m",
         "sina-5m",
+        "mootdx-fallback",
         "cninfo-disclosures",
         "sse-official-reference",
         "szse-official-reference",
@@ -32,6 +33,7 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
         "mof-fiscal-policy-release",
         "ndrc-pricing-policy-release",
         "akshare-reference-hints",
+        "tushare-structured",
         "tushare-reference-hints",
         "finnhub-news-hints",
     ]

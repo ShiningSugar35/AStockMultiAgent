@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from collections.abc import Sequence
 from contextlib import closing
 from datetime import datetime
@@ -76,7 +77,7 @@ class CanonicalRegimeReferenceViews:
         return dict(row)
 
     def _daily_rows(
-        self, release_id: str
+        self, release_id: str, *, tail_limit: int | None = None
     ) -> tuple[dict[str, Any], DatasetReleaseManifest, dict[str, DailyBarObservation]]:
         row = self._release_row(release_id)
         # Reuse the existing release/raw-chain/file/logical-content verification.
@@ -85,7 +86,12 @@ class CanonicalRegimeReferenceViews:
             raise ValueError("regime daily view requires a canonical daily-price release")
         if manifest.coverage.status is not ReferenceCoverageStatus.COMPLETE:
             raise ValueError("regime daily history is incomplete or conflicted")
+        if tail_limit is not None and (type(tail_limit) is not int or not 1 <= tail_limit <= 10000):
+            raise ValueError("canonical daily tail must have a bounded row limit")
         result: dict[str, DailyBarObservation] = {}
+        tail: deque[DailyBarObservation] = deque(maxlen=tail_limit)
+        seen_ids: set[str] = set()
+        previous_day = None
         sources = {
             identity: self.state.get_snapshot(identity) for identity in manifest.raw_snapshot_ids
         }
@@ -93,32 +99,45 @@ class CanonicalRegimeReferenceViews:
             path = (self.parquet.root / descriptor.path).resolve()
             if not path.is_relative_to(self.parquet.root):
                 raise ValueError("canonical reference file escapes its configured data root")
-            raw_rows = pq.ParquetFile(path).read(columns=["record_json"]).column(0).to_pylist()
-            for raw in raw_rows:
-                # Canonical Parquet omits model-envelope created_at. Restore
-                # that bookkeeping time deterministically, not with wall-clock now.
-                payload = json.loads(raw)
-                payload.setdefault("created_at", manifest.available_to_system_at)
-                value = DailyBarObservation.model_validate(payload)
-                if value.observation_id in result:
-                    raise ValueError(
-                        "canonical daily release contains duplicate observation identity"
-                    )
-                if value.instrument_id != manifest.scope_key:
-                    raise ValueError(
-                        "daily observation identity differs from the canonical release scope"
-                    )
-                if (
-                    value.source_snapshot_id not in manifest.raw_snapshot_ids
-                    or value.available_to_system_at > manifest.available_to_system_at
-                ):
-                    raise ValueError("daily observation is not bound to its parent release")
-                source = sources.get(value.source_snapshot_id)
-                if source is None or source.available_to_system_at > value.available_to_system_at:
-                    raise ValueError("daily observation backdates its raw source availability")
-                result[value.observation_id] = value
-        if len(result) != manifest.coverage.record_count:
+            batches = pq.ParquetFile(path).iter_batches(batch_size=512, columns=["record_json"])
+            for batch in batches:
+                for raw in batch.column(0).to_pylist():
+                    # Canonical Parquet omits model-envelope created_at. Restore
+                    # that bookkeeping time deterministically, not with wall-clock now.
+                    payload = json.loads(raw)
+                    payload.setdefault("created_at", manifest.available_to_system_at)
+                    value = DailyBarObservation.model_validate(payload)
+                    if value.observation_id in seen_ids:
+                        raise ValueError(
+                            "canonical daily release contains duplicate observation identity"
+                        )
+                    if value.instrument_id != manifest.scope_key:
+                        raise ValueError(
+                            "daily observation identity differs from the canonical release scope"
+                        )
+                    if (
+                        value.source_snapshot_id not in manifest.raw_snapshot_ids
+                        or value.available_to_system_at > manifest.available_to_system_at
+                    ):
+                        raise ValueError("daily observation is not bound to its parent release")
+                    source = sources.get(value.source_snapshot_id)
+                    if (
+                        source is None
+                        or source.available_to_system_at > value.available_to_system_at
+                    ):
+                        raise ValueError("daily observation backdates its raw source availability")
+                    seen_ids.add(value.observation_id)
+                    if tail_limit is None:
+                        result[value.observation_id] = value
+                    else:
+                        if previous_day is not None and value.session_date <= previous_day:
+                            raise ValueError("bounded daily tail requires ordered unique sessions")
+                        previous_day = value.session_date
+                        tail.append(value)
+        if len(seen_ids) != manifest.coverage.record_count:
             raise ValueError("daily observation count differs from canonical release coverage")
+        if tail_limit is not None:
+            result = {value.observation_id: value for value in tail}
         return row, manifest, result
 
     def daily_locators(self, scope_key: str, *, as_of: datetime) -> tuple[str, ...]:

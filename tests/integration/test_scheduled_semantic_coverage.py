@@ -4,7 +4,7 @@ import importlib.util
 import json
 import shutil
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -98,13 +98,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def project_tmp_path() -> Iterator[Path]:
-    path = PROJECT_ROOT / "runtime" / "pytest" / f"scheduled-semantic-{uuid.uuid4().hex}"
-    path.mkdir(parents=True, exist_ok=False)
-    try:
-        yield path
-    finally:
-        shutil.rmtree(path, ignore_errors=True)
+def project_tmp_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Let the quality runner own project-local scratch and any failed cleanup."""
+    return tmp_path_factory.mktemp("scheduled-semantic")
 
 
 class _ThreeDomainPaperReference(_ReferenceFixture):

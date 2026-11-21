@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from astock.core.errors import AStockError, FailureClass, ProviderError
 from astock.core.hashing import content_hash
@@ -17,7 +18,7 @@ from astock.core.state import StateStore
 from astock.market_data.quality import cross_validate_batches, validate_batch
 from astock.market_data.storage import CanonicalMarketStore, ParquetMarketStore
 from astock.providers.base import MarketDataProvider
-from astock.schemas import BarRequest, DataQualityReport, MarketDataBatch, QualityStatus
+from astock.schemas import BarRequest, DataQualityReport, Frequency, MarketDataBatch, QualityStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +42,13 @@ class MarketSyncService:
         observation_store: ParquetMarketStore,
         canonical_store: CanonicalMarketStore,
     ) -> None:
-        self.providers = providers
+        # Preserve primary cross-checks, regardless of caller ordering; fallbacks run last.
+        self.providers = sorted(
+            providers, key=lambda item: bool(getattr(item, "fallback_only", False))
+        )
+        self.fallback_ids = {
+            item.provider_id for item in providers if getattr(item, "fallback_only", False)
+        }
         self.state = state
         self.source_breaker = SourceCircuitBreaker(state)
         self.observation_store = observation_store
@@ -62,6 +69,11 @@ class MarketSyncService:
         capability = f"market.raw_{request.frequency.value}"
         try:
             for provider in self.providers:
+                if provider.provider_id in self.fallback_ids and any(
+                    self._covers_increment(batch, report)
+                    for batch, report in zip(batches, reports, strict=True)
+                ):
+                    continue
                 if not self.source_breaker.claim_attempt(provider.provider_id, capability):
                     failures[provider.provider_id] = f"CIRCUIT_OPEN:{capability}"
                     continue
@@ -109,17 +121,50 @@ class MarketSyncService:
                     failure_class=FailureClass.DATA_QUALITY,
                     details={"failures": failures},
                 )
-            primary_pair = next(
-                (pair for pair in usable if pair[0].provider_id == "eastmoney-5m"), usable[0]
+            selected, selected_report = max(
+                usable,
+                key=lambda pair: (
+                    pair[1].quality_status == QualityStatus.PASS,
+                    pair[0].actual_end or request.requested_start,
+                    pair[0].bar_count,
+                    pair[0].provider_id not in self.fallback_ids,
+                    pair[0].provider_id == "eastmoney-5m",
+                ),
             )
-            selected, selected_report = primary_pair
             secondary_pairs = [pair for pair in usable if pair[0] is not selected]
             canonical_report = (
                 cross_validate_batches(selected, secondary_pairs[0][0])
                 if secondary_pairs
                 else selected_report
             )
+            fallback_selected = selected.provider_id in self.fallback_ids
             preserve_previous = previous_manifest is not None and bool(failures)
+            if previous_manifest is not None and fallback_selected:
+                # A backup may extend the observed tail, never rewrite established primary bars.
+                previous_end = previous_manifest.get("actual_end")
+                try:
+                    boundary = datetime.fromisoformat(str(previous_end))
+                except (TypeError, ValueError):
+                    boundary = None
+                new_bars = [
+                    bar for bar in selected.bars
+                    if boundary is not None and bar.timestamp > boundary
+                ]
+                preserve_previous = not (
+                    new_bars and selected_report.quality_status == QualityStatus.PASS
+                )
+                if not preserve_previous:
+                    selected = selected.model_copy(update={
+                        "batch_id": content_hash({
+                            "batch_id": selected.batch_id,
+                            "extension_after": boundary,
+                            "observations": [bar.observation_id for bar in new_bars],
+                        }),
+                        "bars": new_bars, "bar_count": len(new_bars),
+                        "actual_start": new_bars[0].timestamp,
+                        "actual_end": new_bars[-1].timestamp,
+                    })
+                    canonical_report = selected_report
             if preserve_previous:
                 assert previous_manifest is not None
                 manifest = previous_manifest
@@ -133,7 +178,10 @@ class MarketSyncService:
                     source_snapshot_ids=[batch.raw_snapshot_id for batch, _ in usable],
                 )
                 canonical_updated = True
-                canonical_publish_reason = "PUBLISHED_QUALITY_PASSED_INCREMENT"
+                canonical_publish_reason = (
+                    "PUBLISHED_QUALITY_PASSED_FALLBACK_INCREMENT" if fallback_selected
+                    else "PUBLISHED_QUALITY_PASSED_INCREMENT"
+                )
                 for batch, report in usable:
                     self._advance_checkpoint(batch, report, job_id)
             self.state.finish_attempt(attempt_id)
@@ -159,6 +207,42 @@ class MarketSyncService:
                 self.state.finish_attempt(attempt_id, error_class=error_class, retryable=retryable)
             self.state.finish_job(job_id, "RETRYABLE_FAILED" if retryable else "PERMANENT_FAILED")
             raise
+
+    @staticmethod
+    def _covers_increment(batch: MarketDataBatch, report: DataQualityReport) -> bool:
+        """Avoid backup traffic when a primary covers the requested weekday window.
+
+        Weekdays are a conservative dispatch bound, never a trading-calendar proof:
+        holidays or suspension can trigger one bounded fallback, without inventing bars.
+        """
+        if report.quality_status != QualityStatus.PASS or not batch.bars:
+            return False
+        zone = ZoneInfo("Asia/Shanghai")
+        start = batch.request.requested_start.astimezone(zone)
+        end = min(batch.request.requested_end, datetime.now(zone)).astimezone(zone)
+        labels = (
+            [time(10, 30), time(11, 30), time(14), time(15)]
+            if batch.request.frequency is Frequency.H1
+            else [time(9, 35), time(15)]
+        )
+        first_day, last_day = start.date(), end.date()
+        if start.time() > labels[-1]:
+            first_day += timedelta(days=1)
+        if end.time() < labels[0]:
+            last_day -= timedelta(days=1)
+        while first_day.weekday() >= 5:
+            first_day += timedelta(days=1)
+        while last_day.weekday() >= 5:
+            last_day -= timedelta(days=1)
+        if first_day > last_day:
+            return False
+        observed_days = {bar.timestamp.astimezone(zone).date() for bar in batch.bars}
+        day = first_day
+        while day <= last_day:
+            if day.weekday() < 5 and day not in observed_days:
+                return False
+            day += timedelta(days=1)
+        return True
 
     def _incremental_request(
         self, provider_id: str, request: BarRequest, *, has_canonical: bool

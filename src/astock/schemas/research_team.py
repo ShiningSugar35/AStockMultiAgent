@@ -130,6 +130,19 @@ class MarketContextPack(AStockModel):
     daily_release_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     market_anchor_artifact_id: str = Field(min_length=1)
     market_anchor_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Optional research provenance; no change to market-price or publication authority.
+    technical_snapshot_artifact_id: str | None = None
+    technical_snapshot_object_hash: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+
+    @model_validator(mode="after")
+    def technical_pair(self) -> MarketContextPack:
+        if (self.technical_snapshot_artifact_id is None) != (
+            self.technical_snapshot_object_hash is None
+        ):
+            raise ValueError("technical snapshot artifact ID and hash must appear together")
+        return self
 
 
 class IndependentBullCase(AStockModel):

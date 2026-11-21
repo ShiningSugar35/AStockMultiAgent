@@ -1,93 +1,51 @@
 ---
 name: astock-research-orchestrator
-description: Route broad or multi-step A-share research requests across candidate discovery, company research, persisted local holdings, portfolio transition/hedging, paper orders/fills, evidence, and recovery. Use for natural-language questions about a company, whether a stock is worth buying, planned-purchase portfolio completion, holding changes, entry/exit planning, stock recommendations, or any task spanning more than one project skill.
+description: Route broad or multi-step A-share research across company analysis, candidate discovery, holdings, portfolio decisions, paper trading and evidence recovery. Use for stock recommendations, buy/sell research, planned-purchase portfolio completion, holding changes or requests spanning project skills.
 ---
 
 # A股研究总控
 
-1. 对**每一个投资类请求**先恢复用户态：若 paper account 存在，先 `local-portfolio-sync-paper`；随后读取 `local-portfolio-status`、`portfolio-local-snapshot` 和 `continuous-monitor-status`。对现有持仓先由 `$holding-monitor` 消费 material delta，对 watched target 由 `$continuous-investment-monitor` 消费增量；不要把排队 task 当成已完成分析。
-2. 如果用户在当前消息中明确陈述一笔**已经发生的外部交易**，并同时给出可唯一识别的标的/市场、买卖方向、数量、价格和实际成交时间，必须在同一轮先通过 `$holding-monitor` 的 `portfolio-import-declared-trade` 路径落入本机事实源，再继续投资分析。若缺字段，只询问真正缺失的成交事实；不得用当前价格或提问时间替代。已经落库的购买时间/数量/成本后续不要重复询问。
-3. 若 open simulated order 跨越离线区间，按需补 `60m` 并执行 `paper-replay`；只有路径歧义才使用 5m。submitted order 不是 position，只有 fill 才改变模拟持仓。
-4. 解释用户意图并路由：
-   - named company / “现在能不能买” → `$company-deep-research`；
-   - **准备买 X，同时希望配其他股票/对冲/组合** → `PLANNED_PURCHASE_PORTFOLIO_COMPLETION`，由 `$portfolio-manager` 走 `workflow-portfolio-transition-and-hedging.md`；
-   - **已有持仓要不要加仓/减仓/退出/调组合** → `HELD_POSITION_REBALANCE_REVIEW`，由 `$holding-monitor` + `$portfolio-manager` 走 `workflow-holding-rebalance-decision.md`；
-   - broad “推荐几只/有什么好买” → 必须先 `research-team-plan` + 全市场 Research Team，`$candidate-scan` 只是 blind discovery；
-   - accounting credibility → `$financial-integrity-audit`；evidence gap → `$evidence-investigation`；paper recovery → `$paper-trading-recovery`；技术侦察 → `$research-tech-scout`。
-5. Planned-purchase 组合补全不是新的荐股捷径。先确认 anchor X 的 current formal result 仍成立，再分析 `CURRENT → ANCHOR_ONLY` 增加的风险 gap；股票互补候选仍只能来自可证明 Universe/ResearchSeed/Candidate → 公司深研 → Committee。不能从 Web/新闻临时挑一只“负相关股票”代替正式候选链。
-6. 组合/持仓请求必须恢复或确认用户约束：可用资本/现金、投资期限、最大总暴露、单股/行业/回撤/流动性/换手和锁定持仓。缺关键约束时允许风险诊断和条件方案，但不得伪造总资产、现金或风险承受。具体数量区间只有在 NAV、价格和工具交易单位都确定时生成。
-7. 组合里的“对冲”用语必须通过 `$portfolio-manager` 的正式分类。低相关只能叫分散化；`NATURAL_HEDGE` 需要机制证据、PIT 正常/压力期复算和已验证成本。当前 long-only 股票/ETF 链不支持 `EXPLICIT_HEDGE`；ETF 可做正式研究/组合评估，并具备独立但默认关闭的 paper execution policy，只有精确有效的 instrument rule + 既有确认/replay 链才可模拟；融券/期货/期权/真实券商均不可用。
-8. 用户明确指示模拟买入/卖出/加减仓时，其指令覆盖模型意见但不覆盖市场机械约束：现金/可用股数、交易单位、可交易状态、价格限制、账户确认和 replay 必须成立。AI 主动模拟下单仍要求正式研究允许模拟、typed entry 已满足和本地自动模拟设置；下单不等于成交。
-9. 不要在每个投资问题前跑 `probe`。`probe` 仅为开发/恢复诊断；完整 SQLite 体检也只在显式诊断/发布门执行。
-10. Existing stable discovery/execution-readiness route remains: `research-seeds --live` → `research-seeds-promote ... --live` → Candidate；`RESEARCH_READY` 仍无 BUY 权威。`JuglarCycleStageSkill` 等 audited Skills 只能影响 bounded research priority。正式执行条件继续由 `ClassifiedTradeProtocol` 和 `trade-plan-view` 解释，不能被 portfolio/holding 新链绕过。
-11. Broad current stock-picking 继续遵守全市场 workflow：Research Team → current Universe/seeds → blind tranche → bounded Expert overlay → company Fundamental/Financial/Catalyst/Market → Valuation → independent Bull/Bear → Reviewer → Committee → Portfolio → `FullResearchInputReadiness` → Mandatory Research DAG → `RecommendationResearchReceipt` → Publication Gate。工程 `coverage_ratio >= 99.5%` 只能说明高覆盖；正式全市场推荐还要求 XSHG/XSHE/BJSE 均有 ObjectStore 可验证的 `UniverseCoverageProof` 且达到 `OFFICIAL_DENOMINATOR_RECONCILED`。Universe 不可证明或只有二级源自报覆盖时 fail closed，不可用 Web/news 人工补股票名单。
-12. 新 current named-stock opinion 先 `research-acquire-current <company_id> --market <market>`。CURRENT 只要求本轮 bounded acquisition/recovery 结束后冻结的最新可信事实、来源 lineage、财务/基本面和最终发布门；不得用用户提问时刻做 anti-lookahead cutoff，也不得要求旧 reference release 继续保持历史 PIT head。历史模式如存在，必须独立显式启用，不能反向约束 CURRENT。Planner 只能改变 optional work，不能删掉公司质量、财务/治理、估值、风险或 Publication Gate。
-13. **任何 CURRENT `NEEDS_INFO` 都先视为内部恢复信号，而不是用户终态。** 先按缺口语义自动处理：对象/registry/schema 漂移 → 从可信源重抓并重建 canonical artifact；结构化 provider 覆盖不足 → 耗尽 allowlisted fallback、transient retry、validated Recovery/SchemaRepair；公开事实缺失或冲突 → `$evidence-investigation` 做 bounded authoritative Web 多源交叉验证并把结果捕获回既有 Evidence/ObjectStore。修复后回到原节点重跑并继续同一请求。只有公共自动恢复预算和权威 Web 都真实耗尽，且剩余信息只能来自用户私人事实时，才可一次性请求必要资料；provider 名称和后台故障不进入 INVESTOR_MODE。
-14. 正式公司研究使用机构级基本面链：evidence sufficiency → industry/company economics → driver tree → Bull/Base/Bear forecast → valuation/sensitivity → decision context → BaseCase → bounded Specialists/Knowledge → committee。Forecast/Valuation 数值由 deterministic Python 复算。
-15. 分离 research sufficiency 与 execution readiness。交易规则/公司行动细节可以阻断模拟执行但不一定阻断中长期基本面结论；精确 entry/exit mechanics 只使用 typed TradePlan，不猜价格。
-16. 对 material formal decision 保持 registered/audited path；Committee 不联网找证据。组合 transition、holding proposal、hedge effectiveness 都是只读研究工件，不直接写 paper ledger 或真实券商。
-17. Prospective 方法比较继续遵守 Phase 7/8。一次回测或一个更高 Sharpe 不自动改变 allocator、Skill 权重或 paper ledger。
-18. 项目任务结束后按 AGENTS 记录恰好一个 `agent-observation-register` 观测；普通运行不自行伪造 expected labels。
-19. Build every user-visible investment answer from one canonical `ResearchNarrativeBundle` and render it through `ResponseGateway`. Keep `research-investor-view` and `research-acquisition-investor-view` as stable machine JSON; use `research-public-view` and `research-acquisition-public-view` for audited public output. Only affirmative diagnostic intent or an explicit mode may enable Developer Mode. Negated diagnostic requests, ordinary “why” questions, and system error text remain Investor Mode. Length reduction may remove only non-critical reasons; mandatory content must survive or use a no-echo safe fallback.
-20. **Same-request terminal contract:** 所有荐股、买卖判断、持仓处置和组合决策统一归一为 `FULL_RESEARCH_RECOMMENDATION`，不得把 Seed、Candidate、acquisition gap、team nonterminal、未完成 Committee/Portfolio、上游 `FullResearchInputReadinessReport` 或未封存的研究结果当作用户终局。必须继续调用本 Skill 路由出的全部适用 Skills，直到 `InvestmentRequestClosurePolicy` 为当前 canonical capability plan 返回 `READY_FOR_INVESTOR_VIEW`，且最终 `RecommendationResearchReceipt + Publication Gate` 允许发布；若返回 `CONTINUE_AUTOMATICALLY`，继续本轮工作而不是回复“下一步可以继续……”。只有公共自动恢复预算与权威 Web 都真实耗尽且缺口只能来自私人输入时，才可停止为 `NEEDS_USER_INPUT`，且此时不得形成 BUY/组合建议。
-21. broad recommendation 的 bounded shortlist 不是最终答案。每个入围标的都必须在同一请求中进入 `$company-deep-research`，之后再完成 cross-name Red Team / Committee / `$portfolio-manager` / Mandatory Research DAG / `RecommendationResearchReceipt` / Publication Gate；被淘汰标的也要保留简洁的淘汰理由，避免幸存者偏差。进入完整研究前先冻结“投资预期”：本金与目标年化分别按本轮明确值 → 最近已注册请求或持仓/荐股研究中可验证的用户已记录值 → 默认 100000 元 / 100% 年化解析，允许一项来自历史而另一项来自本轮；模型 DEFAULT 不得覆盖更早的用户显式值；坏对象、无效记录和其它账户记录跳过，按字段实际记录时间选择最近值。目标年化只用于目标利润、同期限收益路径、下行情景、目标缺口和更严格的目标收益买入价上限；不得因此放宽任何硬风险门、自动加杠杆或提高仓位上限。用户真实账户事实未知时仍不得伪造成已知；只有资本、价格和交易单位具备有效证据时才生成合法交易数量。**隐私采用偏松、request-aware 规则：规划本金/预算、目标盈利、建议配置金额/股数以及公开证券/公司事实可正常输出；只有真实/模拟账户和现有持仓的个性化本金、成本、现金/资产、当前股数、实际盈亏默认不主动输出。用户本轮明确提及或询问对应账户/持仓数值时，应从已核实记录中正常回答。**
+## Workflow
 
-## 宿主接力与结果目标
+1. Recover existing user state: `local-portfolio-sync-paper` when a paper account exists, then `local-portfolio-status`, `portfolio-local-snapshot` and `continuous-monitor-status`. Consume material deltas through `$holding-monitor` / `$continuous-investment-monitor`; queued work is not completed analysis. Record an explicitly reported completed external trade through the existing account workflow before continuing, asking only for genuinely missing execution facts.
+2. Route the actual intent. Named company → `$company-deep-research`; broad recommendations → Research Team and `$candidate-scan`; `PLANNED_PURCHASE_PORTFOLIO_COMPLETION` → `$portfolio-manager`; `HELD_POSITION_REBALANCE_REVIEW` → `$holding-monitor` plus `$portfolio-manager`; evidence gaps → `$evidence-investigation`. Load only the relevant linked Workflow and its required professional Skills.
+3. For current research use `uv run astock research-acquire-current` or recover its same-request continuation. The user's question timestamp/question-time is not a cutoff; `current-research-policy` freezes the latest verified facts after bounded acquisition. Historical/OOS work has its own strict availability contract.
+4. Reuse valid evidence and request-bound artifacts. Automatic recovery uses allowlisted `ProviderRecoveryProposal` and raw-first `SchemaRepair` / Schema Repair; then perform authoritative Web recovery via the evidence Skill. Only after allowlisted automated/provider paths **and** authoritative Web search are exhausted may public unavailability be terminal. A manual request is allowed only for private input/authorization; provider/retry/artifact details are internal and never become the investor answer. Do **not** run `uv run astock probe` before every investment question.
+5. For broad discovery retain `research-seeds --live` → `research-seeds-promote` and the pure blind cohort. `JuglarCycleStageSkill` and other methods may change bounded research priority only. Validate Universe coverage through its existing proof, deepen each selected company, and expand unresearched candidates within policy when the requested count is unmet; never fill quotas with unsupported BUY opinions.
+6. Resolve planning capital/return objectives per field from the explicit request, verified user history, then active policy defaults. Reuse registered constraints; do not infer account assets from a planning example. Goals cannot relax financial, governance, liquidity, concentration, valuation or publication checks. Planned purchase completion first verifies the anchor's current formal research, then measures CURRENT/ANCHOR/TARGET risk gaps.
+7. Complete the applicable canonical DAG: institutional fundamentals and deterministic forecasts/valuation; financial integrity, industry, governance and catalysts; independent Bull/Bear; Reviewer/Red Team; Committee; Portfolio; mandatory readiness and `RecommendationResearchReceipt` / Publication Gate. A Candidate, partial acquisition or unfinished team is not a final investment answer. Read `ClassifiedTradeProtocol` through `trade-plan-view` for exact mechanics instead of inventing prices.
+8. Use `uv run astock codex-run-init --require-registered-output` and `uv run astock codex-run-audit` for registered outputs. Committee consumes the frozen case via `committee-input-resolve / committee-plan / committee-decide / committee-audit`. **The committee never performs the search itself**. A new material fact returns to acquisition/research, not an untracked committee browse.
+9. Keep research proposals separate from execution. **A submitted order is never called a position until the fill ledger confirms it**. Explicit user simulated-trade instructions override model opinion, while cash, available shares, instrument rules, confirmation and replay remain binding. Default replay is raw 60m; use 5m only for ambiguity. ETF execution remains default-off under its independent rule; diversification is not `EXPLICIT_HEDGE`.
+10. Publish one complete investment report from `ResearchNarrativeBundle` through `ResponseGateway` and `research-investor-answer-audit`; preserve stable machine JSON views. Formal WATCH/APPROVE_SIMULATION targets enroll the monitor with reason `RECOMMENDED`. Register one task observation without inventing evaluation labels.
 
-- **CHATGPT_CHAT**：唯一宿主阈值来自 `configs/chat_invocation_policy_v1.yaml`：35分钟保存已完成进度并准备交接、40分钟前核实真实续接绑定、45分钟作为项目激活上限；如平台实际更短则提前处理。**仅保存内部checkpoint，不因交接点直接对外提交半成品研究或建议**。可用时创建或复用真实子Scheduled；Scheduled自身不能创建子Scheduled时使用既有每小时watcher，保留原request/round/lease与有效结果，绝不另起平行研究。平台权限/绑定失败如实留在内部状态，不能把任务ID的存在冒充已核实或用提示词假称已有排程；其它Agent总体研究不受这一时间阈值限制，局部资源预算耗尽后续处理剩余工作。
+## Same-request closure
 
-宽泛荐股与新增组合默认最低 3 只、目标 5 只符合当前或明确近期建仓条件的证券，用户明确数量优先；单股分析不套配额。WATCH 和尚未触发的条件不计入当前可建仓数。先验证 CURRENT Universe 的真实覆盖与 LIVE 来源，再按未研究候选增量扩池，不能复用离线三五只样本声称全市场研究，更不能拿其他 request_id 的旧 WATCH 回执作为本次结论。候选不足时继续扩行业、补证与深研；无合格机会只能以真实已穷尽的漏斗证据解释，不能降低财务/Committee/Portfolio/Publication 门或强行 BUY 凑数。
+Continue the same request when closure says `CONTINUE_AUTOMATICALLY`; retain validated artifacts and resume affected nodes. Only complete, permitted lineage yields `READY_FOR_INVESTOR_VIEW`; public exhaustion yields `PUBLIC_DATA_UNAVAILABLE`, while private input can yield `NEEDS_USER_INPUT`. Do not end with a list of routine research this Skill can still execute.
 
-开发/恢复时优先执行 `python -B -m astock.diagnostics artifacts --type SeedPromotionReport --limit 5` 或按精确 ID 的 `artifact`、指定表的 `schema`。该入口只显示有界诊断，不初始化数据库，不产生推荐权威。复杂 Windows 参数使用结构化 argv 或项目内 UTF-8 JSON 文件，避免嵌套 shell 引号与全表探测。
+Follow host timing from `configs/chat_invocation_policy_v1.yaml`, retaining request/round/checkpoint/lease. Verify a real continuation binding; never claim an imagined scheduler. Save internal progress without presenting unfinished research as a report. A long-lived continuation watcher survives a single round.
+
+Prospective isolation remains `ELIGIBLE_RULE_STATE_MACHINE_RESEARCH` → `AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL` → explicit rule-research approval. **Do not change weights or the paper ledger** from shadow/adaptive results.
 
 ## Workflows
 
-- [`docs/workflows/workflow-full-market-research-team.md`](../../../docs/workflows/workflow-full-market-research-team.md)
-- [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
-- [`docs/workflows/workflow-portfolio-transition-and-hedging.md`](../../../docs/workflows/workflow-portfolio-transition-and-hedging.md)
-- [`docs/workflows/workflow-holding-rebalance-decision.md`](../../../docs/workflows/workflow-holding-rebalance-decision.md)
-- [`docs/workflows/workflow-candidate-discovery.md`](../../../docs/workflows/workflow-candidate-discovery.md)
-- [`docs/workflows/workflow-holding-monitoring.md`](../../../docs/workflows/workflow-holding-monitoring.md)
-- [`docs/workflows/workflow-paper-trading.md`](../../../docs/workflows/workflow-paper-trading.md)
-- [`docs/workflows/workflow-portfolio-construction.md`](../../../docs/workflows/workflow-portfolio-construction.md)
-- [`docs/workflows/workflow-prospective-evaluation.md`](../../../docs/workflows/workflow-prospective-evaluation.md)
-- [`docs/workflows/workflow-adaptive-edge.md`](../../../docs/workflows/workflow-adaptive-edge.md)
-- [`docs/architecture/public-response-contract-v1.md`](../../../docs/architecture/public-response-contract-v1.md)
-
-## Compatibility and hard contracts
-
-- Stable commands remain invoked as `uv run astock ...`; current named-stock acquisition uses `uv run astock research-acquire-current`. Current research is **not** cut off at the user's question timestamp/question-time; it freezes after the bounded acquisition round according to `current-research-policy`.
-- For material registered work use `uv run astock codex-run-init --require-registered-output` and `uv run astock codex-run-audit`. Committee routing still uses `committee-input-resolve / committee-plan / committee-decide / committee-audit`. **The committee never performs the search itself**.
-- Automatic current-research fallback keeps `ProviderRecoveryProposal` and raw-first `SchemaRepair`/Schema Repair. Only after allowlisted automated/provider paths **and** authoritative Web search are exhausted may one manual checklist be requested. Provider/retry/artifact details are internal and never become the investor answer; normal output must pass `research-investor-answer-audit`.
-- Do **not** run `uv run astock probe` before every investment question.
-- Phase 7/8 isolation remains unchanged: `ELIGIBLE_RULE_STATE_MACHINE_RESEARCH` → `AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL` → explicit rule-research approval. **Do not change weights or the paper ledger** from shadow/adaptive results.
-- Formal WATCH/APPROVE_SIMULATION targets continue to enroll the continuous monitor with reason `RECOMMENDED`.
-- **A submitted order is never called a position until the fill ledger confirms it**.
+- [Company research](../../../docs/workflows/workflow-current-company-research.md)
+- [Full market research](../../../docs/workflows/workflow-full-market-research-team.md)
+- [Planned purchase and hedging](../../../docs/workflows/workflow-portfolio-transition-and-hedging.md)
+- [Holding decisions](../../../docs/workflows/workflow-holding-rebalance-decision.md)
+- [Paper trading](../../../docs/workflows/workflow-paper-trading.md)
+- [Prospective evaluation](../../../docs/workflows/workflow-prospective-evaluation.md)
+- [Public response contract](../../../docs/architecture/public-response-contract-v1.md)
 
 ## Output
 
-Lead with the investment answer, not the process. 对 material investment request 输出一份**完整、一次性、闭环**的投资者报告：**主体/排序 → 结论与强度 → 当前价格与估值/赔率 → 公司质量与盈利驱动 → 行业/宏观位置 → 财务完整性与治理 → 催化与时点 → 独立 Bull/Bear/Reviewer/Red Team 的决定性分歧 → Committee/交易分类结果的自然语言翻译 → 组合权重/风险预算 → 入场条件 → 退出/止盈止损/基本面失效条件 → 数据截止与必要引用**。组合任务额外给候选淘汰理由、相关性/集中度和 CURRENT/ANCHOR/TARGET 差异，持仓任务额外给 HOLD/ADD/TRIM/EXIT；只有一般性非决策事实问题才压缩为 2–4 个理由。**规划本金/预算、目标年化与目标盈利、推荐配置金额/建议股数、证券公开价格和发行人公开数据可以正常展示；真实/模拟账户及既有持仓的本金/成本、账户资产/现金、当前股数、实际盈亏仅默认隐藏，若用户本轮主动询问或提及对应数值则允许展示。**正常回复必须经过 `ResponseGateway` 和 investor-answer audit；压缩只能删除非关键理由，强制内容超预算时安全降级，不展示或回显 CLI、artifact、Schema、reason code、task/daemon、数据库细节或被拒绝草稿。
+Give the investment judgment, strength, price/valuation, earnings drivers, financial/governance quality, industry context, catalysts, decisive disagreement, portfolio/risk allocation, entry/exit/invalidation conditions, data cutoff and citations. Explain material uncertainty and rejected alternatives. Do not reduce a complete decision to two generic reasons. For a simple factual question, answer directly.
 
-### 投研报告的表达与返修
-
-投资者文字应像一位耐心、谦和的经济学教师向读者解释自己的研究：先给清晰判断，再说依据、条件与风险。称谓、学历和个人经历不作虚构；不自称教授，不替资料补写不存在的细节。句子长短依照意思安排，保留必要的金融术语；较深的术语首次出现附一句简释，常见术语无需反复讲解。采用自然的中文标点与段落，少用装饰性粗体、破折号、标题堆砌、口号和固定收尾。
-
-在形成完整 `ResearchNarrativeBundle` 后，由当前 Agent 做一次表达修订，最多返修两次，复用已冻结事实，无需新建 Agent、调用外部改写服务或重新获取行情。重点检查“不是……而是……”“……，而不是……”的机械对照、空泛强调、翻译腔及无关前言；有实质辨析含义的否定不能被删掉。只调整语序和表达，逐项保留主体、数字/单位、日期、来源、因果、情景概率、买卖方向、结论强度、风险与失效条件，然后交回原有 `ResponseGateway` / investor-answer audit。只向用户展示最终报告，不展示初稿、自评、审稿提示、系统字段或处理过程。
-
-文风问题是表达返修，不能解释成财务资料不足，也不能触发 `NEEDS_INFO`、买卖结论降级或整篇报告丢失。无法确认改写是否等价时，保留已核实且通过隐私/事实检查的原意，并在内部记录文风待改；不得冒险改动投资事实。隐私泄漏、错误来源、事实漂移与必要内容缺失仍必须阻止发布。只有公开自动补齐真实耗尽且剩余内容属于私人事实，才使用“信息缺失，且无法通过公开资料自动补齐，需要您协助提供。”并说明具体缺哪项；常规采集暂不可用继续按原有恢复流程处理。
+Planning budgets, suggested allocations and public facts may be shown. Existing-account private values stay implicit unless the user asks; verified requested values may be answered. Refine prose from the same frozen facts without changing numbers, direction, probabilities, sources or risk. Style repair cannot become a new research gate.
 
 ## Prohibitions
 
-- Do not ask for persisted trade facts again unless the local state is missing/corrupt or the user reports a correction.
-- Do not stop at the first provider failure when an automatic fallback or bounded authoritative Web search is available.
-- Do not expose internal Agent/committee/runtime vocabulary, artifact/hash, SQL, provider diagnostics or command transcripts in a normal investor answer.
-- Do not weaken current-source provenance, identity, or freshness checks. Historical anti-lookahead/PIT-head constraints apply only to explicit HISTORICAL/replay work and must not be imported into CURRENT recommendation as request-time cutoffs.
-- Do not turn a Candidate directly into a recommendation, portfolio weight or filled position.
-- Do not call low historical correlation an explicit hedge.
-- Do not treat an unfilled simulated order as a holding.
-- Do not claim ETF paper execution is generally enabled: it remains default-off and requires a valid independent instrument rule plus the existing confirmation/replay chain. Shorting, futures, options, margin and real-broker execution remain unavailable.
-- Do not create or send a real brokerage order.
-
-## Public-data recovery before escalation
-
-A public acquisition failure is not private missing input. Follow the canonical continuation and the recovery supplement in the linked current-company/evidence workflows. Try applicable providers and authoritative Web, consume verified evidence, and resume only affected nodes. `research-supplemental-acquire` exposes optional AKShare/Tushare reference hints and Finnhub global news leads; credentials and live access are optional and no hint bypasses formal certification. Exhausted public recovery returns a bounded unresolved result, not a fabricated private-material request or endless automatic retry.
+- Do not bypass identity, provenance, arithmetic, financial/governance vetoes, same-request publication or paper-account mechanics.
+- Do not replace blind discovery, a portfolio constraint or a formal financial claim with a model's confidence or community popularity.
+- Do not repeat full acquisition after a local gap, treat public-source failure as missing private input, or demand user research that available tools can perform.
+- Do not expose internal commands, hashes, errors or rejected drafts in ordinary investor output.
+- Do not invent filled positions, admitted production qualifications, real-broker execution, or a formal hedge from low historical correlation.

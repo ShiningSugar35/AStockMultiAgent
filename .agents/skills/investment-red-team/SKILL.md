@@ -17,7 +17,8 @@ description: Independently challenge a frozen A-share research case as the inves
 2. Reconstruct a compact assumption ledger: key driver, source, scenario range, valuation sensitivity, catalyst dependency and falsifier.
 3. Search the frozen corpus for disconfirming evidence and alternative explanations. Test base-rate neglect, narrative/confirmation bias, selection bias, circular peer choice, scenario probability calibration and terminal-value dependence.
 4. Perform reverse valuation/market-implied-expectation checks, event/forecast double-counting checks and threshold-fragility tests.
-5. Classify findings as fatal defect, material uncertainty or ordinary disagreement. Attach concrete remediation, confidence downgrade and explicit kill criteria; do not manufacture objections merely to appear independent.
+5. 对独立 Bull/Bear 已冻结且确有影响结论或估值的实质分歧，可调用现行 `research-debate-evaluate` 汇总有界、来源绑定的交叉质询材料，由当前 Reviewer 消费；不建立第二条持久任务队列，也不增加投委会。无重大分歧不发起额外 LLM 回合；双方回复最多一轮，未解决冲突不能冒充已核验事实或 Reviewer PASS。
+6. Classify findings as fatal defect, material uncertainty or ordinary disagreement. Attach concrete remediation, confidence downgrade and explicit kill criteria; do not manufacture objections merely to appear independent.
 
 ## Required output contract
 

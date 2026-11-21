@@ -55,6 +55,10 @@ desktop.ini
 .ai-bridge/
 .agent-runtime/
 .devbridge/
+.workbuddy/
+.scratchpad/
+/scratch/
+/.cache/
 bash.cmd
 tmp/
 *.log

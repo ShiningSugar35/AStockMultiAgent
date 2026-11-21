@@ -86,7 +86,8 @@ def test_spawned_success_is_reaped_and_temp_is_project_local(tmp_path: Path) -> 
     marker = tmp_path / "success.json"
     worker = _worker(tmp_path, _success, (str(marker),))
     started = time.monotonic()
-    assert worker(TASK) == "ResearchRunReport:recorded-test"
+    assert worker() == "ResearchRunReport:recorded-test"
+    assert worker.cleanup_confirmed
     assert time.monotonic() - started < 15
     record = json.loads(marker.read_text(encoding="utf-8"))
     assert record["pid"] != os.getpid()
@@ -285,3 +286,17 @@ def test_native_and_descendant_output_is_not_forwarded(tmp_path: Path, capfd) ->
     assert "OWNED_SDK_PRIVATE_OUTPUT_TEST_SENTINEL" not in observed.out
     assert "OWNED_SDK_PRIVATE_OUTPUT_TEST_SENTINEL" not in observed.err
     assert not worker.alive
+
+
+def test_outside_scratch_fallback_never_creates_the_rejected_path(tmp_path: Path) -> None:
+    project = tmp_path / "checkout"
+    (project / "src" / "astock").mkdir(parents=True)
+    outside = tmp_path / "outside-not-created"
+    worker = KillableResearchWorker(
+        _failure, (), deadline_at=None, project_root=project, scratch_root=outside,
+    )
+
+    assert worker.scratch_root == project / "runtime" / "workers"
+    assert worker.cleanup_confirmed
+    assert not outside.exists()
+    assert not worker.scratch_root.exists()

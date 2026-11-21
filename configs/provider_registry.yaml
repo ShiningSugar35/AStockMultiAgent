@@ -39,6 +39,26 @@ providers:
     probe_operation: market-bars
     probe_target: {symbol: "600519", market: XSHG}
     recorded_fixture: tests/fixtures/providers/sina-5m-success.json
+  - provider_id: mootdx-fallback
+    adapter_class: astock.providers.mootdx_fallback:MootdxFallbackProvider
+    capabilities: [market.raw_60m, market.raw_5m, market.quote]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: [market.raw_60m, market.raw_5m]
+    completeness_semantics:
+      market.raw_60m: CONTINUOUS_SERIES
+      market.raw_5m: CONTINUOUS_SERIES
+      market.quote: EXACT_ITEM
+    independence_group: TDX
+    cache_ttl_seconds: 0
+    cost_class: LOW
+    transport: SDK_TCP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 30
+    priority: 50
+    probe_operation: mootdx-intraday
+    probe_target: {symbol: "600519", market: XSHG}
+    recorded_fixture: tests/fixtures/providers/mootdx-fallback-success.json
   - provider_id: cninfo-disclosures
     adapter_class: astock.documents.cninfo:CninfoDisclosureProvider
     capabilities: [disclosure.discover, disclosure.enumerate, disclosure.document, corporate_actions.official_evidence]
@@ -378,6 +398,24 @@ providers:
     recorded_fixture: tests/fixtures/providers/akshare-reference-hints-success.json
     optional_package: akshare
     transport_profile: eastmoney-browser-v1
+  - provider_id: tushare-structured
+    adapter_class: astock.providers.tushare_structured:TushareStructuredProvider
+    capabilities: [tushare.structured.query]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics: {tushare.structured.query: DISCOVERY_ONLY}
+    independence_group: TUSHARE
+    cache_ttl_seconds: 3600
+    cost_class: LOW
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    priority: 10
+    probe_operation: tushare-structured
+    probe_target: {ts_code: "600519.SH"}
+    recorded_fixture: tests/fixtures/providers/tushare-structured-success.json
+    credential_environment: TUSHARE_TOKEN
   - provider_id: tushare-reference-hints
     adapter_class: astock.providers.supplemental:TushareHintProvider
     capabilities: [market.reference.hint]
@@ -390,13 +428,12 @@ providers:
     transport: HTTP
     officiality: SECONDARY_STRUCTURED
     live_supported: true
-    timeout_seconds: 10
-    priority: 20
+    timeout_seconds: 20
+    priority: 10
     probe_operation: supplemental-hints
     probe_target: {symbol: "600519", market: XSHG, capability: market.reference.hint}
     recorded_fixture: tests/fixtures/providers/tushare-reference-hints-success.json
     credential_environment: TUSHARE_TOKEN
-    transport_profile: supplemental-auth-v1
   - provider_id: finnhub-news-hints
     adapter_class: astock.providers.supplemental:FinnhubNewsHintProvider
     capabilities: [news.discovery.lead, news.global.lead]

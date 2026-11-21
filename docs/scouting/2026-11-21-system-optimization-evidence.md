@@ -76,7 +76,7 @@
 | S55 [MinerU](https://github.com/opendatalab/MinerU) | 4.x分级解析；当前LICENSE在Apache-2.0上附商业条件，模型另核；本机Windows/硬件未测试。 | `SHADOW_EXPERIMENT` | 复杂财报目标页挑战者，按单元格准确率/追溯/RAM/时间评估。WP-73 |
 | S56 [Docling](https://github.com/docling-project/docling) | MIT代码；结构化布局/表格/OCR与MCP，模型依赖许可另核。 | `SHADOW_EXPERIMENT` | 同一解析adapter中挑战现有PyMuPDF/OCR，按目标页升级。WP-73 |
 | S57 [Qlib](https://github.com/microsoft/qlib) | MIT；Alpha158/360、中国示例与PIT能力属实，非完整官方数据源；main含未发布安全变更提示，需锁版本。 | `ADAPT_PATTERN` | 先透明本地因子；Alpha158/LightGBM后置shadow，不导入第二存储/GPU栈。WP-74 |
-| S58 [vectorbt](https://github.com/polakowo/vectorbt) | 实际LICENSE为Apache-2.0 with Commons Clause；有销售相关限制，不是无条件普通Apache。 | `SHADOW_EXPERIMENT` | 小型参数面/数值对照；保留A股执行/费用/账本，许可核对随版本。WP-63 |
+| S58 [vectorbt](https://github.com/polakowo/vectorbt) | 参数扫描/向量化回测对照工具；具体版本与数值行为仍需固定。 | `SHADOW_EXPERIMENT` | 小型参数面/数值对照；保留A股执行/费用/账本，按用户决定不增加许可证审批阻塞。WP-63 |
 | S59 [Machine Learning for Trading](https://github.com/stefan-jansen/machine-learning-for-trading) | 第三版工作流、代码MIT；书稿和数据权利独立。 | `ADAPT_PATTERN` | 借假设—数据—探索/确认—成本风险—退役流程，不导入教学整库。WP-63/74 |
 | S60 [Alphalens](https://github.com/quantopian/alphalens) | Apache-2.0；IC/分组收益/换手诊断。未验证本项目Python3.12兼容，也不能凭年龄称已archived。 | `ADAPT_PATTERN` | 借诊断定义，直接安装WATCH；信号分析不等于可成交收益。WP-74 |
 | S61 [skfolio](https://github.com/skfolio/skfolio) | BSD-3-Clause；HRP/CVaR/成本/组约束及pooling可查，EntropyPooling重权情景概率后还需优化器。 | `SHADOW_EXPERIMENT` | 单一可关闭allocator插件，现有数学/执行先校准；不保证回撤。WP-76 |
@@ -179,37 +179,32 @@
 | 历史AgentObservabilityReport内容hash | `76d6e085ab800a03fed6eacbe3219f47c07c39c6ccb0b2bc8a9910aa1aef3157` |
 | 历史SkillEfficiencyReport内容hash | `391b0c1d6dc3e77323cb7fe6fab34be5cd1bd29c9e10c8063491b94491e161fe` |
 
-不能将旧报告的单条21.773秒任务或usage=0说成现时延迟/零费用，也不能把零标签当通过。因本次是规划，只读检查和纯数值反例不构成任何runtime准入或投资发布。
+不能将旧报告的单条21.773秒任务或usage=0说成现时延迟/零费用，也不能把零标签当通过。该段记录规划阶段的只读检查；纯数值反例不构成任何runtime准入或投资发布。
 
-## 五、原未提交验收的证据保全
+## 五、历史证据保存方式
 
-以下引用接管前2026-11-19验收文本的实质内容，作为冻结证据保存。它不是本轮重新运行的结果，不是新的CURRENT架构，不与新的进度验收争夺权威。保留原失败记录和未发布边界，避免改写开发计划时丢失先前工作。
-
-> # AStockMultiAgent 进度验收
->
-> > 状态：LATEST VERIFIED SNAPSHOT / 本地增量修复，整包未完成
-> > 任务：2026-11-19 现役知识能力收口、研究与策略实验代码增量、Web URL/简报发布边界 REVIEW
-> > 机器索引：`planning/work_packages_v1.yaml`
->
-> ## 本次结论
->
-> 本轮实际源码修复：Web 入站 URL 在 HttpUrl 规范化之前拒绝凭据、控制字符、空白和反斜杠；纯规范化拒绝非法 HTTP URL，官方域匹配安全处理畸形 authority。简报本地展示核对调用证券、草稿证券、来源证券及正式建议候选集合，拒绝跨证券展示。新增负向回归，未赋予线索或草稿任何正式研究发布权限。
->
-> ## 验证结果
->
-> 已执行验证：研究质量/策略/CLI 专项 89 passed；Web/简报/campaign/租约/来源专项 63 passed；文档/工作流/验证规划专项 54 passed。上述批次存在重叠，不相加作为独立覆盖数。定向 Ruff 通过，定向 Pyright 0 errors / 0 warnings，git diff --check 退出0。17文件影响回归实际为 254 passed / 2 failed（269.62秒）；两项失败均为本轮更新验收文档时遗漏合同必需标题，补回后完整失败文件复跑 6 passed。保留原批次失败记录，不宣称单次全绿。
->
-> 本轮对现役 `runtime/state.sqlite` 执行了一次 SQLite URI `mode=ro` 只读查询：观察名单18只，2026-09-30 季报登记记录0条，未满足正式财报发布前置条件18只。没有修改现役数据库、账户、注册证据、正式财报回执或账本；没有执行网络研究、真实订单或外部发布，没有 commit/push。最终测试临时目录与工具缓存已指定在项目 scratch 内；首次有测试误用系统临时目录，已如实记录。其他未提交修改保留。
->
-> 现行知识模块仅保留已登记来源身份、批准的本地文档、不可变来源证据、通用蒸馏、离线图片定位与本地图片审核。历史数据库迁移和来源引用保持兼容；未改写现役数据库、对象存储或账本。
->
-> 删除专项验收：知识配置/蒸馏/语义流程/离线图片定位/删除回归 12 passed；CLI/删除回归/来源配置兼容 29 passed，两批存在重叠，不累加为独立覆盖数。定向 Ruff 与 `git diff --check` 通过。首次 CLI 验证暴露文件哈希及聚合哈希漂移，更新当前开源适配清单后完整 CLI 批次通过；曾有测试选择器中文经 shell 管道编码损坏，改用稳定 source_id 后通过。首次测试误用系统临时目录，后续所有测试临时目录和缓存均显式指定到项目 scratch。未修改现役数据库、WAL、user_state、账户或其它既有源码修改，未 commit/push。
->
-> WP-55 软件层原有 campaign/租约/续接与来源准入回归通过，但现役只读查询确认 Q3正式记录仍0/18，业务 BLOCKED、不得制造 receipt。WP-62 保持 IN_PROGRESS / RESEARCH_ONLY。WP-63 已接入基于冻结 MarketBar、市场限制、费用、股息、基准和封存选择的确定性日线评价器及 CLI；六文件影响回归98 passed，Ruff/Pyright通过，但缺失完整真实行情和公司行动等市场证据，`market_validation_claim=false`，保持 IN_PROGRESS。WP-65 已接 ResearchTeam 不同估值争议Reviewer与原子单次预约，仍缺更广义争议接线、实际host执行器及成熟结果，保持 IN_PROGRESS。WP-66 已接入原有 ScheduledResearch/ContinuousMonitor 的本地 DRAFT 简报复用，跨账户/标的绑定与无授权负向校验通过，未建立新定时器或推送。WP-65/66 回归 34+41+24通过（批次有重叠），Reviewer复测10通过，Ruff/Pyright 0错误。上述新代码未进行全仓完整回归、正式市场实盘数据验证或正式投资发布，不将各项未满足的业务门设为 DONE。
->
+早期验收及原稿已在 Git 提交 `053b41d` 保存。现行文档不再复制旧验收全文；需要复核原失败、业务未准入或历史测试时从该提交读取。上表 C01–C26 是优化前的代码基线，不能误认为开发后的当前状态。当前实现与实测结果以 [进度验收.md](../../进度验收.md) 为准。
 
 ## 六、本轮独立审阅与规划裁决
 
 工程、数据、量化三线已对正文与机器索引进行独立只读审阅。已纳入的修订：同URL缓存按身份/范围/freshness而非永不刷新；共享收费预算原子预留/结算和未知结果保守占用；DeepSeek固定origin/路径、鉴权不跨站转发；日期级公告不能伪造盘前时刻；骤死receipt由监督者/恢复核对；本地staged与CI merge-base检查区分；完成包删除时原子移除已满足的依赖边；WP65/76/77缩小全包依赖；合法MATURE参考与净绩效分开；现有ScoreBuilder扩展而不重复裁剪优化解；留出集经济时间窗追踪；估值权益桥缺项不默认为零。
 
-本次只交付规划文档。新包状态PLANNED，原55/62/63/65/66状态继续保留，来源资格/真实市场有效性/自然样本未被升级。最终文档合同、覆盖检查、diff检查及提交结果以[进度验收.md](../../进度验收.md)的本轮记录为准。
+上述独立审阅对应规划阶段；随后用户已授权实际开发与清理。现行未完成范围在开发计划，完成事实和失败重验在进度验收，本文不再保留第二份实施状态表。
+
+## 七、实施阶段新增官方依据（2026-11-21）
+
+这些链接由本轮重新读取；文档声明、项目配置与真实运行结果分别记录，不互相代替。
+
+| 能力 | 官方依据 | 本项目采用的规则 |
+|---|---|---|
+| Tushare AI 三层能力 | [总览473](https://tushare.pro/document/1?doc_id=473)、[Skill安装450](https://tushare.pro/document/1?doc_id=450)、[waditu/tushare-data](https://github.com/waditu/tushare-data)、[官方镜像](https://github.com/waditu-tushare/skills) | 按任务读取接口Markdown、参数和返回字段；现役typed adapter执行，不常驻加载整包Skill、不新增独立Agent。 |
+| Tushare 账户与接口权限 | [频次290](https://tushare.pro/document/1?doc_id=290)、[门槛108](https://tushare.pro/document/1?doc_id=108) | 用户报告2120积分；项目聚合限额200/min、每API100000/day。频次不等于并发，配置并发另设2；权限成功需实际响应，分钟/新闻/公告/VIP不由积分自动推出。 |
+| Tushare 股票基础 | [stock_basic](https://tushare.pro/document/2?doc_id=25) | 2000积分，接口另设50/min；优先本地缓存，上市/暂停/退市状态必须显式，不把默认在市列表当历史无幸存者偏差宇宙。 |
+| Tushare 日、周、月行情 | [daily](https://tushare.pro/document/2?doc_id=27)、[weekly](https://tushare.pro/document/2?doc_id=144)、[monthly](https://tushare.pro/document/2?doc_id=145) | 日线官方明示成交量为手、成交额为千元；周/月接口未明示量额单位，保留来源原值并禁止自动单位转换。周涨跌字段为未乘100的比例；月字段的比例仅由本次录制样本观察，不推广为全部历史合同。复权、停牌与前收盘语义独立处理。 |
+| Tushare 三表 | [income](https://tushare.pro/document/2?doc_id=33)、[balancesheet](https://tushare.pro/document/2?doc_id=36)、[cashflow](https://tushare.pro/document/2?doc_id=44) | 当前账户按单证券查询；季度全市场VIP需更高权限。财务组80/min先按用户要求作为保守配置，未找到直接官方明示时不标成已验证官方限额。保留公告日、报告期、合并/母公司、累计/单季与修订字段。 |
+| Tushare 宏观 | [GDP](https://tushare.pro/document/2?doc_id=227)、[CPI](https://tushare.pro/document/2?doc_id=228) | 各600积分；保留各自单位和期间，不能以统计期末伪造数据公布/当时可得时间。CPI以参数表start_m/end_m为准，示例start_q笔误不照抄。 |
+| Tushare 远程MCP | [配置463](https://tushare.pro/document/1?doc_id=463) | token只由credential loader在进程内解析；含token的URL不落日志/仓库。MCP与HTTP是同一数据源，不能双重计独立证据；不盲目先跑两个transport。 |
+| Antigravity 内置工具 | [SDK工具](https://antigravity.google/docs/sdk/tools)、[MCP支持](https://antigravity.google/docs/mcp) | search_web/read_url_content分别观测当前调用能力与额度；Python接真实host callback，不能伪造订阅私有API。当前MCP文档说明Streamable HTTP；不能把旧SSE兼容性当作已经验证。 |
+| DeepSeek 独立工具 | [中文Search/Fetch指南](https://api-docs.deepseek.com/zh-cn/guides/search/)、[Search Schema](https://api-docs.deepseek.com/api/search/)、[Fetch Schema](https://api-docs.deepseek.com/api/fetch/) | 固定两个POST端点、Search≤128Unicode；每1000次成功请求5元。使用宿主内置能力后才考虑有界后备；搜索正文复用，未知完成保守预占，非工具模型请求为0。 |
+
+Mootdx 的官方SDK旧协议与真实MAC兼容运行证据归入当前验收；第三方源码的参考布局不是服务稳定性或主源SLA。所有供应商端点值仍服从配置中更保守的限额，真实权限拒绝不自动重试或扩大权限。

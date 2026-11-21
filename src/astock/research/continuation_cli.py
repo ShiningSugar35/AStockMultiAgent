@@ -15,6 +15,7 @@ from astock.schemas.research_continuation import (
     CurrentResearchContinuationRequest,
     CurrentResearchEvidenceBinding,
 )
+from astock.web_discovery_cli import register_web_discovery_commands
 
 
 def register_current_research_continuation_commands(
@@ -25,6 +26,19 @@ def register_current_research_continuation_commands(
     """Register durable acquisition, evidence binding, team, and readiness transitions."""
 
     register_supplemental_commands(app, services, emit)
+    from astock.experiments.cli import register_commands as register_experiment_commands
+    from astock.research.quality_cli import register_commands as register_quality_commands
+    from astock.technical.cli import register_commands as register_technical_commands
+
+    register_technical_commands(app, services, emit)
+    register_experiment_commands(app, services, emit)
+    register_quality_commands(app, services, emit)
+    # Additive extension point: cli.py and runtime_cli.py are frozen by
+    # serenity-local-adaptation-v2 and must remain byte-identical.
+    register_web_discovery_commands(app, emit)
+    from astock.research.web_tools_cli import register_web_tool_commands
+
+    register_web_tool_commands(app, services, emit)
 
     def continuation() -> CurrentResearchContinuationService:
         paths, state, objects = services()

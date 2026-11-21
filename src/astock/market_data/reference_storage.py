@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -12,7 +13,12 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
+from astock.core.hashing import (
+    _content_projection,
+    canonical_json_bytes,
+    content_hash,
+    sha256_bytes,
+)
 from astock.schemas import ReferenceBatch, ReferenceFileDescriptor
 
 _SCHEMA = pa.schema(
@@ -86,31 +92,49 @@ class ReferenceParquetStore:
         if not path.is_relative_to(self.root) or not path.is_file():
             return False
         try:
-            raw = path.read_bytes()
+            # Hash the physical file without allocating its complete byte payload.
+            with path.open("rb") as source:
+                physical_hash = hashlib.file_digest(source, "sha256").hexdigest()
             parquet = pq.ParquetFile(path)
             if (
-                sha256_bytes(raw) != descriptor.sha256
+                physical_hash != descriptor.sha256
                 or not parquet.schema_arrow.equals(_SCHEMA, check_metadata=True)
                 or _schema_fingerprint(parquet.schema_arrow) != descriptor.schema_fingerprint
                 or parquet.metadata.num_rows != descriptor.row_count
                 or descriptor.row_count != expected_row_count
             ):
                 return False
-            table = parquet.read()
-            rows = table.to_pylist()
             expected_metadata = {
                 "dataset_kind": dataset_kind,
                 "scope_key": scope_key,
                 "provider_id": provider_id,
                 "batch_id": batch_id,
             }
-            for row in rows:
-                if any(row[key] != value for key, value in expected_metadata.items()):
-                    return False
-                if row["available_to_system_at"] != available_to_system_at:
-                    return False
-            records = [json.loads(row["record_json"]) for row in rows]
-            return _logical_records_hash(records) == descriptor.logical_content_hash
+            logical_hash = hashlib.sha256(b"[")
+            count = 0
+            # Batch size is an I/O block, not a trading threshold. At most 512
+            # row envelopes exist in Python at a time; the digest is byte-identical
+            # to the previous content_hash(list) including volatile-key rules.
+            for batch in parquet.iter_batches(batch_size=512):
+                for row in batch.to_pylist():
+                    if any(row[key] != value for key, value in expected_metadata.items()):
+                        return False
+                    if row["available_to_system_at"] != available_to_system_at:
+                        return False
+                    record = json.loads(row["record_json"])
+                    if not isinstance(record, dict):
+                        return False
+                    record.pop("source_snapshot_id", None)
+                    record.pop("available_to_system_at", None)
+                    if count:
+                        logical_hash.update(b",")
+                    logical_hash.update(canonical_json_bytes(_content_projection(record)))
+                    count += 1
+            logical_hash.update(b"]")
+            return (
+                count == descriptor.row_count
+                and logical_hash.hexdigest() == descriptor.logical_content_hash
+            )
         except (OSError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
             return False
 

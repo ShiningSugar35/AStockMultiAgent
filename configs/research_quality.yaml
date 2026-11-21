@@ -1,0 +1,19 @@
+schema_version: research-quality-policy-v1
+policy_version: wp65-66-v1
+max_request_bytes: 65536
+max_artifact_bytes: 2097152
+max_text_chars: 12000
+max_sources: 1024
+max_issues: 32
+max_questions: 8
+cross_response_rounds: 1
+cross_response_limit: 1600
+importance_order: [CRITICAL, HIGH, NORMAL]
+impact_order: [VERDICT, VALUATION, TIMING]
+max_bars: 4096
+max_calendar_days: 400
+holding_sessions: [5, 20, 60]
+max_feedback_samples: 128
+receipt_max_age_hours: 168
+max_events: 32
+session_boundaries: ['09:30', '11:30', '13:00', '15:00']

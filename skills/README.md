@@ -31,7 +31,7 @@ AStockMultiAgent 的 canonical Agent Skills 位于 [`../.agents/skills/`](../.ag
 | `$continuous-investment-monitor` | 已分析/推荐/持仓/开放模拟订单的持续监控、事件队列与增量研究路由 | [SKILL.md](../.agents/skills/continuous-investment-monitor/SKILL.md) | [continuous investment monitoring](../docs/workflows/workflow-continuous-investment-monitoring.md) |
 | `$portfolio-manager` | 组合风险、四种稳健构建、风险缺口预筛、transition/no-trade band 与 hedge 语义 | [SKILL.md](../.agents/skills/portfolio-manager/SKILL.md) | [portfolio transition](../docs/workflows/workflow-portfolio-transition-and-hedging.md) |
 | `$paper-trading-recovery` | 会话式模拟账户、订单/成交恢复、默认 60m replay + 5m fallback | [SKILL.md](../.agents/skills/paper-trading-recovery/SKILL.md) | [paper trading](../docs/workflows/workflow-paper-trading.md) |
-| `$knowledge-ingest` | 批准来源采集、覆盖与知识蒸馏前置 | [SKILL.md](../.agents/skills/knowledge-ingest/SKILL.md) | [knowledge ingest](../docs/workflows/workflow-knowledge-ingest.md) |
+| `$knowledge-ingest` | 批准本地文件摄取、存量覆盖与知识审计；线上作者采集退役 | [SKILL.md](../.agents/skills/knowledge-ingest/SKILL.md) | [knowledge ingest](../docs/workflows/workflow-knowledge-ingest.md) |
 | `$research-tech-scout` | 外部 GitHub/投研平台/社区技术侦察与去重 | [SKILL.md](../.agents/skills/research-tech-scout/SKILL.md) | [research tech scout](../docs/workflows/workflow-research-tech-scout.md) |
 | `$source-qualification-auditor` | 外部能力 M-06 资格、撤销与退出审计，不授予来源权威 | [SKILL.md](../.agents/skills/source-qualification-auditor/SKILL.md) | [research tech scout](../docs/workflows/workflow-research-tech-scout.md) |
 | `$report-visual-qa` | 正式报告渲染页、引用、隐私、资产权利与版式 QA | [SKILL.md](../.agents/skills/report-visual-qa/SKILL.md) | [current company research](../docs/workflows/workflow-current-company-research.md) |

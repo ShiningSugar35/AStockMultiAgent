@@ -74,7 +74,6 @@ from astock.knowledge import (
     KnowledgeDraftService,
     KnowledgeRepository,
     KnowledgeStructureProfileService,
-    ParquetKnowledgeStore,
     ParquetSemanticStore,
     RepositoryKnowledgeSkillProvider,
     ReviewedBookSkillService,
@@ -85,26 +84,13 @@ from astock.knowledge import (
     SemanticFunnelService,
     SemanticPacketService,
     SentenceTransformerBackend,
-    ZhihuArticleRecoveryService,
-    ZhihuCollectionService,
-    ZhihuFullCaptureSession,
-    ZhihuLoopbackCaptureSession,
-    ZhihuManualTaskService,
-    ZhihuPythonRecoveryService,
-    ZhihuResponseImportService,
-    build_coordinator_capture_extension,
-    create_loopback_capture_server,
     default_model_directory,
     get_knowledge_source,
     install_local_model,
     load_distillation_rules,
     load_knowledge_sources,
     load_semantic_funnel_config,
-    load_zhihu_endpoint_templates,
-    loopback_installer_url,
-    loopback_status_url,
     register_knowledge_completion_commands,
-    serve_loopback_capture,
     verify_local_model,
 )
 from astock.knowledge.storage_cli import register_knowledge_storage_commands
@@ -137,6 +123,7 @@ from astock.providers import (
     Sina5mProvider,
     load_provider_registry,
 )
+from astock.providers.tushare_cli import register_tushare_commands
 from astock.reports.cli import register_report_commands
 from astock.research import (
     EvidenceCollectionRunService,
@@ -214,9 +201,6 @@ from astock.schemas import (
     SpecialistRouteRequest,
     TradeProtocol,
     TradeProtocolOutcome,
-    ZhihuContentType,
-    ZhihuEndpointTemplateRegistry,
-    ZhihuResponseKind,
 )
 from astock.settings import ProjectPaths
 from astock.shadow import (
@@ -268,10 +252,6 @@ def _read_only_services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
 
 def _knowledge_sources(paths: ProjectPaths) -> KnowledgeSourceRegistry:
     return load_knowledge_sources(paths.root / "configs" / "knowledge_sources.yaml")
-
-
-def _zhihu_endpoint_templates(paths: ProjectPaths) -> ZhihuEndpointTemplateRegistry:
-    return load_zhihu_endpoint_templates(paths.root / "configs" / "zhihu_endpoint_templates.yaml")
 
 
 def _distillation_rules(paths: ProjectPaths) -> DistillationClassRuleSet:
@@ -411,6 +391,7 @@ register_knowledge_storage_commands(app, _services, _emit)
 register_local_portfolio_commands(app, _services)
 register_external_capability_commands(app, _services, _emit)
 register_report_commands(app, _services, _emit)
+register_tushare_commands(app, _services, _emit)
 register_operations_commands(app, _services, _emit)
 register_research_runtime_commands(
     app,
@@ -473,10 +454,15 @@ def _sync(
     instrument_type: InstrumentType | None = None,
 ) -> dict[str, Any]:
     paths, state, objects = _services()
-    providers = [
-        EastMoney5mProvider(objects, state),
-        Sina5mProvider(objects, state),
-    ]
+    from astock.providers.mootdx_fallback import build_intraday_fallback_providers
+
+    providers = build_intraday_fallback_providers(
+        objects, state, project_root=paths.root,
+        primary_providers=[
+            EastMoney5mProvider(objects, state),
+            Sina5mProvider(objects, state),
+        ],
+    )
     service = MarketSyncService(
         providers,
         state,
@@ -4910,547 +4896,6 @@ def knowledge_draft_audit(
             objects,
             required_classification_rule_version=rules.rule_version,
         ).audit(source_id)
-    )
-
-
-@app.command("zhihu-author-probe")
-def zhihu_author_probe(
-    source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
-) -> None:
-    """Probe one confirmed Zhihu profile with a persisted low-frequency response."""
-
-    paths, state, objects = _services()
-    source = get_knowledge_source(_knowledge_sources(paths), source_id)
-    service = ZhihuCollectionService(
-        state,
-        objects,
-        ParquetKnowledgeStore(paths.parquet),
-    )
-    try:
-        identity = service.probe_identity(source)
-    except AStockError as exc:
-        _emit(
-            {
-                "status": "FAILED",
-                "failure_class": exc.failure_class,
-                "message": str(exc),
-                "details": exc.details,
-            }
-        )
-        raise typer.Exit(code=3) from exc
-    _emit({"status": "CONFIRMED", "identity": identity})
-
-
-@app.command("zhihu-response-import")
-def zhihu_response_import(
-    envelope: Annotated[
-        Path,
-        typer.Argument(exists=True, file_okay=True, dir_okay=False, resolve_path=True),
-    ],
-) -> None:
-    """Persist one credential-free Chrome/manual Zhihu response envelope."""
-
-    paths, state, objects = _services()
-    service = ZhihuResponseImportService(state, objects, paths.runtime)
-    try:
-        execution = service.import_file(
-            envelope,
-            _knowledge_sources(paths),
-            _zhihu_endpoint_templates(paths),
-        )
-    except AStockError as exc:
-        _emit(
-            {
-                "status": "REJECTED",
-                "failure_class": exc.failure_class,
-                "message": str(exc),
-                "details": exc.details,
-            }
-        )
-        raise typer.Exit(code=3) from exc
-    record = execution.record
-    _emit(
-        {
-            "status": "IMPORTED",
-            "envelope_id": record.envelope_id,
-            "author_source_id": record.author_source_id,
-            "response_kind": record.response_kind,
-            "content_type": record.content_type,
-            "http_status": record.status_code,
-            "body_byte_size": record.body_byte_size,
-            "source_snapshot_id": record.source_snapshot_id,
-            "raw_object_sha256": record.raw_object_sha256,
-            "import_status": record.import_status,
-            "response_failure": execution.response_failure,
-        }
-    )
-
-
-@app.command("zhihu-capture-serve")
-def zhihu_capture_serve(
-    source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
-    content_type: Annotated[
-        ZhihuContentType,
-        typer.Option(case_sensitive=False, help="answers, articles, or thoughts"),
-    ] = ZhihuContentType.ANSWERS,
-    port: Annotated[int, typer.Option(min=0, max=65535)] = 8765,
-    page_size: Annotated[int, typer.Option(min=1, max=100)] = 20,
-    request_interval_seconds: Annotated[
-        float,
-        typer.Option(min=2, help="Delay between browser requests; minimum 2 seconds."),
-    ] = 2.0,
-    ttl_seconds: Annotated[
-        int,
-        typer.Option(min=60, max=3600, help="One-time capture session lifetime."),
-    ] = 900,
-) -> None:
-    """Serve one credential-free, localhost-only Zhihu capture session."""
-
-    paths, state, objects = _services()
-    try:
-        session = ZhihuLoopbackCaptureSession(
-            state,
-            objects,
-            paths.runtime,
-            ParquetKnowledgeStore(paths.parquet),
-            _knowledge_sources(paths),
-            _zhihu_endpoint_templates(paths),
-            source_id=source_id,
-            content_type=content_type,
-            page_size=page_size,
-            request_interval_seconds=request_interval_seconds,
-            ttl_seconds=ttl_seconds,
-        )
-        server = create_loopback_capture_server(session, port=port)
-    except (AStockError, OSError, ValueError) as exc:
-        failure = exc.failure_class if isinstance(exc, AStockError) else "INVALID_ARGUMENT"
-        _emit(
-            {
-                "status": "REJECTED",
-                "failure_class": failure,
-                "message": str(exc),
-            }
-        )
-        raise typer.Exit(code=3) from exc
-    _emit(
-        {
-            **session.safe_status(),
-            "bind_host": "127.0.0.1",
-            "installer_url": loopback_installer_url(server),
-            "status_url": loopback_status_url(server),
-        }
-    )
-    try:
-        final_status = serve_loopback_capture(server, session)
-    except KeyboardInterrupt:
-        _emit({**session.safe_status(), "status": "INTERRUPTED"})
-        return
-    _emit(final_status)
-
-
-@app.command("zhihu-full-capture-serve")
-def zhihu_full_capture_serve(
-    port: Annotated[int, typer.Option(min=0, max=65535)] = 8765,
-    page_size: Annotated[int, typer.Option(min=1, max=100)] = 20,
-    request_interval_seconds: Annotated[
-        float,
-        typer.Option(min=2, help="Delay between browser requests; minimum 2 seconds."),
-    ] = 2.0,
-    ttl_seconds: Annotated[
-        int,
-        typer.Option(min=60, max=86_400, help="Full capture session lifetime."),
-    ] = 21_600,
-    session_token: Annotated[
-        str | None,
-        typer.Option(
-            hidden=True,
-            envvar="ASTOCK_ZHIHU_CAPTURE_SESSION_TOKEN",
-        ),
-    ] = None,
-) -> None:
-    """Serve one localhost session for all online authors and verified boundaries."""
-
-    paths, state, objects = _services()
-    try:
-        session = ZhihuFullCaptureSession(
-            state,
-            objects,
-            paths.runtime,
-            ParquetKnowledgeStore(paths.parquet),
-            _knowledge_sources(paths),
-            _zhihu_endpoint_templates(paths),
-            page_size=page_size,
-            request_interval_seconds=request_interval_seconds,
-            ttl_seconds=ttl_seconds,
-            session_token=session_token,
-        )
-        server = create_loopback_capture_server(session, port=port)
-    except (AStockError, OSError, ValueError) as exc:
-        failure = exc.failure_class if isinstance(exc, AStockError) else "INVALID_ARGUMENT"
-        _emit(
-            {
-                "status": "REJECTED",
-                "failure_class": failure,
-                "message": str(exc),
-            }
-        )
-        raise typer.Exit(code=3) from exc
-    _emit(
-        {
-            **session.safe_status(),
-            "bind_host": "127.0.0.1",
-            "installer_url": loopback_installer_url(server),
-            "status_url": loopback_status_url(server),
-            "extension_directory": str(
-                build_coordinator_capture_extension(
-                    runtime_root=paths.runtime,
-                    bridge_origin=loopback_installer_url(server).split("/install/", maxsplit=1)[0],
-                    session_token=session.session_token,
-                    interval_ms=round(request_interval_seconds * 1000),
-                ).relative_to(paths.root)
-            ),
-        }
-    )
-    try:
-        final_status = serve_loopback_capture(server, session)
-    except KeyboardInterrupt:
-        _emit({**session.safe_status(), "status": "INTERRUPTED"})
-        return
-    _emit(final_status)
-
-
-@app.command("zhihu-import-replay")
-def zhihu_import_replay(
-    envelope_id: Annotated[str, typer.Argument(help="Registered response envelope id.")],
-    recover_consumed: Annotated[
-        bool,
-        typer.Option(
-            help=(
-                "Replay a consumed raw listing only when no page manifest was committed; "
-                "used after a parser upgrade."
-            )
-        ),
-    ] = False,
-) -> None:
-    """Consume one imported listing response through the normal checkpoint pipeline."""
-
-    paths, state, objects = _services()
-    service = ZhihuResponseImportService(state, objects, paths.runtime)
-    try:
-        imported = service.repository.get_imported_response(envelope_id)
-        if imported is not None and imported.response_kind in {
-            ZhihuResponseKind.ROOT_COMMENTS,
-            ZhihuResponseKind.CHILD_COMMENTS,
-        }:
-            comment_replay = service.replay_comment(
-                envelope_id,
-                _knowledge_sources(paths),
-                ParquetKnowledgeStore(paths.parquet),
-            )
-            if comment_replay.comment_execution is None:
-                _emit(
-                    {
-                        "status": (
-                            "CONSUMED_WITH_GAP"
-                            if comment_replay.response_failure
-                            else "ALREADY_CONSUMED"
-                        ),
-                        "envelope_id": comment_replay.record.envelope_id,
-                        "import_status": comment_replay.record.import_status,
-                        "response_failure": comment_replay.response_failure,
-                    }
-                )
-                return
-            comment_execution = comment_replay.comment_execution
-            _emit(
-                {
-                    "status": "CONSUMED",
-                    "envelope_id": comment_replay.record.envelope_id,
-                    "import_status": comment_replay.record.import_status,
-                    "response_kind": comment_replay.record.response_kind,
-                    "comment_page_id": comment_execution.page.page_id,
-                    "comment_record_count": len(comment_execution.comment_records),
-                    "participation_chain_count": len(comment_execution.participation_chains),
-                }
-            )
-            return
-        if imported is not None and imported.response_kind is ZhihuResponseKind.CONTENT_DETAIL:
-            detail_replay = service.replay_detail(
-                envelope_id,
-                _knowledge_sources(paths),
-                ParquetKnowledgeStore(paths.parquet),
-            )
-            if detail_replay.content_record is None:
-                _emit(
-                    {
-                        "status": (
-                            "CONSUMED_WITH_GAP"
-                            if detail_replay.response_failure
-                            else "ALREADY_CONSUMED"
-                        ),
-                        "envelope_id": detail_replay.record.envelope_id,
-                        "import_status": detail_replay.record.import_status,
-                        "response_failure": detail_replay.response_failure,
-                    }
-                )
-                return
-            _emit(
-                {
-                    "status": "CONSUMED",
-                    "envelope_id": detail_replay.record.envelope_id,
-                    "import_status": detail_replay.record.import_status,
-                    "content_id": detail_replay.content_record.content_id,
-                    "content_type": detail_replay.content_record.content_type,
-                    "content_completeness": (detail_replay.content_record.content_completeness),
-                }
-            )
-            return
-        replay = service.replay_listing(
-            envelope_id,
-            _knowledge_sources(paths),
-            ParquetKnowledgeStore(paths.parquet),
-            recover_consumed=recover_consumed,
-        )
-    except AStockError as exc:
-        _emit(
-            {
-                "status": "REJECTED",
-                "failure_class": exc.failure_class,
-                "message": str(exc),
-                "details": exc.details,
-            }
-        )
-        raise typer.Exit(code=3) from exc
-    if replay.sync_execution is None:
-        _emit(
-            {
-                "status": "ALREADY_CONSUMED",
-                "envelope_id": replay.record.envelope_id,
-                "import_status": replay.record.import_status,
-            }
-        )
-        return
-    execution = replay.sync_execution
-    _emit(
-        {
-            "status": "CONSUMED",
-            "envelope_id": replay.record.envelope_id,
-            "import_status": replay.record.import_status,
-            "coverage_status": execution.report.coverage_status,
-            "terminal_condition": execution.report.terminal_condition,
-            "listing_page_count": len(execution.listing_pages),
-            "content_record_count": len(execution.content_records),
-        }
-    )
-
-
-@app.command("zhihu-python-recover")
-def zhihu_python_recover(
-    source_ids: Annotated[
-        list[str] | None,
-        typer.Option("--source-id", help="Optional allowlisted author; repeat for several."),
-    ] = None,
-    response_kinds: Annotated[
-        list[ZhihuResponseKind] | None,
-        typer.Option(
-            "--response-kind",
-            help="Optional verified CONTENT_DETAIL task kind.",
-        ),
-    ] = None,
-    max_requests: Annotated[
-        int | None,
-        typer.Option(min=1, help="Optional smoke limit; omitted means run to a hard boundary."),
-    ] = None,
-    request_interval_seconds: Annotated[
-        float,
-        typer.Option(min=2, help="Minimum delay between verified Python API requests."),
-    ] = 2.0,
-) -> None:
-    """Recover active Zhihu listings and verified content details with Python HTTP."""
-
-    paths, state, objects = _services()
-    service = ZhihuPythonRecoveryService(
-        state,
-        objects,
-        paths.runtime,
-        ParquetKnowledgeStore(paths.parquet),
-        _knowledge_sources(paths),
-        _zhihu_endpoint_templates(paths),
-        request_interval_seconds=request_interval_seconds,
-    )
-    try:
-        execution = service.run(
-            source_ids=source_ids,
-            response_kinds=response_kinds,
-            max_requests=max_requests,
-        )
-    except (AStockError, ValueError) as exc:
-        _emit(
-            {
-                "status": "FAILED",
-                "failure_class": (
-                    exc.failure_class if isinstance(exc, AStockError) else "INVALID_ARGUMENT"
-                ),
-                "message": str(exc),
-            }
-        )
-        raise typer.Exit(code=3) from exc
-    _emit(execution)
-
-
-@app.command("zhihu-article-html-recover")
-def zhihu_article_html_recover(
-    source_ids: Annotated[
-        list[str] | None,
-        typer.Option("--source-id", help="Optional allowlisted author; repeat for several."),
-    ] = None,
-    max_requests: Annotated[
-        int | None,
-        typer.Option(min=1, help="Optional smoke limit; omitted means run to a hard boundary."),
-    ] = None,
-    request_interval_seconds: Annotated[
-        float,
-        typer.Option(min=2, help="Minimum delay between canonical article page requests."),
-    ] = 2.0,
-) -> None:
-    """Recover enumerated article full text from strict canonical HTML pages."""
-
-    paths, state, objects = _services()
-    service = ZhihuArticleRecoveryService(
-        state,
-        objects,
-        ParquetKnowledgeStore(paths.parquet),
-        _knowledge_sources(paths),
-        request_interval_seconds=request_interval_seconds,
-    )
-    try:
-        execution = service.run(
-            source_ids=source_ids,
-            max_requests=max_requests,
-        )
-    except (AStockError, ValueError) as exc:
-        _emit(
-            {
-                "status": "FAILED",
-                "failure_class": (
-                    exc.failure_class if isinstance(exc, AStockError) else "INVALID_ARGUMENT"
-                ),
-                "message": str(exc),
-            }
-        )
-        raise typer.Exit(code=3) from exc
-    _emit(execution)
-
-
-@app.command("zhihu-author-sync")
-def zhihu_author_sync(
-    source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
-    content_type: Annotated[
-        ZhihuContentType,
-        typer.Option(case_sensitive=False, help="answers, articles, or thoughts"),
-    ] = ZhihuContentType.ANSWERS,
-    max_pages: Annotated[
-        int | None,
-        typer.Option(help="Optional smoke limit; a capped run remains PARTIAL."),
-    ] = None,
-    page_size: Annotated[int, typer.Option(min=1, max=100)] = 20,
-    request_interval_seconds: Annotated[
-        float,
-        typer.Option(min=0, help="Minimum delay between listing requests."),
-    ] = 2.0,
-) -> None:
-    """Synchronize one allowlisted Zhihu listing without emitting collected text."""
-
-    paths, state, objects = _services()
-    source = get_knowledge_source(_knowledge_sources(paths), source_id)
-    service = ZhihuCollectionService(
-        state,
-        objects,
-        ParquetKnowledgeStore(paths.parquet),
-        minimum_request_interval_seconds=request_interval_seconds,
-    )
-    try:
-        execution = service.sync_listing(
-            source,
-            content_type,
-            max_pages=max_pages,
-            page_size=page_size,
-        )
-    except AStockError as exc:
-        _emit(
-            {
-                "status": "FAILED",
-                "failure_class": exc.failure_class,
-                "message": str(exc),
-                "details": exc.details,
-            }
-        )
-        raise typer.Exit(code=3) from exc
-    _emit(
-        {
-            "status": execution.report.coverage_status,
-            "job_id": execution.job_id,
-            "report": execution.report,
-            "listing_page_count": len(execution.listing_pages),
-            "content_record_count": len(execution.content_records),
-            "parquet_file_count": len(execution.parquet_files),
-        }
-    )
-
-
-@app.command("zhihu-manual-tasks")
-def zhihu_manual_tasks(
-    include_tasks: Annotated[
-        bool,
-        typer.Option(help="Also print every task; the full list is always saved locally."),
-    ] = False,
-) -> None:
-    """Refresh and export exact manual recovery boundaries without source text."""
-
-    paths, state, objects = _services()
-    tasks = ZhihuManualTaskService(state, objects).refresh(_knowledge_sources(paths))
-    report_path = paths.runtime / "reports" / "zhihu-manual-tasks.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "generated_at": datetime.now(ZoneInfo("UTC")),
-        "open_task_count": len(tasks),
-        "tasks": tasks,
-    }
-    atomic_write_text(
-        report_path,
-        json.dumps(_jsonable(payload), ensure_ascii=False, indent=2, sort_keys=True),
-    )
-    counts: dict[str, int] = {}
-    for task in tasks:
-        key = f"{task.author_source_id}|{task.response_kind}"
-        counts[key] = counts.get(key, 0) + 1
-    output: dict[str, Any] = {
-        "status": "COMPLETE" if not tasks else "MANUAL_ACTION_REQUIRED",
-        "open_task_count": len(tasks),
-        "count_by_author_and_kind": counts,
-        "report_file": "runtime/reports/zhihu-manual-tasks.json",
-    }
-    if include_tasks:
-        output["tasks"] = tasks
-    _emit(output)
-
-
-@app.command("zhihu-coverage")
-def zhihu_coverage(
-    source_id: Annotated[str, typer.Argument(help="Allowlisted knowledge source id.")],
-    content_type: Annotated[
-        ZhihuContentType,
-        typer.Option(case_sensitive=False, help="answers, articles, or thoughts"),
-    ] = ZhihuContentType.ANSWERS,
-) -> None:
-    """Return the latest durable coverage report for one Zhihu listing scope."""
-
-    _, state, _ = _services()
-    report = KnowledgeRepository(state).latest_coverage_report(source_id, content_type)
-    _emit(
-        {"status": "NOT_COLLECTED", "report": None}
-        if report is None
-        else {"status": report.coverage_status, "report": report}
     )
 
 

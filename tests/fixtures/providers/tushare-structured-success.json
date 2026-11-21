@@ -1,0 +1,75 @@
+{
+  "schema_version": "provider-self-probe-v1",
+  "provider_id": "tushare-structured",
+  "operation": "tushare-structured",
+  "record_count": 1,
+  "quality": true,
+  "checked_capabilities": [
+    "tushare.structured.query"
+  ],
+  "recorded_evidence": {
+    "schema_version": "tushare-query-result-v1",
+    "source_id": "tushare",
+    "provider_id": "tushare-structured",
+    "transport": "HTTP",
+    "request": {
+      "endpoint": "stock_basic",
+      "params": {
+        "ts_code": "600519.SH",
+        "list_status": "L"
+      },
+      "fields": [
+        "area",
+        "curr_type",
+        "delist_date",
+        "exchange",
+        "industry",
+        "list_date",
+        "list_status",
+        "market",
+        "name",
+        "symbol",
+        "ts_code"
+      ]
+    },
+    "request_fingerprint": "a239bff6fead6cba3d47760f27def4f0c3c021fd595ffd4ece0a9f715e505b08",
+    "rows": [
+      {
+        "area": "贵州",
+        "curr_type": "CNY",
+        "delist_date": null,
+        "exchange": "SSE",
+        "industry": "白酒",
+        "list_date": "20010827",
+        "list_status": "L",
+        "market": "主板",
+        "name": "贵州茅台",
+        "symbol": "600519",
+        "ts_code": "600519.SH"
+      }
+    ],
+    "record_count": 1,
+    "source_snapshot_id": "tushare-structured:db050fab4cca401c48f5ec8f94d1c25246960a3792959f277c19bab4a6acde8f",
+    "source_object_hash": "db050fab4cca401c48f5ec8f94d1c25246960a3792959f277c19bab4a6acde8f",
+    "fetched_at": "2026-11-21T07:18:00.263067+00:00",
+    "available_to_system_at": "2026-11-21T07:18:00.263067+00:00",
+    "permission_observation": "RESPONSE_ACCEPTED",
+    "cache_status": "MISS",
+    "full_universe_proven": false,
+    "formal_use_allowed": false,
+    "quota_scope": "THIS_PROJECT_STATESTORE; EXTERNAL_CLIENTS_NOT_CONTROLLED",
+    "coverage_status": "BOUNDED_RESPONSE_WITHOUT_COMPLETENESS_PROOF",
+    "semantics": {
+      "authority": "SECONDARY_STRUCTURED",
+      "issuer_original_document": false,
+      "null_is_not_zero": true,
+      "source_units_preserved": true,
+      "temporal_scope": "CURRENT_SNAPSHOT; NOT_A_HISTORICAL_SURVIVORSHIP_FREE_UNIVERSE"
+    },
+    "artifact_id": "TushareStructuredCapture:b128631c5ea2db715e0a17c5d45e14bc9d05dd6111798aa5c1a1a0df6f05e800"
+  },
+  "permissions_proven": [
+    "stock_basic"
+  ],
+  "other_endpoint_permissions_proven": false
+}

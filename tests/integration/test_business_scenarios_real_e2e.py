@@ -1851,11 +1851,19 @@ def test_recorded_read_scenarios_run_through_real_registered_domains(
         idempotency_key=f"business-e2e-{scenario_id}",
     )
     result = runner.run(scenario_id, request, handlers=recorded_bank.handlers)
-    assert result.failures == ()
+    # Scenario 36 asks for a multi-stock allocation, while this recorded bank
+    # certifies only one company. Capability coverage alone must NOT certify
+    # a current broad recommendation requiring at least three eligible names.
+    if scenario_id == 36:
+        assert result.failures == ("ANSWER_NOT_CERTIFIED",)
+        assert result.answer.degraded
+        assert result.answer.degradation_reason
+    else:
+        assert result.failures == ()
+        assert not result.answer.degraded
     assert result.coverage_complete
     assert result.required_capability_coverage == 1.0
     assert result.prohibited_call_count == 0
-    assert not result.answer.degraded
 
 
 @pytest.fixture(scope="module")

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import sqrt
+from math import fsum, sqrt
 
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.covariance import LedoitWolf
 
 _ANNUALIZATION = 252.0
+_WEIGHT_TOLERANCE = 1e-10
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +93,12 @@ def portfolio_risk_statistics(
     aligned: AlignedPortfolioData,
     weights: np.ndarray,
 ) -> PortfolioRiskStatistics:
+    """Evaluate daily constant-weight research returns, not an account NAV history.
+
+    Weights are fractions of total NAV; uninvested cash has zero return. Do not
+    renormalize the risky sleeve. The initial NAV of one anchors drawdowns but is
+    not an additional daily observation for CDaR, VaR, or annualization.
+    """
     invested = float(weights.sum())
     if invested <= 0:
         raise ValueError("portfolio weights require positive invested exposure")
@@ -120,7 +127,7 @@ def portfolio_risk_statistics(
         else -1.0
     )
     cumulative = np.cumprod(1.0 + portfolio_returns)
-    running_peak = np.maximum.accumulate(cumulative)
+    running_peak = np.maximum(1.0, np.maximum.accumulate(cumulative))
     drawdowns = 1.0 - cumulative / running_peak
     max_drawdown = float(np.max(drawdowns))
     drawdown_quantile = float(np.quantile(drawdowns, 0.95))
@@ -244,15 +251,36 @@ def constrain_scores(
     max_single: float,
     max_group: float,
 ) -> tuple[dict[str, float], set[str]]:
-    scores = np.maximum(np.asarray(raw_scores, dtype=float), 0.0)
-    if not np.isfinite(scores).all() or float(scores.sum()) <= 0:
+    """Allocate long-only scores within a total-NAV budget and position/group caps.
+
+    Finite negative scores retain the existing zero-floor semantics. Only an
+    entirely zero effective vector uses the existing equal-weight fallback;
+    zero scores in a mixed vector never receive leftover exposure. Infeasible
+    exposure stays in cash. Invalid numerical inputs must not become equal weight.
+    """
+    scores = np.asarray(raw_scores, dtype=float)
+    if scores.shape != (len(company_ids),):
+        raise ValueError("portfolio scores must match the company vector")
+    if len(set(company_ids)) != len(company_ids):
+        raise ValueError("portfolio allocation requires unique company ids")
+    if any(company_id not in groups for company_id in company_ids):
+        raise ValueError("portfolio allocation requires a group for every company")
+    if not np.isfinite(scores).all():
+        raise ValueError("portfolio scores must be finite")
+    if any(
+        not np.isfinite(value) or not 0.0 <= value <= 1.0
+        for value in (target, max_single, max_group)
+    ):
+        raise ValueError("portfolio target and caps must be finite fractions within zero and one")
+    scores = np.maximum(scores, 0.0)
+    if not np.any(scores):
         scores = np.ones(len(company_ids), dtype=float)
-    scores = scores / float(scores.sum())
     weights = {company_id: 0.0 for company_id in company_ids}
     binding: set[str] = set()
     remaining = target
-    for _ in range(100):
-        if remaining <= 1e-10:
+    # Each productive pass exhausts the budget or binds at least one asset/group.
+    for _ in range(len(company_ids) + 1):
+        if remaining <= _WEIGHT_TOLERANCE:
             break
         group_used: dict[str, float] = {}
         for company_id, weight in weights.items():
@@ -265,29 +293,30 @@ def constrain_scores(
                 0.0,
                 max_group - group_used.get(groups[company_id], 0.0),
             )
-            if min(single_room, group_room) > 1e-12:
+            if scores[index] > 0 and min(single_room, group_room) > 1e-12:
                 eligible.append((index, company_id))
         if not eligible:
-            binding.add("CASH_RESIDUAL_CONSTRAINT_BOUND")
             break
-        eligible_score = sum(float(scores[index]) for index, _ in eligible)
-        if eligible_score <= 0:
-            eligible_score = float(len(eligible))
+        # Scale within each remaining set, avoiding overflow and preserving tiny
+        # positive scores for later passes once larger-scored assets hit a cap.
+        peak_score = max(float(scores[index]) for index, _ in eligible)
+        eligible_score = fsum(float(scores[index]) / peak_score for index, _ in eligible)
         distributed = 0.0
         for index, company_id in eligible:
             group = groups[company_id]
             single_room = max(0.0, max_single - weights[company_id])
             group_room = max(0.0, max_group - group_used.get(group, 0.0))
-            room = min(single_room, group_room)
-            score = float(scores[index]) if float(scores[index]) > 0 else 1.0
+            room = min(single_room, group_room, max(0.0, remaining - distributed))
+            score = float(scores[index]) / peak_score
             allocation = min(room, remaining * score / eligible_score)
             weights[company_id] += allocation
             group_used[group] = group_used.get(group, 0.0) + allocation
             distributed += allocation
+        remaining = max(0.0, target - fsum(weights.values()))
         if distributed <= 1e-12:
-            binding.add("CASH_RESIDUAL_CONSTRAINT_BOUND")
             break
-        remaining -= distributed
+    if remaining > _WEIGHT_TOLERANCE:
+        binding.add("CASH_RESIDUAL_CONSTRAINT_BOUND")
     if any(abs(value - max_single) <= 1e-8 for value in weights.values()):
         binding.add("MAX_SINGLE_POSITION_BOUND")
     group_totals: dict[str, float] = {}
@@ -296,6 +325,12 @@ def constrain_scores(
         group_totals[group] = group_totals.get(group, 0.0) + weight
     if any(abs(value - max_group) <= 1e-8 for value in group_totals.values()):
         binding.add("MAX_GROUP_EXPOSURE_BOUND")
+    if (
+        fsum(weights.values()) > target + _WEIGHT_TOLERANCE
+        or any(not 0.0 <= value <= max_single + _WEIGHT_TOLERANCE for value in weights.values())
+        or any(value > max_group + _WEIGHT_TOLERANCE for value in group_totals.values())
+    ):
+        raise ValueError("portfolio allocation violated its budget or exposure caps")
     return weights, binding
 
 

@@ -595,6 +595,16 @@ class ScheduledResearchService:
             interval_start=request.source_interval_start,
             interval_end=request.source_interval_end,
         )
+        brief_results = self._reuse_session_briefs(request, preflight, selected_subjects, policy)
+        # Draft metadata belongs to the existing state lane, never the outbox.
+        from astock.core.state import StateStore
+
+        StateStore(self.store.path).set_checkpoint(
+            scope_type="scheduled-session-brief",
+            scope_key=request.run_id,
+            cursor={"results": brief_results, "public_approved": False},
+            status="DRAFT",
+        )
         capability_receipt_id = None
         if source_coverage.expected_subject_count > 0:
             capability_coverage = self.source_audit.register_run_coverage(
@@ -679,6 +689,71 @@ class ScheduledResearchService:
         )
         self._resume_notification(request, receipt, policy)
         return receipt
+
+    def _reuse_session_briefs(self, request, preflight, subjects, policy):
+        """Consume canonical monitor state in this run, without another timer/sink."""
+        from pathlib import Path
+
+        from astock.core.state import StateStore
+        from astock.market_data.official_calendar import load_official_trading_calendar
+        from astock.research.debate_evaluation import load_quality_policy
+        from astock.research.quality_cli import QualityServices
+        from astock.research.session_brief import SessionBriefReuseService
+
+        root = Path(__file__).resolve().parents[3]
+        state = StateStore(self.store.path)
+        reader = self.preflight_service.reader
+        if not isinstance(reader, CanonicalStateProjectionReader):
+            return [{"status": "BRIEF_CANONICAL_READER_REQUIRED", "public_approved": False}]
+        reuse = SessionBriefReuseService(
+            QualityServices(
+                state,
+                reader.objects,
+                None,
+                load_official_trading_calendar(root / "configs/official_trading_calendar.yaml"),
+                load_quality_policy(root / "configs/research_quality.yaml"),
+            )
+        )
+        results = []
+        for domain, instruments in subjects.items():
+            lane = (
+                preflight.context.actual
+                if domain is ScheduledDomain.ACTUAL_HOLDING
+                else preflight.context.paper
+                if domain is ScheduledDomain.PAPER_HOLDING
+                else None
+            )
+            for instrument in instruments[: policy.max_subjects_per_run]:
+                accounts = (
+                    {
+                        position.account_id
+                        for position in lane.positions
+                        if normalized_instrument(position.instrument_id)
+                        == normalized_instrument(instrument)
+                    }
+                    if lane is not None
+                    else {None}
+                )
+                if not accounts:
+                    results.append({"status": "BRIEF_ACCOUNT_SCOPE_UNAVAILABLE"})
+                for account in sorted(accounts, key=lambda value: value or ""):
+                    try:
+                        results.append(
+                            reuse.project(
+                                instrument_id=instrument,
+                                account_id=account,
+                                context_id=f"scheduled:{request.binding_id}:{domain.value}",
+                                now=request.requested_at,
+                            )
+                        )
+                    except (ValueError, OSError):
+                        results.append(
+                            {
+                                "status": "BRIEF_REGISTERED_INPUT_UNAVAILABLE",
+                                "public_approved": False,
+                            }
+                        )
+        return results
 
     def _preflight_for_run(
         self,

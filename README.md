@@ -1,130 +1,78 @@
 # AStockMultiAgent
 
-AStockMultiAgent 是一套**本地优先、可审计、可恢复**的 A 股多 Agent 投研与模拟交易系统。自然语言模型负责研究意图、证据解释与专业协作；Python 3.12 的 `astock` CLI 负责确定性数据、PIT、财务计算、风险、状态机和账本。
+AStockMultiAgent 是本地优先的 A 股研究、证据与模拟交易系统。Agent 负责意图、专业判断与协作，Python 3.12 的 `astock` CLI 负责数据、计算、校验、状态和账本。任务通过现有 Skill、Workflow 和服务续接，使用同一份可追溯事实。
 
-## 永久边界
+## 研究边界
 
-- 不承诺收益，不连接真实券商自动下单；真实交易只能由用户在券商端执行。
-- 所有正式历史输入必须 point-in-time safe，未来可见事实不得倒灌。
-- 社区内容和搜索结果只能作线索；公告、交易所、财报和权威政策来源承担关键事实。
-- 候选、研究意见、组合建议和模拟订单互不等价；只有模拟成交才改变模拟持仓。
-- 实际账户与模拟账户永久分 lane，不能互相写入或混成一份伪账本。
-- 缺数据、证据冲突或能力未准入时 fail closed，不用叙述伪装完成。
+- 当前问题使用有界获取后的最新可信事实，不以提问时刻截断；历史回测/OOS/前向验证单独遵守真实 point-in-time 可见性。
+- 关键事实回到交易所、公告、正式财报和权威政策；搜索、社区和二级结构化数据提供线索，不能冒充正式证据。
+- 缺口先复用本地证据、同能力备用源和权威 Web；真实耗尽后明确尚不能核实的事实。公开数据不可得与需要用户私人资料分开处理。
+- 候选、正式研究、组合建议、模拟订单和成交是不同状态。只有模拟成交改变模拟持仓；外部真实账户事件与模拟账本分开。
+- 不承诺收益。系统没有真实券商执行功能；ETF 模拟执行默认关闭，启用需要独立有效规则与既有确认/回放。
 
-## 当前能力概览
+## 能力入口
 
-| 领域 | 当前边界 |
+| 领域 | 入口与边界 |
 |---|---|
-| 数据与证据 | ObjectStore、Parquet、SQLite、PIT、官方公告/PDF/DOCX、Claim–Evidence、Provider resilience 已实现 |
-| 公司与行业研究 | 单公司 Research Runtime、机构级基本面、财务审计、行业/产业链、治理、催化剂、独立多空与投委会已具备 |
-| 全市场与组合 | 三市场候选链、正式荐股门、组合风险/构建/迁移、ETF 深度事实与对冲评估已具备；不以初筛冒充推荐 |
-| 账户与模拟交易 | 外部真实账户 append-only 事件、多账户投影、模拟订单/成交/T+1/恢复已具备；ETF 模拟执行默认关闭 |
-| 持续研究 | Watch Universe、行情/公告/news lead、Catalyst、typed rule、持久任务和已确认模拟订单回放已具备 |
-| 定时语义研究 | 三域本地调度、五类来源准备、语义 lease 单一 owner、typed submit、幂等通知与 missed-run 恢复已接入；平台原生任务与完整 controlled-live/prospective 仍需真实运行证据 |
-| 用户输出 | Investor Mode、Verified Answer Gateway、公共回复审计与内部诊断分层已具备 |
-| 宏观 current data | NBS/PBOC 具名官方 family 的 raw-first live capture、版本化 vintage/期间/单位语义与冲突 fail-closed 已具备；MOF/NDRC 保持 document-only，正式启用仍由 activation 证据门控制 |
-| 市场状态总控 | PIT 特征、透明基线、概率 challenger、风险预算与推荐供给只读覆盖层已具备；生产使用保持 SHADOW，等待真实 prospective/approval 门 |
-| 统一投资请求编排 | 请求级 actual/paper/monitor preflight、required/conditional/prohibited capability DAG、typed coverage receipt 与公共回答硬门已接入 |
-| Phase 7/8 | 软件路径已闭合；真实前向样本与持续天数仍按 activation 合同自然积累，历史回放不能替代真实前向证据 |
+| 公司研究 | 当前获取/续接、机构基本面、财务完整性、行业/治理/催化、独立多空与投委会；正式结论须通过同请求发布门 |
+| 全市场与组合 | Universe/候选、blind cohort、研究优先级、组合构建/迁移/风险；初筛和量化排序不自动取得推荐权威 |
+| 数据补证 | 宿主 Web 能力优先，已有正文复用；明确能力缺口才走配置备用，搜索/Markdown 不升级为正式 PDF |
+| 结构化补充 | Tushare 的基础、行情、财报、宏观入口受统一配置与限额约束，尚不替换正式 financial_sources 回源合同 |
+| 分钟行情 | Mootdx 使用隔离工具环境与有界 worker，为 raw 60m/5m 提供配置化备用；不能冒充财报或复权价格源 |
+| 账户与持续观察 | append-only 外部账户、模拟订单/成交/T+1、持久监控任务、增量复核；排队任务不等于已完成分析 |
+| 知识 | 批准的本地 PDF/DOCX 与存量证据审核；线上社区作者采集已退役，运行只消费 audited active registry |
+| 验证与准入 | 历史研究、shadow/prospective、来源资格与自然场景样本分别记录；软件存在不等于生产资格已获准 |
 
-能力的详细实现状态以 Schema、配置、CLI、测试、SQLite/Parquet/ObjectStore 和正式审计结果为准，不以本表单独证明。
+字段、路由、限额和当前可用状态以 Schema、配置、CLI、测试与运行事实为准；验证范围见最近的[进度验收](进度验收.md)。
 
-## 快速开始
+## 开始使用
 
 ```powershell
 uv sync --all-groups
 uv run astock init
-uv run astock probe
 uv run astock --help
 ```
 
-常用只读入口：
+研究任务按需加载 `.agents/skills/astock-research-orchestrator/SKILL.md`，由总控路由专业 Skill。独立诊断才使用 `probe`，无需每次投资提问都重跑。
 
 ```powershell
-# 当前公司研究
+# 当前公司数据获取；完整研究由同请求 continuation / workflow 驱动
 uv run astock research-acquire-current 600519 --market XSHG
-uv run astock research-plan 600519 --mode LIVE
-uv run astock research-run-company 600519 --mode LIVE --institutional-research-required
-
-# 实际账户 / 本地投影 / 模拟盘
-uv run astock external-account-list
+# 仅查看已有状态
 uv run astock local-portfolio-status
-uv run astock paper-status
-
-# 组合与持续监控
-uv run astock portfolio-schema
 uv run astock continuous-monitor-status
+# 按端点读取结构化来源合同，不加载全部接口文档
+uv run astock tushare-schema --endpoint income
 ```
 
-完整命令以 `uv run astock --help` 和各子命令 `--help` 为准；README 不复制整个 CLI 目录。
+可选凭据从项目 `.env` 或进程环境读取，环境变量优先；复制 `.env.example` 后按需填写，再用 `provider-credentials-status` 核验是否识别，不回显密钥。`.env`、用户持仓和私有原文不进 Git。
 
-### 可选 Provider 凭据
+## 单一事实源
 
-Tushare / Finnhub 等可选数据源默认从项目根目录 `.env` 读取本机凭据；`.env` 已被 Git 忽略，不会进入仓库。也可以继续使用系统/进程环境变量，且环境变量优先于 `.env`。
+| 内容 | 权威位置 |
+|---|---|
+| 原始响应/证据对象 | `runtime/objects/sha256/`，按引用生命周期保护 |
+| 分析事实 | Parquet；DuckDB 只建视图 |
+| 任务/游标/工件与账户/模拟账本 | SQLite；只经正式服务写入 |
+| 字段、策略与执行规则 | `src/astock/schemas/`、versioned config、migration、CLI |
+| 用户可读投影 | Git-ignore 的 `user_state/`，不能反向制造事实 |
 
-```text
-TUSHARE_TOKEN=
-FINNHUB_API_KEY=
+## 开发与验证
+
+先确认改动影响，再运行项目内 runner；所有临时、日志、缓存与工具环境留在项目目录。长任务具有进程树归属、取消/超时、输出预算和终态回执。heavy gate 全项目最多两组，避免子孙进程与 BLAS 叠加。
+
+```powershell
+.venv\Scripts\python.exe -B scripts/plan_validation.py src/astock/portfolio/analytics.py --output .ai-bridge/validation-plan.json
+.venv\Scripts\python.exe -B scripts/run_local_quality.py pytest tests/unit/test_portfolio_numeric_invariants.py -q
 ```
 
-可先复制 `.env.example`，填入自己账号的值，再运行 `uv run astock provider-credentials-status` 检查是否已识别。状态命令只显示 `configured` 与来源，不回显凭据正文。
-
-## 架构概览
-
-```text
-自然语言投资问题
-  → Repo Skill / Workflow / Orchestrator
-  → Python Schema + Service + CLI + deterministic guardrail
-  → ObjectStore / Parquet / SQLite / versioned config
-  → typed research / risk / account / paper artifacts
-  → Response Gateway
-  → 投资者可读结论
-```
-
-统一投资请求运行时入口固定为：
-
-```text
-Request
-  → actual/paper/monitor/latest-regime availability preflight
-  → required/conditional/prohibited capability DAG
-  → typed outputs + coverage receipt
-  → investor answer audit
-```
-
-该入口已由机器合同和真实领域 E2E 约束；缺数据、冲突或未准入能力仍按运行时规则 fail closed。
-
-## 事实源
-
-- 原始响应与不可变对象：`runtime/objects/sha256/`
-- 分析事实：Parquet；DuckDB 只建视图
-- 任务、游标、工件注册、真实账户事件和模拟账本：SQLite
-- 可执行合同：`src/astock/schemas/`、migration、versioned config、状态机和 CLI
-- Agent 草稿：`runtime/codex_runs/<run_id>/`，校验后才能进入 ArtifactStore
-- 本地用户投影：`user_state/`，永久 Git-ignore
-- 设计、计划与验收：Markdown；没有机器证据时不得宣称能力完成
+示例仅演示调用方式，实际执行选择器给出的相关测试并补充任务负例；选出测试不等于覆盖证明。输入树变化、超时或漏片不能记 PASS。日常回归使用 recorded fixture，live 证据单独记录。
 
 ## 文档入口
 
-1. [AGENTS.md](AGENTS.md)：所有 Agent 必须遵守的安全、证据、交互和开发规则。
-2. [docs/README.md](docs/README.md)：文档治理、单一事实源优先级、ADR 与完整导航。
-3. [开发计划.md](开发计划.md)：当前已批准但尚未完成的工作包。
-4. [进度验收.md](进度验收.md)：最近一次任务的验证结果与未完成边界。
-5. [docs/workflows/README.md](docs/workflows/README.md)：跨 Skill 工作流。
-6. [skills/README.md](skills/README.md)：人类可见 Skill 目录；canonical Skill 位于 `.agents/skills/`。
-
-下一阶段重点设计：
-
-- [统一投资请求编排](docs/architecture/investment-request-orchestration-v1.md)
-- [市场状态与风险预算总控](docs/architecture/market-regime-control-v1.md)
-- [ChatGPT / Codex 定时投研适配](docs/architecture/scheduled-research-orchestration-v1.md)
-- [68 个业务问题能力链验收矩阵](docs/acceptance/business-question-capability-matrix-v1.md)
-
-## 工程检查
-
-```powershell
-uv run pytest
-uv run ruff check .
-uv run pyright
-```
-
-新增或修改能力时，按 `Schema → repository/state → service → CLI → Skill/Workflow → tests/audit` 闭合；文档中的 `PROPOSED`、`SHADOW`、`CURRENT` 等状态由 [文档治理规则](docs/README.md)解释。
+- [AGENTS.md](AGENTS.md)：不超过 8 KiB 的仓库级硬规则与按需路由。
+- [docs/README.md](docs/README.md)：文档治理、机器合同与现役架构导航。
+- [开发计划.md](开发计划.md) / [机器索引](planning/work_packages_v1.yaml)：尚未完成的工作包。
+- [进度验收.md](进度验收.md)：最近任务的真实验证结果与限制。
+- [Workflow 索引](docs/workflows/README.md) / [Skill 目录](skills/README.md)：按当前问题选择专业流程。
+- [业务问题能力矩阵](docs/acceptance/business-question-capability-matrix-v1.md)：业务链的可执行验收边界。

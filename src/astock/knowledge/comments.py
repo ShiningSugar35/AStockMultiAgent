@@ -1,4 +1,4 @@
-"""Deterministic comment-page ingestion and target-author chain derivation."""
+"""Offline target-author chain derivation from preserved comment evidence."""
 
 from __future__ import annotations
 
@@ -6,145 +6,18 @@ import html
 import re
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import dataclass
-from pathlib import Path
 
-from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
-from astock.core.object_store import ObjectStore
-from astock.core.state import StateStore
-from astock.knowledge.adapter import ZhihuResponseAdapter
-from astock.knowledge.repository import CommentRegistration, KnowledgeRepository
-from astock.knowledge.storage import ParquetKnowledgeStore
-from astock.knowledge.transport import PersistedZhihuResponse
 from astock.schemas import (
-    CollectionCheckpoint,
-    CollectionTerminalCondition,
     DistillationClassRuleSet,
-    KnowledgeSourceDefinition,
     ZhihuAuthorParticipationChain,
     ZhihuCommentNode,
-    ZhihuCommentPage,
-    ZhihuContentType,
 )
 
 _PARTICIPATION_RULE_VERSION = "target-author-reply-ancestor-chain-v2"
 _HTML_TAG = re.compile(r"<[^>]+>")
 _ZERO_WIDTH = re.compile("[\u200b-\u200d\ufeff]")
 _WHITESPACE = re.compile(r"\s+")
-
-
-@dataclass(frozen=True, slots=True)
-class ZhihuCommentIngestExecution:
-    page: ZhihuCommentPage
-    comment_records: tuple[ZhihuCommentNode, ...]
-    registrations: tuple[CommentRegistration, ...]
-    parquet_files: tuple[Path, ...]
-    participation_chains: tuple[ZhihuAuthorParticipationChain, ...]
-
-
-class ZhihuCommentService:
-    def __init__(
-        self,
-        state: StateStore,
-        object_store: ObjectStore,
-        parquet_store: ParquetKnowledgeStore,
-    ) -> None:
-        self.state = state
-        self.object_store = object_store
-        self.parquet_store = parquet_store
-        self.repository = KnowledgeRepository(state)
-        self.adapter = ZhihuResponseAdapter(object_store)
-
-    def ingest_page(
-        self,
-        source: KnowledgeSourceDefinition,
-        content_type: ZhihuContentType,
-        content_id: str,
-        *,
-        parent_comment_id: str | None,
-        comment_page: int,
-        request_cursor: str | None,
-        response: PersistedZhihuResponse,
-    ) -> ZhihuCommentIngestExecution:
-        page, parsed = self.adapter.parse_comment_page(
-            source,
-            content_type,
-            content_id,
-            parent_comment_id=parent_comment_id,
-            comment_page=comment_page,
-            request_cursor=request_cursor,
-            response=response,
-        )
-        existing_ids = {
-            item.comment_id
-            for item in self.repository.latest_comments(
-                source.source_id,
-                content_type,
-                content_id,
-            )
-        }
-        if (
-            not page.is_end
-            and page.comment_ids
-            and self.repository.get_comment_page(page.page_id) is None
-            and not (set(page.comment_ids) - existing_ids)
-        ):
-            raise ProviderError(
-                "Zhihu comment page added no new comment ids before its terminal page",
-                failure_class=FailureClass.PAGINATION_CYCLE,
-                retryable=False,
-                details={"snapshot_id": response.snapshot.snapshot_id},
-            )
-        registrations: list[CommentRegistration] = []
-        files: list[Path] = []
-        stored_records: list[ZhihuCommentNode] = []
-        for record in parsed:
-            registration = self.repository.register_comment(record)
-            registrations.append(registration)
-            stored_records.append(registration.record)
-            files.append(self.parquet_store.write_comment(registration.record))
-        page = self.repository.register_comment_page(page)
-        checkpoint = _next_comment_checkpoint(page)
-        self.state.set_collection_checkpoint(
-            checkpoint,
-            status=("SUCCEEDED" if checkpoint.terminal_condition else "RUNNING"),
-            object_hash=page.raw_object_sha256,
-        )
-        page_object = self.object_store.put_json(page.model_dump(mode="json"))
-        self.state.register_artifact(
-            artifact_id=f"ZhihuCommentPage:{page.page_id}",
-            artifact_type="ZhihuCommentPage",
-            schema_version=page.schema_version,
-            object_hash=page_object.sha256,
-            input_hashes=[page.source_snapshot_id],
-        )
-        all_comments = self.repository.latest_comments(
-            source.source_id,
-            content_type,
-            content_id,
-        )
-        chains = derive_author_participation_chains(all_comments)
-        for chain in chains:
-            chain_object = self.object_store.put_json(chain.model_dump(mode="json"))
-            self.repository.register_participation_chain(
-                chain,
-                object_hash=chain_object.sha256,
-            )
-            self.state.register_artifact(
-                artifact_id=f"ZhihuAuthorParticipationChain:{chain.chain_id}",
-                artifact_type="ZhihuAuthorParticipationChain",
-                schema_version=chain.schema_version,
-                object_hash=chain_object.sha256,
-                input_hashes=chain.source_snapshot_ids,
-            )
-        return ZhihuCommentIngestExecution(
-            page=page,
-            comment_records=tuple(stored_records),
-            registrations=tuple(registrations),
-            parquet_files=tuple(files),
-            participation_chains=tuple(chains),
-        )
 
 
 def derive_author_participation_chains(
@@ -248,9 +121,7 @@ def derive_keyword_filtered_author_participation_chains(
         selection_rule_version = (
             f"{_PARTICIPATION_RULE_VERSION}+{rules.comment_chain_filter_version}"
         )
-        keyword_filter_rule_version = (
-            f"{rules.comment_chain_filter_version}@{rules.rule_version}"
-        )
+        keyword_filter_rule_version = f"{rules.comment_chain_filter_version}@{rules.rule_version}"
         identity = {
             "author_source_id": base.author_source_id,
             "content_type": base.content_type.value,
@@ -283,34 +154,7 @@ def _normalize_comment_text(value: str) -> str:
     return _WHITESPACE.sub(" ", value).strip().casefold()
 
 
-def _next_comment_checkpoint(page: ZhihuCommentPage) -> CollectionCheckpoint:
-    terminal: CollectionTerminalCondition | None = None
-    if page.is_end:
-        terminal = (
-            CollectionTerminalCondition.CONFIRMED_EMPTY
-            if not page.comment_ids
-            else CollectionTerminalCondition.PAGINATION_COMPLETE
-        )
-    return CollectionCheckpoint(
-        author=page.author_source_id,
-        content_type=page.content_type.value,
-        listing_page=0,
-        content_id=page.content_id,
-        comment_parent_id=page.parent_comment_id,
-        comment_page=page.comment_page if page.is_end else page.comment_page + 1,
-        comment_cursor=page.request_url if page.is_end else page.next_cursor,
-        nested_reply_cursor=(
-            (page.request_url if page.is_end else page.next_cursor)
-            if page.parent_comment_id
-            else None
-        ),
-        terminal_condition=terminal,
-    )
-
-
 __all__ = [
-    "ZhihuCommentIngestExecution",
-    "ZhihuCommentService",
     "derive_author_participation_chains",
     "derive_keyword_filtered_author_participation_chains",
 ]

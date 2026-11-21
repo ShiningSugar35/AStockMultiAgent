@@ -12,6 +12,7 @@ from astock.research import (
     load_research_skill_registry,
     validate_registry_open_source_audits,
 )
+from astock.research.open_source_audit import _validate_local_adaptation_files
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,6 +83,26 @@ def test_serenity_audits_resolve_precise_files_and_local_contracts() -> None:
         )
         for skill in external_skills
     )
+
+
+def test_serenity_local_adaptation_survives_repository_lf_checkout(tmp_path: Path) -> None:
+    registry = load_research_skill_registry(PROJECT_ROOT / "configs" / "research_skills.yaml")
+    assert registry.open_source_local_adaptation_release_file is not None
+    release = load_local_adaptation_release(
+        PROJECT_ROOT / registry.open_source_local_adaptation_release_file
+    )
+    attributes = (PROJECT_ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+
+    for audited in release.local_adaptation_files:
+        source = PROJECT_ROOT / audited.path
+        assert f"*{source.suffix} text eol=lf" in attributes
+        destination = tmp_path / audited.path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Simulate Git's declared checkout bytes, not an MCP-written CRLF working
+        # copy. A manifest refreshed against those accidental bytes must fail.
+        destination.write_bytes(source.read_bytes().replace(b"\r\n", b"\n"))
+
+    _validate_local_adaptation_files(tmp_path, release.local_adaptation_files)
 
 
 def test_serenity_audit_rejects_shared_local_adaptation_drift(tmp_path: Path) -> None:

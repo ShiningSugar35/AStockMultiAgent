@@ -20,8 +20,10 @@ def test_active_semantic_funnel_config_is_exact_three_view_v3() -> None:
     assert config["argument_builder"]["maximum_argument_unit_chars"] == 1800
 
 
-def test_knowledge_allowlist_is_exact_and_online_identities_are_confirmed() -> None:
+def test_archived_knowledge_allowlist_preserves_identities() -> None:
     sources = load_yaml("knowledge_sources.yaml")["sources"]
+    assert all(not source["online_collection_required"] for source in sources)
+    assert all(not source["collection_scope"]["incremental_updates"] for source in sources)
     by_name = {source["display_name"]: source for source in sources}
     assert set(by_name) == {"MR Dang", "黄彦臻", "派大星皮皮", "寒武纪的鳄鱼"}
     mr_dang = by_name["MR Dang"]
@@ -55,20 +57,6 @@ def test_knowledge_allowlist_is_exact_and_online_identities_are_confirmed() -> N
     assert hanwuji["online_collection_required"] is False
     assert hanwuji["enabled"] is True
     assert hanwuji["collection_scope"]["container_types"] == []
-
-
-def test_resolved_identity_tasks_leave_no_open_identity_blocker() -> None:
-    sources = load_yaml("knowledge_sources.yaml")["sources"]
-    pending_ids = {
-        source["source_id"]
-        for source in sources
-        if source["identity_status"] == "PENDING_IDENTITY_CONFIRMATION"
-    }
-    tasks = load_yaml("manual_investigation_tasks.yaml")["tasks"]
-    open_subjects = {task["subject_source_id"] for task in tasks if task["status"] == "OPEN"}
-    assert open_subjects == pending_ids
-    assert all(task["task_type"] == "IDENTITY_CONFIRMATION" for task in tasks)
-    assert {task["status"] for task in tasks} == {"RESOLVED"}
 
 
 def test_private_book_scope_is_formal_but_raw_pdf_remains_git_excluded() -> None:

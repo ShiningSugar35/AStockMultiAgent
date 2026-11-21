@@ -185,3 +185,115 @@ def test_intraday_breaker_is_scoped_by_provider_and_frequency_capability(
     assert len(east_provider.requests) == 3
     assert degraded.failures["eastmoney-5m"] == "CIRCUIT_OPEN:market.raw_5m"
     assert not degraded.canonical_updated
+
+
+class FallbackProvider(FakeProvider):
+    fallback_only = True
+
+
+def test_fallback_runs_after_primaries_and_is_skipped_when_covered(tmp_path: Path, state):
+    primary = make_batch("sina-5m")
+    backup = FallbackProvider(make_batch("mootdx-fallback"), provider_id="mootdx-fallback")
+    result = service(tmp_path, state, [
+        backup, FakeProvider(primary, provider_id="sina-5m"),
+    ]).sync_intraday(primary.request)
+    assert backup.requests == []
+    assert result.canonical_manifest["selected_provider"] == "sina-5m"
+
+
+def test_partial_primary_invokes_and_selects_quality_passed_fallback(tmp_path: Path, state):
+    primary = make_batch("eastmoney-5m", missing_index=3)
+    fallback = make_batch("mootdx-fallback")
+    backup = FallbackProvider(fallback, provider_id="mootdx-fallback")
+    result = service(tmp_path, state, [
+        FakeProvider(primary, provider_id="eastmoney-5m"), backup,
+    ]).sync_intraday(primary.request)
+    assert len(backup.requests) == 1
+    assert result.canonical_manifest["selected_provider"] == "mootdx-fallback"
+    assert result.canonical_updated
+
+
+def test_truncated_primary_history_still_invokes_fallback(tmp_path: Path, state):
+    primary = make_batch("sina-5m")
+    backup = FallbackProvider(make_batch("mootdx-fallback"), provider_id="mootdx-fallback")
+    wider = primary.request.model_copy(update={
+        "requested_start": primary.request.requested_start - timedelta(days=3),
+    })
+    service(tmp_path, state, [
+        FakeProvider(primary, provider_id="sina-5m"), backup,
+    ]).sync_intraday(wider)
+    assert len(backup.requests) == 1
+
+
+def test_fallback_can_extend_but_never_rewrite_existing_primary_bars(tmp_path: Path, state):
+    from astock.core.hashing import content_hash
+
+    primary = make_batch("sina-5m")
+    initial = service(tmp_path, state, [FakeProvider(primary, provider_id="sina-5m")])
+    initial.sync_intraday(primary.request)
+    before = initial.canonical_store.read_bars(primary.request)
+    fallback = make_batch("mootdx-fallback")
+    newer = [
+        bar.model_copy(update={
+            "timestamp": bar.timestamp + timedelta(days=3),
+            "observation_id": content_hash({"previous": bar.observation_id, "days": 3}),
+        }) for bar in fallback.bars
+    ]
+    combined = fallback.model_copy(update={
+        "bars": fallback.bars + newer, "bar_count": len(fallback.bars) + len(newer),
+        "actual_end": newer[-1].timestamp,
+        "requested_end": fallback.requested_end + timedelta(days=3),
+    })
+    request = primary.request.model_copy(update={
+        "requested_end": primary.request.requested_end + timedelta(days=3),
+    })
+    follow = service(tmp_path, state, [
+        FakeProvider(provider_id="sina-5m", fail=True),
+        FallbackProvider(combined, provider_id="mootdx-fallback"),
+    ])
+    result = follow.sync_intraday(request)
+    assert result.canonical_updated
+    assert result.canonical_publish_reason == "PUBLISHED_QUALITY_PASSED_FALLBACK_INCREMENT"
+    after = follow.canonical_store.read_bars(request)
+    # Parquet reads reconstruct created_at; compare every persisted market field.
+    assert [bar.model_dump(exclude={"created_at"}) for bar in after[:len(before)]] == [
+        bar.model_dump(exclude={"created_at"}) for bar in before
+    ]
+    assert len(after) == len(before) + len(newer)
+    assert "sina-5m" in result.failures
+
+
+def test_failed_fallback_cannot_replace_previous_canonical(tmp_path: Path, state):
+    primary = make_batch("sina-5m")
+    sync = service(tmp_path, state, [FakeProvider(primary, provider_id="sina-5m")])
+    initial = sync.sync_intraday(primary.request)
+    failing = service(tmp_path, state, [
+        FakeProvider(provider_id="sina-5m", fail=True),
+        FallbackProvider(provider_id="mootdx-fallback", fail=True),
+    ])
+    with pytest.raises(ProviderError):
+        failing.sync_intraday(primary.request)
+    assert failing.canonical_store.load_manifest(primary.request) == initial.canonical_manifest
+
+
+def test_whole_missing_weekday_is_not_mistaken_for_complete_primary_coverage(tmp_path: Path, state):
+    primary = make_batch("sina-5m")
+    middle_gap = [
+        bar.model_copy(update={"timestamp": bar.timestamp + timedelta(days=offset)})
+        for offset in (3, 5) for bar in primary.bars
+    ]
+    window = primary.request.model_copy(update={
+        "requested_start": primary.request.requested_start + timedelta(days=3),
+        "requested_end": primary.request.requested_end + timedelta(days=5),
+    })
+    primary = primary.model_copy(update={
+        "request": window, "requested_start": window.requested_start,
+        "requested_end": window.requested_end, "bars": middle_gap,
+        "actual_start": middle_gap[0].timestamp, "actual_end": middle_gap[-1].timestamp,
+        "bar_count": len(middle_gap),
+    })
+    backup = FallbackProvider(provider_id="mootdx-fallback", fail=True)
+    service(tmp_path, state, [
+        FakeProvider(primary, provider_id="sina-5m"), backup,
+    ]).sync_intraday(window)
+    assert len(backup.requests) == 1

@@ -28,6 +28,7 @@ from astock.operations import (
     load_storage_lifecycle_policy,
 )
 from astock.settings import ProjectPaths
+from astock.storage_retention import ProcessIdentity
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -1200,7 +1201,7 @@ class TestEphemeralTreeRetention:
 
         terminal = paths.root / ".ai-bridge" / "quality-runs" / "terminal"
         _write_file(terminal / "tmp" / "pytest" / "payload.bin", b"x" * 64)
-        _write_file(terminal / "result.json", b"{}")
+        _write_file(terminal / "result.json", b'{"child_exit_code":0}')
         _age_tree(terminal / "tmp", old)
 
         running = paths.root / ".ai-bridge" / "quality-runs" / "running"
@@ -1221,7 +1222,7 @@ class TestEphemeralTreeRetention:
 
 
     def test_abandoned_quality_run_tmp_expires_after_orphan_grace(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         paths, _, service = self._service(tmp_path)
         now = datetime(2026, 9, 24, tzinfo=UTC)
@@ -1230,6 +1231,15 @@ class TestEphemeralTreeRetention:
         abandoned = paths.root / ".ai-bridge" / "quality-runs" / "abandoned"
         scratch = abandoned / "tmp"
         _write_file(scratch / "pytest" / "payload.bin", b"orphan")
+        _write_file(abandoned / "owner.json", json.dumps({
+            "schema_version": "astock-owned-run-v1",
+            "run_id": "abandoned", "owner_pid": 12345, "owner_create_time": 1000.0,
+            "project_root": str(paths.root), "scratch_dir": str(scratch),
+            "status": "RUNNING", "started_at": "2026-09-22T00:00:00+00:00",
+        }).encode())
+        monkeypatch.setattr(
+            "astock.operations.process_identity", lambda pid: ProcessIdentity("DEAD"),
+        )
         _age_tree(scratch, old)
 
         plan = service.automatic_plan(now=now)
@@ -1283,6 +1293,7 @@ class TestEphemeralTreeRetention:
         stale = paths.runtime / "worktrees" / "stale"
         _write_file(live / "runtime" / "payload.bin", b"live")
         _write_file(stale / "runtime" / "payload.bin", b"stale")
+        _write_file(stale / ".cleanup-ready", b"owner-reviewed-disposable-copy")
         _age_tree(live, old)
         _age_tree(stale, old)
 

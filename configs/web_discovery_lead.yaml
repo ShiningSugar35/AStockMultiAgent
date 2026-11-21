@@ -1,0 +1,97 @@
+# Deterministic, offline Web discovery lead policy.
+# This capability NEVER performs network I/O and NEVER emits formal evidence.
+# Official domains are intentionally NOT duplicated here: the service reads the
+# single authoritative registry named by official_domains_source.
+schema_version: web-discovery-lead-v1
+
+# This file remains offline. web_tools.yaml owns active host-first execution;
+# active results pass through this same lead normalization and source gate.
+official_domains_source: configs/authority_domains.yaml
+default_capability: web.authoritative_fact
+official_site_query_enabled: true
+
+# All budgets, ordering, thresholds and ranking weights live here, never in
+# service code. max_redirect_depth bounds redirect unwrapping (DoS guard).
+max_official_domains_per_query: 4
+max_engines: 6
+max_results_per_engine: 20
+max_query_length: 240
+max_redirect_depth: 3
+max_input_bytes: 1048576
+min_independent_hits: 1
+official_domain_rank_bonus: 100
+independent_hit_weight: 10
+
+# Tracking parameters stripped during canonicalization (protocol-level constants).
+tracking_params:
+  - utm_source
+  - utm_medium
+  - utm_campaign
+  - utm_term
+  - utm_content
+  - fbclid
+  - gclid
+  - spm
+  - from
+  - isappinstalled
+  - ie
+  - f
+  - rsv_bp
+  - rsv_sug3
+  - oq
+
+# Redirect unwrapping is host-bound on purpose. A generic `?url=` on an
+# arbitrary third-party page must never be able to forge an official-domain
+# label. Only known search-engine redirect endpoints are unwrapped.
+redirect_rules:
+  - host: cn.bing.com
+    params: [u]
+  - host: www.google.com
+    params: [url, q]
+  - host: html.duckduckgo.com
+    params: [uddg]
+  - host: lite.duckduckgo.com
+    params: [uddg]
+  - host: www.baidu.com
+    params: [url]
+
+# Explicit engine order. No provider/endpoint order exists in service code.
+default_engines:
+  - bing-cn
+  - bing-int
+  - baidu
+  - so360
+  - sogou
+  - duckduckgo
+
+engines:
+  - engine_id: bing-cn
+    url_template: "https://cn.bing.com/search?q={q}&ensearch=0"
+    independence_group: BING_CN
+  - engine_id: bing-int
+    url_template: "https://cn.bing.com/search?q={q}&ensearch=1"
+    independence_group: BING_CN
+  - engine_id: baidu
+    url_template: "https://www.baidu.com/s?wd={q}&rn=10"
+    independence_group: BAIDU
+  - engine_id: so360
+    url_template: "https://www.so.com/s?q={q}"
+    independence_group: SO360
+  - engine_id: sogou
+    url_template: "https://www.sogou.com/web?query={q}"
+    independence_group: SOGOU
+  - engine_id: duckduckgo
+    url_template: "https://html.duckduckgo.com/html/?q={q}"
+    independence_group: DUCKDUCKGO
+  - engine_id: ecosia
+    url_template: "https://www.ecosia.org/search?q={q}"
+    independence_group: ECOSIA
+  - engine_id: google
+    url_template: "https://www.google.com/search?q={q}"
+    independence_group: GOOGLE
+
+  # Import-only transports have no fabricated public search URL.
+  - engine_id: host-included
+    independence_group: HOST_SEARCH_UNVERIFIED
+  - engine_id: deepseek-tools
+    independence_group: DEEPSEEK

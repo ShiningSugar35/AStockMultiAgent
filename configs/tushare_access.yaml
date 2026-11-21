@@ -1,0 +1,125 @@
+# Current account profile is user-reported; endpoint permission requires a real response.
+schema_version: tushare-access-v1
+source_id: tushare
+reported_points: 2120
+global_requests_per_minute: 200
+default_endpoint_requests_per_day: 100000
+financial_requests_per_minute: 80
+financial_quota_basis: USER_REQUEST
+max_concurrency: 2
+timeout_seconds: 20
+max_response_bytes: 4194304
+# This is a conservative project-wide envelope, not a claim of 200 concurrent calls.
+# HTTP and controlled MCP calls must reserve against this same source identity.
+documentation:
+  reviewed_at: '2026-11-21'
+  tier: 'https://tushare.pro/document/1?doc_id=290'
+  permissions: 'https://tushare.pro/document/1?doc_id=108'
+  skill: 'https://tushare.pro/document/1?doc_id=450'
+  repositories:
+    - 'https://github.com/waditu/tushare-data'
+    - 'https://github.com/waditu-tushare/skills'
+  ai_layers: 'https://tushare.pro/document/1?doc_id=473'
+  mcp: 'https://tushare.pro/document/1?doc_id=463'
+  # Resolve TUSHARE_TOKEN at runtime; never persist the credential-bearing MCP URL.
+endpoints:
+  stock_basic:
+    enabled: true
+    capability: instrument.master
+    minimum_points: 2000
+    requests_per_minute: 50
+    requests_per_day: 100000
+    cache_ttl_seconds: 86400
+    permission_status: UNVERIFIED
+    quota_basis: OFFICIAL_DOCUMENT
+    documentation_url: 'https://tushare.pro/document/2?doc_id=25'
+  daily:
+    enabled: true
+    capability: market.raw_1d
+    minimum_points: 120
+    requests_per_minute: 200
+    requests_per_day: 100000
+    cache_ttl_seconds: 3600
+    permission_status: UNVERIFIED
+    quota_basis: OFFICIAL_DOCUMENT
+    documentation_url: 'https://tushare.pro/document/2?doc_id=27'
+  weekly:
+    enabled: true
+    capability: market.raw_1w
+    minimum_points: 2000
+    requests_per_minute: 200
+    requests_per_day: 100000
+    cache_ttl_seconds: 3600
+    permission_status: UNVERIFIED
+    quota_basis: OFFICIAL_DOCUMENT
+    documentation_url: 'https://tushare.pro/document/2?doc_id=144'
+  monthly:
+    enabled: true
+    capability: market.raw_1mo
+    minimum_points: 2000
+    requests_per_minute: 200
+    requests_per_day: 100000
+    cache_ttl_seconds: 3600
+    permission_status: UNVERIFIED
+    quota_basis: OFFICIAL_DOCUMENT
+    documentation_url: 'https://tushare.pro/document/2?doc_id=145'
+  daily_basic:
+    enabled: true
+    capability: market.daily_indicators
+    minimum_points: 2000
+    requests_per_minute: 200
+    requests_per_day: 100000
+    cache_ttl_seconds: 3600
+    permission_status: UNVERIFIED
+    quota_basis: OFFICIAL_DOCUMENT
+    documentation_url: 'https://tushare.pro/document/2?doc_id=32'
+  income:
+    enabled: true
+    capability: financial.income
+    minimum_points: 2000
+    requests_per_minute: 80
+    requests_per_day: 100000
+    cache_ttl_seconds: 86400
+    permission_status: UNVERIFIED
+    quota_basis: USER_REQUEST
+    documentation_url: 'https://tushare.pro/document/2?doc_id=33'
+  balancesheet:
+    enabled: true
+    capability: financial.balancesheet
+    minimum_points: 2000
+    requests_per_minute: 80
+    requests_per_day: 100000
+    cache_ttl_seconds: 86400
+    permission_status: UNVERIFIED
+    quota_basis: USER_REQUEST
+    documentation_url: 'https://tushare.pro/document/2?doc_id=36'
+  cashflow:
+    enabled: true
+    capability: financial.cashflow
+    minimum_points: 2000
+    requests_per_minute: 80
+    requests_per_day: 100000
+    cache_ttl_seconds: 86400
+    permission_status: UNVERIFIED
+    quota_basis: USER_REQUEST
+    documentation_url: 'https://tushare.pro/document/2?doc_id=44'
+  cn_gdp:
+    enabled: true
+    capability: macro.gdp
+    minimum_points: 600
+    requests_per_minute: 200
+    requests_per_day: 100000
+    cache_ttl_seconds: 86400
+    permission_status: UNVERIFIED
+    quota_basis: OFFICIAL_DOCUMENT
+    documentation_url: 'https://tushare.pro/document/2?doc_id=227'
+  cn_cpi:
+    enabled: true
+    capability: macro.cpi
+    minimum_points: 600
+    requests_per_minute: 200
+    requests_per_day: 100000
+    cache_ttl_seconds: 86400
+    permission_status: UNVERIFIED
+    quota_basis: OFFICIAL_DOCUMENT
+    documentation_url: 'https://tushare.pro/document/2?doc_id=228'

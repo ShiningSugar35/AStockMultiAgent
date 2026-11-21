@@ -1,3 +1,4 @@
+# Archived source identities and local exports; online collectors are retired.
 schema_version: "1.0"
 sources:
   - source_id: zhihu:mr-dang-77
@@ -16,7 +17,8 @@ sources:
       include_required_comment_pages: false
       include_nested_replies: false
       derive_author_participation_chains: false
-      incremental_updates: true
+      incremental_updates: false
+    online_collection_required: false
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
     enabled: true
 
@@ -36,7 +38,8 @@ sources:
       include_required_comment_pages: false
       include_nested_replies: false
       derive_author_participation_chains: false
-      incremental_updates: true
+      incremental_updates: false
+    online_collection_required: false
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
     enabled: true
 
@@ -56,7 +59,8 @@ sources:
       include_required_comment_pages: false
       include_nested_replies: false
       derive_author_participation_chains: false
-      incremental_updates: true
+      incremental_updates: false
+    online_collection_required: false
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
     enabled: true
 
@@ -86,7 +90,7 @@ sources:
       include_required_comment_pages: false
       include_nested_replies: false
       derive_author_participation_chains: false
-      incremental_updates: true
+      incremental_updates: false
     online_collection_required: false
     rights_status: USER_ALLOWLISTED_LOCAL_RESEARCH
     enabled: true

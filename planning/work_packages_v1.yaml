@@ -17,13 +17,6 @@ rules:
   markdown_consistency_check_required: true
 
 work_packages:
-  - id: WP-67
-    order: 10
-    title: 金融计算与组合约束正确性修复
-    status: PLANNED
-    priority: P0
-    owner_lane: wp67-numeric-correctness
-    depends_on: []
   - id: WP-68
     order: 20
     title: 只读诊断、黄金评测与成本基线
@@ -33,15 +26,15 @@ work_packages:
     depends_on: []
   - id: WP-69
     order: 30
-    title: 指令地图、能力装载与Agent折叠实验
-    status: PLANNED
+    title: 能力按需装载与Agent折叠实验
+    status: IN_PROGRESS
     priority: P0
     owner_lane: wp69-context-capability
     depends_on: [WP-68]
   - id: WP-70
     order: 40
-    title: 进程生命周期与架构机械约束
-    status: PLANNED
+    title: 进程覆盖收口与架构机械约束
+    status: IN_PROGRESS
     priority: P0
     owner_lane: wp70-process-architecture
     depends_on: []
@@ -51,18 +44,18 @@ work_packages:
     status: PLANNED
     priority: P0
     owner_lane: wp71-durable-recovery
-    depends_on: [WP-68, WP-70]
+    depends_on: [WP-68]
   - id: WP-72
     order: 60
-    title: Tushare权益兑现与统一数据能力适配
-    status: PLANNED
+    title: Tushare正式数据映射与统一能力适配
+    status: IN_PROGRESS
     priority: P0
     owner_lane: wp72-data-capabilities
     depends_on: []
   - id: WP-73
     order: 70
-    title: 主动联网、研报预测与分级PDF补证
-    status: PLANNED
+    title: 原件补证闭环、研报预测与分级PDF
+    status: IN_PROGRESS
     priority: P0
     owner_lane: wp73-web-research-evidence
     depends_on: [WP-71, WP-72]
@@ -79,7 +72,7 @@ work_packages:
     status: IN_PROGRESS
     priority: P0
     owner_lane: wp63-strategy-validation
-    depends_on: [WP-67, WP-72, WP-62]
+    depends_on: [WP-72, WP-62]
   - id: WP-74
     order: 100
     title: 透明Quantamental候选漏斗与因子诊断
@@ -107,7 +100,7 @@ work_packages:
     status: PLANNED
     priority: P1
     owner_lane: wp76-portfolio-optimization
-    depends_on: [WP-67, WP-63]
+    depends_on: [WP-63]
   - id: WP-77
     order: 140
     title: 事实绑定与自然中文投资表达

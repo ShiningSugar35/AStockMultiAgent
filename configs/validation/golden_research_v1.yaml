@@ -1,0 +1,24 @@
+version: golden-research-selection-v1
+source_manifest: configs/business_scenarios_v1.yaml
+evidence_mode: RECORDED
+# An optional, reusable slice. It never replaces impact-selected negatives or
+# the complete 68-scenario contract, and is not a model-quality benchmark.
+test_file: tests/integration/test_business_scenarios_real_e2e.py
+read_test: test_recorded_read_scenarios_run_through_real_registered_domains
+economic_test: test_recorded_economic_scenarios_preserve_lane_and_operation_contracts
+cases:
+  - {scenario_id: 1, lane: read}
+  - {scenario_id: 11, lane: read}
+  - {scenario_id: 25, lane: economic}
+  - {scenario_id: 29, lane: economic}
+  - {scenario_id: 31, lane: read}
+  - {scenario_id: 36, lane: read}
+  - {scenario_id: 41, lane: read}
+  - {scenario_id: 56, lane: read}
+  - {scenario_id: 61, lane: read}
+  - {scenario_id: 71, lane: read}
+  - {scenario_id: 73, lane: read}
+  - {scenario_id: 81, lane: read}
+  - {scenario_id: 91, lane: read}
+  - {scenario_id: 95, lane: economic}
+  - {scenario_id: 96, lane: economic}

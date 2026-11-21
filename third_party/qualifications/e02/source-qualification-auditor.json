@@ -1,6 +1,6 @@
 {
   "admitted_stage": "SHADOW",
-  "candidate_version": "sha256:ab426fb009b8e7d4ab974c0d39ed863c9c536e1c12a86b668d74b6dc0a6fe879",
+  "candidate_version": "sha256:a0c1e4da23623cd6ad238a6ffbd61110e7008bd3247a5ad70d55fe6c95f826ba",
   "capability_id": "source-qualification-auditor",
   "checks": {
     "cache_behavior": "NOT_APPLICABLE",
@@ -21,7 +21,7 @@
   },
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
-  "created_at": "2026-09-21T10:48:00Z",
+  "created_at": "2026-11-21T10:47:02Z",
   "evidence_version": "e02-qualification-evidence-v1",
   "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
@@ -34,8 +34,8 @@
   "sources": [
     {
       "assertion": "Tracked Repo Skill contract used by the qualification pilot.",
-      "observed_at": "2026-09-21T10:48:00Z",
-      "sha256": "ab426fb009b8e7d4ab974c0d39ed863c9c536e1c12a86b668d74b6dc0a6fe879",
+      "observed_at": "2026-11-21T10:47:02Z",
+      "sha256": "a0c1e4da23623cd6ad238a6ffbd61110e7008bd3247a5ad70d55fe6c95f826ba",
       "source_ref": "repo:.agents/skills/source-qualification-auditor/SKILL.md"
     },
     {
@@ -52,8 +52,8 @@
     },
     {
       "assertion": "Recorded contract, observability, revocation and uninstall checks are covered by the repository test; they do not substitute for a frozen controlled-live Skill run.",
-      "observed_at": "2026-09-21T10:48:00Z",
-      "sha256": "70c753ba50f91bc18abad1de27843a40f1b80b22f6e6e12a670471e401dd5d19",
+      "observed_at": "2026-11-21T10:47:02Z",
+      "sha256": "c60a1eaae3ddb75de0ebece7eb514253461f98adacde509d45625faa7e05eb41",
       "source_ref": "contract:tests/unit/test_e02_external_qualification.py"
     },
     {
@@ -62,5 +62,5 @@
       "source_ref": "gap:source-qualification-auditor-controlled-live"
     }
   ],
-  "valid_from": "2026-09-21T10:48:00Z"
+  "valid_from": "2026-11-21T10:47:02Z"
 }

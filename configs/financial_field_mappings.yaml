@@ -3,90 +3,107 @@ fields:
   TOTAL_ASSETS:
     statement_type: BALANCE_SHEET
     official_label: 资产总计
-    provider_fields: {eastmoney-financial: TOTAL_ASSETS, sina-financial: total_assets}
+    provider_fields: {eastmoney-financial: TOTAL_ASSETS, sina-financial: total_assets, tushare-financial: total_assets}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   TOTAL_LIABILITIES:
     statement_type: BALANCE_SHEET
     official_label: 负债合计
-    provider_fields: {eastmoney-financial: TOTAL_LIABILITIES, sina-financial: total_liabilities}
+    provider_fields: {eastmoney-financial: TOTAL_LIABILITIES, sina-financial: total_liabilities, tushare-financial: total_liab}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   TOTAL_EQUITY:
     statement_type: BALANCE_SHEET
     official_label: 所有者权益合计
-    provider_fields: {eastmoney-financial: TOTAL_EQUITY, sina-financial: total_equity}
+    provider_fields: {eastmoney-financial: TOTAL_EQUITY, sina-financial: total_equity, tushare-financial: total_hldr_eqy_inc_min_int}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   ACCOUNTS_RECEIVABLE:
     statement_type: BALANCE_SHEET
     official_label: 应收账款
-    provider_fields: {eastmoney-financial: ACCOUNTS_RECEIVABLE, sina-financial: accounts_receivable}
+    provider_fields: {eastmoney-financial: ACCOUNTS_RECEIVABLE, sina-financial: accounts_receivable, tushare-financial: accounts_receiv}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   INVENTORY:
     statement_type: BALANCE_SHEET
     official_label: 存货
-    provider_fields: {eastmoney-financial: INVENTORY, sina-financial: inventory}
+    provider_fields: {eastmoney-financial: INVENTORY, sina-financial: inventory, tushare-financial: inventories}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   PREPAYMENTS:
     statement_type: BALANCE_SHEET
     official_label: 预付款项
-    provider_fields: {eastmoney-financial: PREPAYMENTS, sina-financial: prepayments}
+    provider_fields: {eastmoney-financial: PREPAYMENTS, sina-financial: prepayments, tushare-financial: prepayment}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   OTHER_RECEIVABLES:
     statement_type: BALANCE_SHEET
     official_label: 其他应收款
-    provider_fields: {eastmoney-financial: OTHER_RECEIVABLES, sina-financial: other_receivables}
+    provider_fields: {eastmoney-financial: OTHER_RECEIVABLES, sina-financial: other_receivables, tushare-financial: oth_receiv}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   CASH_BEGINNING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 期初现金及现金等价物余额
-    provider_fields: {eastmoney-financial: CASH_BEGINNING, sina-financial: cash_beginning}
+    provider_fields: {eastmoney-financial: CASH_BEGINNING, sina-financial: cash_beginning, tushare-financial: c_cash_equ_beg_period}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   CASH_ENDING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 期末现金及现金等价物余额
-    provider_fields: {eastmoney-financial: CASH_ENDING, sina-financial: cash_ending}
+    provider_fields: {eastmoney-financial: CASH_ENDING, sina-financial: cash_ending, tushare-financial: c_cash_equ_end_period}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   NET_CASH_OPERATING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 经营活动产生的现金流量净额
-    provider_fields: {eastmoney-financial: NET_CASH_OPERATING, sina-financial: net_cash_operating}
+    provider_fields: {eastmoney-financial: NET_CASH_OPERATING, sina-financial: net_cash_operating, tushare-financial: n_cashflow_act}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   NET_CASH_INVESTING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 投资活动产生的现金流量净额
-    provider_fields: {eastmoney-financial: NET_CASH_INVESTING, sina-financial: net_cash_investing}
+    provider_fields: {eastmoney-financial: NET_CASH_INVESTING, sina-financial: net_cash_investing, tushare-financial: n_cashflow_inv_act}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   NET_CASH_FINANCING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 筹资活动产生的现金流量净额
-    provider_fields: {eastmoney-financial: NET_CASH_FINANCING, sina-financial: net_cash_financing}
+    provider_fields: {eastmoney-financial: NET_CASH_FINANCING, sina-financial: net_cash_financing, tushare-financial: n_cash_flows_fnc_act}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   EXCHANGE_EFFECT:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 汇率变动对现金及现金等价物的影响
-    provider_fields: {eastmoney-financial: EXCHANGE_EFFECT, sina-financial: exchange_effect}
+    provider_fields: {eastmoney-financial: EXCHANGE_EFFECT, sina-financial: exchange_effect, tushare-financial: eff_fx_flu_cash}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   NET_PROFIT_CASH_FLOW:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 净利润
-    provider_fields: {eastmoney-financial: NET_PROFIT_CASH_FLOW, sina-financial: net_profit_cash_flow}
+    provider_fields: {eastmoney-financial: NET_PROFIT_CASH_FLOW, sina-financial: net_profit_cash_flow, tushare-financial: net_profit}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   NET_PROFIT_INCOME:
     statement_type: INCOME_STATEMENT
     official_label: 净利润
-    provider_fields: {eastmoney-financial: NET_PROFIT_INCOME, sina-financial: net_profit_income}
+    provider_fields: {eastmoney-financial: NET_PROFIT_INCOME, sina-financial: net_profit_income, tushare-financial: n_income}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   REVENUE:
     statement_type: INCOME_STATEMENT
     official_label: 营业收入
-    provider_fields: {eastmoney-financial: REVENUE, sina-financial: revenue}
+    provider_fields: {eastmoney-financial: REVENUE, sina-financial: revenue, tushare-financial: revenue}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   OPERATING_COST:
     statement_type: INCOME_STATEMENT
     official_label: 营业成本
-    provider_fields: {eastmoney-financial: OPERATING_COST, sina-financial: operating_cost}
+    provider_fields: {eastmoney-financial: OPERATING_COST, sina-financial: operating_cost, tushare-financial: oper_cost}
     unit: TEN_THOUSAND_CNY
+    provider_units: {tushare-financial: CNY}
   SHARES_OUTSTANDING:
     statement_type: BALANCE_SHEET
     official_label: 期末普通股股份总数
-    provider_fields: {eastmoney-financial: SHARES_OUTSTANDING, sina-financial: shares_outstanding}
+    provider_fields: {eastmoney-financial: SHARES_OUTSTANDING, sina-financial: shares_outstanding, tushare-financial: total_share}
     unit: SHARES

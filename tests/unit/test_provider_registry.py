@@ -25,6 +25,7 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
         "eastmoney-reference",
         "sina-reference",
         "tencent-reference",
+        "tushare-financial",
         "eastmoney-financial",
         "sina-financial",
         "gdelt-news-leads",

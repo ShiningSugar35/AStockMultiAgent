@@ -560,14 +560,23 @@ class ResearchProductionService:
 
     def efficiency_report(self) -> SkillEfficiencyReport:
         policy = self.register_policy()
-        events = self._usage_events()
+        registry = self.research.skill_registry_summary(self.registry.registry_version)
+        assert registry is not None
+        registry_hash = str(registry["object_hash"])
+        usage_rows = self._usage_rows()
+        events = [
+            SkillUsageEvent.model_validate_json(self.objects.get_bytes(str(row["object_hash"])))
+            for row in usage_rows
+        ]
         report_id = "skill-efficiency:" + content_hash(
             {
+                "schema_version": "skill-efficiency-report-v2",
+                "registry": registry_hash,
                 "policy": policy.policy_version,
                 "usage": sorted(content_hash(item) for item in events),
             }
         )
-        input_hashes = sorted({str(row["object_hash"]) for row in self._usage_rows()})
+        input_hashes = sorted({registry_hash, *(str(row["object_hash"]) for row in usage_rows)})
         existing = self.state.artifact_record(report_id)
         if existing is not None:
             if (
@@ -623,7 +632,9 @@ class ResearchProductionService:
                     changed_ic_state_count=sum(
                         item.changed_investment_committee_state for item in rows
                     ),
-                    total_token_cost=sum(item.token_cost for item in rows),
+                    # Legacy usage events have no measured-usage provenance.
+                    total_token_cost=None,
+                    declared_token_cost=sum(item.token_cost for item in rows),
                     mean_prospective_lift=(sum(lifts) / len(lifts) if lifts else None),
                     near_duplicate_skill_ids=duplicates,
                     conflict_skill_ids=conflicts,
@@ -924,12 +935,6 @@ class ResearchProductionService:
                 "ORDER BY skill_id,skill_version,created_at,usage_event_id"
             ).fetchall()
         return [dict(row) for row in rows]
-
-    def _usage_events(self) -> list[SkillUsageEvent]:
-        return [
-            SkillUsageEvent.model_validate_json(self.objects.get_bytes(str(row["object_hash"])))
-            for row in self._usage_rows()
-        ]
 
     def _one(self, sql: str, parameters: tuple[Any, ...]) -> dict[str, Any] | None:
         with closing(self.state.connect()) as connection:

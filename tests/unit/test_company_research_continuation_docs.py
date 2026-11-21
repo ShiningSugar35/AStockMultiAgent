@@ -35,6 +35,23 @@ def test_current_company_workflow_does_not_return_public_evidence_gaps_to_user()
         "typed automatic-resolution artifact",
         "same_request_continuation_required=true",
         "investment_conclusion_blocked=true",
-        "genuinely private source material",
     ):
         assert required in workflow
+
+    closure_rows = {
+        line.split("`", 2)[1]: line
+        for line in workflow.splitlines()
+        if line.startswith("| `")
+    }
+    for state, required_terms in {
+        "PUBLIC_DATA_UNAVAILABLE": ("exhausted", "no private-material demand"),
+        "BUDGET_EXHAUSTED": (
+            "Time/attempt", "bound evidence locally", "without claiming public-route exhaustion",
+        ),
+        "NEEDS_USER_INPUT": (
+            "private", "authorization", "dependency only", "independent capabilities continue",
+        ),
+    }.items():
+        assert state in closure_rows
+        for term in required_terms:
+            assert term in closure_rows[state], (state, term)

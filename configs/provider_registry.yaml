@@ -234,6 +234,28 @@ providers:
     probe_operation: quote-batch
     probe_target: {symbol: "600519", market: XSHG}
     recorded_fixture: tests/fixtures/providers/tencent-reference-success.json
+  - provider_id: tushare-financial
+    adapter_class: astock.providers.tushare_financial:TushareFinancialProvider
+    capabilities: [financial.balance_sheet.secondary, financial.income_statement.secondary, financial.cash_flow_statement.secondary, financial.statement_values]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics:
+      financial.balance_sheet.secondary: EXACT_ITEM
+      financial.income_statement.secondary: EXACT_ITEM
+      financial.cash_flow_statement.secondary: EXACT_ITEM
+      financial.statement_values: EXACT_ITEM
+    independence_group: TUSHARE
+    cache_ttl_seconds: 86400
+    cost_class: LOW
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    priority: 10
+    probe_operation: financial-period
+    probe_target: {symbol: "600519", market: XSHG, period_end: "2026-09-30"}
+    recorded_fixture: tests/fixtures/providers/tushare-financial-success.json
+    credential_environment: TUSHARE_TOKEN
   - provider_id: eastmoney-financial
     adapter_class: astock.providers.eastmoney_financial:EastMoneyFinancialProvider
     capabilities: [financial.balance_sheet.secondary, financial.income_statement.secondary, financial.cash_flow_statement.secondary, financial.statement_values]

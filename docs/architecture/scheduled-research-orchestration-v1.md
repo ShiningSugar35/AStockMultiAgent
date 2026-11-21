@@ -54,11 +54,11 @@ ChatGPT / Work / Codex Scheduled Task（语义研究/通知平面，按时唤醒
 
 逻辑研究与单次激活分别计时。宿主必须显式标明 `CHATGPT_CHAT` 或 `OTHER_AGENT`，模型名、进程名和CLI入口不能代替宿主身份。
 
-- **CHATGPT_CHAT**：单次激活以真实开始时间计时，唯一项目阈值为 `configs/chat_invocation_policy_v1.yaml` 的 2100/2400/2700 秒：35 分钟后保存已验证工作并准备交接、40 分钟前核验真实平台续接绑定、45 分钟内完成本次激活；若平台实际更早结束则提前准备。保存同一 request/round 的 checkpoint、待核实缺口、下一执行节点，不因为到达交接时间自动对外发布半成品投资报告。经事实与输出审核的完整独立阶段结果可以依用户授权发送。交互会话只在平台实际允许时创建或复用子 Scheduled；Scheduled 自身不能动态创建 Scheduled 时沿用预绑定的每小时 watcher。仅有 opaque task ID 不能证明续接已经核验，权限或绑定缺失应留存状态；平台续接不覆盖正在运行的其他任务。该限制约束单次激活，不截断逻辑研究；相同 owner 重入不能重置计时。
-- campaign续接的并发正确性使用`round_id + lease_generation`做代际CAS，owner字符串只保留诊断与旧调用兼容。live lease冲突、同轮已COMPLETE、同activation租期到期均返回正常no-acquire结果，不把预期编排状态当异常；到期begin返回`EXPIRED_LEASE`且不重置时钟。旧generation、已释放、被接管或到期lease的checkpoint返回`STALE_LEASE`安全no-op，不覆盖新进度；调用方收到no-op不得继续覆盖报告。OS级`schedule_run_ownership`只承担同主机极短临界区互斥，不能替代durable lease，也不锁住之后的文件/SSH动作。
+- **CHATGPT_CHAT**：单次激活按真实开始时间计时；兼容路径 `configs/chat_invocation_policy_v1.yaml` 的 v2 只配置交接余量、绑定核验余量与续接频次。只有观测到实际平台期限，才围绕该期限计算交接窗口；实际宿主中断、用户取消与显式资源预算按各自既有合同处理。未观察到期限时不得反推项目自设总时限。保存同一 request/round 的 checkpoint、待核实缺口、下一执行节点，不因为到达交接时间自动对外发布半成品投资报告。经事实与输出审核的完整独立阶段结果可以依用户授权发送。交互会话只在平台实际允许时创建或复用子 Scheduled；Scheduled 自身不能动态创建 Scheduled 时沿用预绑定的每小时 watcher。仅有 opaque task ID 不能证明续接已经核验，权限或绑定缺失应留存状态；平台续接不覆盖正在运行的其他任务。该限制约束单次激活，不截断逻辑研究；相同 owner 重入不能重置计时。
+- campaign续接的并发正确性使用`round_id + lease_generation`做代际CAS，owner字符串只保留诊断与旧调用兼容。live lease冲突、同轮已COMPLETE、同activation租期到期均返回正常no-acquire结果，不把预期编排状态当异常；到期begin返回`EXPIRED_LEASE`且不重置时钟。旧generation、已释放、被接管或到期lease的checkpoint返回`STALE_LEASE`安全no-op，不覆盖新进度；调用方收到no-op不得继续覆盖报告。OS级`schedule_run_ownership`只承担同主机极短临界区互斥，不能替代durable lease，也不锁住之后的文件/SSH动作。 `begin --lease-seconds` 独立决定 owner 租期，默认保留现役 2100 秒接管兼容；`CampaignRound.deadline_at` 是租约到期时间，不能作为宿主截止或逻辑研究时限，也不进入宿主预算投影。
 - 研究metadata与报告投影解耦：checkpoint只有显式登记`report_file`时才验证项目内真实文件，不因历史报告缺失阻断普通进度保存或PARTIAL释放。报告投影失败仅影响对应本地文件的生成与展示，不清空已核验的研究进度；checkpoint接纳只证明元数据完成写入，不承担跨文件操作的原子事务。
 - `OTHER_AGENT`：不设置整体研究时限，不因 35/40/45 分钟截断 Research Team、公司深研或最终报告。该规则只取消总体 wall-clock 截断；HTTP timeout、provider retry、单任务 lease、并发上限、内存/候选数和显式花费预算仍保持有界，卡死 worker 仍可被 lease 取消。
-- 进度仅计算已有终态证据的工作项；失败、跳过和排队不算完成。进度不能豁免45分钟项目激活上限；35分钟是准备交接时点，新增必要工作保留在原round的版本化工作图。
+- 进度只计算已有终态证据的工作项；失败、跳过、排队不算完成。固定运行分钟数或完成比例不足不构成研究完成或早停判据；新增必要工作保留在原 round 的版本化工作图，已完成节点复用。
 - 主对话与 Scheduled 续接共享逻辑 request id，但每次唤醒都必须重新核对输入 revision、round/lease generation 与已完成 checkpoint，避免重复深研、重复写 receipt 或双写。逻辑请求完成后只停用该请求临时创建的 Scheduled，不影响其它自动化；预绑定的长期 continuation watcher 不随单个 round 完成而停用，只有其 campaign/日常跟踪整体明确结束时才停止。
 
 本地 `CurrentResearchSlaService` 因此支持显式取消总体 deadline：无总体 deadline 的 run 仍保留 task lease 与可取消 worker；历史/显式 `budget_seconds` 合同继续受原边界约束。平台 Scheduled 是宿主续接平面，不进入行情、研究事实或推荐权威。

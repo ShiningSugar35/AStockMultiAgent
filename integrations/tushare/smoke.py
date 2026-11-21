@@ -10,7 +10,9 @@ from pathlib import Path
 from astock.core.errors import ProviderError
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
+from astock.providers.tushare_financial import STATEMENT_ENDPOINTS, TushareFinancialProvider
 from astock.providers.tushare_structured import TushareQueryRequest, TushareStructuredProvider
+from astock.schemas import Market
 from astock.settings import ProjectPaths
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,13 +22,26 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mcp", action="store_true")
     parser.add_argument("--record-fixture", action="store_true")
+    parser.add_argument("--financial-mapping", action="store_true")
     args = parser.parse_args()
+    if args.financial_mapping and args.record_fixture:
+        parser.error(
+            "--financial-mapping reuses existing raw fixtures; do not overwrite stock_basic"
+        )
     paths = ProjectPaths.discover(ROOT)
     if paths.root != ROOT or not paths.runtime.resolve().is_relative_to(ROOT):
         raise SystemExit("Tushare smoke requires the project-owned normal runtime")
     state = StateStore(paths.state_db, ROOT / "migrations")
     state.migrate()
-    provider = TushareStructuredProvider(ObjectStore(paths.objects), state, project_root=ROOT)
+    objects = ObjectStore(paths.objects)
+    financial = (
+        TushareFinancialProvider(objects, state, project_root=ROOT)
+        if args.financial_mapping else None
+    )
+    provider = (
+        financial.structured if financial is not None
+        else TushareStructuredProvider(objects, state, project_root=ROOT)
+    )
     today = datetime.now(UTC).date()
     trading_day = today - timedelta(days=1)
     while trading_day.weekday() > 4:
@@ -60,6 +75,9 @@ def main() -> int:
         "input_sha256": {
             path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in (
                 "src/astock/providers/tushare_structured.py",
+                "src/astock/providers/tushare_financial.py",
+                "configs/financial_field_mappings.yaml",
+                "configs/financial_sources.yaml",
                 "src/astock/providers/tushare_mcp.py",
                 "src/astock/providers/supplemental.py",
                 "configs/tushare_access.yaml", "configs/provider_registry.yaml",
@@ -69,6 +87,29 @@ def main() -> int:
     }
     captures = []
     try:
+        if financial is not None:
+            requests = []
+            try:
+                payload = financial.fetch("600519", Market.XSHG, last_quarter_end, live=True)
+                for statement, endpoint in STATEMENT_ENDPOINTS.items():
+                    rows = payload.tables[statement]
+                    item = {
+                        "endpoint": endpoint, "status": "PASS" if rows else "EMPTY",
+                        "record_count": len(rows), "formal_use_allowed": False,
+                        "mapped_statement": statement,
+                        "source_snapshot_id": payload.snapshots_by_statement[statement].snapshot_id,
+                        "selected_version": rows[0]["provider_report_version"] if rows else None,
+                    }
+                    report["results"].append(item)
+                    print(json.dumps(item, ensure_ascii=True), flush=True)
+            except (ProviderError, ValueError) as exc:
+                report["results"].append({
+                    "operation": "financial-mapping", "status": "UNAVAILABLE",
+                    "failure_class": (
+                        exc.failure_class.value if isinstance(exc, ProviderError)
+                        else type(exc).__name__
+                    ),
+                })
         for request in requests:
             try:
                 result = provider.query(request)

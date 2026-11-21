@@ -31,8 +31,11 @@ def utc_now_text() -> str:
 
 
 class StateStore:
-    def __init__(self, path: Path, migrations_dir: Path | None = None) -> None:
+    def __init__(
+        self, path: Path, migrations_dir: Path | None = None, *, read_only: bool = False
+    ) -> None:
         self.path = path.resolve()
+        self.read_only = read_only
         self.migrations_dir = (
             migrations_dir.resolve()
             if migrations_dir is not None
@@ -40,6 +43,15 @@ class StateStore:
         )
 
     def connect(self) -> sqlite3.Connection:
+        if self.read_only:
+            if not self.path.is_file():
+                raise FileNotFoundError("READ_ONLY_DATABASE_NOT_FOUND")
+            connection = sqlite3.connect(
+                self.path.as_uri() + "?mode=ro", uri=True, timeout=5, isolation_level=None
+            )
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only=ON")
+            return connection
         self.path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
@@ -50,6 +62,8 @@ class StateStore:
         return connection
 
     def migrate(self) -> list[str]:
+        if self.read_only:
+            raise PermissionError("READ_ONLY_STATE")
         applied_now: list[str] = []
         phase6_reconciliation: tuple[str, str] | None = None
         for migration in sorted(self.migrations_dir.glob("*.sql")):
@@ -123,6 +137,8 @@ class StateStore:
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
+        if self.read_only:
+            raise PermissionError("READ_ONLY_STATE")
         connection = self.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")

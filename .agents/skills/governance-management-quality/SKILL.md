@@ -7,22 +7,21 @@ description: Build a point-in-time governance and management-quality assessment 
 
 ## Inputs and authority
 
+Use the [shared team execution contract](../../../docs/architecture/research-specialist-skills-crosswalk.md#shared-execution-contract) for task dispatch, registration and recovery. Load this role's method only; reuse the coordinator's ready-task snapshot.
+
 - Consume only the ready `governance-management-quality` task from the existing `ResearchTeamPlan`; do not create a parallel plan or a free-form personality score.
 - Preserve company identity, `as_of`, acquisition lineage and the typed `GovernanceAssessment` contract.
 - Primary authority is exchange/CNINFO/issuer charters, annual/governance reports, resolutions, ownership/pledge filings, audit reports, regulator/court/enforcement records, government appointment notices, official enterprise-registration/credit records and formal transaction documents. Track legal-representative/controller changes, external public-office appointments of key people, equity pledge/freeze, administrative penalties and business-registration/enforcement changes when they can alter incentives, control, financing or related-party risk. Qualified commercial enterprise-intelligence MCP/API sources are secondary cross-checks only; unresolved cross-source conflicts must remain explicit and trigger evidence investigation rather than last-write-wins. Interviews and media are secondary context.
 
 ## Procedure
 
-1. Inspect `uv run astock research-team-status <plan_id>` and confirm the GOVERNANCE task is ready.
-2. Separate governance facts from management interpretation. Freeze control structure, board independence, incentives, related-party transactions, capital allocation, financing/dilution, dividends/buybacks, M&A, auditor/opinion history, disclosure corrections, pledges, succession and execution against prior disclosed targets.
-3. Use a point-in-time evidence table and compare actions with stated policy. Record favorable and adverse evidence symmetrically.
-4. Connect each material finding once to forecast/valuation mechanisms: cost of capital, dilution, reinvestment return, minority-shareholder risk, cash conversion, control risk or scenario probabilities.
-5. Detect duplicate treatment where the same governance risk is already embedded in forecast, probability or valuation.
+1. Separate governance facts from management interpretation. Freeze control structure, board independence, incentives, related-party transactions, capital allocation, financing/dilution, dividends/buybacks, M&A, auditor/opinion history, disclosure corrections, pledges, succession and execution against prior disclosed targets.
+2. Use a point-in-time evidence table and compare actions with stated policy. Record favorable and adverse evidence symmetrically.
+3. Connect each material finding once to forecast/valuation mechanisms: cost of capital, dilution, reinvestment return, minority-shareholder risk, cash conversion, control risk or scenario probabilities.
+4. Detect duplicate treatment where the same governance risk is already embedded in forecast, probability or valuation.
 
 ## Required output contract
 
-- Register a typed `GovernanceAssessment` through `uv run astock research-team-role-output REQUEST.json`.
-- Complete `governance-management-quality` through `uv run astock research-team-task-result REQUEST.json`.
 - Set `GOVERNANCE_QUALITY=true` only when material ownership/control, related-party, audit/opinion, capital-allocation, disclosure and falsifier evidence is current and frozen.
 
 ## Output
@@ -31,17 +30,15 @@ Return the registered typed `GovernanceAssessment` artifact ID, control and ince
 
 ## Gates and abstention
 
-Abstain and leave `GOVERNANCE_QUALITY=false` when ownership/control lineage is incomplete, material related-party or audit records conflict, or an allegation lacks a formal source. Escalate the evidence gap; never label fraud, intent or character from an anomaly, rumor or communication style alone.
+Recover missing primary records and reconcile conflicts through the shared contract. Independent work continues; abstain from the affected formal conclusion and leave `GOVERNANCE_QUALITY=false` when ownership/control lineage is incomplete, material related-party or audit records conflict, or an allegation lacks a formal source. Escalate the evidence gap; never label fraud, intent or character from an anomaly, rumor or communication style alone.
 
 ## Verification
 
-- Re-run `uv run astock research-team-status <plan_id>` and verify the typed artifact, COMPLETE task and readiness evidence.
 - Verify later enforcement outcomes did not leak into an earlier decision and each governance impact is counted only once.
 - This Skill produces governance research and does not write the paper ledger.
 
 ## Workflows
 
-- [`docs/workflows/workflow-governance-management-quality.md`](../../../docs/workflows/workflow-governance-management-quality.md)
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 
 ## Prohibitions

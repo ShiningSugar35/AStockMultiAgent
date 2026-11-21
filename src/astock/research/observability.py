@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+from collections import defaultdict
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
@@ -59,7 +62,7 @@ class AgentObservabilityService:
             observation_id=observation_id,
         )
         event_hash = content_hash(semantic)
-        with self.state.connect() as connection:
+        with closing(self.state.connect()) as connection:
             existing = connection.execute(
                 "SELECT observation_id,event_hash,object_hash FROM agent_task_observation_index "
                 "WHERE observation_id=? OR task_id=?",
@@ -109,14 +112,13 @@ class AgentObservabilityService:
         return observation
 
     def register_request_trace(self, trace: ResearchRequestTrace) -> ResearchRequestTrace:
-        semantic = trace.model_dump(mode="json", exclude={"trace_id", "created_at"})
-        event_hash = content_hash(semantic)
+        event_hash = _trace_identity(trace)
         expected_id = f"research-request-trace:{event_hash}"
         if trace.trace_id not in {"AUTO", expected_id}:
             raise ValueError("research request trace identity is not canonical")
         trace = trace.model_copy(update={"trace_id": expected_id})
         metrics = _trace_metrics(trace)
-        with self.state.connect() as connection:
+        with closing(self.state.connect()) as connection:
             existing = connection.execute(
                 "SELECT trace_id,event_hash,object_hash FROM research_request_trace_index "
                 "WHERE trace_id=? OR request_id=?",
@@ -183,7 +185,7 @@ class AgentObservabilityService:
             query += " WHERE answer_ready_at>=?"
             params = (since.isoformat(),)
         query += " ORDER BY answer_ready_at,request_id"
-        with self.state.connect() as connection:
+        with closing(self.state.connect()) as connection:
             rows = connection.execute(query, params).fetchall()
         normal = [
             row
@@ -223,6 +225,7 @@ class AgentObservabilityService:
             p50_wall_time_ms=p50,
             p75_wall_time_ms=p75,
             p90_wall_time_ms=p90,
+            p95_wall_time_ms=_percentile_ms(durations, 0.95),
             useful_delivery_rate=useful_count / len(rows) if rows else 0.0,
             on_time_rate_45m=normal_ontime / len(normal) if normal else 0.0,
             provider_call_count=sum(int(row["provider_call_count"]) for row in rows),
@@ -238,6 +241,35 @@ class AgentObservabilityService:
             threshold_pass=threshold_pass,
             finding_codes=sorted(findings),
         )
+
+    def evaluation_report(
+        self, *, lookback_days: int = 30, limit: int = 500,
+        baseline: str = "baseline", candidate: str = "candidate",
+    ) -> dict[str, Any]:
+        """Bounded read-only comparison over the canonical trace objects."""
+        if lookback_days < 0 or not 1 <= limit <= 2000 or baseline == candidate:
+            raise ValueError("invalid evaluation selection")
+        since = datetime.now(UTC) - timedelta(days=lookback_days) if lookback_days else None
+        query = "SELECT object_hash FROM research_request_trace_index"
+        parameters: list[Any] = []
+        if since is not None:
+            query += " WHERE answer_ready_at>=?"
+            parameters.append(since.isoformat())
+        query += " ORDER BY answer_ready_at DESC,request_id LIMIT ?"
+        parameters.append(limit + 1)
+        with closing(self.state.connect()) as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        traces = [
+            ResearchRequestTrace.model_validate_json(
+                self.objects.get_bytes(str(row["object_hash"]))
+            )
+            for row in rows[:limit]
+        ]
+        report = summarize_evaluation_traces(traces, baseline=baseline, candidate=candidate)
+        report["selection_truncated"] = len(rows) > limit
+        report["selection_limit"] = limit
+        report["lookback_days"] = lookback_days
+        return report
 
     def report(self, *, lookback_days: int = 30) -> AgentObservabilityReport:
         if lookback_days < 0:
@@ -348,7 +380,7 @@ class AgentObservabilityService:
             query += " WHERE created_at>=?"
             params = (since.isoformat(),)
         query += " ORDER BY created_at,observation_id"
-        with self.state.connect() as connection:
+        with closing(self.state.connect()) as connection:
             rows = connection.execute(query, params).fetchall()
         observations = [
             AgentTaskObservation.model_validate_json(
@@ -437,7 +469,7 @@ class AgentObservabilityService:
         if since is not None:
             query += " WHERE created_at>=?"
             params = (since.isoformat(),)
-        with self.state.connect() as connection:
+        with closing(self.state.connect()) as connection:
             row = connection.execute(query, params).fetchone()
         if row is None:
             return 0, 0
@@ -452,7 +484,7 @@ class AgentObservabilityService:
             query += " AND created_at>=?"
             params = (since.isoformat(),)
         query += " ORDER BY created_at,artifact_id"
-        with self.state.connect() as connection:
+        with closing(self.state.connect()) as connection:
             rows = connection.execute(query, params).fetchall()
         latest: dict[str, tuple[ResearchRunReport, str]] = {}
         for row in rows:
@@ -698,3 +730,149 @@ def _percentile_ms(values: list[int], quantile: float) -> int | None:
     ordered = sorted(values)
     index = max(0, math.ceil(quantile * len(ordered)) - 1)
     return ordered[index]
+
+def _trace_identity(trace: ResearchRequestTrace) -> str:
+    semantic = trace.model_dump(mode="json", exclude={"trace_id", "created_at"})
+    # Keep v1 identities unchanged when optional metadata is absent.
+    for optional in ("usage", "evaluation"):
+        if semantic[optional] is None:
+            semantic.pop(optional)
+    return content_hash(semantic)
+
+
+def _evaluation_key(trace: ResearchRequestTrace) -> tuple[str, ...]:
+    context = trace.evaluation
+    if context is None:
+        raise ValueError("comparison requires a frozen evaluation context")
+    return (
+        context.case_id, context.input_hash, context.evidence_hash, context.budget_hash,
+        context.rubric_hash, context.host_id, context.model_id, context.evidence_mode,
+        trace.cache_mode.value, trace.source_group.value,
+    )
+
+
+_EVALUATION_METRICS = (
+    "wall_time_ms", "provider_calls", "retries", "input_tokens", "output_tokens",
+    "cost_cny", "peak_memory_bytes",
+)
+
+
+def _measurements(trace: ResearchRequestTrace) -> dict[str, float | int | None]:
+    usage = trace.usage
+    return {
+        "wall_time_ms": trace.wall_time_ms,
+        "provider_calls": sum(span.provider_calls for span in trace.spans),
+        "retries": sum(span.retries for span in trace.spans),
+        "input_tokens": usage.input_tokens if usage is not None else None,
+        "output_tokens": usage.output_tokens if usage is not None else None,
+        "cost_cny": usage.cost_cny if usage is not None else None,
+        "peak_memory_bytes": usage.peak_memory_bytes if usage is not None else None,
+    }
+
+
+def _measurement_summary(
+    rows: list[dict[str, float | int | None]],
+) -> dict[str, dict[str, float | int | None]]:
+    result: dict[str, dict[str, float | int | None]] = {}
+    for metric in _EVALUATION_METRICS:
+        known = [row[metric] for row in rows if row[metric] is not None]
+        result[metric] = {
+            "known_count": len(known),
+            "unknown_count": len(rows) - len(known),
+            "total": sum(value for value in known if value is not None)
+            if len(known) == len(rows) else None,
+        }
+    return result
+
+
+def _measurement_delta(
+    left: dict[str, float | int | None], right: dict[str, float | int | None],
+) -> dict[str, float | int | None]:
+    result: dict[str, float | int | None] = {}
+    for metric in _EVALUATION_METRICS:
+        before, after = left[metric], right[metric]
+        result[metric] = after - before if before is not None and after is not None else None
+    return result
+
+
+def summarize_evaluation_traces(
+    traces: list[ResearchRequestTrace], *, baseline: str = "baseline",
+    candidate: str = "candidate",
+) -> dict[str, Any]:
+    """Describe observations and matched deltas, without inferring causal quality."""
+    if baseline == candidate:
+        raise ValueError("baseline and candidate must differ")
+    # A repeated request is one observation, regardless of callback count.
+    unique: dict[str, ResearchRequestTrace] = {}
+    conflicts: set[str] = set()
+    for trace in traces:
+        previous = unique.get(trace.request_id)
+        if previous is not None and _trace_identity(previous) != _trace_identity(trace):
+            conflicts.add(trace.request_id)
+        unique[trace.request_id] = trace
+    selected = [trace for key, trace in unique.items() if key not in conflicts]
+    groups: dict[tuple[str, ...], list[ResearchRequestTrace]] = defaultdict(list)
+    units: dict[tuple[str, ...], dict[str, list[ResearchRequestTrace]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    unbound = 0
+    for trace in selected:
+        context = trace.evaluation
+        if context is None:
+            unbound += 1
+            continue
+        groups[(
+            context.variant, context.host_id, context.model_id, context.evidence_mode,
+            trace.cache_mode.value, trace.source_group.value,
+            context.code_revision, context.policy_version,
+        )].append(trace)
+        units[(*_evaluation_key(trace), context.replicate_id)][context.variant].append(trace)
+    measurements = {trace.request_id: _measurements(trace) for trace in selected}
+    summaries: list[dict[str, Any]] = []
+    for key, rows in sorted(groups.items()):
+        durations = [trace.wall_time_ms for trace in rows]
+        summaries.append({
+            "variant": key[0], "host_id": key[1], "model_id": key[2],
+            "evidence_mode": key[3], "cache_mode": key[4], "source_group": key[5],
+            "run_count": len(rows),
+            "distinct_input_count": len({_evaluation_key(trace)[:3] for trace in rows}),
+            "p50_wall_time_ms": _percentile_ms(durations, 0.50),
+            "p95_wall_time_ms": _percentile_ms(durations, 0.95),
+            "useful_output_count": sum(trace.useful_output for trace in rows),
+            "code_revisions": sorted({trace.evaluation.code_revision for trace in rows
+                                      if trace.evaluation is not None}),
+            "policy_versions": sorted({trace.evaluation.policy_version for trace in rows
+                                       if trace.evaluation is not None}),
+            "measurements": _measurement_summary(
+                [measurements[trace.request_id] for trace in rows]
+            ),
+        })
+    pairs: list[dict[str, Any]] = []
+    ambiguous = 0
+    for key, variants in sorted(units.items()):
+        left, right = variants.get(baseline, []), variants.get(candidate, [])
+        if len(left) > 1 or len(right) > 1:
+            ambiguous += 1
+            continue
+        if len(left) != 1 or len(right) != 1:
+            continue
+        pairs.append({
+            "comparison_hash": content_hash(key[:-1]),
+            "input_identity_hash": content_hash(key[:3]), "case_id": key[0],
+            "replicate_id": key[-1], "baseline_request_id": left[0].request_id,
+            "candidate_request_id": right[0].request_id,
+            "deltas": _measurement_delta(
+                measurements[left[0].request_id], measurements[right[0].request_id]
+            ),
+        })
+    return {
+        "schema_version": "research-evaluation-summary-v1",
+        "authority": "DIAGNOSTIC_ONLY", "materialized": False,
+        "trace_count": len(selected), "unbound_trace_count": unbound,
+        "conflicting_request_count": len(conflicts),
+        "duplicate_evaluation_unit_count": ambiguous,
+        "paired_run_count": len(pairs),
+        "distinct_paired_input_count": len({item["input_identity_hash"] for item in pairs}),
+        "groups": summaries, "pairs": pairs,
+        "quality_comparison": "REQUIRES_INDEPENDENT_REVIEW",
+    }

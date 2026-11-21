@@ -20,12 +20,12 @@ R-03 为现有运行时补充有界存储治理和业务 SLO 视图，不建立�
 
 当前自动类别：
 
-- `.ai-bridge/quality-runs/<run>/tmp`：覆盖主工作树和已注册 `runtime/worktrees/*` 内相同精确目录；同级已有 `result.json` 时按 2 小时 TTL 删除，没有 `result.json` 的运行先保护 24 小时，超过 orphan grace 且整树不再变化时才可回收。候选扫描在测量前即拒绝 `.ai-bridge`、`quality-runs`、run root 或 `tmp` 任一层的 symlink/junction，删除前仍重复执行路径边界与整树快照校验；`result.json`、`junit.xml`、`output.log` 等小体积回执继续保留。
+- `.ai-bridge/quality-runs/<run>/tmp`：覆盖主工作树和已注册 `runtime/worktrees/*` 内相同精确目录；同级已有可核实终态 `result.json` 时按配置 TTL 回收；缺少 result 不能仅凭年龄删除，须超过 orphan grace，并核实 owner、PID 创建时间和进程已退出。归属或存活状态 UNKNOWN 时继续保护。候选扫描在测量前即拒绝 `.ai-bridge`、`quality-runs`、run root 或 `tmp` 任一层的 symlink/junction，删除前仍重复执行路径边界与整树快照校验；`result.json`、`junit.xml`、`output.log` 等回执由同一策略的期限、最近结果数量和活跃引用保护管理，不无限保留。
 - `runtime/longrun` 内的 `pytest*`、`cache-*`、`process-tmp`、`tmp*`：24 小时 TTL，按 owned tree 删除；authority receipt、checkpoint、正式输出等不按目录整体删除。
 - `runtime/worktrees/*`：48 小时 TTL，并且必须不在 Git 自身 `.git/worktrees/*/gitdir` 注册集合中。计划后若重新注册，执行时再次保护。
 - runtime 根级 `pytest-*`、`uv-cache-*`：24 小时 TTL。
 - `.ai-bridge/tmp*`：24 小时 TTL。
-- `.scratchpad/<任务ID>`：统一临时区。一般目录只有任务主动创建 `.cleanup-ready` 标记、整树超过配置 TTL 且计划后内容未变化才可回收；特殊 `quality-<run-id>` 目录需匹配已终态质量回执，并在执行时重新验证。未能验证归属的活动/未知文件保持保护。正常结束的测试 tmp 由 quality runner 立即清理。
+- `.scratchpad/<任务ID>`：统一临时区。一般目录只有任务主动创建 `.cleanup-ready` 标记、整树超过配置 TTL 且计划后内容未变化才可回收；特殊 `quality-<run-id>` 目录需匹配已终态质量回执，并在执行时重新验证。未能验证归属的活动/未知文件保持保护。正常结束的测试 tmp 在确认所属进程树已回收后由 quality runner 立即清理；审核后的 scratch/cache 走现有 reviewed-scratch 通道，仍检查归属、引用、路径和计划后变化。
 
 大规模临时数据不再逐文件制造数十万候选；计划记录整树的字节数、文件数、目录数和最新 mtime，执行前重新测量。任一指标变化即 `CHANGED_SINCE_PLAN`，整树跳过。Windows 打开句柄导致删除失败时同样跳过，不强制破坏活动任务。
 

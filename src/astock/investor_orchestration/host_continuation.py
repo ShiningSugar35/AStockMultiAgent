@@ -1,4 +1,4 @@
-"""Host activation policy; a checkpoint is not a partial investment report."""
+"""Host-aware handoff; elapsed project time is not a platform deadline."""
 from __future__ import annotations
 
 from enum import StrEnum
@@ -17,20 +17,46 @@ class AgentHost(StrEnum):
 
 
 class ChatInvocationPolicy(StrictModel):
-    schema_version: Literal["chat-invocation-policy-v1"] = "chat-invocation-policy-v1"
-    closeout_after_seconds: int = Field(gt=0)
-    binding_check_after_seconds: int = Field(gt=0)
-    hard_limit_seconds: int = Field(gt=0)
-    continuation_cadence_seconds: int = Field(ge=3600)
+    schema_version: Literal["chat-invocation-policy-v2"] = "chat-invocation-policy-v2"
+    handoff_reserve_seconds: int = Field(default=600, ge=0)
+    binding_verification_reserve_seconds: int = Field(default=300, ge=0)
+    continuation_cadence_seconds: int = Field(default=3600, ge=3600)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_thresholds(cls, value: object) -> object:
+        """Read v1 policy snapshots without restoring their assumed hard stop."""
+        if not isinstance(value, dict):
+            return value
+        values = dict(value)
+        legacy_keys = (
+            "closeout_after_seconds",
+            "binding_check_after_seconds",
+            "hard_limit_seconds",
+        )
+        if not any(key in values for key in legacy_keys):
+            return values
+        legacy = tuple(values.pop(key, None) for key in legacy_keys)
+        if any(not isinstance(item, int) or isinstance(item, bool) for item in legacy):
+            raise ValueError("legacy invocation thresholds must be complete integers")
+        closeout, check, hard = legacy
+        if not 0 < closeout < check < hard:
+            raise ValueError("legacy closeout < binding check < hard limit required")
+        reserves = {
+            "handoff_reserve_seconds": hard - closeout,
+            "binding_verification_reserve_seconds": hard - check,
+        }
+        for key, reserve in reserves.items():
+            if key in values and values[key] != reserve:
+                raise ValueError("legacy invocation thresholds conflict with handoff reserves")
+            values[key] = reserve
+        values["schema_version"] = "chat-invocation-policy-v2"
+        return values
 
     @model_validator(mode="after")
     def ordered(self) -> ChatInvocationPolicy:
-        if not (
-            self.closeout_after_seconds
-            < self.binding_check_after_seconds
-            < self.hard_limit_seconds
-        ):
-            raise ValueError("closeout < binding check < hard invocation limit required")
+        if self.binding_verification_reserve_seconds > self.handoff_reserve_seconds:
+            raise ValueError("binding verification reserve cannot exceed handoff reserve")
         return self
 
     @classmethod
@@ -77,6 +103,7 @@ class HostContinuationPolicy:
         existing_platform_task_id: str | None = None,
         platform_binding_verified: bool = False,
         platform_hard_limit_seconds: int | None = None,
+        platform_interrupted: bool = False,
         policy: ChatInvocationPolicy | None = None,
     ) -> HostContinuationDecision:
         host = AgentHost(host)
@@ -93,38 +120,49 @@ class HostContinuationPolicy:
 
         chat = host is AgentHost.CHATGPT_CHAT
         incomplete = completed_units < total_units
-        # Other hosts do not inherit ChatGPT configuration or its wall-clock budget.
-        limits = (policy or ChatInvocationPolicy.load()) if chat else None
-        hard = limits.hard_limit_seconds if limits else None
-        if chat and platform_hard_limit_seconds is not None:
-            hard = min(hard or platform_hard_limit_seconds, platform_hard_limit_seconds)
-        # Preserve the configured handoff reserve when a platform ends earlier.
-        reserve = limits.hard_limit_seconds - limits.closeout_after_seconds if limits else 0
-        closeout = max(0, (hard or 0) - reserve)
-        verification_at = (
-            max(0, (hard or 0) - (limits.hard_limit_seconds - limits.binding_check_after_seconds))
-            if limits else 0
+        hard = platform_hard_limit_seconds
+        # Only an observed platform limit or actual interruption activates handoff.
+        # Legacy project thresholds are reserves, never evidence of a host limit.
+        limits = (
+            policy or ChatInvocationPolicy.load()
+            if hard is not None or platform_interrupted
+            else None
         )
-        handoff = chat and incomplete and elapsed_seconds >= closeout
-        stop = chat and hard is not None and elapsed_seconds >= hard
-        create = handoff and existing_platform_task_id is None
-        verify = handoff and elapsed_seconds >= verification_at and not platform_binding_verified
-        if not chat:
-            reason = "OTHER_AGENT_NO_OVERALL_RESEARCH_DEADLINE"
+        remaining = max(0, hard - elapsed_seconds) if hard is not None else None
+        stop = platform_interrupted or (remaining is not None and remaining == 0)
+        handoff = incomplete and (
+            platform_interrupted
+            or (
+                remaining is not None
+                and limits is not None
+                and remaining <= limits.handoff_reserve_seconds
+            )
+        )
+        create = chat and handoff and existing_platform_task_id is None
+        verify = handoff and not platform_binding_verified and (
+            platform_interrupted
+            or (
+                remaining is not None
+                and limits is not None
+                and remaining <= limits.binding_verification_reserve_seconds
+            )
+        )
+        if platform_interrupted:
+            reason = "PLATFORM_ACTIVATION_INTERRUPTED"
         elif stop:
-            reason = "CHATGPT_INVOCATION_HARD_STOP"
+            reason = "PLATFORM_INVOCATION_HARD_STOP"
         elif not incomplete:
-            reason = "CHATGPT_ROUND_COMPLETED"
+            reason = "RESEARCH_ROUND_COMPLETED"
         elif verify:
-            reason = "CHATGPT_CONTINUATION_BINDING_VERIFICATION_REQUIRED"
+            reason = "CONTINUATION_BINDING_VERIFICATION_REQUIRED"
         elif handoff:
             reason = (
-                "CHATGPT_CONTINUATION_ALREADY_BOUND"
+                "CONTINUATION_ALREADY_BOUND"
                 if platform_binding_verified
-                else "CHATGPT_CONTINUATION_REQUIRED"
+                else "CONTINUATION_REQUIRED"
             )
         else:
-            reason = "CHATGPT_WITHIN_PRIMARY_TURN_WINDOW"
+            reason = "CONTINUE_WITHIN_RESOURCE_BUDGET"
         return HostContinuationDecision(
             host=host,
             elapsed_seconds=elapsed_seconds,
@@ -133,11 +171,11 @@ class HostContinuationPolicy:
             progress_numerator=completed_units,
             progress_denominator=total_units,
             overall_deadline_enforced=False,
-            activation_deadline_enforced=chat,
+            activation_deadline_enforced=hard is not None,
             continuation_required=handoff,
             scheduled_creation_required=create,
             schedule_cadence_seconds=(
-                limits.continuation_cadence_seconds if handoff and limits else None
+                limits.continuation_cadence_seconds if chat and handoff and limits else None
             ),
             run_immediately=create,
             existing_platform_task_id=existing_platform_task_id,
@@ -147,9 +185,7 @@ class HostContinuationPolicy:
             checkpoint_required=handoff,
             binding_verification_required=verify,
             continuation_binding_verified=platform_binding_verified,
-            remaining_invocation_seconds=(
-                max(0, hard - elapsed_seconds) if hard is not None else None
-            ),
+            remaining_invocation_seconds=remaining,
         )
 
 

@@ -22,7 +22,7 @@ description: Route broad or multi-step A-share research across company analysis,
 
 Continue the same request when closure says `CONTINUE_AUTOMATICALLY`; retain validated artifacts and resume affected nodes. Only complete, permitted lineage yields `READY_FOR_INVESTOR_VIEW`; public exhaustion yields `PUBLIC_DATA_UNAVAILABLE`, while private input can yield `NEEDS_USER_INPUT`. Do not end with a list of routine research this Skill can still execute.
 
-Follow host timing from `configs/chat_invocation_policy_v1.yaml`, retaining request/round/checkpoint/lease. Verify a real continuation binding; never claim an imagined scheduler. Save internal progress without presenting unfinished research as a report. A long-lived continuation watcher survives a single round.
+Follow observed host deadlines/interruption and active resource budgets through `configs/chat_invocation_policy_v1.yaml`, retaining request/round/checkpoint/lease. Elapsed project time alone does not stop useful work. Verify a real continuation binding; never claim an imagined scheduler. Save internal progress without presenting unfinished research as a report. A long-lived continuation watcher survives a single round.
 
 Prospective isolation remains `ELIGIBLE_RULE_STATE_MACHINE_RESEARCH` → `AWAITING_EXPLICIT_RULE_RESEARCH_APPROVAL` → explicit rule-research approval. **Do not change weights or the paper ledger** from shadow/adaptive results.
 

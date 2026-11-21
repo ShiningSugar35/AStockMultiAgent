@@ -1,8 +1,8 @@
 {
   "schema_version": "capability-qualification-report-v1",
-  "report_id": "3f7459e17541e1bfa2e394e61341d1062170af4051274a76c93affba5aea4fd1",
+  "report_id": "58170b73938f6f85a94a3d098b05a003756d0f2927aea50735ad2a4be9a0f483",
   "capability_id": "schema-drift-recorder",
-  "candidate_version": "sha256:af705b6846a15e0f7aa95cfcd685db9bd479b98e8018c90335133ede061a24b5",
+  "candidate_version": "sha256:9c19d3a5e104273a08bb576c7c4479f76597db5b39525b4e0a31d515ca58b0e5",
   "requested_stage": "SHADOW",
   "admitted_stage": "SHADOW",
   "checks": {
@@ -26,9 +26,9 @@
   "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
   "evidence_object_hashes": [
-    "9786abceee0f7eac43bf7e446a98ba11e75a265ec583252b7fbaf8e3905784fd"
+    "577cf39d517288e1b389deb611f3c5a3516c963806afa5db9a6a44559a39861d"
   ],
-  "valid_from": "2026-09-21T10:48:00Z",
+  "valid_from": "2026-11-21T10:47:02Z",
   "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
     "END_TO_END_CONTROLLED_LIVE_DRIFT_CAPTURE_NOT_RUN"

@@ -28,6 +28,7 @@ class InvestmentClosureState(StrEnum):
     READY_FOR_INVESTOR_VIEW = "READY_FOR_INVESTOR_VIEW"
     NEEDS_USER_INPUT = "NEEDS_USER_INPUT"
     PUBLIC_DATA_UNAVAILABLE = "PUBLIC_DATA_UNAVAILABLE"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
 
 
 class InvestmentClosureDecision(StrictModel):
@@ -42,6 +43,9 @@ class InvestmentClosureDecision(StrictModel):
     investor_view_allowed: bool
     automatic_resolution_exhausted: bool = False
     private_user_input_required: bool = False
+    automatic_budget_exhausted: bool = False
+    private_input_capabilities: tuple[str, ...] = ()
+    remaining_automatic_capabilities: tuple[str, ...] = ()
     recommendation_fulfillment: RecommendationFulfillmentAssessment | None = None
 
 
@@ -70,6 +74,8 @@ class InvestmentRequestClosurePolicy:
         *,
         automatic_resolution_exhausted: bool = False,
         private_user_input_required: bool = False,
+        private_input_capabilities: tuple[str, ...] = (),
+        automatic_budget_exhausted: bool = False,
         recommendation_fulfillment: RecommendationFulfillmentAssessment | None = None,
     ) -> InvestmentClosureDecision:
         request = InvestorRequestEnvelope.model_validate(request.model_dump())
@@ -79,10 +85,6 @@ class InvestmentRequestClosurePolicy:
             raise ValueError("investment closure identities differ")
         if coverage.plan_id != plan.plan_id or coverage.policy_version != plan.policy_version:
             raise ValueError("investment closure does not cover the active capability plan")
-        if private_user_input_required and not automatic_resolution_exhausted:
-            raise ValueError(
-                "public-source resolution must be exhausted before requesting user input"
-            )
 
         if (
             recommendation_fulfillment is not None
@@ -107,20 +109,25 @@ class InvestmentRequestClosurePolicy:
         )
         missing = tuple(sorted(set(required) - set(completed)))
 
-        if request.normalized_intent not in _MATERIAL_INVESTMENT_INTENTS:
-            return InvestmentClosureDecision(
-                request_id=request.request_id,
-                intent=request.normalized_intent,
-                state=InvestmentClosureState.NOT_REQUIRED,
-                required_capabilities=required,
-                completed_capabilities=completed,
-                missing_capabilities=missing,
-                same_request_continuation_required=False,
-                investment_conclusion_blocked=False,
-                investor_view_allowed=True,
-                automatic_resolution_exhausted=automatic_resolution_exhausted,
-                private_user_input_required=private_user_input_required,
-            )
+        # Private input blocks only its dependency descendants. A legacy boolean
+        # identifies a single gap, but cannot classify a whole multi-gap plan.
+        private_scope = set(private_input_capabilities)
+        if not private_scope.issubset(required):
+            raise ValueError("private input must identify required plan capabilities")
+        private_scope.intersection_update(missing)
+        if private_user_input_required and not private_input_capabilities and len(missing) == 1:
+            private_scope.update(missing)
+        blocked = set(private_scope)
+        while True:
+            descendants = {
+                node.capability_id for node in plan.nodes
+                if set(node.dependencies) & blocked
+            }
+            if descendants.issubset(blocked):
+                break
+            blocked.update(descendants)
+        remaining_automatic = tuple(sorted(set(missing) - blocked))
+        private_needed = bool(private_scope)
 
         terminal_coverage = (
             not missing
@@ -129,74 +136,47 @@ class InvestmentRequestClosurePolicy:
             and coverage.prohibited_call_count == 0
             and not coverage.unresolved_conflicts
         )
-        if (
-            terminal_coverage
-            and recommendation_fulfillment is not None
-            and not recommendation_fulfillment.satisfied
+        fulfillment_satisfied = (
+            recommendation_fulfillment is None or recommendation_fulfillment.satisfied
+        )
+        if request.normalized_intent not in _MATERIAL_INVESTMENT_INTENTS:
+            state = InvestmentClosureState.NOT_REQUIRED
+        elif terminal_coverage and fulfillment_satisfied:
+            state = InvestmentClosureState.READY_FOR_INVESTOR_VIEW
+        elif private_needed and (
+            not remaining_automatic
+            or automatic_resolution_exhausted
+            or automatic_budget_exhausted
         ):
-            return InvestmentClosureDecision(
-                request_id=request.request_id,
-                intent=request.normalized_intent,
-                state=(
-                    InvestmentClosureState.PUBLIC_DATA_UNAVAILABLE
-                    if automatic_resolution_exhausted
-                    else InvestmentClosureState.CONTINUE_AUTOMATICALLY
-                ),
-                required_capabilities=required,
-                completed_capabilities=completed,
-                missing_capabilities=(),
-                same_request_continuation_required=not automatic_resolution_exhausted,
-                investment_conclusion_blocked=True,
-                investor_view_allowed=False,
-                automatic_resolution_exhausted=automatic_resolution_exhausted,
-                private_user_input_required=False,
-                recommendation_fulfillment=recommendation_fulfillment,
-            )
-        if terminal_coverage:
-            return InvestmentClosureDecision(
-                request_id=request.request_id,
-                intent=request.normalized_intent,
-                state=InvestmentClosureState.READY_FOR_INVESTOR_VIEW,
-                required_capabilities=required,
-                completed_capabilities=completed,
-                missing_capabilities=(),
-                same_request_continuation_required=False,
-                investment_conclusion_blocked=False,
-                investor_view_allowed=True,
-                automatic_resolution_exhausted=automatic_resolution_exhausted,
-                private_user_input_required=False,
-                recommendation_fulfillment=recommendation_fulfillment,
-            )
-        if private_user_input_required:
-            return InvestmentClosureDecision(
-                request_id=request.request_id,
-                intent=request.normalized_intent,
-                state=InvestmentClosureState.NEEDS_USER_INPUT,
-                required_capabilities=required,
-                completed_capabilities=completed,
-                missing_capabilities=missing,
-                same_request_continuation_required=False,
-                investment_conclusion_blocked=True,
-                investor_view_allowed=False,
-                automatic_resolution_exhausted=True,
-                private_user_input_required=True,
-            )
+            state = InvestmentClosureState.NEEDS_USER_INPUT
+        elif automatic_budget_exhausted:
+            state = InvestmentClosureState.BUDGET_EXHAUSTED
+        elif automatic_resolution_exhausted:
+            state = InvestmentClosureState.PUBLIC_DATA_UNAVAILABLE
+        else:
+            state = InvestmentClosureState.CONTINUE_AUTOMATICALLY
+        ready = state in {
+            InvestmentClosureState.NOT_REQUIRED,
+            InvestmentClosureState.READY_FOR_INVESTOR_VIEW,
+        }
         return InvestmentClosureDecision(
             request_id=request.request_id,
             intent=request.normalized_intent,
-            state=(
-                InvestmentClosureState.PUBLIC_DATA_UNAVAILABLE
-                if automatic_resolution_exhausted
-                else InvestmentClosureState.CONTINUE_AUTOMATICALLY
-            ),
+            state=state,
             required_capabilities=required,
             completed_capabilities=completed,
             missing_capabilities=missing,
-            same_request_continuation_required=not automatic_resolution_exhausted,
-            investment_conclusion_blocked=True,
-            investor_view_allowed=False,
+            same_request_continuation_required=(
+                state is InvestmentClosureState.CONTINUE_AUTOMATICALLY
+            ),
+            investment_conclusion_blocked=not ready,
+            investor_view_allowed=ready,
             automatic_resolution_exhausted=automatic_resolution_exhausted,
-            private_user_input_required=False,
+            automatic_budget_exhausted=automatic_budget_exhausted,
+            private_user_input_required=private_needed and not ready,
+            private_input_capabilities=tuple(sorted(private_scope)),
+            remaining_automatic_capabilities=remaining_automatic,
+            recommendation_fulfillment=recommendation_fulfillment,
         )
 
 

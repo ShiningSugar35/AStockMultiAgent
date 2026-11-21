@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import re
+from datetime import UTC, datetime
 from pathlib import Path
+
+from astock.research.team import ResearchTeamService
+from astock.schemas.research_team import ResearchTaskRole
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_ROOT = REPO_ROOT / ".agents" / "skills"
+CROSSWALK = REPO_ROOT / "docs" / "architecture" / "research-specialist-skills-crosswalk.md"
 
 SKILLS = {
     "macro-policy-regime": {
@@ -49,6 +55,14 @@ def _collapsed(text: str) -> str:
     return " ".join(text.split())
 
 
+def _references_shared_contract(path: Path, text: str) -> bool:
+    targets = re.findall(
+        r"\[[^\]]+\]\(([^)]+)#shared-execution-contract\)",
+        text,
+    )
+    return any((path.parent / target).resolve() == CROSSWALK for target in targets)
+
+
 def test_specialist_research_skills_are_canonical_and_executable() -> None:
     for skill_name, contract in SKILLS.items():
         path = SKILL_ROOT / skill_name / "SKILL.md"
@@ -67,9 +81,7 @@ def test_specialist_research_skills_are_canonical_and_executable() -> None:
             "## Verification",
         ):
             assert heading in text, (skill_name, heading)
-        assert "uv run astock research-team-status" in text
-        assert "uv run astock research-team-role-output" in text
-        assert "uv run astock research-team-task-result" in text
+        assert _references_shared_contract(path, text), skill_name
         assert "artifact" in lower
         assert "abstain" in lower
         for category in ("tasks", "outputs", "checks", "terms"):
@@ -81,47 +93,70 @@ def test_company_workflow_dispatches_specialists_without_merging_bull_and_bear()
     workflow = (
         REPO_ROOT / "docs" / "workflows" / "workflow-current-company-research.md"
     ).read_text(encoding="utf-8")
-    collapsed = _collapsed(workflow)
+    lower = _collapsed(workflow).lower()
+    shared = CROSSWALK.read_text(encoding="utf-8")
 
-    for skill_name in SKILLS:
-        assert f".agents/skills/{skill_name}/SKILL.md" in workflow
+    assert "$company-deep-research" in workflow
     for role in (
-        "`macro`",
-        "`policy`",
-        "`industry`",
-        "`catalyst`",
-        "`governance`",
-        "`bull`",
-        "`bear`",
-        "`reviewer`",
-        "`model-risk`",
+        "macro", "policy", "industry", "catalyst", "governance",
+        "bull", "bear", "reviewer", "model-risk",
     ):
-        assert role in workflow
-    assert "`bull` and `bear` tasks remain separate, independent contexts" in collapsed
-    assert "dispatched only for the downstream `reviewer`" in collapsed
-    assert "committee may consume only registered typed outputs" in collapsed
+        assert re.search(rf"\b{re.escape(role)}\b", lower), role
+    assert re.search(r"\btyped\b[^.\n]*\boutputs\b", lower)
+    assert re.search(r"\bcommittee\b[^.\n]*\bcannot\b[^.\n]*\bfetch\b", lower)
+
+    # Task identity and dependencies enforce separation without duplicating role tables.
+    tasks = {
+        task.task_id: task
+        for task in ResearchTeamService._company_tasks(datetime(2026, 1, 1, tzinfo=UTC))
+    }
+    bull, bear = tasks["bull-case"], tasks["bear-case"]
+    reviewer = tasks["investment-red-team"]
+    assert bull.role is ResearchTaskRole.BULL
+    assert bear.role is ResearchTaskRole.BEAR
+    assert reviewer.role is ResearchTaskRole.REVIEWER
+    assert bull.output_contract == "IndependentBullCase"
+    assert bear.output_contract == "IndependentBearCase"
+    assert reviewer.output_contract == "ChallengerAssessment"
+    assert "bear-case" not in bull.dependencies
+    assert "bull-case" not in bear.dependencies
+    assert set(reviewer.dependencies) == {"bull-case", "bear-case"}
+    assert reviewer.task_id in tasks["committee"].dependencies
+
+    assert re.search(
+        r"\bBull\b[^\n]*\bBear\b[^\n]*\bdifferent\b[^\n]*independent_context_id",
+        shared,
+    )
+    assert re.search(r"\bReviewer\b[^\n]*\bneither\b[^\n]*\bcontext\b", shared)
+    assert re.search(r"\bReviewer\b[^\n]*\bdoes not browse\b", shared)
+    assert re.search(r"\bCommittee\b[^\n]*\bonly\b[^\n]*\bfrozen\b[^\n]*\badmitted\b", shared)
 
 
 def test_specialist_crosswalk_binds_runtime_roles_and_skills() -> None:
-    crosswalk = (
-        REPO_ROOT / "docs" / "architecture" / "research-specialist-skills-crosswalk.md"
-    ).read_text(encoding="utf-8")
-    collapsed = _collapsed(crosswalk)
+    crosswalk = CROSSWALK.read_text(encoding="utf-8")
+    assert re.search(r"^## Shared execution contract\s*$", crosswalk, re.MULTILINE)
+    assert "ResearchRoleResult" in crosswalk
 
-    for skill_name in SKILLS:
-        assert f".agents/skills/{skill_name}/SKILL.md" in crosswalk
-    for required in (
-        "CurrentResearchContinuation",
-        "ResearchTeamService",
-        "READY_FOR_INVESTOR_VIEW",
-        "OBSERVATION_ONLY_FOR_INVESTOR_VIEW",
-        "committee reads only admitted typed outputs",
-        "Broker execution remains disabled",
-    ):
-        assert required in collapsed
-    assert "| `reviewer` |" in crosswalk
-    assert "`bull-case` and `bear-case`" in crosswalk
-    assert "| `bear`, `reviewer` |" not in crosswalk
+    rows = [
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in crosswalk.splitlines()
+        if line.startswith("|")
+    ]
+    for skill_name, contract in SKILLS.items():
+        expected_skill = SKILL_ROOT / skill_name / "SKILL.md"
+        matched_rows = []
+        for row in rows:
+            if len(row) != 4:
+                continue
+            links = re.findall(r"\[[^\]]+\]\(([^)]+)\)", row[1])
+            if any((CROSSWALK.parent / link).resolve() == expected_skill for link in links):
+                matched_rows.append(row)
+        assert len(matched_rows) == 1, skill_name
+        assert expected_skill.is_file(), skill_name
+        row = matched_rows[0]
+        assert set(re.findall(r"`([^`]+)`", row[0])) == set(contract["tasks"])
+        assert set(re.findall(r"`([^`]+)`", row[2])) == set(contract["outputs"])
+        assert set(re.findall(r"`([^`]+)`", row[3])) == set(contract["checks"])
 
 
 def test_python_team_dag_and_policy_bind_specialist_contracts() -> None:

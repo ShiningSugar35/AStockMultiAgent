@@ -11,7 +11,7 @@ description: Review rendered report visual QA, manifest integrity, privacy, cita
 4. When a rendered PDF/DOCX is available, inspect the actual rendered pages for clipping, missing glyphs, table truncation, orphaned headings, broken images and unreadable layout. A text extraction success is not evidence that visual rendering passed.
 5. If visual inspection is unavailable in the current environment, report the visual gate as incomplete and keep this Skill in `SHADOW`; do not invent a PASS from source text or file existence.
 6. On a failed visual check, preserve the original source and report artifacts, record the violation, and use the existing report recovery/publish path rather than rewriting research content inside the QA Skill.
-7. Record selection/completion through `uv run astock agent-observation-register <request.json>` and inspect `uv run astock agent-observability-report --lookback-days 30` for Skill routing telemetry.
+7. At the owning task's completion, record one observation through `uv run astock agent-observation-register <request.json>`; reuse a coordinator's existing observation. Inspect saved telemetry only for an actual diagnostic question. A missing report does not trigger materialization or block the task.
 
 ## Output
 

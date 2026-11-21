@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.financial import (
@@ -37,6 +38,23 @@ class OfficialFinancialLineageKind(StrEnum):
     LEGACY_UNVERIFIED = "LEGACY_UNVERIFIED"
 
 
+class FinancialProviderReportVersion(BaseModel):
+    """Vendor revision metadata; date precision never implies intraday availability."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    announced_on: date | None = None
+    actual_announced_on: date | None = None
+    report_type: Literal["1"]
+    company_type: Literal["1", "2", "3", "4", "7"]
+    update_flag: Literal["0", "1"] | None = None
+    source_row_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    capture_artifact_id: str = Field(pattern=r"^TushareStructuredCapture:[0-9a-f]{64}$")
+    raw_snapshot_id: str = Field(min_length=1)
+    returned_version_count: int = Field(ge=1, le=200)
+    selection_basis: Literal["LATEST_CONSOLIDATED_CUMULATIVE"]
+    publication_precision: Literal["DATE_ONLY", "UNKNOWN"]
+
+
 class FinancialSourceObservation(AStockModel):
     observation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     company_id: str = Field(pattern=r"^\d{6}$")
@@ -63,6 +81,7 @@ class FinancialSourceObservation(AStockModel):
     source_snapshot_id: str = Field(min_length=1)
     source_request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     available_to_system_at: AwareDatetime
+    provider_report_version: FinancialProviderReportVersion | None = None
 
     @model_validator(mode="after")
     def _period_and_scope(self) -> FinancialSourceObservation:

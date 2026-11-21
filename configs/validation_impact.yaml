@@ -88,6 +88,8 @@ rules:
     changed: [src/astock/providers/tushare_*.py, integrations/tushare/*, configs/tushare_access.yaml, tests/fixtures/providers/tushare-*]
     tests:
       - tests/unit/test_tushare_structured.py
+      - tests/unit/test_tushare_financial.py
+      - tests/integration/test_financial_sources.py
       - tests/contract/test_provider_probe_contract.py
       - tests/unit/test_source_router.py
       - tests/unit/test_provider_registry.py
@@ -263,10 +265,40 @@ rules:
       - scripts/audit_gate_inventory.py
       - scripts/run_local_quality.py
       - configs/validation_impact.yaml
+      - configs/validation/golden_research_v1.yaml
     tests:
       - tests/unit/test_validation_planning.py
       - tests/unit/test_document_governance.py
       - tests/unit/test_workflow_docs.py
+  - name: read-only-research-observability
+    changed:
+      - src/astock/diagnostics.py
+      - src/astock/research/observability.py
+      - src/astock/research/production.py
+      - src/astock/research/production_cli.py
+      - src/astock/research/runtime_cli.py
+      - src/astock/schemas/agent_observability.py
+      - src/astock/schemas/research_production.py
+    tests:
+      - tests/unit/test_observability_inspection.py
+      - tests/unit/test_agent_observability.py
+      - tests/unit/test_research_request_performance.py
+      - tests/unit/test_phase12_research_production.py
+      - tests/unit/test_lightweight_diagnostics.py
+      - tests/integration/test_cli.py
+      - tests/unit/test_repo_skills.py
+      - tests/unit/test_operational_logging_redaction.py
+  - name: retired-one-off-script-and-helper-cleanup
+    changed:
+      - scripts/cleanup-python311-and-launcher.ps1
+      - scripts/phase2_acceptance.py
+      - scripts/phase5_acceptance_summary.py
+      - src/astock/documents/cninfo.py
+    tests:
+      - tests/unit/test_document_governance.py
+      - tests/unit/test_phase2_scope_configs.py
+      - tests/contract/test_cninfo_recorded.py
+      - tests/contract/test_cninfo_pagination_terminal.py
   - name: changed-tests
     changed: ['tests/*']
     tests: [tests/unit/test_validation_planning.py]

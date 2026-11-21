@@ -154,27 +154,16 @@ def test_material_recommendation_is_terminal_only_after_verified_full_plan() -> 
     assert decision.missing_capabilities == ()
 
 
-def test_user_input_can_only_be_requested_after_public_automatic_resolution_is_exhausted() -> None:
-    request = _request(RequestIntent.FULL_RESEARCH_RECOMMENDATION)
+def test_identified_private_input_does_not_require_wasting_public_search_budget() -> None:
+    request = _request()
     plan = _plan(request)
     coverage = _coverage(request, plan, missing={"FINANCIAL_INTEGRITY"})
-
-    with pytest.raises(ValueError, match="public-source resolution must be exhausted"):
-        InvestmentRequestClosurePolicy.evaluate(
-            request,
-            plan,
-            coverage,
-            private_user_input_required=True,
-        )
-
     decision = InvestmentRequestClosurePolicy.evaluate(
-        request,
-        plan,
-        coverage,
-        automatic_resolution_exhausted=True,
-        private_user_input_required=True,
+        request, plan, coverage, private_user_input_required=True,
     )
     assert decision.state is InvestmentClosureState.NEEDS_USER_INPUT
+    assert not decision.automatic_resolution_exhausted
+    assert decision.private_input_capabilities == ("FINANCIAL_INTEGRITY",)
     assert not decision.same_request_continuation_required
     assert decision.investment_conclusion_blocked
     assert not decision.investor_view_allowed
@@ -191,3 +180,98 @@ def test_non_material_monitor_request_does_not_inherit_investment_terminal_block
     assert not decision.same_request_continuation_required
     assert not decision.investment_conclusion_blocked
     assert decision.investor_view_allowed
+
+
+def test_private_gap_blocks_only_descendants_while_independent_work_continues() -> None:
+    request = _request()
+    plan = _plan(request)
+    plan = plan.model_copy(update={"nodes": tuple(
+        node.model_copy(update={"dependencies": ("FINANCIAL_INTEGRITY",)})
+        if node.capability_id == "PORTFOLIO" else node
+        for node in plan.nodes
+    )})
+    coverage = _coverage(
+        request, plan, missing={"FINANCIAL_INTEGRITY", "PORTFOLIO", "INDUSTRY"},
+    )
+    decision = InvestmentRequestClosurePolicy.evaluate(
+        request, plan, coverage, private_input_capabilities=("FINANCIAL_INTEGRITY",),
+    )
+    assert decision.state is InvestmentClosureState.CONTINUE_AUTOMATICALLY
+    assert decision.private_user_input_required
+    assert decision.remaining_automatic_capabilities == ("INDUSTRY",)
+    assert decision.same_request_continuation_required
+    assert not decision.investor_view_allowed
+
+    after_independent_work = InvestmentRequestClosurePolicy.evaluate(
+        request, plan,
+        _coverage(request, plan, missing={"FINANCIAL_INTEGRITY", "PORTFOLIO"}),
+        private_input_capabilities=("FINANCIAL_INTEGRITY",),
+    )
+    assert after_independent_work.state is InvestmentClosureState.NEEDS_USER_INPUT
+    assert not after_independent_work.automatic_resolution_exhausted
+    assert after_independent_work.remaining_automatic_capabilities == ()
+
+
+@pytest.mark.parametrize("budget_exhausted", [False, True])
+def test_legacy_private_boolean_cannot_classify_multiple_gaps_as_private(
+    budget_exhausted: bool,
+) -> None:
+    request = _request()
+    plan = _plan(request)
+    decision = InvestmentRequestClosurePolicy.evaluate(
+        request, plan, _coverage(request, plan, missing={"INDUSTRY", "PORTFOLIO"}),
+        private_user_input_required=True,
+        automatic_budget_exhausted=budget_exhausted,
+    )
+    assert decision.state is (
+        InvestmentClosureState.BUDGET_EXHAUSTED if budget_exhausted
+        else InvestmentClosureState.CONTINUE_AUTOMATICALLY
+    )
+    assert not decision.private_user_input_required
+    assert decision.private_input_capabilities == ()
+    assert decision.remaining_automatic_capabilities == ("INDUSTRY", "PORTFOLIO")
+
+
+@pytest.mark.parametrize("budget_exhausted", [False, True])
+def test_completed_private_scope_does_not_reassign_remaining_independent_gap(
+    budget_exhausted: bool,
+) -> None:
+    request = _request()
+    plan = _plan(request)
+    decision = InvestmentRequestClosurePolicy.evaluate(
+        request, plan, _coverage(request, plan, missing={"CURRENT_MARKET"}),
+        private_user_input_required=True,
+        private_input_capabilities=("FINANCIAL_INTEGRITY",),
+        automatic_budget_exhausted=budget_exhausted,
+    )
+    assert decision.state is (
+        InvestmentClosureState.BUDGET_EXHAUSTED if budget_exhausted
+        else InvestmentClosureState.CONTINUE_AUTOMATICALLY
+    )
+    assert not decision.private_user_input_required
+    assert decision.private_input_capabilities == ()
+    assert decision.remaining_automatic_capabilities == ("CURRENT_MARKET",)
+
+
+def test_resource_budget_is_not_evidence_of_public_route_exhaustion() -> None:
+    request = _request()
+    plan = _plan(request)
+    decision = InvestmentRequestClosurePolicy.evaluate(
+        request, plan, _coverage(request, plan, missing={"INDUSTRY"}),
+        automatic_budget_exhausted=True,
+    )
+    assert decision.state is InvestmentClosureState.BUDGET_EXHAUSTED
+    assert not decision.automatic_resolution_exhausted
+    assert not decision.private_user_input_required
+    assert decision.investment_conclusion_blocked
+    assert not decision.investor_view_allowed
+
+
+def test_private_scope_must_belong_to_the_active_required_plan() -> None:
+    request = _request()
+    plan = _plan(request)
+    with pytest.raises(ValueError, match="required plan"):
+        InvestmentRequestClosurePolicy.evaluate(
+            request, plan, _coverage(request, plan, missing={"INDUSTRY"}),
+            private_input_capabilities=("UNRELATED_EXTERNAL_TASK",),
+        )

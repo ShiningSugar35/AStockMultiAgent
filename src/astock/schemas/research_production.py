@@ -287,7 +287,9 @@ class SkillEfficiencySummary(AStockModel):
     changed_driver_count: int = Field(ge=0)
     provided_falsifier_count: int = Field(ge=0)
     changed_ic_state_count: int = Field(ge=0)
-    total_token_cost: int = Field(ge=0)
+    total_token_cost: int | None = Field(default=None, ge=0)
+    declared_token_cost: int | None = Field(default=None, ge=0)
+    token_usage_status: Literal["UNKNOWN", "OBSERVED"] = "UNKNOWN"
     mean_prospective_lift: float | None = Field(default=None, allow_inf_nan=False)
     near_duplicate_skill_ids: list[str]
     conflict_skill_ids: list[str]
@@ -295,7 +297,7 @@ class SkillEfficiencySummary(AStockModel):
 
 
 class SkillEfficiencyReport(AStockModel):
-    schema_version: str = "skill-efficiency-report-v1"
+    schema_version: str = "skill-efficiency-report-v2"
     report_id: str = Field(min_length=1)
     policy_version: str = Field(min_length=1)
     summaries: list[SkillEfficiencySummary]

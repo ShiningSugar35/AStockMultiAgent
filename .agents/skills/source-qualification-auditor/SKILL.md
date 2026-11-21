@@ -12,7 +12,7 @@ description: Audit external capability qualification evidence, M-06 admission ga
 5. Store the evidence bundle in the existing ObjectStore before `uv run astock external-capability-qualify <report.json>` so every `evidence_object_hashes` entry is verifiable. A `PRODUCTION_BACKUP` report is valid only when every M-06 check and both validations are `PASS`.
 6. For Provider-backed capabilities, keep `SourceAccessRouter`, Provider Registry, SourcePolicyGate, SourceSnapshot and Evidence as the only source path. The backup may be selected only after the standard route is unavailable and the active qualification report remains valid.
 7. Revoke with `uv run astock external-capability-revoke <revocation.json>` when evidence expires, drifts, is withdrawn, or an exit drill fails. Verify that stored evidence and primary routes remain usable after revocation.
-8. Record the Skill selection/completion through `uv run astock agent-observation-register <request.json>` and inspect aggregate telemetry with `uv run astock agent-observability-report --lookback-days 30`.
+8. At the owning task's completion, record one observation through `uv run astock agent-observation-register <request.json>`; reuse a coordinator's existing observation. Inspect saved telemetry only for an actual diagnostic question. A missing report does not trigger materialization or block the task.
 
 ## Output
 
@@ -26,6 +26,6 @@ Return the capability id and fixed version, immutable evidence hashes, per-gate 
 - Do not create a second Router, Provider registry, Evidence store, ObjectStore, qualification index, or mutable copy of qualification history.
 - Source qualification does not create paper orders or fills; execution-capable integrations are outside this research-source audit.
 
-## Workflows
+## References
 
-- [Research Tech Scout](../../../docs/workflows/workflow-research-tech-scout.md) — use after discovery when a candidate needs deterministic qualification, revocation, and exit evidence before it can become a production backup.
+- [External dependency contract](../../../docs/architecture/external-dependency-resilience-v1.md): the existing qualification, revocation and exit path. Discovery alone does not require this admission task.

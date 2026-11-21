@@ -17,20 +17,13 @@ rules:
   markdown_consistency_check_required: true
 
 work_packages:
-  - id: WP-68
-    order: 20
-    title: 只读诊断、黄金评测与成本基线
-    status: PLANNED
-    priority: P0
-    owner_lane: wp68-evaluation-observability
-    depends_on: []
   - id: WP-69
     order: 30
     title: 能力按需装载与Agent折叠实验
     status: IN_PROGRESS
     priority: P0
     owner_lane: wp69-context-capability
-    depends_on: [WP-68]
+    depends_on: []
   - id: WP-70
     order: 40
     title: 进程覆盖收口与架构机械约束
@@ -41,10 +34,10 @@ work_packages:
   - id: WP-71
     order: 50
     title: 同请求持久补证、预算与退出语义
-    status: PLANNED
+    status: IN_PROGRESS
     priority: P0
     owner_lane: wp71-durable-recovery
-    depends_on: [WP-68]
+    depends_on: []
   - id: WP-72
     order: 60
     title: Tushare正式数据映射与统一能力适配
@@ -79,7 +72,7 @@ work_packages:
     status: PLANNED
     priority: P1
     owner_lane: wp74-quantamental-discovery
-    depends_on: [WP-68, WP-72, WP-62, WP-63]
+    depends_on: [WP-72, WP-62, WP-63]
   - id: WP-75
     order: 110
     title: 经营驱动、预期差与可检验投资论点
@@ -93,7 +86,7 @@ work_packages:
     status: IN_PROGRESS
     priority: P1
     owner_lane: wp65-debate-outcomes
-    depends_on: [WP-68, WP-71]
+    depends_on: [WP-71]
   - id: WP-76
     order: 130
     title: 组合优化插件、风险情景与观点校准
@@ -107,7 +100,7 @@ work_packages:
     status: PLANNED
     priority: P1
     owner_lane: wp77-investor-narrative
-    depends_on: [WP-68]
+    depends_on: []
   - id: WP-66
     order: 150
     title: 盘前盘中盘后研究与决策呈现

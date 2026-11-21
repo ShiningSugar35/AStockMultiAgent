@@ -170,7 +170,7 @@ NIST AI RMF / GenAI Profile 强调将可信度与风险管理纳入设计、开�
 
 用户提出荐股、投资组合推荐、买入/卖出判断或持仓处置时，顶层请求统一规范化为 `FULL_RESEARCH_RECOMMENDATION`；Seed/Candidate/Acquisition/Team/Committee/Portfolio 都只是同一请求里的内部阶段。`InvestmentRequestClosurePolicy` 读取 canonical `CapabilityExecutionPlan + CapabilityCoverageReceipt`，而最终 `FULL_RESEARCH_GATE` 必须消费已经闭合的 Mandatory Research DAG 和不可变 `RecommendationResearchReceipt`。任一 REQUIRED capability 或 Mandatory Research 节点未通过，都保持 `investment_conclusion_blocked=true`。
 
-公共层不允许“先给半份分析，再告诉用户下一步可以跑财报/行业/估值/多空/仓位”。正式停止只有两个：① Full Research 全链和 Publication Gate 完成，允许一次性完整 investor view；② 公共自动恢复与权威 Web 真正耗尽、剩余材料只能由用户私人输入补齐，此时只能请求最少必要资料且不得形成 BUY/组合结论。任何状态都不会由研究链生成真实券商订单权限。
+公共层不允许“先给半份分析，再告诉用户下一步可以跑财报/行业/估值/多空/仓位”。完成全链与 Publication Gate 后才允许正式投资结论。未完成时分别记录公开路线实际耗尽、资源预算耗尽、真实宿主中断或取消、明确私有输入缺口，保存已核验证据与未完成依赖；预算耗尽不证明公开路线耗尽，公开缺口不产生私人材料义务。明确私有缺口仅影响其依赖分支，不要求先做无效公共检索，其余独立工作在有效预算内继续。任何状态均不授予真实券商订单权限。
 
 ## 5. P1：投研团队 DAG
 

@@ -158,7 +158,7 @@ class FinancialPdfCertifier:
                 hint_value = hint.reported_value
                 if hint_value is None:
                     raise ValueError("financial certification hint unexpectedly lost its value")
-                if not _values_equivalent(hint_value, hint.unit, value, unit):
+                if not values_equivalent(hint_value, hint.unit, value, unit):
                     reasons.append(f"SECONDARY_VALUE_CONFLICT:{mapping.field_code.value}")
                 period_start = hint.period_start
                 duration_semantics = hint.duration_semantics
@@ -523,7 +523,7 @@ def _logical_row_values(
     return result
 
 
-def _values_equivalent(
+def values_equivalent(
     left: Decimal,
     left_unit: FinancialUnit,
     right: Decimal,

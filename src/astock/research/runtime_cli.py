@@ -106,6 +106,8 @@ def register_research_runtime_commands(
     services: Callable[[], tuple[Any, Any, Any]],
     emit: Callable[[Any], None],
     knowledge_provider_factory: Callable[[Any, Any], KnowledgeSkillProvider],
+    *,
+    read_only_services: Callable[[], tuple[Any, Any, Any]],
 ) -> None:
     """Attach staged research and read-only readiness commands to the stable CLI."""
 
@@ -115,7 +117,9 @@ def register_research_runtime_commands(
     register_portfolio_decision_commands(app, services, emit)
     register_portfolio_vnext_commands(app, services, emit)
     register_prospective_governance_commands(app, services, emit)
-    register_research_production_commands(app, services, emit)
+    register_research_production_commands(
+        app, services, emit, read_only_services=read_only_services
+    )
     register_serenity_commands(app, services, emit)
     register_current_research_continuation_commands(app, services, emit)
     register_research_team_commands(app, services, emit)

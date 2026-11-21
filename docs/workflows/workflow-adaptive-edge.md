@@ -66,7 +66,7 @@ Unknown dialect/schema drift 必须 raw-first：先保存真实 SourceSnapshot�
 
 ## Stop conditions
 
-- Manual remains last：自动 provider/authority 路径仍可继续时，不向用户索要材料。
+- 公开数据缺口在预算内继续适用 provider/authority 补证；只有明确私有材料/授权依赖才用 NEEDS_USER_INPUT，并让独立分支继续。预算耗尽记 BUDGET_EXHAUSTED，已证明的公开路线耗尽记 PUBLIC_DATA_UNAVAILABLE，二者都不产生私人材料义务。
 - Proposal 无法通过 deterministic validator 时，不通过自然语言“变通”绕门。
 - Schema Repair 缺 raw/official/contract 证据时保持 REJECTED，不猜值。
 - 任何真实 broker execution 都不可用；任何模拟账本写入仍需要独立人工确认。

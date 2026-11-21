@@ -7,23 +7,22 @@ description: Independently challenge a frozen A-share research case as the inves
 
 ## Inputs and authority
 
+Use the [shared team execution contract](../../../docs/architecture/research-specialist-skills-crosswalk.md#shared-execution-contract) for task dispatch, registration and recovery. Load this role's method only; reuse the coordinator's ready-task snapshot.
+
 - Consume only the ready `investment-red-team` REVIEWER task from the existing `ResearchTeamPlan`; do not create a parallel plan or act as the Bear author.
 - Require `bull-case` and `bear-case` to be COMPLETE with different `independent_context_id` values and frozen `IndependentBullCase` / `IndependentBearCase` artifacts.
 - Work from the common frozen evidence set and admitted specialist outputs. The Reviewer does not browse, repair evidence, or participate in Bull/Bear production.
 
 ## Procedure
 
-1. Inspect `uv run astock research-team-status <plan_id>` and verify dependency completion plus Bull/Bear context independence.
-2. Reconstruct a compact assumption ledger: key driver, source, scenario range, valuation sensitivity, catalyst dependency and falsifier.
-3. Search the frozen corpus for disconfirming evidence and alternative explanations. Test base-rate neglect, narrative/confirmation bias, selection bias, circular peer choice, scenario probability calibration and terminal-value dependence.
-4. Perform reverse valuation/market-implied-expectation checks, event/forecast double-counting checks and threshold-fragility tests.
-5. 对独立 Bull/Bear 已冻结且确有影响结论或估值的实质分歧，可调用现行 `research-debate-evaluate` 汇总有界、来源绑定的交叉质询材料，由当前 Reviewer 消费；不建立第二条持久任务队列，也不增加投委会。无重大分歧不发起额外 LLM 回合；双方回复最多一轮，未解决冲突不能冒充已核验事实或 Reviewer PASS。
-6. Classify findings as fatal defect, material uncertainty or ordinary disagreement. Attach concrete remediation, confidence downgrade and explicit kill criteria; do not manufacture objections merely to appear independent.
+1. Reconstruct a compact assumption ledger: key driver, source, scenario range, valuation sensitivity, catalyst dependency and falsifier.
+2. Search the frozen corpus for disconfirming evidence and alternative explanations. Test base-rate neglect, narrative/confirmation bias, selection bias, circular peer choice, scenario probability calibration and terminal-value dependence.
+3. Perform reverse valuation/market-implied-expectation checks, event/forecast double-counting checks and threshold-fragility tests.
+4. 对独立 Bull/Bear 已冻结且确有影响结论或估值的实质分歧，可调用现行 `research-debate-evaluate` 汇总有界、来源绑定的交叉质询材料，由当前 Reviewer 消费；不建立第二条持久任务队列，也不增加投委会。无重大分歧不发起额外 LLM 回合；双方回复最多一轮，未解决冲突不能冒充已核验事实或 Reviewer PASS。
+5. Classify findings as fatal defect, material uncertainty or ordinary disagreement. Attach concrete remediation, confidence downgrade and explicit kill criteria; do not manufacture objections merely to appear independent.
 
 ## Required output contract
 
-- Register a typed `ChallengerAssessment` through `uv run astock research-team-role-output REQUEST.json`.
-- Complete `investment-red-team` through `uv run astock research-team-task-result REQUEST.json`.
 - Set `INDEPENDENT_REVIEW=true` only when both independent cases, the common evidence set, assumption ledger, disconfirming evidence, stress tests, unresolved defects and kill criteria are covered.
 
 ## Output
@@ -32,17 +31,15 @@ Return the registered typed `ChallengerAssessment` artifact ID, strongest surviv
 
 ## Gates and abstention
 
-Abstain and leave `INDEPENDENT_REVIEW=false` when Bull/Bear independence cannot be verified, required upstream artifacts are missing, the common evidence set is not frozen, or a critical fact requires new evidence. New evidence returns to `$evidence-investigation`; affected Bull, Bear and Reviewer tasks rerun rather than silently mutating frozen outputs.
+Request same-plan repair of missing dependencies and continue unrelated ready tasks. Abstain from formal review and leave `INDEPENDENT_REVIEW=false` when Bull/Bear independence cannot be verified, required upstream artifacts are missing, the common evidence set is not frozen, or a critical fact requires new evidence. New evidence returns to `$evidence-investigation`; affected Bull, Bear and Reviewer tasks rerun rather than silently mutating frozen outputs.
 
 ## Verification
 
-- Re-run `uv run astock research-team-status <plan_id>` and verify the typed Reviewer artifact, COMPLETE checkpoint and readiness evidence.
 - Confirm the Reviewer used neither Bull nor Bear context, performed no browsing, and did not overwrite upstream artifacts.
 - The Reviewer cannot override the Committee or write the paper ledger.
 
 ## Workflows
 
-- [`docs/workflows/workflow-investment-red-team.md`](../../../docs/workflows/workflow-investment-red-team.md)
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 - [`docs/workflows/workflow-full-market-research-team.md`](../../../docs/workflows/workflow-full-market-research-team.md)
 

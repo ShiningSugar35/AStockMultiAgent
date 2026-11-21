@@ -336,3 +336,28 @@ def test_phase12_efficiency_never_retires_skill_without_prospective_evidence(
     }
     assert not report.automatic_retirement_allowed
     assert not report.automatic_skill_modification_allowed
+
+
+def test_efficiency_report_cache_tracks_registry_and_retains_actual_lineage(tmp_path: Path) -> None:
+    service, state, objects = _service(tmp_path)
+    before = service.efficiency_report()
+    manifest = service.registry.skills[0]
+    changed_manifest = manifest.model_copy(update={
+        "skill_version": manifest.skill_version + "-changed",
+    })
+    registry = service.registry.model_copy(update={
+        "registry_version": service.registry.registry_version + "-changed",
+        "skills": [changed_manifest, *service.registry.skills[1:]],
+    })
+    changed_service = ResearchProductionService(state, objects, registry, policy=service.policy)
+    after = changed_service.efficiency_report()
+    assert after.report_id != before.report_id
+    assert changed_service.efficiency_report() == after
+    assert next(item for item in after.summaries if item.skill_id == manifest.skill_id
+                ).skill_version == changed_manifest.skill_version
+    registry_record = state.artifact_record(f"ResearchSkillRegistry:{registry.registry_version}")
+    report_record = state.artifact_record(after.report_id)
+    assert registry_record is not None and report_record is not None
+    assert registry_record["object_hash"] in report_record["input_hashes"]
+    assert all(item.total_token_cost is None for item in after.summaries)
+    assert all(item.token_usage_status == "UNKNOWN" for item in after.summaries)

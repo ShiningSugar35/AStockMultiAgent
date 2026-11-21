@@ -82,6 +82,58 @@ def test_owner_retry_reuses_lease_and_live_owner_is_a_normal_noop(
     assert next_activation.lease_generation == first.lease_generation + 1
 
 
+def test_owner_lease_is_explicit_and_independent_of_host_policy(
+    campaign: WatchCampaignService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_host_policy(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("owner leases must not be derived from host handoff reserves")
+
+    monkeypatch.setattr(
+        "astock.investor_orchestration.host_continuation.ChatInvocationPolicy.load",
+        reject_host_policy,
+    )
+    now = datetime.now(UTC)
+    first = campaign.begin(
+        "am", "2026-09-28", "owner-1", now=now, lease_seconds=90,
+    )
+    assert first.deadline_at == now + timedelta(seconds=90)
+    retry = campaign.begin(
+        "am", "2026-09-28", "owner-1", now=now + timedelta(seconds=89),
+        lease_seconds=7200,
+    )
+    assert retry.lease_disposition == "REUSED"
+    assert retry.deadline_at == first.deadline_at
+    successor = campaign.begin(
+        "am", "2026-09-28", "owner-2", now=first.deadline_at, lease_seconds=120,
+    )
+    assert successor.lease_acquired
+    assert successor.round_id == first.round_id
+    assert successor.lease_generation == first.lease_generation + 1
+    assert successor.deadline_at == first.deadline_at + timedelta(seconds=120)
+
+
+def test_owner_lease_does_not_create_a_host_deadline_in_campaign_status(
+    campaign: WatchCampaignService,
+) -> None:
+    started = campaign.begin(
+        "pm", "2026-09-28", "active-owner",
+        now=datetime.now(UTC) - timedelta(hours=1), lease_seconds=7200,
+    )
+    assert started.deadline_at > datetime.now(UTC)
+    budgets = campaign.status()["budgets"]
+    assert isinstance(budgets, dict)
+    budget = budgets["pm"]
+    assert isinstance(budget, dict)
+    assert budget["elapsed_seconds"] >= 3600
+    assert not budget["activation_deadline_enforced"]
+    assert budget["remaining_invocation_seconds"] is None
+    assert not budget["invocation_stop_required"]
+    assert not budget["continuation_required"]
+    assert not budget["scheduled_creation_required"]
+    assert campaign.load().rounds["pm"].deadline_at == started.deadline_at
+
+
 def test_checkpoint_requires_complete_explicit_lease_token(
     campaign: WatchCampaignService,
 ) -> None:

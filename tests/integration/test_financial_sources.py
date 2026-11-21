@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -23,12 +24,17 @@ from astock.financial_sources import FinancialSourceParquetStore, FinancialSourc
 from astock.financial_sources.certification import FinancialPdfCertifier
 from astock.financial_sources.config import FinancialFieldMapping
 from astock.financial_sources.official import OfficialFinancialReport, _exact_report_title
-from astock.financial_sources.service import _parse_provider
+from astock.financial_sources.service import (
+    _cross_provider_conflicts,
+    _parse_provider,
+    _strict_decimal,
+)
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
 from astock.providers.financial_base import (
     FinancialProviderPayload,
     FinancialRawCaptureError,
 )
+from astock.providers.tushare_financial import STATEMENT_ENDPOINTS, TushareFinancialProvider
 from astock.schemas import (
     AgentSourceProposal,
     DocumentPage,
@@ -67,12 +73,19 @@ def _service(tmp_path: Path, instrument_market: Market = Market.XSHE) -> Financi
         PROJECT_ROOT / "tests" / "fixtures" / "reference",
     ).sync_instruments()
     assert instrument_report.release_id is not None
-    return FinancialSourceService(
+    service = FinancialSourceService(
         state,
         objects,
         FinancialSourceParquetStore(parquet_root / "financial_sources"),
         PROJECT_ROOT,
     )
+    # Existing recorded fixture cases isolate the two providers their transport mocks cover.
+    # Tushare's native boundary is exercised separately and must never use real CI credentials.
+    service.providers.pop("tushare-financial")
+    service.config = replace(
+        service.config, provider_order=("sina-financial", "eastmoney-financial"),
+    )
+    return service
 
 
 def _payload_at(
@@ -1502,3 +1515,246 @@ def test_financial_source_cli_live_without_as_of_preserves_capture_cutoff(
     assert result.exit_code == 2
     assert captured["as_of"] is None
     assert captured["live"] is True
+
+
+def _capture_existing_annual(service: FinancialSourceService):
+    fixture = json.loads(
+        (PROJECT_ROOT / "tests/fixtures/financial_sources/cninfo_reports_000001.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    observed = datetime.now(UTC)
+    proposal = AgentSourceProposal.model_validate({
+        "requested_capability": "financial.official_document",
+        "query": "exact annual report",
+        "candidate_url": "https://www.szse.cn/disclosure/listedinfo/offline-annual.pdf",
+        "expected_fact": "2025 annual-report values",
+        "preferred_source_class": SourceClass.PRIMARY_OFFICIAL_WEB,
+        "formal_use": True, "require_complete": False,
+        "reason": "reuse a captured original after the network budget is spent",
+    })
+    return OfficialWebDocumentCaptureService(service.state, service.objects).capture(
+        proposal,
+        base64.b64decode(fixture["reports"][0]["pdf_base64"], validate=True),
+        title="平安银行股份有限公司2025年年度报告",
+        company_ids=["000001"], published_at=observed - timedelta(days=1),
+        period_end=PERIOD_END, document_type=DocumentType.ANNUAL_REPORT,
+        disclosure_id="offline-annual-000001-2025", observed_at=observed,
+    )
+
+
+def _install_tushare_financial_mock(service, monkeypatch, *, rejected_endpoint=None):
+    monkeypatch.setenv("TUSHARE_TOKEN", "financial-pipeline-mock-credential")
+    legacy = service.providers["sina-financial"].fetch("000001", Market.XSHE, PERIOD_END)
+
+    def no_unmocked_fallback(*args, **kwargs):
+        raise AssertionError("financial pipeline tests must not use real fallback transports")
+
+    for existing in service.providers.values():
+        monkeypatch.setattr(existing, "fetch", no_unmocked_fallback)
+    responses = {}
+    for statement, endpoint in STATEMENT_ENDPOINTS.items():
+        legacy_row = legacy.tables[statement][0]
+        row: dict[str, str | None] = {
+            "ts_code": "000001.SZ", "ann_date": "20260722", "f_ann_date": "20260722",
+            "end_date": "20251231", "report_type": "1", "comp_type": "2", "update_flag": "1",
+        }
+        for mapping in service.mappings:
+            if mapping.statement_type.value == statement:
+                value = legacy_row[mapping.provider_field("sina-financial")]
+                # Reuse the established legacy number contract for mock wire conversion:
+                # thousands separators/parenthesized negatives are not native Tushare strings.
+                parsed = _strict_decimal(value)
+                assert parsed is not None or value in (None, "", "--", "-")
+                multiplier = (
+                    Decimal(1) if mapping.unit is FinancialUnit.SHARES else Decimal(10000)
+                )
+                row[mapping.provider_field("tushare-financial")] = (
+                    str(parsed * multiplier) if parsed is not None else None
+                )
+        fields = list(row)
+        responses[endpoint] = {"code": 0, "data": {
+            "fields": fields, "items": [[row[key] for key in fields]],
+        }}
+    calls = []
+
+    def transport(request):
+        wire = json.loads(request.content)
+        endpoint = wire["api_name"]
+        assert wire["params"] == {
+            "ts_code": "000001.SZ", "period": "20251231", "report_type": "1",
+        }
+        calls.append(endpoint)
+        if endpoint == rejected_endpoint:
+            return httpx.Response(200, json={"code": 2002, "msg": "权限不足"})
+        return httpx.Response(200, json=responses[endpoint])
+
+    client = httpx.Client(transport=httpx.MockTransport(transport))
+    provider = TushareFinancialProvider(
+        service.objects, service.state, project_root=PROJECT_ROOT, client=client,
+    )
+    service.providers["tushare-financial"] = provider
+    service.config = replace(service.config, provider_order=(
+        "tushare-financial", "sina-financial", "eastmoney-financial",
+    ))
+    return client, calls, legacy
+
+
+def _deny_network_and_fixtures(service, monkeypatch):
+    def denied(*args, **kwargs):
+        raise AssertionError("local-only financial recovery must not acquire data or use fixtures")
+
+    for provider in service.providers.values():
+        monkeypatch.setattr(provider, "fetch", denied)
+    monkeypatch.setattr(service.official, "_live_candidates", denied)
+    monkeypatch.setattr(service.official, "_recorded_candidates", denied)
+
+
+def test_tushare_routes_through_existing_official_certifier_once(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import astock.financial_sources.service as financial_service
+
+    service = _service(tmp_path)
+    capture = _capture_existing_annual(service)
+    client, calls, legacy = _install_tushare_financial_mock(service, monkeypatch)
+    monkeypatch.setattr(service.official, "_live_candidates", lambda *args, **kwargs: [])
+    parse_calls = []
+    parse = financial_service._parse_provider
+
+    def counted_parse(payload, *args, **kwargs):
+        parse_calls.append(payload.provider_id)
+        return parse(payload, *args, **kwargs)
+
+    monkeypatch.setattr(financial_service, "_parse_provider", counted_parse)
+    try:
+        report = service.sync(
+            "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL, live=True,
+        )
+    finally:
+        client.close()
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    assert report.provider_ids == ["tushare-financial"]
+    assert calls == ["balancesheet", "income", "cashflow"]
+    assert parse_calls == ["tushare-financial"]
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
+    assert row is not None
+    manifest = service._verified_manifest(row)
+    observations = service.parquet.read_observations(manifest.source_files[0])
+    assert len(observations) == 18
+    assert all(item.provider_report_version is not None for item in observations)
+    assert all(
+        item.unit is (
+            FinancialUnit.SHARES if item.field_code is FinancialFieldCode.SHARES_OUTSTANDING
+            else FinancialUnit.CNY
+        ) for item in observations
+    )
+    facts = service.parquet.read_facts(manifest.certified_files[0])
+    assert len(facts) == 18
+    assert all(item.source_snapshot_id == capture.snapshot_id for item in facts)
+    assert manifest.official_lineage_kind is (
+        OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION
+    )
+    binding = service.instruments.resolve("000001", Market.XSHE, as_of=datetime.now(UTC))
+    legacy_observations, _ = _parse_provider(
+        legacy, service.mappings, "000001", PERIOD_END, FinancialPeriodType.ANNUAL,
+        binding, as_of=None,
+    )
+    assert not _cross_provider_conflicts([*observations, *legacy_observations])
+
+
+def test_tushare_success_without_official_original_is_never_certified(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    client, calls, _legacy = _install_tushare_financial_mock(service, monkeypatch)
+    monkeypatch.setattr(service.official, "get", lambda *args, **kwargs: None)
+    try:
+        report = service.sync(
+            "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL, live=True,
+        )
+    finally:
+        client.close()
+    assert len(calls) == 3
+    assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
+    assert report.coverage.certified_fact_count == 0 and report.release_id is None
+    assert report.provider_ids == ["tushare-financial"]
+
+
+def test_tushare_permission_failure_falls_back_with_partial_raw_retained(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    _capture_existing_annual(service)
+    client, calls, legacy = _install_tushare_financial_mock(
+        service, monkeypatch, rejected_endpoint="income",
+    )
+    monkeypatch.setattr(service.providers["sina-financial"], "fetch", lambda *a, **k: legacy)
+
+    def unavailable_eastmoney(*args, **kwargs):
+        raise ValueError("controlled Eastmoney transport outage")
+
+    monkeypatch.setattr(service.providers["eastmoney-financial"], "fetch", unavailable_eastmoney)
+    monkeypatch.setattr(service.official, "_live_candidates", lambda *args, **kwargs: [])
+    try:
+        report = service.sync(
+            "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL, live=True,
+        )
+    finally:
+        client.close()
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    assert report.provider_ids == ["sina-financial"]
+    assert calls == ["balancesheet", "income"]
+    assert "TUSHARE_FINANCIAL_ACCESS_RESTRICTED" in report.reason_codes
+    assert "SINA_FINANCIAL_FALLBACK_USED" in report.reason_codes
+    with service.state.connect() as connection:
+        captured = connection.execute(
+            "SELECT snapshot_id FROM source_snapshot_index "
+            "WHERE source_id LIKE 'tushare-financial:%'"
+        ).fetchall()
+    assert len(captured) == 1
+    assert service.state.get_snapshot(captured[0]["snapshot_id"]) is not None
+
+
+def test_financial_network_budget_does_not_block_captured_original(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    capture = _capture_existing_annual(service)
+    _deny_network_and_fixtures(service, monkeypatch)
+    report = service.sync(
+        "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+        live=True, allow_network=False,
+    )
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    assert report.provider_ids == ["official-financial-document"]
+    assert report.coverage.certified_fact_count == 18
+    assert report.official_snapshot_id == capture.snapshot_id
+    # Reuse a verified release even if its capture is not in the current discovery index.
+    monkeypatch.setattr(service.official, "_captured_candidates", lambda *a, **k: [])
+    reused = service.sync(
+        "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+        live=True, allow_network=False,
+    )
+    assert reused.release_id == report.release_id
+    assert "EXISTING_CERTIFIED_RELEASE_REUSED" in reused.reason_codes
+
+
+@pytest.mark.parametrize("recorded_release_exists", [False, True])
+def test_financial_local_only_never_substitutes_recorded_release_or_fixture(
+    tmp_path: Path, monkeypatch, recorded_release_exists: bool,
+) -> None:
+    service = _service(tmp_path)
+    if recorded_release_exists:
+        recorded = service.sync(
+            "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+            as_of=ORIGINAL_AS_OF,
+        )
+        assert recorded.status is FinancialSourceReleaseStatus.CERTIFIED
+    _deny_network_and_fixtures(service, monkeypatch)
+    report = service.sync(
+        "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+        live=True, allow_network=False,
+    )
+    assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
+    assert report.release_id is None and report.coverage.certified_fact_count == 0

@@ -5,18 +5,19 @@ description: Scout external GitHub projects, quant research platforms, engineeri
 
 # 投研技术自由人
 
-1. Start from the current system, not from external hype. Read `uv run astock research-capability-status`, `uv run astock agent-observability-report --lookback-days 30`, `uv run astock research-efficiency-report`, and the relevant local Skill/Workflow before searching outside.
+1. Inspect the relevant capability and local implementation first. Read `uv run astock agent-observability-report --lookback-days 30` or `uv run astock research-efficiency-report` only when existing telemetry can answer the current efficiency question. These commands inspect saved reports by default; `NOT_FOUND` is an honest absence, not a reason to generate a report or stop the task. Use explicit `--materialize` only when producing a new baseline is part of the requested work.
 2. Search **current** primary sources first: official repositories, release notes, papers, vendor/platform documentation, then GitHub issues/discussions and practitioner communities for failure modes and unmet needs. Social media is discovery evidence only.
 3. For every candidate, classify it as `ADAPT_PATTERN`, `SHADOW_EXPERIMENT`, `WATCH`, or `REJECT`. Prefer extracting a small design pattern over importing a large framework when the project already has an equivalent deterministic core.
-4. Check license, maintenance activity, dependency weight, data rights, A-share applicability, point-in-time behavior, reproducibility, execution assumptions, and overlap with existing code before recommending adoption.
+4. Check maintenance, dependency cost, A-share applicability, source provenance, point-in-time behavior, reproducibility and overlap. Record relevant upstream conditions as evidence; Commons Clause is not a development or selection blocker for this project.
 5. Quant/ML ideas must enter the existing prospective/shadow gates. A popular factor, agent, optimizer, or RL stack never receives production trading authority from stars, backtests, screenshots, or community testimonials.
 6. Engineering ideas may be adopted directly only when they strengthen observability, correctness, recoverability, data quality, performance, or developer ergonomics without weakening evidence/PIT/accounting/ledger/broker boundaries.
 7. Record useful external patterns in a dated scouting note under `docs/scouting/`; include the source, what is genuinely novel for this repository, what is duplicate, the smallest integration surface, and the verification required before promotion.
-8. When an external idea is implemented, rerun its targeted tests plus the repository release gates. Do not leave an imported package or copied subsystem when a smaller local implementation passes the same acceptance criteria.
+8. When an idea is implemented, use the existing impact-based validation plan for the changed contracts; expand only for a concrete unresolved risk. Reuse the same evidence for review and delivery. Remove rejected adapters or copied subsystems after confirming they have no remaining callers. At task completion register one observation through `uv run astock agent-observation-register REQUEST.json`, reusing an existing coordinator observation instead of duplicating it.
 
-## Workflows
+## References
 
-- [`docs/workflows/workflow-research-tech-scout.md`](../../../docs/workflows/workflow-research-tech-scout.md)
+- [Current architecture and contracts](../../../docs/README.md): locate the specific subsystem before proposing an addition.
+- [External capability qualification](../../../docs/architecture/external-dependency-resilience-v1.md): read only when a candidate will enter a production source path.
 
 ## Output
 

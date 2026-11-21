@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from astock.core.hashing import canonical_json_bytes, sha256_bytes
@@ -149,10 +150,14 @@ def test_unmet_akshare_backup_gate_is_not_a_development_backlog_item() -> None:
     architecture = (
         PROJECT_ROOT / "docs/architecture/external-dependency-resilience-v1.md"
     ).read_text(encoding="utf-8")
-    # An unmet external qualification gate is not a software backlog item.
-    # Other unrelated development work may legitimately remain active.
+    # Retire the completed package by identity. References to AKShare for new
+    # software mappings do not reopen its unmet runtime qualification.
+    manifest = yaml.safe_load(
+        (PROJECT_ROOT / "planning/work_packages_v1.yaml").read_text(encoding="utf-8")
+    )
     assert "### E-02" not in plan
-    assert "AKShare" not in plan
+    assert all(item["id"] != "E-02" for item in manifest["work_packages"])
+    assert manifest["rules"]["completed_packages_removed_from_active_manifest"] is True
     assert "`SHADOW` 是外部资格证据不足时的安全稳定终态" in architecture
     assert (
         "不得把 AKShare 或其他候选的 `PRODUCTION_BACKUP` 资格长期挂在《开发计划》"

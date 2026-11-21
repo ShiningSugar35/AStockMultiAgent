@@ -64,6 +64,7 @@ class FakeAcquisition:
         self.objects = objects
         self.gap_rounds = list(gap_rounds)
         self.calls = 0
+        self.network_modes: list[bool] = []
 
     def acquire(
         self,
@@ -74,6 +75,7 @@ class FakeAcquisition:
         planner_plan_artifact_id: str | None = None,
         reuse_report_artifact_id: str | None = None,
         trusted_identity_capture_ids: tuple[str, ...] = (),
+        allow_network: bool = True,
     ) -> CurrentResearchAcquisitionReport:
         del (
             lookback_days,
@@ -84,6 +86,7 @@ class FakeAcquisition:
         index = min(self.calls, len(self.gap_rounds) - 1)
         gapped = self.gap_rounds[index]
         self.calls += 1
+        self.network_modes.append(allow_network)
         observed = NOW + timedelta(seconds=self.calls)
         needs = []
         if gapped:
@@ -467,7 +470,7 @@ def test_manual_escalation_occurs_only_after_bounded_automatic_rounds(tmp_path: 
     escalated = service.resume(second_failure.continuation_id)
 
     assert acquisition.calls == 2
-    assert escalated.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
+    assert escalated.status is CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
     assert escalated.automatic_budget_exhausted
     assert not escalated.manual_actions
     assert not escalated.investor_view_allowed
@@ -647,7 +650,7 @@ def test_run_to_terminal_uses_the_configured_final_automatic_round_before_escala
 
     assert acquisition.calls == 1
     assert resolver_calls == [started.external_tasks[0].task_id]
-    assert final.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
+    assert final.status is CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
     assert final.automatic_budget_exhausted is True
     assert len(final.automatic_resolution_artifact_ids) == 1
 
@@ -703,7 +706,7 @@ def test_final_automatic_round_does_not_gain_an_extra_resolver_round_when_bound_
     escalated = service.resume(bound.continuation_id)
 
     assert acquisition.calls == 2
-    assert escalated.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
+    assert escalated.status is CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
     assert escalated.automatic_rounds_completed == 1
     assert escalated.automatic_budget_exhausted is True
     assert not escalated.manual_actions
@@ -843,9 +846,187 @@ def test_public_source_failure_escalates_only_after_automatic_budget_exhaustion(
     )
     exhausted = service.resume(second_failure.continuation_id)
 
-    assert exhausted.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
+    assert exhausted.status is CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
     assert exhausted.automatic_budget_exhausted is True
     assert exhausted.private_material_required is False
     assert exhausted.manual_actions == []
     assert len(exhausted.automatic_resolution_artifact_ids) == 2
     assert acquisition.calls == 2
+
+@pytest.mark.parametrize("bound_before_call", [True, False])
+def test_expired_resolution_budget_consumes_frozen_evidence_locally(
+    tmp_path: Path, bound_before_call: bool,
+) -> None:
+    service, acquisition, state, objects = _service(tmp_path, gap_rounds=[True, False])
+    started = service.start(_request(request_id="expired-success"))
+    capture = _capture_annual_report(state, objects, started.company_id)
+    calls: list[str] = []
+
+    def resolver(record, task):
+        calls.append(task.task_id)
+        service.clock = lambda: started.deadline_at
+        return CurrentResearchAutomaticResolution(
+            continuation_id=record.continuation_id,
+            task_id=task.task_id,
+            capture_artifact_ids=[capture],
+        )
+
+    if bound_before_call:
+        service.bind_external_evidence(CurrentResearchEvidenceBinding(
+            continuation_id=started.continuation_id,
+            task_id=started.external_tasks[0].task_id,
+            capture_artifact_id=capture,
+        ))
+        service.clock = lambda: started.deadline_at
+
+    def execute_team(record, plan, ready_tasks):
+        del record, ready_tasks
+        _complete_company_team(service, state, objects, plan.plan_id)
+
+    final = service.run_to_terminal(
+        started.continuation_id, resolve_external=resolver, execute_team=execute_team,
+    )
+    assert final.status is CurrentResearchContinuationStatus.READY_FOR_INVESTOR_VIEW
+    assert acquisition.network_modes == [True, False]
+    assert len(calls) == (0 if bound_before_call else 1)
+    assert not final.automatic_budget_exhausted
+    assert final.recovery_stop_reason is None
+
+
+def test_expired_budget_without_evidence_is_not_public_source_exhaustion(tmp_path: Path) -> None:
+    service, acquisition, _, _ = _service(tmp_path, gap_rounds=[True])
+    started = service.start(_request(request_id="elapsed-budget"))
+    service.clock = lambda: started.deadline_at
+    result = service.run_to_terminal(
+        started.continuation_id,
+        resolve_external=lambda *_: pytest.fail("expired budget must not send network work"),
+        execute_team=lambda *_: pytest.fail("unresolved research cannot enter team"),
+    )
+    assert result.status is CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
+    assert result.recovery_stop_reason == "TIME_BUDGET_EXHAUSTED"
+    status = service.status(result.continuation_id)
+    assert status["public_data_unavailable"] is False
+    assert status["user_assistance_request_allowed"] is False
+    assert acquisition.calls == 1
+
+
+def test_budget_exhaustion_retains_identity_and_accepts_later_frozen_evidence(
+    tmp_path: Path,
+) -> None:
+    service, acquisition, state, objects = _service(tmp_path, gap_rounds=[True, False])
+    started = service.start(_request(request_id="late-local-reconcile", max_rounds=1))
+    exhausted = service.resume(started.continuation_id)
+    assert exhausted.status is CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
+    assert exhausted.recovery_stop_reason == "ATTEMPT_BUDGET_EXHAUSTED"
+    capture = _capture_annual_report(state, objects, started.company_id)
+    service.bind_external_evidence(CurrentResearchEvidenceBinding(
+        continuation_id=started.continuation_id,
+        task_id=started.external_tasks[0].task_id,
+        capture_artifact_id=capture,
+    ))
+    resumed = service.resume(started.continuation_id)
+    assert resumed.continuation_id == exhausted.continuation_id
+    assert resumed.status is CurrentResearchContinuationStatus.TEAM_RESEARCH_REQUIRED
+    assert resumed.automatic_rounds_completed == exhausted.automatic_rounds_completed
+    assert acquisition.network_modes == [True, False]
+
+
+def test_private_gap_does_not_skip_independent_public_resolution(tmp_path: Path) -> None:
+    service, acquisition, _, _ = _service(tmp_path, gap_rounds=[True])
+    started = service.start(_request(request_id="private-and-public", max_rounds=1))
+    private_task = started.external_tasks[0]
+    public_task = private_task.model_copy(update={
+        "task_id": private_task.task_id + ":independent",
+        "capability": AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+        "research_question": "取得独立的公开中报",
+    })
+    service._persist(started.model_copy(update={"external_tasks": [private_task, public_task]}))
+    calls = []
+
+    def resolver(record, task):
+        calls.append(task.task_id)
+        return CurrentResearchAutomaticResolution(
+            continuation_id=record.continuation_id,
+            task_id=task.task_id,
+            failure_code=(
+                "PRIVATE_MATERIAL_REQUIRED" if task.task_id == private_task.task_id
+                else "PUBLIC_SOURCE_TEMPORARY_FAILURE"
+            ),
+            private_material_required=task.task_id == private_task.task_id,
+        )
+
+    final = service.run_to_terminal(
+        started.continuation_id, resolve_external=resolver,
+        execute_team=lambda *_: pytest.fail("unresolved facts remain"),
+    )
+    assert calls == [private_task.task_id, public_task.task_id]
+    assert acquisition.calls == 1
+    assert final.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT
+    assert final.private_material_required
+    assert final.automatic_budget_exhausted
+    assert final.recovery_stop_reason == "ATTEMPT_BUDGET_EXHAUSTED"
+    assert len(final.manual_actions) == 1
+    assert final.manual_actions[0].capability is private_task.capability
+    stored = service.get(final.continuation_id)
+    assert stored is not None
+    assert [task.private_material_required for task in stored.external_tasks] == [True, False]
+
+
+def test_legacy_public_exhaustion_checkpoint_remains_readable(tmp_path: Path) -> None:
+    service, _, _, _ = _service(tmp_path, gap_rounds=[True])
+    started = service.start(_request(request_id="legacy-checkpoint"))
+    service._persist(started.model_copy(update={
+        "status": CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
+        "automatic_budget_exhausted": True,
+    }))
+    stored = service.get(started.continuation_id)
+    assert stored is not None
+    assert stored.recovery_stop_reason is None
+    assert stored.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
+
+
+def test_local_acquisition_never_restarts_remote_or_recorded_market_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths, state, objects = _runtime(tmp_path)
+    service = CurrentResearchAcquisitionService(paths, state, objects, clock=lambda: NOW)
+    calls: list[str] = []
+
+    def unexpected_remote(*_args, **_kwargs):
+        calls.append("unexpected")
+        raise AssertionError("local-only reconciliation cannot fetch or load fixtures")
+
+    monkeypatch.setattr(service, "_market_service", unexpected_remote)
+    monkeypatch.setattr(service, "_financial_service", unexpected_remote)
+    # There is no verified identity or local raw evidence; all attempts stay
+    # non-formal without instantiating a remote or recorded-data provider.
+    report = service.acquire("600519", Market.XSHG, allow_network=False)
+    assert calls == []
+    assert report.status is CurrentResearchAcquisitionStatus.NEEDS_EXTERNAL_RESEARCH
+    assert all(
+        "LOCAL_ONLY_NETWORK_DISABLED" in attempt.internal_reason_codes
+        for attempt in report.attempts
+    )
+    assert all(attempt.record_count == 0 for attempt in report.attempts)
+
+
+def test_local_identity_reconciliation_uses_registered_capture_without_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths, state, objects = _runtime(tmp_path)
+    service = CurrentResearchAcquisitionService(paths, state, objects, clock=lambda: NOW)
+    capture = _capture_annual_report(state, objects, "600519")
+    calls: list[str] = []
+
+    def unexpected_market(*_args, **_kwargs):
+        calls.append("unexpected")
+        raise AssertionError("identity should use the already registered official capture")
+
+    monkeypatch.setattr(service, "_market_service", unexpected_market)
+    attempt = service._identity_attempt(
+        "600519", Market.XSHG, trusted_identity_capture_ids=(capture,), allow_network=False,
+    )
+    assert calls == []
+    assert attempt.status is AcquisitionAttemptStatus.SUCCEEDED
+    assert "OFFICIAL_EXCHANGE_DOCUMENT_IDENTITY_FALLBACK" in attempt.internal_reason_codes
+    assert attempt.source_snapshot_ids

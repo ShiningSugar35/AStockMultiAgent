@@ -245,8 +245,7 @@ def _read_only_services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
     """Resolve an existing runtime without creating directories or applying migrations."""
 
     paths = ProjectPaths.discover()
-    _configure_cli_operation(paths, create_log_dir=False)
-    state = StateStore(paths.state_db, paths.root / "migrations")
+    state = StateStore(paths.state_db, paths.root / "migrations", read_only=True)
     return paths, state, ObjectStore(paths.objects)
 
 
@@ -401,6 +400,7 @@ register_research_runtime_commands(
         KnowledgeCompletionRepository(state),
         objects,
     ),
+    read_only_services=_read_only_services,
 )
 
 

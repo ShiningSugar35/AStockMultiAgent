@@ -85,8 +85,11 @@ class OfficialFinancialReportService:
         *,
         as_of: datetime,
         live: bool,
+        allow_network: bool = True,
     ) -> OfficialFinancialReport | None:
-        if live:
+        if not allow_network:
+            candidates = self._captured_candidates(company_id, period_end, period_type)
+        elif live:
             local_candidates = self._captured_candidates(company_id, period_end, period_type)
             try:
                 remote_candidates = self._live_candidates(

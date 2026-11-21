@@ -17,7 +17,7 @@
 
 | 决策 | 理由 |
 |---|---|
-| 本地最小适配（ADAPT_PATTERN），不引入包/账号/密钥 | `workflow-research-tech-scout.md`：能用小适配器通过验收就不加依赖；`evidence-investigation/SKILL.md`：优先无需注册、API Key、Cookie 或用户交互的来源 |
+| 本地最小适配（ADAPT_PATTERN），不引入包/账号/密钥 | `.agents/skills/research-tech-scout/SKILL.md`：能用小适配器通过验收就不加依赖；`evidence-investigation/SKILL.md`：优先无需注册、API Key、Cookie 或用户交互的来源 |
 | 不发起任何网络请求 | 日常测试不得依赖外网；实时检索由 Agent 用宿主能力完成，Python 只负责确定性部分。链接模式在完全离线环境可用 |
 | 不新建第二套 Router / Provider Registry / Evidence Store / Skill registry | `external-dependency-resilience-v1.md` §3.1、§19；`AGENTS.md` §强制开发工作流 |
 | 引擎顺序、预算、权重全部进版本化配置 | `AGENTS.md` §门禁最小化；`external-dependency-resilience-v1.md` §16 第 11 项禁止「看似可配、实际硬编码」 |

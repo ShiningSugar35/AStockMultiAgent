@@ -9,8 +9,8 @@ from astock.investor_orchestration.host_continuation import (
 )
 
 
-@pytest.mark.parametrize("elapsed", [0, 1799, 1800, 2099])
-def test_chat_stays_within_primary_window(elapsed: int) -> None:
+@pytest.mark.parametrize("elapsed", [0, 1799, 2100, 2400, 2700, 10000, 86400])
+def test_chat_has_no_project_imposed_deadline(elapsed: int) -> None:
     result = HostContinuationPolicy.evaluate(
         host=AgentHost.CHATGPT_CHAT,
         elapsed_seconds=elapsed,
@@ -18,7 +18,8 @@ def test_chat_stays_within_primary_window(elapsed: int) -> None:
         total_units=6,
     )
     assert not result.overall_deadline_enforced
-    assert result.activation_deadline_enforced
+    assert not result.activation_deadline_enforced
+    assert result.remaining_invocation_seconds is None
     assert not result.continuation_required
     assert not result.invocation_stop_required
 
@@ -31,6 +32,7 @@ def test_unfinished_chat_checkpoints_without_partial_report(completed: int, elap
         elapsed_seconds=elapsed,
         completed_units=completed,
         total_units=6,
+        platform_hard_limit_seconds=2700,
     )
     assert result.continuation_required and result.scheduled_creation_required
     assert result.checkpoint_required
@@ -49,7 +51,7 @@ def test_completed_round_does_not_create_child() -> None:
         completed_units=6,
         total_units=6,
     )
-    assert result.invocation_stop_required
+    assert not result.invocation_stop_required
     assert not result.continuation_required
     assert not result.checkpoint_required
     assert not result.binding_verification_required
@@ -66,6 +68,7 @@ def test_existing_child_prevents_duplicate_but_id_alone_does_not_prove_binding(
         total_units=6,
         existing_platform_task_id="opaque-child",
         platform_binding_verified=verified,
+        platform_hard_limit_seconds=2700,
     )
     assert result.continuation_required
     assert not result.scheduled_creation_required
@@ -161,19 +164,18 @@ def test_policy_order_and_hourly_recurrence(
     closeout: int, check: int, hard: int, cadence: int
 ) -> None:
     with pytest.raises(ValueError):
-        ChatInvocationPolicy(
-            closeout_after_seconds=closeout,
-            binding_check_after_seconds=check,
-            hard_limit_seconds=hard,
-            continuation_cadence_seconds=cadence,
-        )
+        ChatInvocationPolicy.model_validate({
+            "closeout_after_seconds": closeout,
+            "binding_check_after_seconds": check,
+            "hard_limit_seconds": hard,
+            "continuation_cadence_seconds": cadence,
+        })
 
 
 def test_policy_thresholds_are_configuration_not_python_constants() -> None:
     policy = ChatInvocationPolicy(
-        closeout_after_seconds=900,
-        binding_check_after_seconds=1200,
-        hard_limit_seconds=1500,
+        handoff_reserve_seconds=600,
+        binding_verification_reserve_seconds=300,
         continuation_cadence_seconds=3600,
     )
     result = HostContinuationPolicy.evaluate(
@@ -182,6 +184,55 @@ def test_policy_thresholds_are_configuration_not_python_constants() -> None:
         completed_units=1,
         total_units=2,
         policy=policy,
+        platform_hard_limit_seconds=1500,
     )
     assert result.binding_verification_required
     assert result.remaining_invocation_seconds == 300
+
+@pytest.mark.parametrize("host", list(AgentHost))
+def test_actual_host_interruption_checkpoints_unfinished_work(host: AgentHost) -> None:
+    result = HostContinuationPolicy.evaluate(
+        host=host, elapsed_seconds=17, completed_units=1, total_units=2,
+        platform_interrupted=True,
+    )
+    assert result.invocation_stop_required
+    assert result.continuation_required
+    assert result.checkpoint_required
+    assert result.binding_verification_required
+    assert not result.partial_delivery_required
+    assert result.remaining_invocation_seconds is None
+    assert result.scheduled_creation_required == (host is AgentHost.CHATGPT_CHAT)
+
+
+def test_longer_observed_host_limit_is_not_capped_by_legacy_project_limit() -> None:
+    legacy = ChatInvocationPolicy.model_validate({
+        "schema_version": "chat-invocation-policy-v1",
+        "closeout_after_seconds": 2100,
+        "binding_check_after_seconds": 2400,
+        "hard_limit_seconds": 2700,
+        "continuation_cadence_seconds": 3600,
+    })
+    result = HostContinuationPolicy.evaluate(
+        host="CHATGPT_CHAT", elapsed_seconds=3000, completed_units=1, total_units=2,
+        platform_hard_limit_seconds=7200, policy=legacy,
+    )
+    assert not result.invocation_stop_required
+    assert not result.continuation_required
+    assert result.remaining_invocation_seconds == 4200
+    without_limit = HostContinuationPolicy.evaluate(
+        host="CHATGPT_CHAT", elapsed_seconds=86400, completed_units=1, total_units=2,
+        policy=legacy,
+    )
+    assert not without_limit.activation_deadline_enforced
+    assert not without_limit.invocation_stop_required
+
+
+@pytest.mark.parametrize("payload", [
+    {"binding_verification_reserve_seconds": 700, "handoff_reserve_seconds": 600},
+    {"hard_limit_seconds": 2700},
+    {"closeout_after_seconds": True, "binding_check_after_seconds": 2400,
+     "hard_limit_seconds": 2700},
+])
+def test_invalid_reserves_or_partial_legacy_config_are_rejected(payload: dict) -> None:
+    with pytest.raises(ValueError):
+        ChatInvocationPolicy.model_validate(payload)

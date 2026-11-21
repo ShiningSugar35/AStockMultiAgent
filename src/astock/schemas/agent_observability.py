@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from astock.schemas.base import AStockModel
 
@@ -58,6 +58,37 @@ class ResearchTraceSpan(AStockModel):
         return max(0, int((self.finished_at - self.started_at).total_seconds() * 1000))
 
 
+class ResearchResourceUsage(BaseModel):
+    """Measurements supplied by the host/provider; absent values stay unknown."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["HOST_REPORTED", "PROVIDER_REPORTED", "LOCAL_MEASURED"]
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    cost_cny: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    peak_memory_bytes: int | None = Field(default=None, ge=0)
+
+
+class ResearchEvaluationContext(BaseModel):
+    """Frozen comparison context carried by the existing request trace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str = Field(min_length=1)
+    input_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    budget_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    rubric_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    code_revision: str = Field(min_length=1)
+    policy_version: str = Field(min_length=1)
+    host_id: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
+    variant: str = Field(min_length=1)
+    replicate_id: str = Field(default="1", min_length=1)
+    evidence_mode: Literal["RECORDED", "LIVE", "FAULT_INJECTION"]
+
+
 class ResearchRequestTrace(AStockModel):
     schema_version: str = "research-request-trace-v1"
     trace_id: str = Field(min_length=1)
@@ -69,6 +100,8 @@ class ResearchRequestTrace(AStockModel):
     answer_ready_at: AwareDatetime
     useful_output: bool
     spans: list[ResearchTraceSpan] = Field(default_factory=list)
+    usage: ResearchResourceUsage | None = None
+    evaluation: ResearchEvaluationContext | None = None
     finding_codes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -99,6 +132,7 @@ class ResearchRequestPerformanceSummary(AStockModel):
     p50_wall_time_ms: int | None = Field(default=None, ge=0)
     p75_wall_time_ms: int | None = Field(default=None, ge=0)
     p90_wall_time_ms: int | None = Field(default=None, ge=0)
+    p95_wall_time_ms: int | None = Field(default=None, ge=0)
     useful_delivery_rate: float = Field(ge=0, le=1, allow_inf_nan=False)
     on_time_rate_45m: float = Field(ge=0, le=1, allow_inf_nan=False)
     provider_call_count: int = Field(ge=0)
@@ -239,6 +273,8 @@ __all__ = [
     "ResearchRequestPerformanceSummary",
     "ResearchRequestSourceGroup",
     "ResearchRequestTrace",
+    "ResearchResourceUsage",
+    "ResearchEvaluationContext",
     "ResearchRequestTraceStatus",
     "ResearchTraceSpan",
     "AgentTaskStatus",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -54,7 +55,6 @@ def test_all_repo_skills_have_valid_trigger_metadata_and_ui() -> None:
         description = metadata["description"].lower()
         assert all(term in description for term in trigger_terms)
         body = (folder / "SKILL.md").read_text(encoding="utf-8")
-        assert "uv run astock" in body
         assert "## Output" in body
         assert "## Prohibitions" in body
         assert "1." in body
@@ -99,11 +99,23 @@ def test_method_skills_bind_existing_team_contracts_and_abstention() -> None:
     for name, required_terms in contracts.items():
         body = (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
         assert all(term in body for term in required_terms)
-        assert "uv run astock research-team-status" in body
-        assert "uv run astock research-team-role-output" in body
-        assert "uv run astock research-team-task-result" in body
+        assert "research-specialist-skills-crosswalk.md#shared-execution-contract" in body
         assert "abstain" in body.lower()
         assert "parallel plan" in body.lower() or "existing `ResearchTeamPlan`" in body
+
+
+def test_skill_commands_resolve_to_registered_cli_without_requiring_duplicate_wrappers() -> None:
+    command_names = {command.name for command in app.registered_commands if command.name}
+    contract_path = PROJECT_ROOT / "docs/architecture/research-specialist-skills-crosswalk.md"
+    contract = contract_path.read_text(encoding="utf-8")
+    pattern = re.compile(r"uv run astock ([a-z][a-z0-9-]+)")
+    shared_commands = set(pattern.findall(contract))
+    assert {
+        "research-team-status", "research-team-role-output", "research-team-task-result",
+    } <= shared_commands
+    for path in [*SKILLS_ROOT.glob("*/SKILL.md"), contract_path]:
+        commands = set(pattern.findall(path.read_text(encoding="utf-8")))
+        assert commands <= command_names, (path, sorted(commands - command_names))
 
 
 def test_agents_file_discovers_every_repo_skill() -> None:

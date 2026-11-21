@@ -1,7 +1,7 @@
 # WorkBuddy 项目空间 21 个技能集成扫描（2026-11-12）
 
 > 状态：CURRENT｜性质：外部能力侦察记录，**不直接取得生产资格**
-> 依据：`docs/workflows/workflow-research-tech-scout.md`、`.agents/skills/research-tech-scout/SKILL.md`、`AGENTS.md` §门禁最小化 / §外部能力、`docs/architecture/external-dependency-resilience-v1.md`
+> 依据：`.agents/skills/research-tech-scout/SKILL.md`、`AGENTS.md` §门禁最小化 / §外部能力、`docs/architecture/external-dependency-resilience-v1.md`
 > 结果落地：`wp61-web-discovery-lead`，架构见 `docs/architecture/web-discovery-lead-v1.md`
 
 ## 0. 基线与裁决口径
@@ -11,7 +11,7 @@
 裁决类别沿用 `research-tech-scout`：
 
 - **ADAPT_PATTERN** — 只吸收真实缺口对应的最小确定性模式，本地实现，不引入依赖
-- **REJECT_DUPLICATE** — 本地已有等价或更强保证（`workflow-research-tech-scout.md` Stop condition 1）
+- **REJECT_DUPLICATE** — 本地已有等价或更强保证（`.agents/skills/research-tech-scout/SKILL.md`）
 - **REJECT_GATE** — 账号/密钥/私有授权、来源不可审计、或违反唯一事实源/门禁规则
 - **WATCH_ASSET** — 主体拒绝，但某个静态资产值得在对应 owner lane 交接后评估
 
@@ -69,4 +69,4 @@
 
 ## 4. 停止条件
 
-依 `workflow-research-tech-scout.md` §Stop conditions：本地已有等价或更强保证时停止（20 项 REJECT 的主因）；许可/数据权利/可复现性无法建立时停止（密钥与私有授权类）；不得创建平行状态存储、研究账本、Skill registry 或 portfolio engine。本轮未引入任何第三方运行时依赖，未修改现役 Skill / Workflow 文本，未越界写入其他活动工作包的 lane。
+依 `.agents/skills/research-tech-scout/SKILL.md`：本地已有等价或更强保证时停止（20 项 REJECT 的主因）；许可/数据权利/可复现性无法建立时停止（密钥与私有授权类）；不得创建平行状态存储、研究账本、Skill registry 或 portfolio engine。本轮未引入任何第三方运行时依赖，未修改现役 Skill / Workflow 文本，未越界写入其他活动工作包的 lane。

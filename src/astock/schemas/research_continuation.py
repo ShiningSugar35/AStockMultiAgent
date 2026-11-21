@@ -23,6 +23,7 @@ class CurrentResearchContinuationStatus(StrEnum):
     OBSERVATION_ONLY_FOR_INVESTOR_VIEW = "OBSERVATION_ONLY_FOR_INVESTOR_VIEW"
     NEEDS_USER_INPUT = "NEEDS_USER_INPUT"
     PUBLIC_DATA_UNAVAILABLE = "PUBLIC_DATA_UNAVAILABLE"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
     FAILED = "FAILED"
 
 
@@ -54,6 +55,7 @@ class CurrentResearchExternalTask(AStockModel):
     capture_artifact_ids: list[str] = Field(default_factory=list)
     automatic_rounds_attempted: int = Field(default=1, ge=1, le=5)
     last_failure_code: str | None = None
+    private_material_required: bool = False
     web_search_allowed: Literal[True] = True
     manual_user_action_required: Literal[False] = False
 
@@ -115,6 +117,7 @@ class CurrentResearchContinuation(AStockModel):
     readiness_report_artifact_id: str | None = None
     manual_actions: list[ManualResearchAction] = Field(default_factory=list)
     automatic_budget_exhausted: bool = False
+    recovery_stop_reason: Literal["TIME_BUDGET_EXHAUSTED", "ATTEMPT_BUDGET_EXHAUSTED"] | None = None
     private_material_required: bool = False
     investor_view_allowed: bool = False
     full_research_input_ready: bool = False
@@ -182,7 +185,10 @@ class CurrentResearchContinuation(AStockModel):
                 raise ValueError(
                     "NEEDS_USER_INPUT requires exhausted automatic channels or private material"
                 )
-        elif self.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE:
+        elif self.status in {
+            CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
+            CurrentResearchContinuationStatus.BUDGET_EXHAUSTED,
+        }:
             if (
                 not unresolved
                 or not self.automatic_budget_exhausted
@@ -190,9 +196,16 @@ class CurrentResearchContinuation(AStockModel):
                 or self.manual_actions
                 or self.team_plan_id is not None
             ):
-                raise ValueError("public-data exhaustion cannot request private user material")
+                raise ValueError("public recovery exhaustion cannot request private user material")
+            if (
+                self.status is CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
+                and self.recovery_stop_reason is None
+            ):
+                raise ValueError("budget exhaustion requires its actual limit reason")
         elif self.automatic_budget_exhausted or self.private_material_required:
             raise ValueError("recovery flags require a corresponding terminal gap state")
+        if self.recovery_stop_reason is not None and not self.automatic_budget_exhausted:
+            raise ValueError("a budget stop reason requires an exhausted budget")
         return self
 
 

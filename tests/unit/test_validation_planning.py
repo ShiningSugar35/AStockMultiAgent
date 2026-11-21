@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from scripts.audit_gate_inventory import inventory
-from scripts.plan_validation import normalize_path, plan_validation
+from scripts.plan_validation import normalize_path, plan_golden_validation, plan_validation
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -261,3 +261,34 @@ def test_quality_runner_accepts_capture_streams_without_reconfigure(monkeypatch)
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     monkeypatch.setattr(sys, "stderr", io.StringIO())
     configure_console()
+
+
+def test_golden_slice_reuses_15_registered_scenarios_without_replacing_impact() -> None:
+    plan = plan_golden_validation(ROOT)
+    assert plan["scope"] == "GOLDEN_RECORDED"
+    assert plan["test_case_count"] == 15
+    assert len(set(plan["tests"])) == 15
+    assert all("test_business_scenarios_real_e2e.py::" in node for node in plan["tests"])
+    assert not plan["coverage_proven"] and not plan["model_quality_evaluated"]
+    assert {item["scenario_id"] for item in plan["bindings"]} >= {1, 25, 29, 36, 71, 95, 96}
+    # This optional set cannot weaken the normal shared-state selection.
+    assert plan_validation(ROOT, ["src/astock/core/state.py"])["scope"] == "FULL"
+
+
+def test_golden_slice_rejects_stale_case_binding(tmp_path: Path) -> None:
+    selection = yaml.safe_load(
+        (ROOT / "configs/validation/golden_research_v1.yaml").read_text(encoding="utf-8")
+    )
+    selection["cases"][0]["scenario_id"] = 99999
+    for relative in (
+        "configs/validation/golden_research_v1.yaml",
+        selection["source_manifest"], selection["test_file"],
+    ):
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
+    (tmp_path / "configs/validation/golden_research_v1.yaml").write_text(
+        yaml.safe_dump(selection), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="scenario binding"):
+        plan_golden_validation(tmp_path)

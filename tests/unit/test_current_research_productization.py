@@ -699,7 +699,7 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
     monkeypatch.setattr(
         service,
         "_discover_financial_periods",
-        lambda *_args: (
+        lambda *_args, **_kwargs: (
             [
                 (
                     AcquisitionCapability.FINANCIAL_ANNUAL,
@@ -727,7 +727,9 @@ def test_current_acquisition_freezes_decision_time_after_acquisition_and_keeps_m
         _period_type: object,
         *,
         identity_verified: bool = True,
+        allow_network: bool = True,
     ) -> AcquisitionAttempt:
+        assert allow_network
         assert identity_verified
         return _attempt(capability)
 
@@ -773,7 +775,7 @@ def test_same_request_reuse_reruns_only_failed_capability_and_preserves_lineage(
     monkeypatch.setattr(
         service,
         "_discover_financial_periods",
-        lambda *_args: (
+        lambda *_args, **_kwargs: (
             [
                 (
                     AcquisitionCapability.FINANCIAL_ANNUAL,
@@ -895,6 +897,7 @@ def test_same_request_reuse_waits_for_recovered_dependency_before_reusing_downst
 
     def fake_discover(
         *_args: object,
+        **_kwargs: object,
     ) -> tuple[
         list[tuple[AcquisitionCapability, date, FinancialPeriodType]],
         list[str],

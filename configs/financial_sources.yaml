@@ -1,5 +1,6 @@
 schema_version: financial-sources-v2
 provider_order:
+  - tushare-financial
   - sina-financial
   - eastmoney-financial
 official_reports_fixture: tests/fixtures/financial_sources/cninfo_reports_000001.json

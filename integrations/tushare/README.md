@@ -14,7 +14,17 @@
 
 Registry 的 `tushare-structured` 只声明 `tushare.structured.query`，不会冒充现有 financial statement、instrument master 或 intraday bar 接口。十个已审阅 API 的具体参数、权限门槛、缓存 TTL 和原始文档链接由 `configs/tushare_access.yaml` 与 `tushare-schema` 给出。
 
-现有 `supplemental.TushareHintProvider` 已委托同一 query adapter。`market.reference.hint` 的 Tushare 优先级为 10，因此这一路的按需日行情查询确实优先使用 Tushare。`configs/financial_sources.yaml` 的原有财务审计管线仍保持原合同；本轮没有把所有财务审计、全市场列表或基准历史管线改成自动使用 Tushare。宿主数据采集 skill 应先查询 schema，按需求调用 typed query，再使用正式公告和现有财务审计合同验证。
+现有 `supplemental.TushareHintProvider` 与新的 `tushare-financial` 共用同一 query adapter、凭据 loader、SQLite 配额和 ObjectStore。`market.reference.hint` 与现有 `financial_sources` 的 live 路由优先选择可用 Tushare；权限/冷却/覆盖失败按原 source router 继续同能力 fallback。财务入口仍是现有 `financial-source-sync`，不是第二套路由或财务库。全市场 instrument master 与基准历史流水线尚未迁移。
+
+### 正式财务流水线的映射边界
+
+`tushare-financial` 仅请求单证券、单期、`report_type=1` 的三张表，复用正常缓存，不另外启动 SDK/MCP 请求。母公司、单季、调整前、上年重述等类型不能混入当前合并累计值。季度/半年利润及现金流保持 YTD；资产负债保持期末瞬时值，单季/TTM 由原有 derivation 处理。
+
+同报告期优先选择官方标为最新的 `update_flag=1` 行，再在候选中按实际公告日（缺失时公告日）选取最新版本；没有最新标志时比较全部返回行。多个候选缺少日期，或同日内容冲突，均拒绝任意选择并继续 fallback。单个确定版本缺日期时保留 UNKNOWN，不伪造时间。所有返回版本完整留在原始对象和 capture 中，选中 observation 保存公告日期、报告类型、公司类型、更新标志、行 hash 和原始引用。缺失值保持 null，日期精度不补成虚假发布时间，系统可见时间取真实 capture。
+
+金额按 CNY、`total_share` 按股映射；旧 Sina/Eastmoney 的万元单位保持原合同。跨供应商和 PDF 认证复用一个单位等价函数。字段采用含少数股东的总权益/净利润，不能替换成归母口径。官方接口页并非对每个金额字段都明确重述单位，因此 vendor 值只作结构化提示：正式 fact 的值、单位和 evidence 仍由原件认证决定，查询成功不能自动变成官方原件、历史 PIT 或完整覆盖资格。
+
+一个成功 provider payload 只做一次规范解析。网络预算耗尽时，`FinancialSourceService.sync(..., allow_network=False)` 只消费已有准入原件或可验证的正式 release；不调用 provider、CNINFO 或录制 fixtures。新的本地原件仍能同请求解析、认证、注册。没有原件则保留真实缺口，不能以 `live=False` 伪装离线生产数据。
 
 ## 范围与限额
 
@@ -67,6 +77,8 @@ Registry 的 `tushare-structured` 只声明 `tushare.structured.query`，不会�
 
 - 十个端点均返回非空有效数据：`runtime/provider-probes/tushare/20261121T071759959814Z/report.json`。
 - 两交易所、26 个期间的单位对账及 MCP 认证状态：`runtime/provider-probes/tushare/20261121T072444607891Z/report.json`。
+- 三表原生录制（复用首次真实响应，保留 2+2+1 个版本）：`tests/fixtures/providers/tushare-financial-success.json`。
+- 财务映射与认证反例：`tests/unit/test_tushare_financial.py`、`tests/integration/test_financial_sources.py`。
 - 基础资料录制：`tests/fixtures/providers/tushare-structured-success.json`。
 - 单位对账录制含六个原始响应及来源哈希：`tests/fixtures/providers/tushare-period-units.json`。
 - 负面合同测试：`tests/unit/test_tushare_structured.py`，并回归 `tests/unit/test_provider_supplemental.py`。
@@ -74,6 +86,8 @@ Registry 的 `tushare-structured` 只声明 `tushare.structured.query`，不会�
 可复用验证命令：
 
 `uv run --frozen python -B integrations/tushare/smoke.py --mcp`
+
+只验证三表映射时使用 `uv run --frozen python -B integrations/tushare/smoke.py --financial-mapping`：至多三个受控查询，明确记录 vendor mapping，不宣称取得官方 PDF 认证。
 
 `uv run --frozen python -B integrations/tushare/reconcile_periods.py --start 2026-09-01 --end 2026-11-20 --mcp`
 

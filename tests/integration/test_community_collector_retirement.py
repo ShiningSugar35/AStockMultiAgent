@@ -2,6 +2,7 @@
 
 from importlib.util import find_spec
 
+from typer.core import TyperGroup
 from typer.main import get_command
 
 import astock.knowledge as knowledge
@@ -9,7 +10,9 @@ from astock.cli import app
 
 
 def test_retired_community_collectors_are_absent():
-    commands = get_command(app).commands
+    command = get_command(app)
+    assert isinstance(command, TyperGroup)
+    commands = command.commands
     assert not any(name.startswith("zhihu-") for name in commands)
     for module in (
         "capture",

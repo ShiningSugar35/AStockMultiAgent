@@ -22,7 +22,7 @@ def test_public_exhaustion_never_requests_private_material(tmp_path):
         ),
         execute_team=lambda *_: pytest.fail("incomplete evidence cannot enter team"),
     )
-    assert result.status.value == "PUBLIC_DATA_UNAVAILABLE"
+    assert result.status.value == "BUDGET_EXHAUSTED"
     assert result.automatic_budget_exhausted
     assert not result.private_material_required
     assert result.manual_actions == []

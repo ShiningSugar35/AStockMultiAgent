@@ -13,6 +13,7 @@ import json
 import re
 import sqlite3
 from collections import Counter
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +24,11 @@ class DiagnosticError(ValueError):
 
 _METADATA = "rowid,artifact_id,type,schema_version,object_hash,created_at"
 _MAX_OBJECT_BYTES = 16 * 1024 * 1024
+_SAVED_REPORT_TYPES = ("AgentObservabilityReport", "SkillEfficiencyReport")
 
 
-def connect_read_only(root: Path) -> sqlite3.Connection:
-    database = root / "runtime" / "state.sqlite"
+def connect_read_only(root: Path, *, runtime_root: Path | None = None) -> sqlite3.Connection:
+    database = (runtime_root or root / "runtime") / "state.sqlite"
     if not database.is_file():
         raise DiagnosticError("CANONICAL_DATABASE_NOT_FOUND")
     connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
@@ -34,20 +36,28 @@ def connect_read_only(root: Path) -> sqlite3.Connection:
     return connection
 
 
-def _payload(root: Path, record: sqlite3.Row) -> dict[str, Any]:
+def _payload(
+    root: Path, record: sqlite3.Row, *, runtime_root: Path | None = None
+) -> dict[str, Any]:
     digest = record["object_hash"]
     if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         raise DiagnosticError("INVALID_REGISTERED_OBJECT_HASH")
-    directory = (root / "runtime" / "objects" / "sha256").resolve()
+    directory = ((runtime_root or root / "runtime") / "objects" / "sha256").resolve()
     path = (directory / digest[:2] / digest[2:4] / digest).resolve()
     if not path.is_relative_to(directory):
         raise DiagnosticError("OBJECT_PATH_OUTSIDE_CANONICAL_STORE")
-    if path.stat().st_size > _MAX_OBJECT_BYTES:
-        raise DiagnosticError("OBJECT_EXCEEDS_DIAGNOSTIC_BUDGET")
-    raw = path.read_bytes()
+    try:
+        if path.stat().st_size > _MAX_OBJECT_BYTES:
+            raise DiagnosticError("OBJECT_EXCEEDS_DIAGNOSTIC_BUDGET")
+        raw = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise DiagnosticError("REGISTERED_OBJECT_NOT_FOUND") from exc
     if hashlib.sha256(raw).hexdigest() != digest:
         raise DiagnosticError("OBJECT_HASH_MISMATCH")
-    payload = json.loads(raw)
+    try:
+        payload = json.loads(raw)
+    except (ValueError, UnicodeError) as exc:
+        raise DiagnosticError("INVALID_OBJECT_JSON") from exc
     if not isinstance(payload, dict):
         raise DiagnosticError("OBJECT_IS_NOT_A_RECORD")
     return payload
@@ -142,6 +152,43 @@ def show_artifact(connection: sqlite3.Connection, root: Path, identity: str) -> 
     return {"authority": "DIAGNOSTIC_ONLY", "artifact": summarize(row, _payload(root, row))}
 
 
+def inspect_report(
+    root: Path, kind: str, *, report_id: str | None = None,
+    runtime_root: Path | None = None,
+) -> dict[str, Any]:
+    """Read an existing report only; missing state never becomes a write command."""
+    if kind not in _SAVED_REPORT_TYPES:
+        raise DiagnosticError("UNSUPPORTED_REPORT_TYPE")
+    result: dict[str, Any] = {"artifact_type": kind, "materialized": False}
+    runtime = runtime_root or root / "runtime"
+    if not (runtime / "state.sqlite").is_file():
+        return {**result, "status": "NOT_INITIALIZED"}
+    with closing(connect_read_only(root, runtime_root=runtime)) as connection:
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifact_registry'"
+        ).fetchone() is None:
+            return {**result, "status": "NOT_INITIALIZED"}
+        query = "SELECT " + _METADATA + " FROM artifact_registry WHERE type=?"
+        parameters: tuple[str, ...] = (kind,)
+        if report_id is not None:
+            query += " AND artifact_id=?"
+            parameters += (report_id,)
+        row = connection.execute(
+            query + " ORDER BY rowid DESC LIMIT 1", parameters
+        ).fetchone()
+    if row is None:
+        return {**result, "status": "NOT_FOUND", "report_id": report_id}
+    payload = _payload(root, row, runtime_root=runtime)
+    if payload.get("report_id") != row["artifact_id"]:
+        raise DiagnosticError("REPORT_ID_MISMATCH")
+    if payload.get("schema_version") != row["schema_version"]:
+        raise DiagnosticError("REPORT_SCHEMA_MISMATCH")
+    if kind == "SkillEfficiencyReport":
+        result["usage_basis"] = "LEGACY_DECLARATION_UNVERIFIED"
+    return {**result, "status": "FOUND", "report": payload,
+            "object_hash": row["object_hash"], "stored_at": row["created_at"]}
+
+
 def table_schema(connection: sqlite3.Connection, name: str) -> dict[str, Any]:
     exists = connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,),
@@ -172,12 +219,19 @@ def main(argv: list[str] | None = None) -> int:
     listing.add_argument("--request-id")
     showing = commands.add_parser("artifact", help="Inspect one exact immutable artifact.")
     showing.add_argument("identity")
+    saved = commands.add_parser("report", help="Inspect a saved report without generating one.")
+    saved.add_argument("kind", choices=_SAVED_REPORT_TYPES)
+    saved.add_argument("--report-id")
     schema = commands.add_parser("schema", help="Show one table's columns, not its contents.")
     schema.add_argument("table")
     args = parser.parse_args(argv)
     connection: sqlite3.Connection | None = None
     try:
         root = args.root.resolve()
+        if args.command == "report":
+            result = inspect_report(root, args.kind, report_id=args.report_id)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         connection = connect_read_only(root)
         if args.command == "schema":
             result = table_schema(connection, args.table)

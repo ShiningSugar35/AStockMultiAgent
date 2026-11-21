@@ -325,6 +325,12 @@ def validate_recorded_probe_payload(
     if operation == "reference-master":
         return _recorded_reference_master(payload)
     if operation == "financial-period":
+        if isinstance(payload, dict) and payload.get("schema_version") == (
+            "tushare-financial-recorded-v1"
+        ):
+            from astock.providers.tushare_financial import validate_recorded_financial
+
+            return validate_recorded_financial(payload, definition.probe_target)
         return _recorded_financial(payload)
     if operation == "disclosure-search":
         return _recorded_disclosure(payload)

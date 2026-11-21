@@ -11,14 +11,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from astock.core.errors import AStockError, StorageError
+from astock.core.errors import AStockError, ProviderError, StorageError
 from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.source_resilience import SourceFailureClass
 from astock.core.state import StateStore
 from astock.evidence import EvidenceRepository
 from astock.financial_integrity import FinancialIntegrityService
-from astock.financial_sources.certification import FinancialPdfCertifier
+from astock.financial_sources.certification import FinancialPdfCertifier, values_equivalent
 from astock.financial_sources.config import (
     FinancialFieldMapping,
     FinancialSourceConfig,
@@ -65,6 +65,7 @@ from astock.schemas import (
     Market,
     OfficialFinancialLineageKind,
 )
+from astock.schemas.financial_sources import FinancialProviderReportVersion
 
 
 class FinancialSourceService:
@@ -123,6 +124,7 @@ class FinancialSourceService:
         as_of: datetime | None = None,
         live: bool = False,
         cross_check: bool = False,
+        allow_network: bool = True,
     ) -> FinancialSourceSyncReport:
         with self._sync_lock:
             return self._sync_serialized(
@@ -133,6 +135,7 @@ class FinancialSourceService:
                 as_of=as_of,
                 live=live,
                 cross_check=cross_check,
+                allow_network=allow_network,
             )
 
     def _sync_serialized(
@@ -145,6 +148,7 @@ class FinancialSourceService:
         as_of: datetime | None = None,
         live: bool = False,
         cross_check: bool = False,
+        allow_network: bool = True,
     ) -> FinancialSourceSyncReport:
         explicit_as_of = as_of is not None
         effective_as_of = as_of or datetime.now(UTC)
@@ -161,6 +165,7 @@ class FinancialSourceService:
                     "as_of": effective_as_of,
                     "live": live,
                     "cross_check": cross_check,
+                    "allow_network": allow_network,
                 }
             ),
         )
@@ -175,6 +180,7 @@ class FinancialSourceService:
                 live=live,
                 cross_check=cross_check,
                 explicit_as_of=explicit_as_of,
+                allow_network=allow_network,
             )
             self.state.finish_attempt(attempt)
             self.state.finish_job(
@@ -205,11 +211,12 @@ class FinancialSourceService:
         live: bool,
         cross_check: bool,
         explicit_as_of: bool,
+        allow_network: bool = True,
     ) -> FinancialSourceSyncReport:
         _ = explicit_as_of
         binding = self.instruments.resolve(company_id, market, as_of=as_of)
         official_coverage = self.config.official_market_coverage.get(market, "UNAVAILABLE")
-        if live and official_coverage == "UNAVAILABLE":
+        if live and allow_network and official_coverage == "UNAVAILABLE":
             return self._empty_report(
                 company_id,
                 period_end,
@@ -221,11 +228,17 @@ class FinancialSourceService:
                 [],
             )
         reasons: list[str] = []
-        payloads: list[FinancialProviderPayload] = []
+        observations: list[FinancialSourceObservation] = []
+        successful_providers = 0
         captured_snapshots = []
         first_success_index: int | None = None
-        provider_order = list(self.config.provider_order)
-        if live:
+        provider_order = [
+            provider_id for provider_id in self.config.provider_order
+            if allow_network and (live or getattr(
+                self.providers[provider_id], "recorded_supported", True,
+            ))
+        ]
+        if live and allow_network:
             ranked_definitions = self.provider_factory.definitions_for_capability(
                 "financial.statement_values",
                 source_hint=(self.config.provider_order[0] if self.config.provider_order else None),
@@ -282,7 +295,8 @@ class FinancialSourceService:
                     "financial.statement_values",
                     live=live,
                 )
-                payloads.append(payload)
+                observations.extend(parsed)
+                successful_providers += 1
                 if first_success_index is None:
                     first_success_index = index
                     if index > 0:
@@ -293,6 +307,7 @@ class FinancialSourceService:
                     break
             except (
                 FinancialRawCaptureError,
+                ProviderError,
                 KeyError,
                 TypeError,
                 ValueError,
@@ -300,6 +315,17 @@ class FinancialSourceService:
             ) as exc:
                 if isinstance(exc, FinancialRawCaptureError):
                     captured_snapshots.extend(exc.snapshots)
+                elif isinstance(exc, ProviderError):
+                    snapshot_ids = list(exc.details.get("financial_snapshot_ids", []))
+                    if exc.details.get("snapshot_id"):
+                        snapshot_ids.append(str(exc.details["snapshot_id"]))
+                    captured_snapshots.extend(
+                        snapshot for snapshot_id in snapshot_ids
+                        if (snapshot := self.state.get_snapshot(snapshot_id)) is not None
+                    )
+                    reasons.append(
+                        f"{_provider_reason_token(provider_id)}_{exc.failure_class.value}"
+                    )
                 self.provider_factory.record_capability_failure(
                     provider_id,
                     "financial.statement_values",
@@ -308,20 +334,7 @@ class FinancialSourceService:
                 )
                 reasons.append(f"{_provider_reason_token(provider_id)}_FINANCIAL_FAILED")
 
-        observations: list[FinancialSourceObservation] = []
-        for payload in payloads:
-            parsed, parsed_reasons = _parse_provider(
-                payload,
-                self.mappings,
-                company_id,
-                period_end,
-                period_type,
-                binding,
-                as_of=None,
-            )
-            observations.extend(parsed)
-            reasons.extend(parsed_reasons)
-        if cross_check and len(payloads) > 1:
+        if cross_check and successful_providers > 1:
             reasons.extend(_cross_provider_conflicts(observations))
         if live:
             as_of = max(
@@ -342,7 +355,24 @@ class FinancialSourceService:
             period_type,
             as_of=as_of,
             live=live,
+            **({"allow_network": False} if not allow_network else {}),
         )
+        if official is None and not allow_network:
+            existing = self.repository.get(
+                company_id, period_end.isoformat(), period_type.value, as_of=as_of,
+            )
+            if existing is not None:
+                manifest = self._verified_manifest(existing)
+                if manifest.market is not market:
+                    raise ValueError("Cached financial release exchange mismatch")
+                if manifest.official_lineage_kind in {
+                    OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION,
+                    OfficialFinancialLineageKind.CNINFO_EXHAUSTIVE_ENUMERATION,
+                }:
+                    return _report_from_manifest(
+                        manifest, str(existing["manifest_object_hash"]),
+                        [*manifest.coverage.reason_codes, "EXISTING_CERTIFIED_RELEASE_REUSED"],
+                    )
         if official is None:
             if not observations:
                 reasons.append("STRUCTURED_FINANCIAL_SOURCES_UNAVAILABLE")
@@ -961,9 +991,14 @@ def _parse_provider(
         if row.get("currency") != "CNY":
             reasons.append(f"PROVIDER_CURRENCY_UNSUPPORTED:{statement.value}")
             continue
+        version = (
+            FinancialProviderReportVersion.model_validate(row["provider_report_version"])
+            if row.get("provider_report_version") is not None else None
+        )
         for mapping in statement_mappings:
             provider_field = mapping.provider_field(payload.provider_id)
             raw_value = row.get(provider_field)
+            unit = mapping.provider_unit(payload.provider_id)
             value = _strict_decimal(raw_value)
             if raw_value is not None and value is None:
                 reasons.append(f"PROVIDER_VALUE_INVALID:{mapping.field_code.value}")
@@ -1000,8 +1035,10 @@ def _parse_provider(
                 "field_code": mapping.field_code,
                 "provider_field": provider_field,
                 "value": value,
-                "unit": mapping.unit,
+                "unit": unit,
             }
+            if version is not None:
+                identity["provider_report_version"] = version.model_dump(mode="json")
             observations.append(
                 FinancialSourceObservation(
                     created_at=snapshot.available_to_system_at,
@@ -1025,11 +1062,12 @@ def _parse_provider(
                     field_code=mapping.field_code,
                     provider_field=provider_field,
                     reported_value=value,
-                    unit=mapping.unit,
+                    unit=unit,
                     provider_id=payload.provider_id,
                     source_snapshot_id=snapshot.snapshot_id,
                     source_request_hash=request_hash,
                     available_to_system_at=snapshot.available_to_system_at,
+                    provider_report_version=version,
                 )
             )
     return observations, list(dict.fromkeys(reasons))
@@ -1048,22 +1086,27 @@ def _critical_missing(observations: list[FinancialSourceObservation]) -> bool:
 def _cross_provider_conflicts(
     observations: list[FinancialSourceObservation],
 ) -> list[str]:
-    values: dict[
+    by_field: dict[
         tuple[FinancialStatementType, FinancialFieldCode],
-        set[tuple[Decimal, FinancialUnit]],
+        list[FinancialSourceObservation],
     ] = {}
-    providers: dict[tuple[FinancialStatementType, FinancialFieldCode], set[str]] = {}
     for item in observations:
-        if item.reported_value is None:
+        if item.reported_value is not None:
+            by_field.setdefault((item.statement_type, item.field_code), []).append(item)
+    conflicts = []
+    for (_statement, field), items in by_field.items():
+        if len({item.provider_id for item in items}) < 2:
             continue
-        key = (item.statement_type, item.field_code)
-        values.setdefault(key, set()).add((item.reported_value, item.unit))
-        providers.setdefault(key, set()).add(item.provider_id)
-    return [
-        f"SECONDARY_PROVIDER_CONFLICT:{field.value}"
-        for (statement, field), observed in values.items()
-        if len(providers[(statement, field)]) > 1 and len(observed) > 1
-    ]
+        reference = items[0]
+        assert reference.reported_value is not None
+        if any(
+            item.reported_value is not None and not values_equivalent(
+                reference.reported_value, reference.unit, item.reported_value, item.unit,
+            )
+            for item in items[1:]
+        ):
+            conflicts.append(f"SECONDARY_PROVIDER_CONFLICT:{field.value}")
+    return conflicts
 
 
 def _strict_decimal(value: object) -> Decimal | None:

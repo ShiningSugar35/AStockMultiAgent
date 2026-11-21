@@ -171,7 +171,7 @@ def test_validated_planner_plan_changes_optional_current_acquisition_but_core_re
     monkeypatch.setattr(
         acquisition,
         "_discover_financial_periods",
-        lambda *_args: (
+        lambda *_args, **_kwargs: (
             [
                 (
                     AcquisitionCapability.FINANCIAL_ANNUAL,

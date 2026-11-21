@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -17,6 +17,10 @@ class FinancialFieldMapping:
     official_label: str
     provider_fields: dict[str, str]
     unit: FinancialUnit
+    provider_units: dict[str, FinancialUnit] = field(default_factory=dict)
+
+    def provider_unit(self, provider_id: str) -> FinancialUnit:
+        return self.provider_units.get(provider_id, self.unit)
 
     def provider_field(self, provider_id: str) -> str:
         try:
@@ -55,6 +59,12 @@ def load_financial_field_mappings(path: Path) -> list[FinancialFieldMapping]:
         }
         if len(normalized_fields) != len(provider_fields):
             raise ValueError("Financial field provider mappings must be non-empty")
+        raw_units = raw.get("provider_units", {})
+        if not isinstance(raw_units, dict) or set(raw_units) - set(normalized_fields):
+            raise ValueError("Financial unit overrides require a mapped provider")
+        provider_units = {
+            str(provider): FinancialUnit(str(unit)) for provider, unit in raw_units.items()
+        }
         mappings.append(
             FinancialFieldMapping(
                 field_code=FinancialFieldCode(str(raw_code)),
@@ -62,6 +72,7 @@ def load_financial_field_mappings(path: Path) -> list[FinancialFieldMapping]:
                 official_label=str(raw["official_label"]),
                 provider_fields=normalized_fields,
                 unit=FinancialUnit(str(raw["unit"])),
+                provider_units=provider_units,
             )
         )
     if len({item.field_code for item in mappings}) != len(mappings):

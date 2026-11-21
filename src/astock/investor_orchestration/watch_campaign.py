@@ -17,16 +17,15 @@ from pydantic import Field
 from astock.core.state import StateStore
 from astock.financial_sources.repository import FinancialSourceReleaseRepository
 from astock.investor_orchestration.full_research import FullResearchRecommendationService
-from astock.investor_orchestration.host_continuation import (
-    ChatInvocationPolicy,
-    HostContinuationPolicy,
-)
+from astock.investor_orchestration.host_continuation import HostContinuationPolicy
 from astock.investor_orchestration.models import StrictModel
 from astock.investor_orchestration.run_ownership import schedule_run_ownership
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
 
 SCOPE = "watch-campaign"
+# Compatibility default for owner takeover, independent of any host activation limit.
+DEFAULT_OWNER_LEASE_SECONDS = 2100
 
 
 class CampaignRound(StrictModel):
@@ -36,7 +35,7 @@ class CampaignRound(StrictModel):
     owner: str = ""
     lease_generation: int = Field(default=0, ge=0)
     invocation_started_at: datetime
-    deadline_at: datetime
+    deadline_at: datetime  # Owner lease expiry; never a host or logical research deadline.
     checkpoint: str = Field(default="", max_length=12000)
     completed_units: int = Field(default=0, ge=0)
     total_units: int = Field(default=1, ge=1)
@@ -148,16 +147,19 @@ class WatchCampaignService:
         owner: str,
         *,
         now: datetime | None = None,
+        lease_seconds: int = DEFAULT_OWNER_LEASE_SECONDS,
     ) -> CampaignBeginResult:
         if not owner.strip() or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", bucket):
             raise ValueError("owner and YYYY-MM-DD Shanghai schedule bucket required")
         at = now or datetime.now(UTC)
         if at.tzinfo is None:
             raise ValueError("timezone-aware clock required")
-        limits = ChatInvocationPolicy.load()
-        # Campaign owner leases retain their established 35-minute expiry.
-        # The ChatGPT host's 45-minute hard stop is a separate activation limit.
-        lease_seconds = limits.closeout_after_seconds
+        if (
+            isinstance(lease_seconds, bool)
+            or not isinstance(lease_seconds, int)
+            or lease_seconds <= 0
+        ):
+            raise ValueError("owner lease duration must be a positive integer")
         with schedule_run_ownership(self.database, SCOPE, self.campaign_id):
             campaign = self.load()
             current = campaign.rounds.get(slot)
@@ -456,6 +458,10 @@ def main() -> None:
     parser.add_argument("--owner")
     parser.add_argument("--round-id")
     parser.add_argument("--lease-generation", type=int)
+    parser.add_argument(
+        "--lease-seconds", type=int, default=DEFAULT_OWNER_LEASE_SECONDS,
+        help="owner takeover lease; does not set a host or research deadline",
+    )
     parser.add_argument("--input", type=Path)
     parser.add_argument("--receipt-id")
     args = parser.parse_args()
@@ -474,6 +480,7 @@ def main() -> None:
             args.slot,
             args.bucket or "",
             args.owner or "",
+            lease_seconds=args.lease_seconds,
         ).model_dump(mode="json")
     elif args.action == "checkpoint":
         if args.input is None or args.input.stat().st_size > 65536:

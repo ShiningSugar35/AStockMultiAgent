@@ -80,6 +80,7 @@ class CurrentResearchAcquisitionService:
         planner_plan_artifact_id: str | None = None,
         reuse_report_artifact_id: str | None = None,
         trusted_identity_capture_ids: tuple[str, ...] = (),
+        allow_network: bool = True,
     ) -> CurrentResearchAcquisitionReport:
         if market not in {Market.XSHG, Market.XSHE, Market.BJSE}:
             raise ValueError("current company research requires a stock exchange")
@@ -177,7 +178,7 @@ class CurrentResearchAcquisitionService:
                 )
             ):
                 financial_specs, period_discovery_reasons = self._discover_financial_periods(
-                    company_id, market, current_date
+                    company_id, market, current_date, allow_network=allow_network
                 )
                 financial_by_capability = {
                     capability: (period_end, period_type)
@@ -204,6 +205,7 @@ class CurrentResearchAcquisitionService:
                     financial_by_capability,
                     identity_verified=identity_verified,
                     trusted_identity_capture_ids=trusted_identity_capture_ids,
+                    allow_network=allow_network,
                 )
             stage_results = self._run_parallel(tasks, max_workers=schedule.max_workers)
             if period_discovery_reasons:
@@ -251,6 +253,7 @@ class CurrentResearchAcquisitionService:
             "schedule_artifact_id": schedule.schedule_id,
             "planner_plan_artifact_id": planner_plan_artifact_id,
             "reused_report_artifact_id": reused_report_id,
+            "allow_network": allow_network,
             "attempts": [item.model_dump(mode="json", exclude={"created_at"}) for item in attempts],
             "external_needs": [
                 item.model_dump(mode="json", exclude={"created_at"}) for item in external_needs
@@ -328,6 +331,7 @@ class CurrentResearchAcquisitionService:
                 ],
                 "external_research_need_count": len(external_needs),
                 "reused_capability_count": len(reused_attempts),
+                "allow_network": allow_network,
             },
         )
         return report
@@ -529,11 +533,15 @@ class CurrentResearchAcquisitionService:
         company_id: str,
         market: Market,
         current: date,
+        *,
+        allow_network: bool = True,
     ) -> tuple[
         list[tuple[AcquisitionCapability, date, FinancialPeriodType]],
         list[str],
     ]:
         fallback = _current_financial_periods(current)
+        if not allow_network:
+            return fallback, ["LOCAL_ONLY_REPORT_CALENDAR"]
         financial = self._financial_service()
         definitions = financial.provider_factory.definitions_for_capability(
             "financial.report_period_index"
@@ -612,13 +620,19 @@ class CurrentResearchAcquisitionService:
         *,
         identity_verified: bool,
         trusted_identity_capture_ids: tuple[str, ...],
+        allow_network: bool = True,
     ) -> Callable[[], AcquisitionAttempt]:
         if capability is AcquisitionCapability.INSTRUMENT_IDENTITY:
             return lambda: self._identity_attempt(
                 company_id,
                 market,
                 trusted_identity_capture_ids=trusted_identity_capture_ids,
+                allow_network=allow_network,
             )
+        if not allow_network and capability in {
+            AcquisitionCapability.DAILY_MARKET, AcquisitionCapability.CORPORATE_ACTIONS,
+        }:
+            return lambda: self._network_disabled_attempt(capability)
         if capability is AcquisitionCapability.DAILY_MARKET:
             return lambda: self._reference_attempt(
                 capability,
@@ -650,8 +664,22 @@ class CurrentResearchAcquisitionService:
                 period_end,
                 period_type,
                 identity_verified=identity_verified,
+                allow_network=allow_network,
             )
         raise ValueError(f"unsupported acquisition capability executor: {capability}")
+
+    @staticmethod
+    def _network_disabled_attempt(capability: AcquisitionCapability) -> AcquisitionAttempt:
+        return AcquisitionAttempt(
+            capability=capability,
+            status=AcquisitionAttemptStatus.FAILED,
+            provider_path=[],
+            fallback_used=False,
+            record_count=0,
+            latency_ms=0,
+            internal_reason_codes=["LOCAL_ONLY_NETWORK_DISABLED"],
+            source_snapshot_ids=[],
+        )
 
     def _run_parallel(
         self,
@@ -687,17 +715,20 @@ class CurrentResearchAcquisitionService:
         market: Market,
         *,
         trusted_identity_capture_ids: tuple[str, ...],
+        allow_network: bool = True,
     ) -> AcquisitionAttempt:
         canonical = self._canonical_instrument_identity_attempt(company_id, market)
         if canonical is not None:
             return canonical
-        structured = self._reference_attempt(
-            AcquisitionCapability.INSTRUMENT_IDENTITY,
-            lambda: self._market_service().sync_instrument_identity(
-                company_id,
-                market,
-                live=True,
-            ),
+        structured = (
+            self._reference_attempt(
+                AcquisitionCapability.INSTRUMENT_IDENTITY,
+                lambda: self._market_service().sync_instrument_identity(
+                    company_id, market, live=True,
+                ),
+            )
+            if allow_network
+            else self._network_disabled_attempt(AcquisitionCapability.INSTRUMENT_IDENTITY)
         )
         if structured.status is AcquisitionAttemptStatus.SUCCEEDED:
             return structured
@@ -931,7 +962,10 @@ class CurrentResearchAcquisitionService:
         period_type: FinancialPeriodType,
         *,
         identity_verified: bool = True,
+        allow_network: bool = True,
     ) -> AcquisitionAttempt:
+        if not identity_verified and not allow_network:
+            return self._network_disabled_attempt(capability)
         if not identity_verified:
             return self._financial_secondary_hint_attempt(
                 capability, company_id, market, period_end
@@ -946,6 +980,7 @@ class CurrentResearchAcquisitionService:
                 as_of=None,
                 live=True,
                 cross_check=False,
+                allow_network=allow_network,
             )
         except Exception as exc:
             return AcquisitionAttempt(

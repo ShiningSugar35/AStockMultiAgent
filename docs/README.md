@@ -22,7 +22,7 @@ Markdown 说明目标、边界和取舍；机器合同与运行证据决定实�
 ## 维护规则
 
 1. 根 README 只做产品入口，AGENTS 只放所有任务必需的规则；命令参数、字段、预算按需查 schema/config/CLI，不跨文档复制。
-2. Skill 保存触发条件、输入/输出、专业判断与停止条件；Workflow 保存依赖、并发、恢复和副作用。总控不再复述全部专业步骤。
+2. Skill 保存触发条件、输入/输出与专业方法；Workflow 只保存跨能力依赖、并发、恢复和副作用，不要求一 Skill 对应一 Workflow。共享注册与恢复集中在角色映射，总控按需加载。
 3. 当前架构原位更新，明确实现、未实现、验证与准入差别。完全被吸收的旧审计/方案实际删除，不只加 SUPERSEDED 标签留重复正文。
 4. ADR 是历史决策例外，不删除旧决策；有效审计/许可证/来源绑定记录按真实引用保留。Git 保存源码/配置/文档历史，不替代业务数据库。
 5. 工作包通过独立 Review 与适用测试后，计划/机器索引同时移除；稳定事实迁入现役文档，最近证据写进度验收。自然样本/资格仅作运行 enablement。
@@ -48,9 +48,11 @@ Markdown 说明目标、边界和取舍；机器合同与运行证据决定实�
 ## 代码合同导航
 
 - Web 工具：`src/astock/schemas/web_tools.py`、`configs/web_tools.yaml`；运行时 `web-tool-schema` 展示合同。宿主能力观测与费用类别分开，未知不等于付费备用许可。
-- Tushare：`configs/tushare_access.yaml` 的官方 repo/SDK/逐端点链接，`tushare-schema --endpoint ...` 与 `integrations/tushare/README.md`。只读所需端点；结构化补充尚不替换正式财报回源。
+- Tushare：`configs/tushare_access.yaml` 的官方 repo/SDK/逐端点链接，`tushare-schema --endpoint ...` 与 `integrations/tushare/README.md`。按需读取端点；三表已映射到现有财报流水线，vendor 结果仍须经官方原件认证。
 - Mootdx：`configs/mootdx_fallback.yaml`、`integrations/mootdx/README.md` 与 THIRD_PARTY_NOTICES；隔离依赖、raw 60m/5m、明确 SDK/协议/单位归因。
 - 资源与验证：`configs/storage_lifecycle.yaml`、`scripts/run_local_quality.py`、`scripts/plan_validation.py`。真实进程身份、引用闭包、输入指纹及终态回执拥有清理与 PASS 事实。
+- 观测与评测：`research-evaluation-report` 只读聚合已有 trace；`agent-observability-report`、`research-efficiency-report` 默认查看已登记快照，显式 `--materialize` 才生成。详情见[性能与 Skills](architecture/current-research-performance-and-agent-skills-v1.md)。
+- 可选回归：`plan_validation.py --golden` 从既有业务矩阵选择15个 recorded 场景，不替代影响范围测试，不证明宿主运行或模型质量。
 - 本地知识：`configs/knowledge_sources.yaml` 与 [知识工作流](workflows/workflow-knowledge-ingest.md)；线上作者采集已退役，旧名称仅可承担存量证据兼容。
 
 CURRENT 表示文档当前有效，不保证所有部署已取得生产资格；PROPOSED/SHADOW/NOT_ADMITTED 由相应机器合同解释。任何“已完成”都需可定位的测试、审计或运行证据。

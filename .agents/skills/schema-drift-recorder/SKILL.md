@@ -11,7 +11,7 @@ description: Record provider schema drift from immutable raw snapshots, validate
 4. `uv run astock adaptive-schema-repair-admit <validation_id> --approve` may create only a reviewed candidate dialect release. It must not mutate the active production parser or write formal market/financial facts.
 5. Audit frozen artifacts with `uv run astock adaptive-artifact-audit <artifact_id>` and use `uv run astock adaptive-dialect-rollback <release_id>` for the exit drill. The active dialect remains the last separately validated production configuration.
 6. Preserve all raw responses, validation findings and candidate releases in the existing ObjectStore/State lineage. Do not create a parallel response archive or mutable shadow parser registry.
-7. Record Skill selection/completion through `uv run astock agent-observation-register <request.json>` and inspect `uv run astock agent-observability-report --lookback-days 30` for routing telemetry.
+7. At the owning task's completion, record one observation through `uv run astock agent-observation-register <request.json>`; reuse a coordinator's existing observation. Inspect saved telemetry only for an actual diagnostic question. A missing report does not trigger materialization or block the task.
 
 ## Output
 

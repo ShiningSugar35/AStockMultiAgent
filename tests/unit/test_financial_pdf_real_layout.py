@@ -9,7 +9,7 @@ from astock.financial_sources.certification import (
     _field_label_pattern,
     _logical_row_values,
     _statement_header_identity,
-    _values_equivalent,
+    values_equivalent,
 )
 from astock.financial_sources.config import FinancialFieldMapping
 from astock.schemas import (
@@ -169,13 +169,13 @@ def test_split_cash_flow_rows_extract_current_period(
 
 
 def test_equivalent_monetary_values_compare_after_unit_normalization() -> None:
-    assert _values_equivalent(
+    assert values_equivalent(
         Decimal("5520518.143762"),
         FinancialUnit.TEN_THOUSAND_CNY,
         Decimal("55205181437.62"),
         FinancialUnit.CNY,
     )
-    assert not _values_equivalent(
+    assert not values_equivalent(
         Decimal("5520518.143762"),
         FinancialUnit.TEN_THOUSAND_CNY,
         Decimal("55205181437.63"),

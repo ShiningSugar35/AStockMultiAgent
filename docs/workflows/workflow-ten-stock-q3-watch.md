@@ -22,7 +22,7 @@ canonical campaign=`ten-stock-q3-2026`，元数据保存在现有SQLite checkpoi
 
 时间均为Asia/Shanghai。观察任务每日16:00；组合任务07:30、16:00。07:30是盘前，价格使用上一交易日正式收盘并明确日期，不存在当天开盘价；休市日仅刷新有变化的新闻/政策，价格明确注明最近交易日。同日16点观察与组合使用同一pm round/lease，未取得lease的任务不重复研究或生成报告；先取得者保存一份合并日终报告。
 
-每次激活先记录真实开始时刻并执行`begin`。返回的`round_id + lease_generation`是后续checkpoint的CAS身份，owner仅作诊断及旧调用兼容；相同owner重入不能重置时钟，到期后返回`lease_acquired=false / EXPIRED_LEASE`；不得改名伪造新activation来延长本次35分钟窗口。空checkpoint只确认当前lease、不续租；到期的显式token和旧owner-only调用均返回`STALE_LEASE`。新激活遇到未过期live lease时，`begin`正常返回`lease_acquired=false / LIVE_OWNER`并立即静默结束，而不是把Scheduled任务打成失败；同一目标轮已`COMPLETE`时返回`ALREADY_COMPLETE`并同样不重复研究/生成报告。旧轮释放或租期到期后，续接保持原round_id和已有进度、递增lease_generation，并把活动状态恢复为`PENDING`，使本activation的中途checkpoint/提交前lease校验不会因继承旧`PARTIAL`状态而再次释放lease；不因跨日或平台retry另起平行轮。一个slot只保留当前轮次和必要checkpoint，非累积流水。`COMPLETE`表示本轮覆盖完成，不等于正式投资决策已完成。
+每次激活先记录真实开始时刻并执行`begin`。返回的`round_id + lease_generation`是后续checkpoint的CAS身份，owner仅作诊断及旧调用兼容；相同owner重入不能重置时钟，到期后返回`lease_acquired=false / EXPIRED_LEASE`；不得改名伪造新activation来绕过实际租约。空checkpoint只确认当前lease、不续租；到期的显式token和旧owner-only调用均返回`STALE_LEASE`。新激活遇到未过期live lease时，`begin`正常返回`lease_acquired=false / LIVE_OWNER`并立即静默结束，而不是把Scheduled任务打成失败；同一目标轮已`COMPLETE`时返回`ALREADY_COMPLETE`并同样不重复研究/生成报告。旧轮释放或租期到期后，续接保持原round_id和已有进度、递增lease_generation，并把活动状态恢复为`PENDING`，使本activation的中途checkpoint/提交前lease校验不会因继承旧`PARTIAL`状态而再次释放lease；不因跨日或平台retry另起平行轮。一个slot只保留当前轮次和必要checkpoint，非累积流水。`COMPLETE`表示本轮覆盖完成，不等于正式投资决策已完成。
 
 ### 每轮内容与证据
 
@@ -44,9 +44,9 @@ canonical campaign=`ten-stock-q3-2026`，元数据保存在现有SQLite checkpoi
 
 最终组合报告实际形成并通过发布后，停止“10+三季报观察”对应platform任务；盘前/盘后组合任务保留，目标从正式Portfolio工件读取，不另建持仓事实。还未选出组合时，组合任务只消费共享观察进度，不给虚构的组合盈亏。用户确认实际买入后才使用canonical external-account导入/快照入口保留买入时价格、估值、逻辑、原件引用与风险条件，不自动创建交易。
 
-### 35分钟准备交接 / 40分钟核验 / 45分钟项目上限
+### 实际宿主中断与同轮续接
 
-`configs/chat_invocation_policy_v1.yaml`为唯一阈值配置。CHATGPT_CHAT每次激活2100秒起停止启动新长任务并保存同一轮已验证进度；2400秒前核验真实平台续接绑定；2700秒前完成激活收口与lease释放。若平台更早结束则提前留出交接余量。中途只保存 checkpoint，不发布未完成研究正文；完整且独立审计通过的报告才可进入既有正式展示流程。OTHER_AGENT没有总体研究时限；批次预算耗尽后恢复同一研究请求。
+`configs/chat_invocation_policy_v1.yaml`保留兼容路径，当前v2只配置交接/绑定预留及续接频次。仅实际观测到的平台期限、中断、用户取消或资源预算耗尽触发受控收口；不得因运行超过35/40/45分钟或完成比例不足而机械早停。预留量围绕真实宿主期限计算，不反推项目自设总时限。保存同一round已核验证据和checkpoint，核对真实续接绑定后按合同释放lease；OTHER_AGENT不继承Chat任务计划，实际中断仍需保存恢复点。未完成研究正文不冒充正式报告。
 
 Scheduled automation运行时不动态创建另一条automation。本campaign使用预先绑定的每小时continuation watcher：新round自动继承该opaque task ID，watcher只续接同一未完成round，不重新抓已满足来源；周期最高每小时一次，不能承诺亚小时周期。交互式ChatGPT会话只有在平台明确允许时才可创建新的子Scheduled；预绑定/平台权限失败必须写入断点，不能把提示词或本地配置冒充已创建任务。云平台在收口前中断时，按已落地 checkpoint 恢复剩余研究和报告生成，不假定平台永不 retry。
 

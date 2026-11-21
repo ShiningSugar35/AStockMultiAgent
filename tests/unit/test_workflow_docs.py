@@ -14,12 +14,6 @@ EXPECTED_WORKFLOWS = {
     "workflow-candidate-discovery.md",
     "workflow-evidence-recovery.md",
     "workflow-financial-integrity.md",
-    "workflow-macro-policy-regime.md",
-    "workflow-industry-value-chain.md",
-    "workflow-catalyst-event-research.md",
-    "workflow-governance-management-quality.md",
-    "workflow-investment-red-team.md",
-    "workflow-model-risk-backtest-validation.md",
     "workflow-committee-trade-plan.md",
     "workflow-portfolio-construction.md",
     "workflow-portfolio-transition-and-hedging.md",
@@ -29,7 +23,6 @@ EXPECTED_WORKFLOWS = {
     "workflow-knowledge-ingest.md",
     "workflow-prospective-evaluation.md",
     "workflow-adaptive-edge.md",
-    "workflow-research-tech-scout.md",
     "workflow-continuous-investment-monitoring.md",
     "workflow-ten-stock-q3-watch.md",
 }
@@ -60,18 +53,33 @@ def test_workflow_catalog_is_complete_and_every_workflow_has_operational_section
         assert "## Stop conditions" in text
 
 
-def test_every_repo_skill_links_to_existing_workflow_docs() -> None:
-    link_pattern = re.compile(r"\.\./\.\./\.\./docs/workflows/(workflow-[^)]+\.md)")
-    for skill_path in CANONICAL_SKILLS.glob("*/SKILL.md"):
-        body = skill_path.read_text(encoding="utf-8")
-        assert "## Workflows" in body, skill_path.parent.name
+def test_skill_and_workflow_references_resolve_without_forcing_one_to_one_wrappers() -> None:
+    link_pattern = re.compile(r"\]\(([^)]+)\)")
+    cross_capability_skills = {
+        "astock-research-orchestrator", "candidate-scan", "company-deep-research",
+        "evidence-investigation", "holding-monitor", "continuous-investment-monitor",
+        "portfolio-manager", "paper-trading-recovery", "knowledge-ingest",
+    }
+    paths = [
+        *CANONICAL_SKILLS.glob("*/SKILL.md"),
+        *WORKFLOWS.glob("*.md"),
+        HUMAN_SKILLS / "README.md",
+        PROJECT_ROOT / "docs/architecture/research-specialist-skills-crosswalk.md",
+    ]
+    for path in paths:
+        body = path.read_text(encoding="utf-8")
         linked = link_pattern.findall(body)
-        assert linked, skill_path.parent.name
-        for name in linked:
-            assert (WORKFLOWS / name).is_file(), (skill_path.parent.name, name)
+        if path.parent.name in cross_capability_skills and path.name == "SKILL.md":
+            assert any("docs/workflows/workflow-" in target for target in linked), path
+        for target in linked:
+            if "://" in target or target.startswith("#"):
+                continue
+            local_path = (path.parent / target.split("#", 1)[0]).resolve()
+            assert local_path.is_relative_to(PROJECT_ROOT), (path, target)
+            assert local_path.exists(), (path, target)
 
 
-def test_current_company_and_evidence_workflows_lock_policy_web_manual_order() -> None:
+def test_current_company_and_evidence_workflows_preserve_policy_and_gap_scope() -> None:
     current = (WORKFLOWS / "workflow-current-company-research.md").read_text(encoding="utf-8")
     evidence = (WORKFLOWS / "workflow-evidence-recovery.md").read_text(encoding="utf-8")
     adaptive = (WORKFLOWS / "workflow-adaptive-edge.md").read_text(encoding="utf-8")
@@ -86,11 +94,14 @@ def test_current_company_and_evidence_workflows_lock_policy_web_manual_order() -
     assert "normal investor answers must not expose those backend fields" in current
     assert "active Current Research policy" in evidence
     assert "Authoritative Web fallback" in evidence
-    assert "Manual intervention is last" in evidence
     assert "ProviderRecoveryProposal" in evidence
     assert "Schema Repair" in evidence
     assert "Adaptive Edge / Deterministic Core" in adaptive
-    assert "Manual remains last" in adaptive
+    for workflow in (current, evidence):
+        for state in ("BUDGET_EXHAUSTED", "PUBLIC_DATA_UNAVAILABLE", "NEEDS_USER_INPUT"):
+            assert state in workflow
+    assert "identified private input" in evidence
+    assert "independent" in evidence
 
 
 def test_ten_stock_prebound_watcher_survives_single_round_completion() -> None:

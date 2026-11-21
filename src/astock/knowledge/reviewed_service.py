@@ -1302,50 +1302,6 @@ def _most_specific_title(titles: Sequence[str]) -> str:
     )[0]
 
 
-def _legacy_rule_draft(argument: ReviewedArgumentUnit, text: str) -> _RuleDraft:
-    fields = {name: tuple(_sentences_for(text, terms)) for name, terms in _FIELD_KEYWORDS.items()}
-    sentences = _source_sentences(text)
-    reasoning = tuple(sentences[:4]) or (INSUFFICIENT_SOURCE,)
-    status = (
-        ReviewedSkillStatus.READY_FOR_SHADOW
-        if (
-            argument.status is ReviewedArgumentStatus.READY
-            and fields["conditions"]
-            and fields["evidence"]
-            and (fields["positive"] or fields["negative"])
-            and (fields["invalidation"] or fields["failure"])
-        )
-        else ReviewedSkillStatus.NEEDS_USER_REVIEW
-    )
-    uncertainty_reason: tuple[str, ...] = (
-        ()
-        if status is ReviewedSkillStatus.READY_FOR_SHADOW
-        else ("legacy_draft_unavailable",)
-    )
-    return _RuleDraft(
-        argument=argument,
-        text=text,
-        source_ref=ReviewedSourceRef(
-            argument_unit_id=argument.argument_unit_id,
-            paragraph_ids=[ref.source_paragraph_id for ref in argument.paragraph_refs],
-            page_numbers=sorted({ref.page_number for ref in argument.paragraph_refs}),
-            text_object_sha256=argument.text_object_sha256,
-        ),
-        decision_question=f"如何判断“{argument.title}”？",
-        applicable_conditions=fields["conditions"] or (INSUFFICIENT_SOURCE,),
-        reasoning_steps=reasoning,
-        required_evidence=fields["evidence"] or (INSUFFICIENT_SOURCE,),
-        positive_signals=fields["positive"] or (INSUFFICIENT_SOURCE,),
-        negative_signals=fields["negative"] or (INSUFFICIENT_SOURCE,),
-        invalidation_conditions=fields["invalidation"] or (INSUFFICIENT_SOURCE,),
-        known_failure_modes=fields["failure"] or (INSUFFICIENT_SOURCE,),
-        applicable_industries=fields["industry"] or (INSUFFICIENT_SOURCE,),
-        holding_horizon=fields["horizon"] or (INSUFFICIENT_SOURCE,),
-        uncertainty_reason=uncertainty_reason,
-        status=status,
-    )
-
-
 def _build_rule_draft(argument: ReviewedArgumentUnit, text: str) -> _RuleDraft:
     fields = {
         name: tuple(_sentences_for(text, terms))

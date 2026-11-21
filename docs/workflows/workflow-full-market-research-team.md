@@ -11,7 +11,7 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
 - Default backend: `CHAT_ORCHESTRATED`.
 - No background LLM daemon or daily pre-sync is assumed.
 - User invocation starts one on-demand run. Current market/reference/evidence data are fetched in that run and immutable raw responses are reused through existing ObjectStore lineage.
-- **Same-request completion is mandatory for recommendation intent.** Seed/Candidate shortlist, acquisition recovery, partial company fan-out, unfinished debate/committee, and unfinished portfolio are internal checkpoints only. The Agent keeps the originating logical request active until the deterministic investment-closure/recommendation gate permits an investor view, or a truthful documented stop condition applies. Follow AGENTS host-aware continuation: CHATGPT_CHAT may checkpoint and hand off to a real hourly Scheduled task after more than 2400 seconds with less than 2/3 verified completion; OTHER_AGENT has no overall turn/research time cap. Per-call/batch/resource limits remain bounded. Never substitute another request's historical receipt or declare a Scheduled task created without its actual creation receipt. Do not answer with “下一步可以继续深研/估值/配仓”。
+- **Same-request completion is mandatory for recommendation intent.** Seed/Candidate shortlist, acquisition recovery, partial company fan-out, unfinished debate/committee, and unfinished portfolio are internal checkpoints only. The Agent keeps the originating logical request active until the deterministic investment-closure/recommendation gate permits an investor view, or a truthful documented stop condition applies. Follow the active `configs/chat_invocation_policy_v1.yaml`: hand off for an observed platform deadline/interruption, explicit cancellation or an exhausted resource budget, preserving the same request/checkpoint/lease. Elapsed time alone is not a stop signal. OTHER_AGENT does not inherit Chat scheduling. Per-call/batch/resource limits remain bounded. Never substitute another request's historical receipt or declare a Scheduled task created without its actual creation receipt. Do not answer with “下一步可以继续深研/估值/配仓”。
 - Hardware budget comes from `research-runtime-profile`; lightweight laptops use bounded parallelism rather than maximum fan-out.
 - `AGENT_RUNTIME` is an optional future executor only; it must reuse the same task graph and readiness gate.
 
@@ -19,7 +19,7 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
 
 1. **Refresh local investor state and investment expectation**
    - Sync/read the local paper portfolio and unresolved continuous-monitor items.
-   - Resolve principal and target annual return independently before Full Research: current explicit request value first, then the newest verifiable recorded value in recent formal recommendation history, then the policy defaults of RMB 100,000 and 100% annual target. Model DEFAULT values never hide older user values; malformed objects and other-account entries are skipped. Restore from registered request logs as well as formal recommendation/holding-research contracts, then freeze the small context before capability execution.
+   - Resolve principal and target annual return independently before Full Research: current explicit request value first, then the newest verifiable recorded value in recent formal recommendation history, then the current versioned policy defaults. Model DEFAULT values never hide older user values; malformed objects and other-account entries are skipped. Restore from registered request logs as well as formal recommendation/holding-research contracts, then freeze the small context before capability execution.
    - The annual target is a planning objective, never a promised return or authority to relax mandatory research, concentration, liquidity, risk, margin/shorting or broker constraints. If current approved candidates cannot support the target path under hard limits, retain cash and expose the objective gap.
    - This state restore does not create research authority.
 
@@ -77,21 +77,11 @@ Architecture/acceptance contract: [`../architecture/full-market-research-team-v1
 
 ## Role-output contract
 
-For each non-gate task:
-
-1. Register the role output with `research-team-role-output`.
-2. `plan_id`, `task_id`, and `output_contract` must match the plan.
-3. Every recommendation-required role must reference at least one registered member artifact; the member artifact must already exist and verify in ObjectStore.
-4. Every declared `evidence_id` must resolve to a real Evidence record whose excerpt object verifies; task-result Evidence ids must exactly equal the union declared by its registered role outputs.
-5. Register completion with `research-team-task-result` using the resulting `ResearchRoleOutput` artifact id.
-6. Dependencies and Bull/Bear independence are checked deterministically.
-7. Use `research-coverage-score` to record Universal / Industry / Private Skill / Evidence coverage. Private Skill is edge-only and never replaces core research coverage or the final recommendation gate.
-
-An arbitrary registered artifact cannot be used directly to complete a research-team task.
+Apply the [shared team execution contract](../architecture/research-specialist-skills-crosswalk.md#shared-execution-contract) once per ready DAG wave. Preserve registered typed members, exact evidence union and independent contexts. Reuse frozen macro/policy, industry, governance and event artifacts across downstream company/Bull/Bear tasks; load each role's Skill only when dispatched. Use `research-coverage-score` for coverage diagnostics. Private Skill remains edge-only and never replaces core evidence or publication.
 
 ## Stop conditions
 
-Formal market-wide recommendation stops immediately at `OBSERVATION_ONLY` if the current Universe cannot be proven, the blind discovery lineage is unavailable, a required team node is incomplete/blocked, Bull/Bear independence fails, a required output contract cannot be verified, or the deterministic Recommendation Readiness Gate is not READY. Evidence recovery may continue within the on-demand run budget, but no conversational fallback may bypass these conditions.
+Missing Universe proof, blind lineage, independent contexts or required typed artifacts blocks the dependent formal recommendation. It does not terminate recoverable acquisition or unrelated ready tasks. Continue the same request while an applicable route can add material evidence within the active budget; reuse successful nodes. The existing closure service distinguishes completion, public-route exhaustion, private input, budget exhaustion and interruption. Never relabel an intermediate gate failure as completed research.
 
 ## Fail-closed rules
 
@@ -105,11 +95,11 @@ Formal market-wide recommendation stops immediately at `OBSERVATION_ONLY` if the
 
 ## Performance on light office laptops
 
-- LOW_RESOURCE defaults: provider=2, logical Agent=2, DuckDB threads=2, deep-company concurrency=2, shortlist=6.
+- Read concurrency, CPU and shortlist budgets from `research-runtime-profile` and the active policy; do not duplicate numeric defaults in prompts.
 - Network-bound independent calls may run concurrently; CPU/memory-heavy work stays bounded.
 - Same-run raw snapshots and registered artifacts are reused rather than refetched.
 - No GPU, Redis, Kafka, Temporal or background daemon is required.
-- The full run may consume the configured two-hour resolution budget when data providers or authoritative Web evidence are slow; duration itself is not a quality gate.
+- The active request/resource policy owns budgets; a fixed duration or completion fraction is not a quality verdict.
 
 ## Recovery and optional source supplement
 

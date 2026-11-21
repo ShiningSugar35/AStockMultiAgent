@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import httpx
 
@@ -157,25 +158,21 @@ class CurrentResearchContinuationService:
             CurrentResearchContinuationStatus.TEAM_RESEARCH_REQUIRED,
         }:
             if record.status is CurrentResearchContinuationStatus.AUTO_RESOLUTION_REQUIRED:
-                if self.clock() >= record.deadline_at:
-                    return self._escalate_manual(record)
                 if any(
                     task.status is ExternalResearchTaskStatus.EVIDENCE_BOUND
                     for task in record.external_tasks
                 ):
                     record = self.resume(record.continuation_id)
                     continue
-                unresolved = tuple(
-                    task
-                    for task in record.external_tasks
-                    if task.status is ExternalResearchTaskStatus.PENDING
-                )
+                if self.clock() >= record.deadline_at:
+                    return self._finish_recovery(record, "TIME_BUDGET_EXHAUSTED")
+                unresolved = self._pending_public_tasks(record)
                 if not unresolved:
                     record = self.resume(record.continuation_id)
                     continue
                 for task in unresolved:
                     if self.clock() >= record.deadline_at:
-                        return self._escalate_manual(record)
+                        break
                     try:
                         result = resolve_external(record, task)
                     except (
@@ -285,6 +282,7 @@ class CurrentResearchContinuationService:
             item.model_copy(
                 update={
                     "last_failure_code": result.failure_code,
+                    "private_material_required": result.private_material_required,
                 }
             )
             if item.task_id == task.task_id
@@ -300,7 +298,12 @@ class CurrentResearchContinuationService:
             )
         )
         if result.private_material_required:
-            return self._escalate_private_material(record, task)
+            if not self._pending_public_tasks(record) and not any(
+                item.status is ExternalResearchTaskStatus.EVIDENCE_BOUND
+                for item in record.external_tasks
+            ):
+                return self._finish_private_material(record)
+            return record
         for capture_artifact_id in result.capture_artifact_ids:
             record = self.bind_external_evidence(
                 CurrentResearchEvidenceBinding(
@@ -354,14 +357,14 @@ class CurrentResearchContinuationService:
         binding: CurrentResearchEvidenceBinding,
     ) -> CurrentResearchContinuation:
         record = self._require(binding.continuation_id)
-        private_material_resume = (
-            record.status is CurrentResearchContinuationStatus.NEEDS_USER_INPUT
-            and record.private_material_required
-            and not record.automatic_budget_exhausted
-        )
+        resumable_gap = record.status in {
+            CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
+            CurrentResearchContinuationStatus.BUDGET_EXHAUSTED,
+            CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
+        }
         if (
             record.status is not CurrentResearchContinuationStatus.AUTO_RESOLUTION_REQUIRED
-            and not private_material_resume
+            and not resumable_gap
         ):
             raise ValueError("external evidence can only be bound to an active evidence gap")
         task = next(
@@ -391,19 +394,21 @@ class CurrentResearchContinuationService:
                         "status": ExternalResearchTaskStatus.EVIDENCE_BOUND,
                         "capture_artifact_ids": captures,
                         "last_failure_code": None,
+                        "private_material_required": False,
                     }
                 )
             )
         update: dict[str, object] = {
             "external_tasks": sorted(updated_tasks, key=lambda item: item.task_id)
         }
-        if private_material_resume:
+        if resumable_gap:
             update.update(
                 {
                     "status": CurrentResearchContinuationStatus.AUTO_RESOLUTION_REQUIRED,
                     "manual_actions": [],
                     "private_material_required": False,
                     "automatic_budget_exhausted": False,
+                    "recovery_stop_reason": None,
                 }
             )
         updated = record.model_copy(update=update)
@@ -419,8 +424,14 @@ class CurrentResearchContinuationService:
             task.status is ExternalResearchTaskStatus.EVIDENCE_BOUND and task.capture_artifact_ids
             for task in record.external_tasks
         )
-        if deadline_exhausted or (rounds_exhausted and not bound_evidence_available):
-            return self._escalate_manual(record)
+        budget_exhausted = deadline_exhausted or rounds_exhausted
+        stop_reason: Literal["TIME_BUDGET_EXHAUSTED", "ATTEMPT_BUDGET_EXHAUSTED"] = (
+            "TIME_BUDGET_EXHAUSTED" if deadline_exhausted else "ATTEMPT_BUDGET_EXHAUSTED"
+        )
+        if budget_exhausted and not bound_evidence_available:
+            return self._finish_recovery(record, stop_reason)
+        if not bound_evidence_available and not self._pending_public_tasks(record):
+            return self._finish_private_material(record)
 
         trusted_identity_capture_ids = tuple(
             sorted(
@@ -438,15 +449,14 @@ class CurrentResearchContinuationService:
             planner_plan_artifact_id=record.planner_plan_artifact_id,
             reuse_report_artifact_id=record.current_acquisition_report_artifact_id,
             trusted_identity_capture_ids=trusted_identity_capture_ids,
+            allow_network=not budget_exhausted,
         )
-        # A successful capture on the configured final automatic round still
-        # needs one deterministic reacquisition so the frozen evidence can be
-        # consumed. This is not an extra resolver round: preserve the current
-        # round number, and fail closed immediately if the evidence does not
-        # clear the gap.
+        # Budget limits stop new network attempts, not consumption of frozen
+        # evidence. The existing acquisition pipeline reconciles locally after
+        # either limit, without spending another resolver round or using fixtures.
         next_round = (
             record.automatic_rounds_completed
-            if rounds_exhausted
+            if budget_exhausted
             else record.automatic_rounds_completed + 1
         )
         tasks = self._reconcile_tasks(record, report, automatic_round=next_round)
@@ -463,7 +473,12 @@ class CurrentResearchContinuationService:
                 }
             )
             updated = self._persist(updated)
-            return self._escalate_manual(updated) if rounds_exhausted else updated
+            if budget_exhausted:
+                return self._finish_recovery(updated, stop_reason)
+            return (
+                updated if self._pending_public_tasks(updated)
+                else self._finish_private_material(updated)
+            )
 
         plan = self.team.create_company_plan(
             company_id=record.company_id,
@@ -559,8 +574,9 @@ class CurrentResearchContinuationService:
             ),
             "public_data_unavailable": (
                 record.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
-                or (record.automatic_budget_exhausted and not record.private_material_required)
             ),
+            "automatic_budget_exhausted": record.automatic_budget_exhausted,
+            "recovery_stop_reason": record.recovery_stop_reason,
             "investor_view_allowed": record.investor_view_allowed,
             "full_research_input_ready": record.full_research_input_ready,
         }
@@ -654,9 +670,12 @@ class CurrentResearchContinuationService:
                         ),
                         "automatic_rounds_attempted": automatic_round,
                         "last_failure_code": (
-                            "BOUND_EVIDENCE_NOT_ACCEPTED_BY_ACQUISITION"
-                            if task.capture_artifact_ids
-                            else "AUTOMATIC_SOURCE_STILL_UNAVAILABLE"
+                            task.last_failure_code if task.private_material_required
+                            else (
+                                "BOUND_EVIDENCE_NOT_ACCEPTED_BY_ACQUISITION"
+                                if task.capture_artifact_ids
+                                else "AUTOMATIC_SOURCE_STILL_UNAVAILABLE"
+                            )
                         ),
                     }
                 )
@@ -680,52 +699,75 @@ class CurrentResearchContinuationService:
     ) -> list[CurrentResearchExternalTask]:
         return sorted(
             [
-                item.model_copy(update={"status": ExternalResearchTaskStatus.RESOLVED})
+                item.model_copy(update={
+                    "status": ExternalResearchTaskStatus.RESOLVED,
+                    "private_material_required": False,
+                })
                 for item in tasks
             ],
             key=lambda item: item.task_id,
         )
 
-    def _escalate_private_material(
-        self,
+    @staticmethod
+    def _pending_public_tasks(
         record: CurrentResearchContinuation,
-        task: CurrentResearchExternalTask,
-    ) -> CurrentResearchContinuation:
-        action = ManualResearchAction(
-            capability=task.capability,
-            instruction=task.research_question,
-            why_needed=(
-                "The resolver identified required private material or authorization; "
-                "public-source unavailability alone is not a private-input requirement."
-            ),
-            created_at=self.clock(),
+    ) -> tuple[CurrentResearchExternalTask, ...]:
+        return tuple(
+            task for task in record.external_tasks
+            if task.status is ExternalResearchTaskStatus.PENDING
+            and not task.private_material_required
         )
-        updated = record.model_copy(
-            update={
-                "status": CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
-                "manual_actions": [action],
-                "automatic_budget_exhausted": False,
-                "private_material_required": True,
-            }
-        )
-        return self._persist(updated)
 
-    def _escalate_manual(
+    def _private_actions(
+        self, record: CurrentResearchContinuation,
+    ) -> list[ManualResearchAction]:
+        return [
+            ManualResearchAction(
+                capability=task.capability,
+                instruction=task.research_question,
+                why_needed=(
+                    "This capability requires identified private material or authorization; "
+                    "independent public evidence has been processed separately."
+                ),
+                created_at=self.clock(),
+            )
+            for task in record.external_tasks
+            if task.private_material_required
+            and task.status is not ExternalResearchTaskStatus.RESOLVED
+        ]
+
+    def _finish_private_material(
+        self, record: CurrentResearchContinuation,
+    ) -> CurrentResearchContinuation:
+        actions = self._private_actions(record)
+        if not actions:
+            raise ValueError("private-input closure requires an identified private gap")
+        return self._persist(record.model_copy(update={
+            "status": CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
+            "manual_actions": actions,
+            "automatic_budget_exhausted": False,
+            "recovery_stop_reason": None,
+            "private_material_required": True,
+        }))
+
+    def _finish_recovery(
         self,
         record: CurrentResearchContinuation,
+        reason: Literal["TIME_BUDGET_EXHAUSTED", "ATTEMPT_BUDGET_EXHAUSTED"],
     ) -> CurrentResearchContinuation:
-        # Keep the old method name for internal compatibility. Exhaustion describes
-        # this attempt, not proof that every public source is unavailable or that
-        # the user owns the missing material. Legacy v1 checkpoints remain readable.
-        updated = record.model_copy(
-            update={
-                "status": CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
-                "manual_actions": [],
-                "automatic_budget_exhausted": True,
-                "private_material_required": False,
-            }
-        )
-        return self._persist(updated)
+        # A local resource limit is not evidence that public sources are exhausted.
+        # Keep the original task/capture lineage so later evidence can resume it.
+        actions = self._private_actions(record)
+        return self._persist(record.model_copy(update={
+            "status": (
+                CurrentResearchContinuationStatus.NEEDS_USER_INPUT
+                if actions else CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
+            ),
+            "manual_actions": actions,
+            "automatic_budget_exhausted": True,
+            "recovery_stop_reason": reason,
+            "private_material_required": bool(actions),
+        }))
 
     def _persist(
         self,
@@ -803,6 +845,7 @@ class CurrentResearchContinuationService:
                     CurrentResearchContinuationStatus.NEEDS_USER_INPUT,
                     CurrentResearchContinuationStatus.FAILED,
                     CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
+                    CurrentResearchContinuationStatus.BUDGET_EXHAUSTED,
                 }
                 else OperationalSeverity.INFO
             ),
@@ -819,6 +862,7 @@ class CurrentResearchContinuationService:
                     for item in record.external_tasks
                 ),
                 "automatic_budget_exhausted": record.automatic_budget_exhausted,
+                "recovery_stop_reason": record.recovery_stop_reason,
                 "investor_view_allowed": record.investor_view_allowed,
                 "full_research_input_ready": record.full_research_input_ready,
             },

@@ -382,9 +382,4 @@ def _strict_seen_at(value: object) -> datetime | None:
     return result.astimezone(UTC)
 
 
-def _parse_seen_at(value: object, *, fallback: datetime) -> datetime:
-    """Legacy helper for callers; checked capture parsing never invents a date."""
-    return _strict_seen_at(value) or fallback.astimezone(UTC)
-
-
 __all__ = ["GdeltNewsLeadProvider", "NewsLead", "NewsSearchReceipt", "replay_news_search"]

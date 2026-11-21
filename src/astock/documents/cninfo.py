@@ -557,11 +557,3 @@ def cninfo_org_id(symbol: str, exchange: DisclosureExchange) -> str:
 
 def _column_for_exchange(exchange: DisclosureExchange) -> str:
     return "sse" if exchange is DisclosureExchange.SSE else "szse"
-
-
-def _announcement_count(raw: bytes) -> int:
-    try:
-        payload = json.loads(raw)
-        return int(payload.get("totalAnnouncement") or 0)
-    except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
-        return 0

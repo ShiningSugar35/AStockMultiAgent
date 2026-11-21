@@ -7,25 +7,24 @@ description: Build an evidence-linked catalyst and risk event timeline for an A-
 
 ## Inputs and authority
 
+Use the [shared team execution contract](../../../docs/architecture/research-specialist-skills-crosswalk.md#shared-execution-contract) for task dispatch, registration and recovery. Load this role's method only; reuse the coordinator's ready-task snapshot.
+
 - Consume only the ready `company-catalyst` task from the existing `ResearchTeamPlan`; do not create a parallel plan or free-form news workflow.
 - Preserve company identity, `as_of`, acquisition lineage and upstream macro, policy, industry and governance artifacts.
 - Primary authority is exchange/CNINFO/issuer/regulator/court/procurement/government/official enterprise-credit records or another formal event record. Cover directors/senior-management/controller/legal-representative changes, key-person public-office appointments, equity pledge/freeze, business-registration changes, administrative penalties, enforcement/credit/litigation, subsidiaries/partners and material upstream/downstream key-person events in addition to ordinary earnings/policy/contracts. For optional commercial enterprise intelligence use the source router: qualified platform MCP first for `enterprise.*`, then qualified official SDK/API, then authoritative Web; QCC/Tianyancha-style sources remain secondary evidence and never displace a stronger official filing. News, social posts and calendars are discovery leads until an admissible immutable source is frozen.
 
 ## Procedure
 
-1. Inspect `uv run astock research-team-status <plan_id>` and confirm all declared dependencies are COMPLETE.
-2. Reuse valid existing captures, then run the shared `news.discovery.lead` lane so every currently available independent structured discovery source is attempted within the bounded budget. GDELT and Finnhub are complementary lead sources; one successful source must not suppress the others, and syndicated duplicates count as one lead family.
-3. Regardless of discovery-source success, continue authoritative Web search for material company, industry and policy events. Return to exchange/CNINFO/issuer/regulator/government/court/procurement primary records before admitting a formal fact; third-party news can never be the sole policy or material-event authority.
-4. Build one event ledger with event type, earliest/latest date or window, official source, preconditions, measurable outcome, thesis direction, probability range, impact range, dependency and status.
-5. Separate scheduled, contingent, rumored, cancelled and already realized events. Search absence is not negative proof.
-6. Use base rates or comparable historical events where defensible and disclose sample/transfer limits. Do not manufacture a precise probability merely to make expected value look quantitative.
-7. Model both catalyst and adverse-event paths, interaction/dependency, next evidence checkpoint and what would cancel or delay each event.
-8. Detect and remove double counting where an event is already embedded in forecast or valuation assumptions.
+1. Reuse valid existing captures, then run the shared `news.discovery.lead` lane so every currently available independent structured discovery source is attempted within the bounded budget. GDELT and Finnhub are complementary lead sources; one successful source must not suppress the others, and syndicated duplicates count as one lead family.
+2. Regardless of discovery-source success, continue authoritative Web search for material company, industry and policy events. Return to exchange/CNINFO/issuer/regulator/government/court/procurement primary records before admitting a formal fact; third-party news can never be the sole policy or material-event authority.
+3. Build one event ledger with event type, earliest/latest date or window, official source, preconditions, measurable outcome, thesis direction, probability range, impact range, dependency and status.
+4. Separate scheduled, contingent, rumored, cancelled and already realized events. Search absence is not negative proof.
+5. Use base rates or comparable historical events where defensible and disclose sample/transfer limits. Do not manufacture a precise probability merely to make expected value look quantitative.
+6. Model both catalyst and adverse-event paths, interaction/dependency, next evidence checkpoint and what would cancel or delay each event.
+7. Detect and remove double counting where an event is already embedded in forecast or valuation assumptions.
 
 ## Required output contract
 
-- Register a typed `NewsEventResearchPack` through `uv run astock research-team-role-output REQUEST.json`.
-- Complete `company-catalyst` through `uv run astock research-team-task-result REQUEST.json`.
 - Set `CATALYST_RISK=true` only when material events have official lineage, bounded timing, explicit preconditions, impact ranges, downside coverage and falsifiers.
 
 ## Output
@@ -34,17 +33,15 @@ Return the registered typed `NewsEventResearchPack` artifact ID, ranked event ti
 
 ## Gates and abstention
 
-Abstain and leave `CATALYST_RISK=false` when a material event exists only in rumor/headlines, timing cannot be bounded, negative proof relies on Web-search absence, or the same event remains double counted in forecast, valuation and event expected value.
+Recover material event gaps through the shared contract; independent tasks continue. Abstain from the affected formal conclusion and leave `CATALYST_RISK=false` when a material event exists only in rumor/headlines, timing cannot be bounded, negative proof relies on Web-search absence, or the same event remains double counted in forecast, valuation and event expected value.
 
 ## Verification
 
-- Re-run `uv run astock research-team-status <plan_id>` and verify the typed artifact, COMPLETE result and readiness evidence.
 - Confirm each material event points to a frozen formal object and every probability/impact range states its basis and uncertainty.
 - This Skill produces event research only and does not create paper orders or mutate the paper ledger.
 
 ## Workflows
 
-- [`docs/workflows/workflow-catalyst-event-research.md`](../../../docs/workflows/workflow-catalyst-event-research.md)
 - [`docs/workflows/workflow-current-company-research.md`](../../../docs/workflows/workflow-current-company-research.md)
 
 ## Prohibitions

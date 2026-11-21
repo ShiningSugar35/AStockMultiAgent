@@ -25,10 +25,11 @@ Start/recover with `research-current-continuation-start REQUEST.json` and `resea
 | `TEAM_RESEARCH_REQUIRED` | Execute all ready research-team tasks, register role outputs/results and advance the same DAG |
 | `READY_FOR_INVESTOR_VIEW` | Complete lineage plus final receipt/publication permits the formal answer |
 | `OBSERVATION_ONLY_FOR_INVESTOR_VIEW` | Complete the team first, then label the bounded observation; no formal buy/sell permission |
-| `PUBLIC_DATA_UNAVAILABLE` | Public attempts are exhausted; preserve evidence and state remaining uncertainty without a private-material demand |
-| `NEEDS_USER_INPUT` | Only genuinely private source material or required authorization; later input binds to the same request |
+| `PUBLIC_DATA_UNAVAILABLE` | Public routes are explicitly exhausted; preserve evidence and unresolved impact, with no private-material demand |
+| `BUDGET_EXHAUSTED` | Time/attempt resource limit; preserve the same request, consume already bound evidence locally without new network work, and record unresolved impact without claiming public-route exhaustion |
+| `NEEDS_USER_INPUT` | Identified private input or authorization dependency only; independent capabilities continue, and later evidence binds to the same request |
 
-Intermediate states keep `same_request_continuation_required=true` and `investment_conclusion_blocked=true`; normal investor answers must not expose those backend fields. Public resolution is atomic; later user material uses `research-current-continuation-bind`. Runtime or CLI continuation must obey the same lineage and terminal contract.
+Active recovery and team states keep `same_request_continuation_required=true` and `investment_conclusion_blocked=true`; normal investor answers must not expose those backend fields. Each resolution preserves its original evidence binding. Later evidence uses `research-current-continuation-bind` after the original admission requirements are met. A resource limit does not mark unfinished research complete. Runtime and CLI continuation obey the same lineage and terminal contract.
 
 ## Structured supplements
 

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -391,7 +391,13 @@ def test_registered_evidence_cache_remains_small_and_reuses_recent_objects() -> 
 def canonical_fixture():
     """Synthetic accounting fixture, explicitly NOT historical market validation."""
     from astock.experiments.market_evaluator import VERSION, FrozenMarketRelease, Session
-    from astock.schemas.market import MarketBar
+    from astock.schemas.market import (
+        Frequency,
+        Market,
+        MarketBar,
+        TimestampSemantics,
+        VolumeUnit,
+    )
     from astock.schemas.paper import ReplayFeeSchedule
 
     sessions = []
@@ -399,30 +405,34 @@ def canonical_fixture():
     for i, close in enumerate(closes):
         timestamp = datetime(2025, 1, 6, 7, tzinfo=UTC) + timedelta(days=i)
 
-        def bar(symbol, market, price, i=i, timestamp=timestamp):
+        def bar(
+            symbol: str, market: Market, price: int,
+            i: int = i, timestamp: datetime = timestamp,
+        ) -> MarketBar:
+            decimal_price = Decimal(price)
             return MarketBar(
                 observation_id=f"synthetic-{symbol}-{i}",
                 provider_id="synthetic",
                 symbol=symbol,
                 market=market,
-                frequency="1d",
+                frequency=Frequency.D1,
                 timestamp=timestamp,
-                timestamp_semantics="BAR_END",
-                open=price,
-                high=price,
-                low=price,
-                close=price,
-                volume=100000,
-                volume_unit="SHARE",
+                timestamp_semantics=TimestampSemantics.BAR_END,
+                open=decimal_price,
+                high=decimal_price,
+                low=decimal_price,
+                close=decimal_price,
+                volume=Decimal(100000),
+                volume_unit=VolumeUnit.SHARE,
             )
 
         sessions.append(
             Session(
-                bar=bar("600000", "XSHG", close),
-                benchmark=bar("000300", "INDEX", 100 + i),
+                bar=bar("600000", Market.XSHG, close),
+                benchmark=bar("000300", Market.INDEX, 100 + i),
                 suspended=False,
-                limit_down=1,
-                limit_up=100,
+                limit_down=Decimal(1),
+                limit_up=Decimal(100),
             )
         )
     release = FrozenMarketRelease(
@@ -436,17 +446,17 @@ def canonical_fixture():
         fees=(
             ReplayFeeSchedule(
                 rule_version="synthetic-fees",
-                effective_from="2020-01-01",
-                applicable_markets=["XSHG"],
-                commission_rate="0.001",
+                effective_from=date(2020, 1, 1),
+                applicable_markets=[Market.XSHG],
+                commission_rate=Decimal("0.001"),
                 minimum_commission_fen=500,
-                stamp_tax_sell_rate="0.001",
-                transfer_fee_rate="0.00001",
+                stamp_tax_sell_rate=Decimal("0.001"),
+                transfer_fee_rate=Decimal("0.00001"),
             ),
         ),
         initial_cash_fen=1000000,
-        slippage_bps=10,
-        maximum_participation="0.1",
+        slippage_bps=Decimal(10),
+        maximum_participation=Decimal("0.1"),
     )
     req = Request(
         study_id="synthetic",
@@ -514,7 +524,7 @@ def canonical_query(plan, **updates):
         window=plan.folds[0].train,
     )
     values.update(updates)
-    return Query(**values)
+    return Query.model_validate(values)
 
 
 @pytest.fixture

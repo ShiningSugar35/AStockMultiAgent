@@ -1,6 +1,6 @@
 {
   "admitted_stage": "SHADOW",
-  "candidate_version": "sha256:af705b6846a15e0f7aa95cfcd685db9bd479b98e8018c90335133ede061a24b5",
+  "candidate_version": "sha256:9c19d3a5e104273a08bb576c7c4479f76597db5b39525b4e0a31d515ca58b0e5",
   "capability_id": "schema-drift-recorder",
   "checks": {
     "cache_behavior": "PASS",
@@ -21,7 +21,7 @@
   },
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
-  "created_at": "2026-09-21T10:48:00Z",
+  "created_at": "2026-11-21T10:47:02Z",
   "evidence_version": "e02-qualification-evidence-v1",
   "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
@@ -34,8 +34,8 @@
   "sources": [
     {
       "assertion": "Tracked Repo Skill contract used by the qualification pilot.",
-      "observed_at": "2026-09-21T10:48:00Z",
-      "sha256": "af705b6846a15e0f7aa95cfcd685db9bd479b98e8018c90335133ede061a24b5",
+      "observed_at": "2026-11-21T10:47:02Z",
+      "sha256": "9c19d3a5e104273a08bb576c7c4479f76597db5b39525b4e0a31d515ca58b0e5",
       "source_ref": "repo:.agents/skills/schema-drift-recorder/SKILL.md"
     },
     {
@@ -52,10 +52,10 @@
     },
     {
       "assertion": "Recorded and controlled-live/exit assertions are bound to the repository test contract; a passing test run is required before the final status may claim PASS.",
-      "observed_at": "2026-09-21T10:48:00Z",
-      "sha256": "70c753ba50f91bc18abad1de27843a40f1b80b22f6e6e12a670471e401dd5d19",
+      "observed_at": "2026-11-21T10:47:02Z",
+      "sha256": "c60a1eaae3ddb75de0ebece7eb514253461f98adacde509d45625faa7e05eb41",
       "source_ref": "contract:tests/unit/test_e02_external_qualification.py"
     }
   ],
-  "valid_from": "2026-09-21T10:48:00Z"
+  "valid_from": "2026-11-21T10:47:02Z"
 }

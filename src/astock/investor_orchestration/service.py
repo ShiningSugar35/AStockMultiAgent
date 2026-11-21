@@ -323,6 +323,8 @@ class InvestorOrchestrationService:
         *,
         automatic_resolution_exhausted: bool = False,
         private_user_input_required: bool = False,
+        private_input_capabilities: tuple[str, ...] = (),
+        automatic_budget_exhausted: bool = False,
     ) -> InvestmentClosureDecision:
         """Return the canonical same-request terminal decision for an investor request."""
 
@@ -337,6 +339,8 @@ class InvestorOrchestrationService:
             coverage,
             automatic_resolution_exhausted=automatic_resolution_exhausted,
             private_user_input_required=private_user_input_required,
+            private_input_capabilities=private_input_capabilities,
+            automatic_budget_exhausted=automatic_budget_exhausted,
             recommendation_fulfillment=fulfillment,
         )
 

@@ -42,6 +42,7 @@ class CurrentResearchPolicy:
     minimum_lookback_days: int
     maximum_lookback_days: int
     max_workers: int
+    max_transport_attempts: int
     automatic_resolution_budget_seconds: int
     manual_last: bool
     capabilities: dict[AcquisitionCapability, CapabilityPolicy]
@@ -89,11 +90,7 @@ class CapabilityGraph:
                         changed = True
         steps: list[CapabilityScheduleStep] = []
         for capability_policy in sorted(
-            (
-                item
-                for item in self.policy.capabilities.values()
-                if item.capability in selected
-            ),
+            (item for item in self.policy.capabilities.values() if item.capability in selected),
             key=lambda item: (item.stage, item.capability.value),
         ):
             ranked = self._rank_providers(capability_policy.provider_capabilities)
@@ -225,8 +222,11 @@ def load_current_research_policy(path: Path) -> CurrentResearchPolicy:
     maximum = int(raw["maximum_lookback_days"])
     workers = int(raw["max_workers"])
     budget = int(raw["automatic_resolution_budget_seconds"])
+    attempts = int(raw.get("max_transport_attempts", 64))
     if not (1 <= minimum <= default <= maximum <= 3650):
         raise ValueError("Current research lookback bounds are invalid")
+    if not 1 <= attempts <= 512:
+        raise ValueError("Current research max_transport_attempts must be in 1..512")
     if not 1 <= workers <= 16:
         raise ValueError("Current research max_workers must be in 1..16")
     if not 60 <= budget <= 7200:
@@ -240,6 +240,7 @@ def load_current_research_policy(path: Path) -> CurrentResearchPolicy:
         minimum_lookback_days=minimum,
         maximum_lookback_days=maximum,
         max_workers=workers,
+        max_transport_attempts=attempts,
         automatic_resolution_budget_seconds=budget,
         manual_last=True,
         capabilities=capabilities,
@@ -247,9 +248,7 @@ def load_current_research_policy(path: Path) -> CurrentResearchPolicy:
 
 
 def load_default_current_research_policy(project_root: Path) -> CurrentResearchPolicy:
-    return load_current_research_policy(
-        project_root / "configs" / "current_research_policy.yaml"
-    )
+    return load_current_research_policy(project_root / "configs" / "current_research_policy.yaml")
 
 
 def load_default_provider_registry(project_root: Path) -> ProviderRegistry:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -44,7 +45,7 @@ from astock.schemas.financial import (
 )
 from astock.schemas.financial_sources import FinancialStatementScope as Scope
 
-FORMULA_VERSION = "discovery-fundamentals-v1"
+FORMULA_VERSION = "discovery-fundamentals-v2"
 _QUARTER_ENDS = {(3, 31), (6, 30), (9, 30), (12, 31)}
 _MONEY_SCALE = {
     Unit.CNY: Decimal(1),
@@ -57,9 +58,11 @@ _FLOW_FIELDS = {
     Field.REVENUE: Statement.INCOME_STATEMENT,
     Field.NET_PROFIT_INCOME: Statement.INCOME_STATEMENT,
     Field.NET_CASH_OPERATING: Statement.CASH_FLOW_STATEMENT,
+    Field.CASH_DIVIDENDS_PAID: Statement.CASH_FLOW_STATEMENT,
 }
 _STOCK_FIELDS = frozenset(
-    {Field.TOTAL_ASSETS, Field.TOTAL_LIABILITIES, Field.ACCOUNTS_RECEIVABLE, Field.INVENTORY}
+    {Field.TOTAL_ASSETS, Field.TOTAL_LIABILITIES, Field.TOTAL_EQUITY,
+     Field.ACCOUNTS_RECEIVABLE, Field.INVENTORY}
 )
 _INDUSTRIAL_METRICS = frozenset(
     {Industry.GENERAL_INDUSTRIAL, Industry.RESOURCE_MINING, Industry.REAL_ESTATE}
@@ -328,7 +331,8 @@ class _FactIndex:
                         number = fact.reported_value * multiplier
                 except DecimalException:
                     reasons.append("NUMERIC_RANGE_UNSUPPORTED")
-                if number is not None and fact.field_code in _STOCK_FIELDS and number < 0:
+                if (number is not None and fact.field_code in _STOCK_FIELDS
+                        and fact.field_code is not Field.TOTAL_EQUITY and number < 0):
                     reasons.append("NEGATIVE_BALANCE_SHEET_VALUE")
             signature = _digest(
                 {
@@ -620,10 +624,54 @@ def build_discovery_features(
         start=date(annual_end.year - 2, 1, 1),
         end=annual_end,
     )
+    annual_cash = [
+        index.ytd(Field.NET_CASH_OPERATING, annual_end.replace(year=annual_end.year - offset))
+        for offset in range(3)
+    ]
+    conversion_history = [
+        _ratio(operating, earnings) for operating, earnings in zip(annual_cash, years, strict=True)
+    ]
+    persistent = _collect(conversion_history)
+    if persistent.status is Status.CALCULATED:
+        persistent = replace(
+            persistent,
+            value=min(item.value for item in conversion_history if item.value is not None)
+        )
+    add(
+        "CASH_CONVERSION_THREE_YEAR_FLOOR",
+        persistent if applicable else not_industrial,
+        "minimum(annual_operating_cash / positive_annual_net_profit),three_complete_years",
+        start=date(annual_end.year - 2, 1, 1), end=annual_end,
+    )
+    annual_roe: list[_Value] = []
+    for offset, earnings in enumerate(years):
+        end = annual_end.replace(year=annual_end.year - offset)
+        equity_end = index.exact(Field.TOTAL_EQUITY, None, end)
+        equity_start = index.exact(Field.TOTAL_EQUITY, None, end.replace(year=end.year - 1))
+        # Consolidated total profit / total average equity; not parent-attributable ROE.
+        if any(item.value is not None and item.value <= 0 for item in (equity_start, equity_end)):
+            value = _collect(
+                (earnings, equity_start, equity_end),
+                status=Status.NOT_APPLICABLE, reason="NON_POSITIVE_EQUITY",
+            )
+        else:
+            value = _ratio(_linear((earnings,), (2,)), _linear((equity_start, equity_end), (1, 1)))
+        annual_roe.append(value)
+    roe_history = _collect(annual_roe)
+    if roe_history.status is Status.CALCULATED:
+        roe_values = [item.value for item in annual_roe if item.value is not None]
+        roe_history = replace(roe_history, value=max(roe_values) - min(roe_values))
+    add(
+        "TOTAL_EQUITY_ROE_THREE_YEAR_RANGE", roe_history,
+        "max(annual_total_profit/positive_average_total_equity)-min(...),three_complete_years",
+        start=date(annual_end.year - 2, 1, 1), end=annual_end,
+    )
     add(
         "DIVIDEND_CASH_COVERAGE",
-        _Value(Status.INSUFFICIENT_DATA, reasons=("DIVIDEND_FIELD_UNAVAILABLE",)),
-        "requires_canonical_cash_dividend_fact_not_net_financing_cash",
+        _ratio(cash, index.ttm(Field.CASH_DIVIDENDS_PAID, period_end))
+        if applicable else not_industrial,
+        "operating_cash_ttm / positive_pure_cash_dividends_paid_ttm",
+        start=ttm_start,
     )
     specialist = (
         _Value(Status.NOT_APPLICABLE, reasons=("GENERAL_PROFILE",))
@@ -744,3 +792,141 @@ def peer_percentile(
     if companies[target.company_id] != chosen.value:
         return result(Status.CONFLICTED, reasons=("TARGET_PEER_VALUE_CONFLICT",))
     return result(Status.CALCULATED, midrank_percentile(chosen.value, list(companies.values())))
+
+
+def feature_manifest(packet: DiscoveryFeaturePacket) -> tuple[dict[str, object], ...]:
+    """Explain the existing feature view without a second ranking/score authority.
+
+    Each dependency fingerprint is the invalidation unit. These current-certified
+    facts are not a historical vintage and cannot prove point-in-time factor alpha.
+    """
+    return tuple({
+        "metric_id": item.metric_id,
+        "value": str(item.value) if item.value is not None else None,
+        "reason_codes": item.reason_codes,
+        "independent_vote_weight": 0,
+        "formula": item.formula,
+        "formula_version": packet.formula_version,
+        "period_start": item.period_start.isoformat() if item.period_start else None,
+        "period_end": item.period_end.isoformat(),
+        "unit": item.unit.value,
+        "industry_profile": packet.industry_profile.value,
+        "business_group_id": packet.business_group_id,
+        "statement_scope": packet.statement_scope.value,
+        "status": item.status.value,
+        "missing_policy": "UNKNOWN_NOT_ZERO",
+        "source_fact_ids": item.source_fact_ids,
+        "evidence_ids": item.evidence_ids,
+        "dependency_fingerprint": item.dependency_fingerprint,
+        "information_key": _digest({
+            "company": packet.company_id, "facts": item.source_fact_ids,
+            "evidence": item.evidence_ids, "formula": item.formula,
+        }),
+        "usage": "RESEARCH_PRIORITY_ONLY",
+        "historical_point_in_time_claim": False,
+        "standalone_recommendation_allowed": False,
+    } for item in packet.features)
+
+
+def paired_relative_change(
+    pairs: Sequence[tuple[Decimal, Decimal]],
+) -> tuple[Decimal | None, int, int]:
+    """Median within-member change; a changed member mix is never a revision.
+
+    Pairs are (current, baseline). Non-positive baselines have no interpretable
+    relative-growth denominator and remain excluded, not replaced by zero.
+    """
+    values: list[Decimal] = []
+    for current, baseline in pairs:
+        if not current.is_finite() or not baseline.is_finite():
+            raise ValueError("paired observations must be finite")
+        if baseline <= 0:
+            continue
+        with localcontext(Context(prec=34)):
+            values.append((current - baseline) / baseline)
+    values.sort()
+    count = len(values)
+    if not count:
+        return None, 0, len(pairs)
+    with localcontext(Context(prec=34)):
+        median = (
+            values[count // 2] if count % 2
+            else (values[count // 2 - 1] + values[count // 2]) / 2
+        )
+    return median, count, len(pairs) - count
+
+
+def observed_peer_percentile(
+    target_id: str, values: Mapping[str, Decimal | None], *, minimum_sample_size: int = 10,
+) -> tuple[Decimal | None, tuple[str, ...]]:
+    """Describe an explicit same-basis cohort without inferring membership or rank merit."""
+    if minimum_sample_size < 10:
+        raise ValueError("peer description requires at least ten distinct companies")
+    valid = {key: value for key, value in values.items() if value is not None}
+    if any(not value.is_finite() for value in valid.values()):
+        raise ValueError("peer observations must be finite")
+    ids = tuple(sorted(valid))
+    if target_id not in valid or len(ids) < minimum_sample_size:
+        return None, ids
+    return midrank_percentile(valid[target_id], list(valid.values())), ids
+
+
+def _guidance_segment(
+    text: str, period_start: date, period_end: date,
+) -> tuple[str | None, tuple[str, ...]]:
+    if period_start != date(period_end.year, 1, 1):
+        return None, ("GUIDANCE_PERIOD_NOT_SUPPORTED",)
+    label = {
+        (3, 31): "(?:第一季度|一季度)", (6, 30): "(?:半年度|上半年)",
+        (9, 30): "前三季度", (12, 31): "度",
+    }.get((period_end.month, period_end.day))
+    if label is None:
+        return None, ("GUIDANCE_PERIOD_NOT_SUPPORTED",)
+    lines = text.splitlines()
+    compact = [re.sub(r"\s+", "", line) for line in lines]
+    heading = re.compile(rf"(?:关于)?{period_end.year}年{label}业绩预告(?:的)?(?:公告)?")
+    indexes = [index for index, line in enumerate(compact) if heading.fullmatch(line)]
+    if len(indexes) != 1:
+        return None, ("GUIDANCE_TARGET_HEADING_NOT_EXPLICIT",)
+    selected = []
+    for index in range(indexes[0] + 1, len(lines)):
+        line = compact[index]
+        # A historical/comparative period starts a new semantic section. Never
+        # join its categories to a target-year token elsewhere on the page.
+        if re.search(r"20\d{2}年", line) or re.match(r"(?:上年|上期|历史|对比|比较)", line):
+            break
+        selected.append(lines[index])
+    return "\n".join(selected), ()
+
+
+def official_guidance_direction(
+    text: str, *, company_id: str, period_start: date, period_end: date,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Read a category inside one explicit issuer/target-period guidance section.
+
+    Numeric ranges, unmarked alternatives and free prose stay unknown. The
+    heading is in the registered native body; document metadata is insufficient.
+    """
+    identity_lines = "\n".join("".join(line.split()) for line in text.splitlines())
+    if not re.search(rf"(?:证券|股票)代码[:：]?{re.escape(company_id)}(?!\d)", identity_lines):
+        return None, ("GUIDANCE_ISSUER_NOT_EXPLICIT",)
+    section, reasons = _guidance_segment(text, period_start, period_end)
+    if section is None:
+        return None, reasons
+    alternatives = "扭亏为盈|同向上升|同向下降|继续亏损|继续盈利|预增|预减|预盈|预亏|首亏|续亏|续盈"
+    direct = re.findall(
+        rf"(?m)^\s*(?:本期)?业绩预告类型\s*[:：]\s*({alternatives})"
+        rf"(?=\s*(?:$|[，,；;。]))", section,
+    )
+    checked = re.findall(
+        rf"[√☑✔]\s*({alternatives})(?=\s|[□☐√☑✔，,；;。]|$)", section,
+    )
+    normalize = {
+        "同向上升": "预增", "同向下降": "预减", "继续亏损": "续亏", "继续盈利": "续盈",
+    }
+    directions = {normalize.get(item, item) for item in (*direct, *checked)}
+    if len(directions) > 1:
+        return None, ("GUIDANCE_DIRECTION_CONFLICT",)
+    if not directions:
+        return None, ("GUIDANCE_DIRECTION_NOT_EXPLICIT",)
+    return next(iter(directions)), ()

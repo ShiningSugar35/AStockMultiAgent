@@ -16,12 +16,16 @@ import httpx
 import yaml
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from astock.core.network_ownership import owned_network_request
+from astock.core.request_budget import current_request_budget
+from astock.core.state import StateStore
 from astock.investor_orchestration.models import (
     MacroObservation,
     MacroReleaseSnapshot,
 )
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
+from astock.providers.http_resilience import configure_owned_http_client
 
 
 class MacroReleaseSpec(BaseModel):
@@ -143,6 +147,22 @@ class OfficialMacroCaptureService:
                 return item
         raise KeyError(f"unknown macro release spec: {authority}/{release_family}")
 
+    def _get_owned_response(
+        self, client: HttpClientLike, url: str, timeout: float,
+    ) -> HttpResponseLike:
+        budget = current_request_budget()
+        if budget is not None:
+            timeout = min(timeout, budget.remaining_seconds())
+        with owned_network_request(
+            StateStore(self.store.path), "official-macro", url, timeout_seconds=timeout,
+        ):
+            if isinstance(client, httpx.Client):
+                configure_owned_http_client(client)
+                return client.get(url, follow_redirects=False, timeout=timeout)
+            if budget is not None:
+                budget.reserve_attempt()
+            return client.get(url, follow_redirects=False)
+
     def capture(
         self,
         spec: MacroReleaseSpec,
@@ -198,7 +218,9 @@ class OfficialMacroCaptureService:
             close_after = self.http_client is None
             try:
                 for _ in range(int(transport["maximum_redirects"]) + 1):
-                    response = client.get(final_url, follow_redirects=False)
+                    response = self._get_owned_response(
+                        client, final_url, float(transport["timeout_seconds"]),
+                    )
                     actual_url = str(getattr(response, "url", final_url))
                     self._assert_official_url(spec.model_copy(update={"url": actual_url}))
                     headers = {
@@ -504,6 +526,82 @@ class OfficialMacroCaptureService:
                 continue
             results.append(self.capture(spec, live=live))
         return tuple(results)
+
+    def compare_tushare(
+        self, *, capture_artifact_id: str, metric: str, release_family: str,
+        as_of: datetime, state: Any, objects: Any,
+    ) -> dict[str, object]:
+        """Compare vendor observations to a stored official series without replacing it."""
+        from astock.providers.tushare_reference import load_metric_capture
+
+        capture = load_metric_capture(
+            state, objects, capture_artifact_id, subject_id="CN", as_of=as_of
+        )
+        mapping = {
+            ("cn_cpi", "nt_yoy"): ("cpi_yoy", "PERCENT", "MONTH"),
+            ("cn_cpi", "nt_mom"): ("cpi_mom", "PERCENT", "MONTH"),
+            ("cn_gdp", "gdp"): ("gdp_ytd", "CNY", "YTD"),
+            ("cn_gdp", "gdp_yoy"): ("gdp_quarter_yoy", "PERCENT", "QUARTER_YOY"),
+        }
+        semantics = mapping.get((capture.endpoint, metric))
+        if semantics is None:
+            raise ValueError("macro comparison semantics have not been reviewed")
+        series_key, unit, basis = semantics
+        values = [item for item in capture.metrics if item.metric == metric]
+        if len(values) != 1 or values[0].unit != unit or values[0].period_basis != basis:
+            raise ValueError("macro vendor metric/unit/period basis mismatch")
+        period = (
+            capture.period[:4] + "-" + capture.period[4:]
+            if capture.endpoint == "cn_gdp"
+            else capture.period[:4] + "-" + capture.period[4:6]
+        )
+        official = self.observation_at(
+            authority="NBS", release_family=release_family, series_key=series_key,
+            observation_period=period, as_of=as_of,
+        )
+        official_value: Decimal | None = None
+        source_hash: str | None = None
+        if official is not None:
+            # The existing official capture, raw object and revision remain authoritative.
+            if official.authority != "NBS" or not objects.verify(official.source_hash):
+                raise ValueError("official macro lineage is invalid")
+            scales = {
+                "CNY": {"cny": Decimal(1), "yuan": Decimal(1),
+                        "hundred_million_cny": Decimal(100000000)},
+                "PERCENT": {"percent": Decimal(1), "%": Decimal(1)},
+            }
+            scale = scales[unit].get(str(official.unit).lower())
+            if scale is None:
+                raise ValueError("official macro unit is not comparable")
+            official_value = Decimal(str(official.value)) * scale
+            if not official_value.is_finite():
+                raise ValueError("official macro number is invalid")
+            source_hash = official.source_hash
+        value = values[0].value
+        result = {
+            "schema_version": "tushare-macro-comparison-v1", "as_of": as_of.isoformat(),
+            "capture_artifact_id": capture_artifact_id, "source_group": "TUSHARE",
+            "vendor_source_hash": capture.source_object_hash,
+            "endpoint": capture.endpoint, "metric": metric, "series_key": series_key,
+            "period": period, "period_basis": basis, "unit": unit,
+            "vendor_value": str(value) if value is not None else None,
+            "official_value": str(official_value) if official_value is not None else None,
+            "official_observation_id": official.observation_id if official else None,
+            "official_source_hash": source_hash,
+            "difference": str(value - official_value)
+                if value is not None and official_value is not None else None,
+            "status": "COMPARABLE" if value is not None and official_value is not None
+                else "OFFICIAL_OR_VENDOR_VALUE_UNAVAILABLE",
+            "official_authority_replaced": False, "historical_vintage_verified": False,
+        }
+        ref = objects.put_json(result)
+        state.register_artifact(
+            artifact_id="TushareMacroComparison:" + ref.sha256,
+            artifact_type="TushareMacroComparison", schema_version=result["schema_version"],
+            object_hash=ref.sha256,
+            input_hashes=[capture.source_object_hash, *([source_hash] if source_hash else [])],
+        )
+        return result
 
     def observation_at(
         self,

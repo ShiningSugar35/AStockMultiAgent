@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from datetime import date
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -83,6 +84,7 @@ class WebToolRequest(BaseModel):
     fresh_after: AwareDatetime
     continuation_id: str | None = None
     task_id: str | None = None
+    continuation_dispatch_id: str | None = Field(default=None, min_length=1, max_length=500)
 
     @model_validator(mode="after")
     def validate_request(self) -> WebToolRequest:
@@ -97,6 +99,8 @@ class WebToolRequest(BaseModel):
             public_web_url(self.url)
         if bool(self.continuation_id) != bool(self.task_id):
             raise ValueError("continuation and external task must be supplied together")
+        if self.continuation_dispatch_id is not None and not self.continuation_id:
+            raise ValueError("continuation dispatch requires a bound continuation and task")
         return self
 
 
@@ -131,17 +135,66 @@ class HostWebResult(BaseModel):
         return self
 
 
+class WebOfficialDocumentSelection(BaseModel):
+    """Metadata taken from the selected original; never inferred from a search snippet."""
+
+    model_config = ConfigDict(extra="forbid")
+    operation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dispatch_id: str | None = Field(default=None, min_length=1, max_length=500)
+    url: str
+    title: str = Field(min_length=1, max_length=2000)
+    published_at: AwareDatetime
+    document_type: Literal[
+        "ANNUAL_REPORT", "SEMIANNUAL_REPORT", "QUARTERLY_REPORT", "ANNOUNCEMENT"
+    ]
+    period_end: date | None = None
+    disclosure_id: str | None = None
+
+    @model_validator(mode="after")
+    def valid_original(self) -> WebOfficialDocumentSelection:
+        public_web_url(self.url)
+        if self.document_type != "ANNOUNCEMENT" and self.period_end is None:
+            raise ValueError("Financial original requires its reporting period")
+        return self
+
+
+class CurrentResearchWebBatch(BaseModel):
+    """One host invocation's bounded callbacks for an existing continuation."""
+
+    model_config = ConfigDict(extra="forbid")
+    continuation_id: str = Field(min_length=1, max_length=300)
+    host_capabilities: HostWebCapabilities | None = None
+    host_results: list[HostWebResult] = Field(default_factory=list, max_length=16)
+    originals: list[WebOfficialDocumentSelection] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def unique_operations(self) -> CurrentResearchWebBatch:
+        for items in (self.host_results, self.originals):
+            identifiers = [item.operation_id for item in items]
+            if len(identifiers) != len(set(identifiers)):
+                raise ValueError("a Web batch cannot repeat an operation")
+        return self
+
+
 class WebToolPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["web-tool-policy-v1"] = "web-tool-policy-v1"
     host_capability_max_age_seconds: int = Field(ge=30, le=86400)
     max_results: int = Field(ge=1, le=50)
     max_response_bytes: int = Field(ge=4096, le=4194304)
+    max_document_bytes: int = Field(default=33554432, ge=1024, le=67108864)
+    max_document_pages: int = Field(default=600, ge=1, le=2000)
+    max_document_redirects: int = Field(default=3, ge=0, le=5)
     timeout_seconds: int = Field(ge=1, le=120)
     deepseek_enabled: bool
     max_paid_per_request: int = Field(ge=0, le=100)
     max_paid_per_day: int = Field(ge=0, le=10000)
     max_paid_per_month: int = Field(ge=0, le=100000)
     max_paid_concurrency: int = Field(ge=1, le=4)
+    max_owned_concurrency: int = Field(default=4, ge=1, le=8)
+    max_owned_per_provider: int = Field(default=2, ge=1, le=4)
+    max_owned_per_domain: int = Field(default=2, ge=1, le=4)
+    shared_search_max_age_seconds: int = Field(default=300, ge=0, le=3600)
+    shared_pdf_max_age_seconds: int = Field(default=3600, ge=0, le=86400)
     min_paid_interval_seconds: float = Field(ge=0.5, le=60)
     paid_request_price_cny: str = Field(pattern=r"^[0-9]+(?:[.][0-9]+)?$")

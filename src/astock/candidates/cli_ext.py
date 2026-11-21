@@ -35,7 +35,17 @@ from astock.research.team import detect_hardware_budget, load_research_team_poli
 from astock.schemas.candidate_promotion import SeedPromotionRequest
 from astock.schemas.candidates import CandidateInputRelease, CandidateScanRequest
 from astock.schemas.market import CompletenessSemantics, Market
-from astock.schemas.research_seeds import ResearchSeedRequest
+from astock.schemas.research_seeds import FactorPriorityOverlay, ResearchSeedRequest
+
+
+def _read_feature_overlay(path: Path | None) -> FactorPriorityOverlay | None:
+    if path is None:
+        return None
+    with path.open("rb") as source:
+        raw = source.read(8193)
+    if len(raw) > 8192:
+        raise typer.BadParameter("feature overlay specification must be at most 8192 bytes")
+    return FactorPriorityOverlay.model_validate_json(raw)
 
 
 def register_candidate_input_commands(
@@ -185,6 +195,10 @@ def register_candidate_input_commands(
     def research_seeds(
         as_of: Annotated[str | None, typer.Option("--as-of")] = None,
         live: Annotated[bool, typer.Option("--live")] = False,
+        feature_overlay: Annotated[
+            Path | None,
+            typer.Option("--feature-overlay", exists=True, dir_okay=False, readable=True)
+        ] = None,
         max_total_seeds: Annotated[int, typer.Option(min=5, max=100)] = 80,
         max_market_seeds: Annotated[int, typer.Option(min=0, max=60)] = 40,
         max_long_horizon_value_seeds: Annotated[int | None, typer.Option(min=0, max=30)] = None,
@@ -201,6 +215,7 @@ def register_candidate_input_commands(
             as_of=timestamp,
             live=live,
             max_total_seeds=max_total_seeds,
+            feature_overlay=_read_feature_overlay(feature_overlay),
             max_market_seeds=max_market_seeds,
             max_breadth_challenger_seeds=team_policy.max_breadth_challenger_seeds,
             max_long_horizon_value_seeds=(

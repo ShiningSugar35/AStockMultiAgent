@@ -50,8 +50,16 @@ rules:
       - tests/integration/test_research_core.py
       - tests/integration/test_research_diagnostics.py
   - name: owned-process-lifecycle
-    changed: [scripts/run_local_quality.py, src/astock/research/process_worker.py, src/astock/research/__init__.py]
+    changed:
+      - scripts/run_local_quality.py
+      - src/astock/research/process_worker.py
+      - src/astock/research/__init__.py
+      - src/astock/reports/service.py
+      - src/astock/providers/supplemental.py
     tests:
+      - tests/unit/test_owned_commands.py
+      - tests/unit/test_report_service.py
+      - tests/integration/test_report_cli.py
       - tests/unit/test_research_process_worker.py
       - tests/unit/test_research_worker_cancellation.py
       - tests/unit/test_quality_runner_processes.py
@@ -65,8 +73,17 @@ rules:
       - tests/unit/test_storage_retention.py
       - tests/unit/test_quality_runner_processes.py
   - name: host-first-web-tools
-    changed: [src/astock/research/web_tool*.py, src/astock/providers/deepseek_tools.py, src/astock/schemas/web_tools.py, configs/web_tools.yaml]
+    changed: [src/astock/research/web_tool*.py, src/astock/documents/official_web.py, src/astock/providers/deepseek_tools.py, src/astock/schemas/web_tools.py, configs/web_tools.yaml]
     tests:
+      - tests/integration/test_public_recovery_evidence.py
+      - tests/unit/test_official_web_capture.py
+      - tests/unit/test_research_acquisition_service_reuse.py
+      - tests/unit/test_current_research_continuation.py
+      - tests/unit/test_registered_discovery_features.py
+      - tests/unit/test_web_original_resolution.py
+      - tests/unit/test_research_data_cli.py
+      - tests/unit/test_public_pdf.py
+      - tests/unit/test_continuation_external_wave.py
       - tests/unit/test_web_tools.py
       - tests/unit/test_web_discovery.py
       - tests/unit/test_source_policy_gate.py
@@ -87,6 +104,8 @@ rules:
   - name: tushare-structured-access
     changed: [src/astock/providers/tushare_*.py, integrations/tushare/*, configs/tushare_access.yaml, tests/fixtures/providers/tushare-*]
     tests:
+      - tests/unit/test_tushare_reference.py
+      - tests/integration/test_certified_financial_reader.py
       - tests/unit/test_tushare_structured.py
       - tests/unit/test_tushare_financial.py
       - tests/integration/test_financial_sources.py
@@ -95,8 +114,20 @@ rules:
       - tests/unit/test_provider_registry.py
       - tests/unit/test_provider_supplemental.py
   - name: portfolio-numeric-invariants
-    changed: [src/astock/portfolio/analytics.py]
+    changed:
+      - src/astock/portfolio/decision.py
+      - src/astock/portfolio/implementation.py
+      - src/astock/schemas/portfolio_decision.py
+      - src/astock/portfolio/analytics.py
+      - src/astock/portfolio/allocators.py
+      - src/astock/portfolio/allocation.py
+      - src/astock/portfolio/service.py
+      - src/astock/schemas/portfolio.py
     tests:
+      - tests/unit/test_allocation_context.py
+      - tests/unit/test_portfolio_implementation.py
+      - tests/unit/test_entry_quality_portfolio.py
+      - tests/unit/test_local_portfolio.py
       - tests/unit/test_portfolio_analysis.py
       - tests/unit/test_portfolio_numeric_invariants.py
       - tests/unit/test_portfolio_decision.py
@@ -104,7 +135,7 @@ rules:
       - tests/unit/test_phase10_portfolio_vnext.py
       - tests/integration/test_portfolio*.py
   - name: documentation-contracts
-    changed: ['*.md', 'docs/*', '.agents/*', 'planning/*', '.gitignore']
+    changed: ['*.md', 'docs/*', '.agents/*', 'planning/*', '.gitignore', 'third_party/audits/quant-method-comparison-v1.json']
     tests:
       - tests/unit/test_document_governance.py
       - tests/unit/test_workflow_docs.py
@@ -112,21 +143,48 @@ rules:
       - tests/unit/test_company_research_continuation_docs.py
   - name: bounded-current-recovery
     changed:
+      - src/astock/research/recovery_evidence.py
+      - src/astock/research/sla_runtime.py
+      - src/astock/schemas/research_sla.py
+      - src/astock/research/policy.py
+      - configs/current_research_policy.yaml
       - src/astock/research/continuation*
       - src/astock/schemas/research_continuation.py
       - src/astock/research/acquisition.py
     tests:
+      - tests/integration/test_public_recovery_evidence.py
+      - tests/unit/test_continuation_external_wave.py
+      - tests/unit/test_web_original_resolution.py
+      - tests/unit/test_research_data_cli.py
+      - tests/unit/test_request_budget.py
+      - tests/unit/test_research_sla_runtime.py
+      - tests/unit/test_research_sla_recovery.py
+      - tests/integration/test_research_takeover_acceptance.py
+      - tests/integration/test_research_takeover_cli.py
       - tests/unit/test_current_research*.py
       - tests/unit/test_adaptive_recovery_wp27.py
       - tests/unit/test_research_team.py
   - name: investment-closure
-    changed: [src/astock/investor_orchestration/closure.py]
+    changed: [src/astock/investor_orchestration/closure.py, src/astock/investor_orchestration/service.py]
     tests:
+      - tests/integration/test_public_recovery_evidence.py
+      - tests/integration/test_cli.py
+      - tests/unit/test_validation_planning.py
       - tests/unit/test_investment_request_closure.py
       - tests/unit/test_investor_orchestration.py
   - name: public-report-style
-    changed: [src/astock/research/report_style.py]
+    changed:
+      - src/astock/research/report_style.py
+      - src/astock/research/presentation.py
+      - src/astock/research/public_polish.py
+      - src/astock/schemas/presentation.py
     tests:
+      - tests/unit/test_narrative_fact_binding.py
+      - tests/unit/test_public_capital_privacy.py
+      - tests/unit/test_public_capital_issuer_boundaries.py
+      - tests/unit/test_investor_answer_*.py
+      - tests/unit/test_session_brief.py
+      - tests/integration/test_report_cli.py
       - tests/unit/test_presentation_gateway.py
       - tests/unit/test_presentation_humanize_experiment.py
   - name: source-routing-and-adapters
@@ -142,6 +200,8 @@ rules:
       - configs/market_reference.yaml
       - configs/transport_profiles.yaml
     tests:
+      - tests/unit/test_tushare_reference.py
+      - tests/unit/test_request_budget.py
       - tests/unit/test_provider_*.py
       - tests/unit/test_source_*.py
       - tests/unit/test_reference_data_schemas.py
@@ -154,6 +214,8 @@ rules:
       - src/astock/schemas/financial*.py
       - configs/financial*.yaml
     tests:
+      - tests/integration/test_certified_financial_reader.py
+      - tests/unit/test_institutional_driver_contracts.py
       - tests/unit/test_financial*.py
       - tests/unit/test_candidate_financial_policy.py
       - tests/unit/test_full_research_source_binding.py
@@ -167,6 +229,15 @@ rules:
       - src/astock/research/team.py
       - configs/research_team.yaml
     tests:
+      - tests/integration/test_feature_priority_overlay.py
+      - tests/unit/test_factor_diagnostics.py
+      - tests/integration/test_registered_factor_diagnostics.py
+      - tests/unit/test_registered_discovery_features.py
+      - tests/unit/test_discovery_features.py
+      - tests/unit/test_discovery_cli.py
+      - tests/unit/test_discovery_runtime.py
+      - tests/unit/test_verified_discovery_candidate_seam.py
+      - tests/unit/test_verified_discovery_promotion_chain.py
       - tests/unit/test_research_seeds.py
       - tests/unit/test_candidate_scan.py
       - tests/unit/test_candidate_promotion.py
@@ -197,10 +268,13 @@ rules:
     changed:
       - configs/chat_invocation_policy_v1.yaml
       - src/astock/investor_orchestration/host_continuation.py
+      - src/astock/investor_orchestration/antigravity_hooks.py
+      - .agents/hooks.json
       - src/astock/investor_orchestration/watch_campaign.py
       - src/astock/operations.py
     tests:
       - tests/unit/test_host_continuation_policy.py
+      - tests/unit/test_antigravity_hooks.py
       - tests/unit/test_watch_campaign.py
       - tests/unit/test_scheduled_run_ownership.py
       - tests/unit/test_investor_subject_projection.py
@@ -209,8 +283,13 @@ rules:
       - tests/unit/test_original_instruction_contract.py
   # WP62-66: explicit high-signal regression map; unknown shared paths still escalate.
   - name: company-research-typed-market-context
-    changed: [src/astock/schemas/research_team.py, src/astock/research/team.py]
+    changed:
+      - src/astock/schemas/research_team.py
+      - src/astock/research/team.py
+      - src/astock/research/team_cli.py
     tests:
+      - tests/unit/test_debate_evaluation.py
+      - tests/integration/test_cli.py
       - tests/unit/test_research_team.py
       - tests/unit/test_technical_research_team.py
       - tests/unit/test_current_research_continuation.py
@@ -228,8 +307,14 @@ rules:
       - tests/integration/test_market_reference.py
       - tests/unit/test_reference_data_schemas.py
   - name: bounded-strategy-experiment-and-atomic-selection
-    changed: [src/astock/experiments/*, configs/strategy_validation.yaml]
+    changed: [src/astock/experiments/*, configs/strategy_validation.yaml, scripts/compare_quant_research.py]
     tests:
+      - tests/unit/test_strategy_cross_validation.py
+      - tests/unit/test_allocation_context.py
+      - tests/unit/test_selection_statistics_contracts.py
+      - tests/integration/test_strategy_canonical_assembly.py
+      - tests/unit/test_shadow_statistics.py
+      - tests/unit/test_shadow_admission.py
       - tests/unit/test_strategy_validation.py
       - tests/unit/test_selection_seal.py
       - tests/integration/test_strategy_validation_cli.py
@@ -237,16 +322,23 @@ rules:
       - tests/integration/test_paper_replay.py
       - tests/unit/test_validation_planning.py
   - name: bounded-research-quality-and-investor-brief
-    changed: [src/astock/research/debate_evaluation.py, src/astock/research/outcome_feedback.py, src/astock/research/session_brief.py, src/astock/research/quality_cli.py, configs/research_quality.yaml]
+    changed: [src/astock/research/debate_evaluation.py, src/astock/research/outcome_feedback.py, src/astock/research/reference_outcomes.py, src/astock/research/session_brief.py, src/astock/research/quality_cli.py, configs/research_quality.yaml, tests/unit/test_outcome_feedback.py]
     tests:
+      - tests/integration/test_forecast_event_outcomes.py
+      - tests/unit/test_institutional_driver_contracts.py
+      - tests/unit/test_watch_campaign.py
+      - tests/unit/test_continuous_monitoring.py
       - tests/unit/test_debate_evaluation.py
       - tests/unit/test_outcome_feedback.py
+      - tests/integration/test_registered_factor_diagnostics.py
+      - tests/unit/test_registered_discovery_features.py
       - tests/unit/test_session_brief.py
       - tests/integration/test_research_quality_cli.py
       - tests/unit/test_quality_followup.py
       - tests/unit/test_quality_review_regressions.py
       - tests/unit/test_price_comparability.py
       - tests/unit/test_full_research_recommendation.py
+      - tests/unit/test_second_review_regressions.py
   - name: official-web-discovery-lead
     changed: [src/astock/research/web_discovery.py, src/astock/web_discovery_cli.py, src/astock/schemas/web_discovery.py, configs/web_discovery_lead.yaml]
     tests:
@@ -261,12 +353,21 @@ rules:
       - tests/unit/test_document_governance.py
   - name: validation-tooling
     changed:
+      - scripts/validation_inputs.py
+      - scripts/check_repository.py
+      - .pre-commit-config.yaml
+      - .github/workflows/repository-boundaries.yml
       - scripts/plan_validation.py
       - scripts/audit_gate_inventory.py
       - scripts/run_local_quality.py
       - configs/validation_impact.yaml
       - configs/validation/golden_research_v1.yaml
     tests:
+      - tests/unit/test_validation_input_closure.py
+      - tests/unit/test_repository_hygiene.py
+      - tests/unit/test_import_boundaries.py
+      - tests/unit/test_quality_runner_fingerprint.py
+      - tests/unit/test_quality_runner_processes.py
       - tests/unit/test_validation_planning.py
       - tests/unit/test_document_governance.py
       - tests/unit/test_workflow_docs.py
@@ -295,6 +396,7 @@ rules:
       - scripts/phase5_acceptance_summary.py
       - src/astock/documents/cninfo.py
     tests:
+      - tests/integration/test_strategy_canonical_assembly.py
       - tests/unit/test_document_governance.py
       - tests/unit/test_phase2_scope_configs.py
       - tests/contract/test_cninfo_recorded.py
@@ -314,3 +416,137 @@ rules:
       - src/astock/providers/supplemental*.py
       - tests/fixtures/providers/*-hints-success.json
     tests: [tests/unit/test_provider_supplemental.py]
+
+  # Reviewed domain mappings for the completed work packages. Unknown files still
+  # require FULL; these selections are not evidence of observed runtime coverage.
+  - name: shared-request-transport-budget
+    changed:
+      - src/astock/core/request_budget.py
+      - src/astock/core/network_ownership.py
+      - src/astock/providers/base.py
+      - src/astock/providers/http_resilience.py
+      - src/astock/providers/bse_official_reference.py
+      - configs/web_tools.yaml
+    tests:
+      - tests/integration/test_public_recovery_evidence.py
+      - tests/unit/test_request_budget.py
+      - tests/unit/test_continuation_external_wave.py
+      - tests/unit/test_current_research_continuation.py
+      - tests/unit/test_provider_resilience.py
+      - tests/unit/test_source_resilience.py
+      - tests/unit/test_mootdx_fallback.py
+      - tests/unit/test_provider_supplemental.py
+      - tests/unit/test_tushare_structured.py
+      - tests/unit/test_web_tools.py
+      - tests/unit/test_web_original_resolution.py
+      - tests/unit/test_public_pdf.py
+      - tests/unit/test_sampled_forecasts.py
+      - tests/unit/test_bse_official_reference.py
+      - tests/unit/test_news_capture_scope.py
+      - tests/unit/test_continuous_monitoring.py
+      - tests/unit/test_external_capabilities.py
+      - tests/unit/test_macro_capture_receipts.py
+      - tests/unit/test_investor_macro_hardening.py
+      - tests/integration/test_scheduled_input_coverage.py
+      - tests/integration/test_scheduled_semantic_coverage.py
+      - tests/integration/test_market_sync.py
+  - name: institutional-model-and-premise-lineage
+    changed:
+      - src/astock/research/fundamental_analytics.py
+      - src/astock/research/institutional.py
+      - src/astock/schemas/institutional_research.py
+      - src/astock/research/runtime.py
+      - src/astock/research/runtime_inputs.py
+      - src/astock/investor_orchestration/output_validation.py
+      - src/astock/committee/service.py
+    tests:
+      - tests/integration/test_forecast_event_outcomes.py
+      - tests/unit/test_institutional_research.py
+      - tests/unit/test_institutional_driver_contracts.py
+      - tests/unit/test_research_team.py
+      - tests/unit/test_full_research_source_binding.py
+      - tests/unit/test_full_research_recommendation.py
+      - tests/integration/test_research_runtime_complete.py
+      - tests/integration/test_runtime_current_financial_binding.py
+      - tests/integration/test_research_quality_cli.py
+      - tests/unit/test_final_completion.py
+      - tests/unit/test_current_research_continuation.py
+      - tests/unit/test_research_validation_cache.py
+      - tests/unit/test_investor_answer_projection.py
+      - tests/unit/test_investor_answer_rendering.py
+      - tests/unit/test_investor_domain_contracts.py
+      - tests/unit/test_investor_orchestration_guards.py
+      - tests/unit/test_investor_registered_execution.py
+      - tests/unit/test_investor_replay_result.py
+      - tests/unit/test_investor_decision_freeze.py
+      - tests/unit/test_investor_decision_inputs.py
+      - tests/unit/test_investor_activation_hardening.py
+      - tests/unit/test_registered_artifact_compatibility.py
+      - tests/unit/test_scheduled_preparation.py
+      - tests/integration/test_research_takeover_acceptance.py
+      - tests/integration/test_research_takeover_cli.py
+      - tests/integration/test_committee.py
+      - tests/integration/test_business_scenarios_real_e2e.py
+      - tests/integration/test_paper_operation_cli.py
+      - tests/integration/test_scheduled_input_coverage.py
+      - tests/integration/test_scheduled_semantic_coverage.py
+  - name: official-document-and-forecast-consumers
+    changed:
+      - src/astock/documents/public_pdf.py
+      - src/astock/providers/forecasts.py
+      - src/astock/research/data_cli.py
+      - tests/fixtures/providers/eastmoney-forecasts-*.json
+    tests:
+      - tests/unit/test_public_pdf.py
+      - tests/unit/test_web_original_resolution.py
+      - tests/unit/test_web_tools.py
+      - tests/unit/test_sampled_forecasts.py
+      - tests/unit/test_tushare_reference.py
+      - tests/unit/test_institutional_driver_contracts.py
+      - tests/integration/test_certified_financial_reader.py
+      - tests/integration/test_cli.py
+  - name: macro-authority-and-context
+    changed: [src/astock/investor_orchestration/macro.py]
+    tests:
+      - tests/unit/test_macro_*.py
+      - tests/unit/test_investor_macro_hardening.py
+      - tests/unit/test_tushare_reference.py
+      - tests/unit/test_regime_risk_binding.py
+      - tests/integration/test_regime_reference_views.py
+  - name: current-runtime-trading-boundaries
+    changed:
+      - src/astock/schemas/research_runtime.py
+      - src/astock/research/trading_classification.py
+    tests:
+      - tests/unit/test_trading_classification_baseline.py
+      - tests/unit/test_current_research*.py
+      - tests/unit/test_full_research_source_binding.py
+      - tests/unit/test_investor_domain_contracts.py
+      - tests/unit/test_research_team.py
+      - tests/unit/test_technical_research_team.py
+      - tests/integration/test_research_runtime_complete.py
+      - tests/integration/test_runtime_current_financial_binding.py
+      - tests/integration/test_strategy_canonical_assembly.py
+      - tests/integration/test_technical_registered.py
+  - name: shadow-statistical-governance
+    changed:
+      - src/astock/shadow/governance.py
+      - src/astock/shadow/statistics.py
+      - src/astock/schemas/prospective.py
+    tests:
+      - tests/unit/test_selection_statistics_contracts.py
+      - tests/unit/test_selection_seal.py
+      - tests/unit/test_strategy_validation.py
+      - tests/unit/test_shadow_*.py
+      - tests/integration/test_strategy_canonical_assembly.py
+      - tests/integration/test_strategy_validation_cli.py
+      - tests/integration/test_shadow_evaluation.py
+  - name: governance-qualification-evidence
+    changed:
+      - third_party/qualifications/e02/*.json
+    tests:
+      - tests/unit/test_e02_external_qualification.py
+      - tests/unit/test_external_capabilities.py
+      - tests/unit/test_source_router.py
+      - tests/unit/test_provider_registry.py
+      - tests/unit/test_repo_skills.py

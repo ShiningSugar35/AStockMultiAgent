@@ -18,6 +18,7 @@ class FinancialFieldMapping:
     provider_fields: dict[str, str]
     unit: FinancialUnit
     provider_units: dict[str, FinancialUnit] = field(default_factory=dict)
+    optional: bool = False
 
     def provider_unit(self, provider_id: str) -> FinancialUnit:
         return self.provider_units.get(provider_id, self.unit)
@@ -49,9 +50,12 @@ def load_financial_field_mappings(path: Path) -> list[FinancialFieldMapping]:
     for raw_code, raw in fields.items():
         if not isinstance(raw, dict):
             raise ValueError("Financial field mapping must be an object")
+        optional = raw.get("optional", False)
+        if not isinstance(optional, bool):
+            raise ValueError("Financial field optional flag must be boolean")
         provider_fields = raw.get("provider_fields")
-        if not isinstance(provider_fields, dict) or not provider_fields:
-            raise ValueError("Financial field mapping provider_fields must be non-empty")
+        if not isinstance(provider_fields, dict) or (not provider_fields and not optional):
+            raise ValueError("Required financial field provider mappings must be non-empty")
         normalized_fields = {
             str(provider_id): str(field_name)
             for provider_id, field_name in provider_fields.items()
@@ -73,6 +77,7 @@ def load_financial_field_mappings(path: Path) -> list[FinancialFieldMapping]:
                 provider_fields=normalized_fields,
                 unit=FinancialUnit(str(raw["unit"])),
                 provider_units=provider_units,
+                optional=optional,
             )
         )
     if len({item.field_code for item in mappings}) != len(mappings):

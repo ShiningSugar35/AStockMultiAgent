@@ -65,6 +65,7 @@ class FakeAcquisition:
         self.gap_rounds = list(gap_rounds)
         self.calls = 0
         self.network_modes: list[bool] = []
+        self.blocked_modes: list[frozenset[AcquisitionCapability]] = []
 
     def acquire(
         self,
@@ -76,6 +77,7 @@ class FakeAcquisition:
         reuse_report_artifact_id: str | None = None,
         trusted_identity_capture_ids: tuple[str, ...] = (),
         allow_network: bool = True,
+        network_blocked_capabilities: frozenset[AcquisitionCapability] = frozenset(),
     ) -> CurrentResearchAcquisitionReport:
         del (
             lookback_days,
@@ -87,6 +89,7 @@ class FakeAcquisition:
         gapped = self.gap_rounds[index]
         self.calls += 1
         self.network_modes.append(allow_network)
+        self.blocked_modes.append(network_blocked_capabilities)
         observed = NOW + timedelta(seconds=self.calls)
         needs = []
         if gapped:
@@ -972,17 +975,57 @@ def test_private_gap_does_not_skip_independent_public_resolution(tmp_path: Path)
     assert [task.private_material_required for task in stored.external_tasks] == [True, False]
 
 
-def test_legacy_public_exhaustion_checkpoint_remains_readable(tmp_path: Path) -> None:
-    service, _, _, _ = _service(tmp_path, gap_rounds=[True])
+@pytest.mark.parametrize("old_reason", [None, "TIME_BUDGET_EXHAUSTED"])
+def test_legacy_budget_checkpoint_reads_without_granting_public_exhaustion(
+    tmp_path: Path, old_reason: str | None,
+) -> None:
+    service, acquisition, _, _ = _service(tmp_path, gap_rounds=[True])
     started = service.start(_request(request_id="legacy-checkpoint"))
-    service._persist(started.model_copy(update={
-        "status": CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
-        "automatic_budget_exhausted": True,
-    }))
+    # Reconstruct a real pre-coverage stored artifact, never weaken the current writer.
+    payload = started.model_dump(mode="json", exclude={"public_recovery_coverage"})
+    payload.update(status="PUBLIC_DATA_UNAVAILABLE", automatic_budget_exhausted=True)
+    if old_reason is None:
+        payload.pop("recovery_stop_reason")
+    else:
+        payload["recovery_stop_reason"] = old_reason
+    prior = service.state.get_checkpoint("current-research-continuation", started.continuation_id)
+    assert prior is not None
+    frozen = service.objects.put_json(payload)
+    identity = f"CurrentResearchContinuation:{started.continuation_id}:{frozen.sha256}"
+    service.state.register_artifact(
+        artifact_id=identity, artifact_type="CurrentResearchContinuation",
+        schema_version=started.schema_version, object_hash=frozen.sha256,
+        input_hashes=[str(prior["object_hash"])],
+    )
+    service.state.set_checkpoint(
+        scope_type="current-research-continuation", scope_key=started.continuation_id,
+        cursor={"artifact_id": identity, "status": "PUBLIC_DATA_UNAVAILABLE"},
+        status="PUBLIC_DATA_UNAVAILABLE", object_hash=frozen.sha256,
+    )
+    original = service.objects.get_bytes(frozen.sha256)
+    checkpoint = service.state.get_checkpoint(
+        "current-research-continuation", started.continuation_id,
+    )
     stored = service.get(started.continuation_id)
     assert stored is not None
-    assert stored.recovery_stop_reason is None
-    assert stored.status is CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE
+    assert stored.status is CurrentResearchContinuationStatus.BUDGET_EXHAUSTED
+    assert stored.automatic_budget_exhausted
+    assert stored.recovery_stop_reason == (old_reason or "LEGACY_BUDGET_EXHAUSTED")
+    assert stored.public_recovery_coverage is None
+    assert stored.request_id == started.request_id and stored.deadline_at == started.deadline_at
+    assert stored.max_transport_attempts == started.max_transport_attempts
+    assert stored.automatic_rounds_completed == started.automatic_rounds_completed
+    assert not service.status(started.continuation_id)["public_data_unavailable"]
+    assert acquisition.calls == 1
+    assert service.objects.get_bytes(frozen.sha256) == original
+    assert service.state.get_checkpoint(
+        "current-research-continuation", started.continuation_id,
+    ) == checkpoint
+    with pytest.raises(ValueError, match="completed bounded route evidence"):
+        service._persist(started.model_copy(update={
+            "status": CurrentResearchContinuationStatus.PUBLIC_DATA_UNAVAILABLE,
+            "automatic_budget_exhausted": True,
+        }))
 
 
 def test_local_acquisition_never_restarts_remote_or_recorded_market_fetch(

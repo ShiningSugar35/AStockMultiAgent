@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 
 from astock.core.hashing import content_hash
@@ -15,6 +16,7 @@ from astock.schemas import (
     FetchStatus,
     OfficialWebDocumentCapture,
     SourceAdmissionStatus,
+    SourceClass,
     SourceDocument,
     SourceSnapshot,
 )
@@ -211,4 +213,130 @@ class OfficialWebDocumentCaptureService:
         return capture
 
 
-__all__ = ["OfficialWebDocumentCaptureService"]
+def load_official_web_capture(
+    state: StateStore, objects: ObjectStore, artifact_id: str, *,
+    company_id: str, as_of: datetime,
+    capabilities: tuple[str, ...] = ("disclosure.document", "financial.official_document"),
+) -> tuple[OfficialWebDocumentCapture, SourceDocument, SourceSnapshot]:
+    """Verify exact-item admission, immutable PDF and time without network or writes.
+
+    This proves source lineage. Consumers must still establish the document's
+    company/period and the meaning of any extracted statement from the original.
+    """
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("official document cutoff must be timezone-aware")
+    prefix = "OfficialWebDocumentCapture:"
+    normalized_id = artifact_id if artifact_id.startswith(prefix) else prefix + artifact_id
+    artifact = state.artifact_record(normalized_id)
+    if artifact is None or artifact["type"] != "OfficialWebDocumentCapture":
+        raise ValueError("official document capture is not registered")
+    digest = str(artifact["object_hash"])
+    if not objects.verify(digest):
+        raise ValueError("official document capture object mismatch")
+    payload = json.loads(objects.get_bytes(digest))
+    if not isinstance(payload, dict):
+        raise ValueError("official document capture payload is invalid")
+    payload.pop("pit_id", None)
+    capture = OfficialWebDocumentCapture.model_validate(payload)
+    if (
+        normalized_id != prefix + capture.capture_id
+        or capture.source_class is not SourceClass.PRIMARY_OFFICIAL_WEB
+        or capture.requested_capability not in capabilities
+        or not capture.formal_eligible or capture.exhaustive_proof_allowed
+    ):
+        raise ValueError("official document capture capability or identity mismatch")
+    document = DocumentRepository(state).get_model(capture.document_id)
+    if (
+        document is None or company_id not in document.company_ids
+        or document.publisher != capture.source_id
+        or document.source_url != str(capture.source_url)
+    ):
+        raise ValueError("official document company or source mismatch")
+    if document.published_at > capture.observed_at or capture.observed_at > as_of:
+        raise ValueError("official document was unavailable at cutoff")
+    with state.connect() as connection:
+        linked = connection.execute(
+            "SELECT 1 FROM document_snapshot WHERE document_id=? AND snapshot_id=?",
+            (capture.document_id, capture.snapshot_id),
+        ).fetchone()
+    if linked is None:
+        raise ValueError("official document snapshot is not registered to its document")
+    snapshot, admission = _verified_capture_snapshots(state, objects, capture, as_of=as_of)
+    if artifact.get("input_hashes") != [snapshot.object_sha256, admission.object_sha256]:
+        raise ValueError("official document capture input hashes mismatch")
+    _verify_capture_admission(objects, capture, admission)
+    return capture, document, snapshot
+
+
+def _verified_capture_snapshots(
+    state: StateStore, objects: ObjectStore, capture: OfficialWebDocumentCapture, *,
+    as_of: datetime,
+) -> tuple[SourceSnapshot, SourceSnapshot]:
+    snapshot = state.get_snapshot(capture.snapshot_id)
+    admission = state.get_snapshot(capture.admission_snapshot_id)
+    if snapshot is None or admission is None:
+        raise ValueError("official document source snapshot is missing")
+    if (
+        snapshot.source_id != capture.source_id
+        or admission.source_id != f"{capture.source_id}:admission"
+        or snapshot.object_sha256 != capture.object_sha256
+    ):
+        raise ValueError("official document source snapshot identity mismatch")
+    for item in (snapshot, admission):
+        if (
+            item.source_url != str(capture.source_url)
+            or item.fetch_status is not FetchStatus.SUCCEEDED
+            or not objects.verify(item.object_sha256)
+        ):
+            raise ValueError("official document raw source is unavailable")
+        if item.available_to_system_at > as_of:
+            raise ValueError("official document raw source was unavailable at cutoff")
+        if item.available_to_system_at != capture.observed_at:
+            raise ValueError("official document visibility differs from its raw source")
+    if not objects.get_bytes(snapshot.object_sha256).lstrip().startswith(b"%PDF-"):
+        raise ValueError("official document raw source is not a PDF")
+    return snapshot, admission
+
+
+def _verify_capture_admission(
+    objects: ObjectStore, capture: OfficialWebDocumentCapture, admission: SourceSnapshot,
+) -> None:
+    payload = json.loads(objects.get_bytes(admission.object_sha256))
+    if not isinstance(payload, dict):
+        raise ValueError("official document admission is invalid")
+    expected = {
+        "schema_version": "official-web-admission-v1",
+        "document_id": capture.document_id,
+        "document_snapshot_id": capture.snapshot_id,
+        "document_object_sha256": capture.object_sha256,
+        "exhaustive_proof_allowed": False,
+    }
+    if any(payload.get(key) != value for key, value in expected.items()):
+        raise ValueError("official document admission binding mismatch")
+    proposal = AgentSourceProposal.model_validate(payload.get("proposal"))
+    if (
+        proposal.requested_capability != capture.requested_capability
+        or proposal.candidate_url != capture.source_url
+        or not proposal.formal_use or proposal.require_complete
+    ):
+        raise ValueError("official document admission proposal mismatch")
+    recorded = payload.get("decision")
+    expected_decision = {
+        "requested_capability": capture.requested_capability,
+        "allowed": True, "source_id": capture.source_id, "formal_eligible": True,
+        "exhaustive_proof_allowed": False, "admission_status": "ADMIT_AFTER_SNAPSHOT",
+    }
+    if not isinstance(recorded, dict) or any(
+        recorded.get(key) != value for key, value in expected_decision.items()
+    ):
+        raise ValueError("official document admission decision mismatch")
+    decision = SourcePolicyGate().validate(proposal)
+    if (
+        not decision.allowed or not decision.formal_eligible
+        or decision.source_id != capture.source_id
+        or decision.source_class is not SourceClass.PRIMARY_OFFICIAL_WEB
+    ):
+        raise ValueError("official document source is not eligible under current policy")
+
+
+__all__ = ["OfficialWebDocumentCaptureService", "load_official_web_capture"]

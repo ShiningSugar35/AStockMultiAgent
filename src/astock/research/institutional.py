@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from datetime import timedelta
+from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from sqlite3 import Connection
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -15,10 +17,14 @@ from astock.core.state import StateStore
 from astock.evidence import EvidenceRepository
 from astock.research.fundamental_analytics import (
     dcf_fcff_value,
+    equity_adjustment,
+    equity_from_enterprise,
     evaluate_driver_period,
     forecast_period_from_nodes,
     implied_terminal_growth,
+    solve_bounded_driver,
     topological_order,
+    validate_forecast_units,
 )
 from astock.schemas.entry_quality import EntryQualitySnapshot
 from astock.schemas.evidence import (
@@ -40,6 +46,7 @@ from astock.schemas.institutional_research import (
     CompanyEconomicsProfile,
     DriverAssumptionProvenance,
     DriverOperation,
+    DriverSensitivityPoint,
     DriverTree,
     DriverTreeBuildRequest,
     EvidenceAuthorityTier,
@@ -52,6 +59,8 @@ from astock.schemas.institutional_research import (
     EvidenceSufficiencyRequest,
     EvidenceSufficiencyState,
     ForecastBuildRequest,
+    ForecastEventBuildRequest,
+    ForecastEventProbability,
     ForecastPack,
     ForecastScenario,
     ForecastScenarioPack,
@@ -66,6 +75,7 @@ from astock.schemas.institutional_research import (
     InstitutionalDecisionContextBuildRequest,
     InstitutionalResearchFinalizeRequest,
     MarketImpliedExpectation,
+    SampledExpectationComparison,
     SourceEpistemicMetadata,
     TaxonomyStatus,
     ValuationBuildRequest,
@@ -107,6 +117,42 @@ _TWO_SOURCE_TYPES = {
     InstitutionalClaimType.INTERPRETATION,
     InstitutionalClaimType.CAUSAL_CLAIM,
 }
+
+
+def require_active_institutional_inputs(
+    state: StateStore, object_hashes: list[str], *, connection: Connection | None = None,
+) -> None:
+    """Reject superseded premises only at callers that consume current research.
+
+    Historical audit/outcome readers deliberately do not call this function.
+    The existing checkpoint lineage is the only invalidation state.
+    """
+    import json
+
+    if not object_hashes:
+        return
+    if connection is None:
+        with closing(state.connect()) as active:
+            require_active_institutional_inputs(state, object_hashes, connection=active)
+        return
+    # Most reads have no invalidations; do not scan the artifact graph then.
+    if connection.execute(
+        "SELECT 1 FROM checkpoint WHERE scope_type=? LIMIT 1",
+        ("institutional-invalidated-input",),
+    ).fetchone() is None:
+        return
+    row = connection.execute(
+        "WITH RECURSIVE lineage(hash) AS ("
+        "SELECT value FROM json_each(?) UNION "
+        "SELECT child.value FROM lineage parent "
+        "JOIN artifact_registry a ON a.object_hash=parent.hash "
+        "JOIN json_each(a.input_hashes_json) child"
+        ") SELECT 1 FROM lineage JOIN checkpoint c ON c.scope_key=lineage.hash "
+        "WHERE c.scope_type=? LIMIT 1",
+        (json.dumps(sorted(set(object_hashes))), "institutional-invalidated-input"),
+    ).fetchone()
+    if row is not None:
+        raise ValueError("INSTITUTIONAL_PREMISE_SUPERSEDED")
 
 
 class InstitutionalResearchService:
@@ -335,6 +381,8 @@ class InstitutionalResearchService:
         if not request.draft.segments:
             missing.append("COMPANY_SEGMENT_ECONOMICS_REQUIRED")
         warnings: list[str] = []
+        if not request.draft.reconciliations:
+            warnings.append("SEGMENT_RECONCILIATION_NOT_PROVIDED")
         if request.draft.customer_concentration is None:
             warnings.append("CUSTOMER_CONCENTRATION_NOT_MODELED")
         if request.draft.supplier_dependency is None:
@@ -469,6 +517,7 @@ class InstitutionalResearchService:
         input_node_ids = {
             item.node_id for item in tree.draft.nodes if item.operation is DriverOperation.INPUT
         }
+        node_units = {node.node_id: node.unit for node in tree.draft.nodes}
         reference_periods: tuple[Any, ...] | None = None
         scenario_packs: list[ForecastScenarioPack] = []
         for scenario in sorted(request.scenarios, key=lambda item: item.scenario.value):
@@ -483,9 +532,23 @@ class InstitutionalResearchService:
                     )
                 if item.period_end <= request.as_of.date():
                     raise ValueError("forecast periods must be later than the research as_of date")
+                if item.unit is not None and item.unit != node_units[item.node_id]:
+                    raise ValueError("forecast driver unit does not match its tree")
+                if item.node_id in grouped[item.period_end]:
+                    raise ValueError("duplicate forecast driver/period")
                 grouped[item.period_end][item.node_id] = item.value
                 claim_ids.update(item.claim_ids)
                 evidence_ids.update(item.evidence_ids)
+                if item.verification is not None:
+                    counter_ids = sorted(set(item.verification.counter_evidence_ids))
+                    if self._lineage_gap_codes(sufficiency, [], counter_ids):
+                        raise ValueError("forecast counter-evidence is outside frozen evidence")
+                    if (
+                        item.verification.next_review_at is not None
+                        and item.verification.next_review_at < request.as_of
+                    ):
+                        raise ValueError("forecast next review precedes its creation")
+                    evidence_ids.update(counter_ids)
                 notes.add(item.provenance_note)
                 if item.provenance is DriverAssumptionProvenance.EVIDENCE:
                     gaps = self._lineage_gap_codes(
@@ -517,6 +580,10 @@ class InstitutionalResearchService:
                     assumption_claim_ids=sorted(claim_ids),
                     assumption_evidence_ids=sorted(evidence_ids),
                     assumption_notes=sorted(notes),
+                    driver_inputs=[
+                        item.model_copy(update={"unit": node_units[item.node_id]})
+                        for item in scenario.input_values
+                    ],
                     created_at=request.as_of,
                 )
             )
@@ -554,6 +621,59 @@ class InstitutionalResearchService:
         )
         return pack
 
+    def freeze_forecast_event(
+        self, request: ForecastEventBuildRequest,
+    ) -> ForecastEventProbability:
+        """Freeze a future-period judgement using the server clock, not request metadata."""
+        from astock.investor_orchestration.run_ownership import schedule_run_ownership
+        from astock.research.debate_evaluation import QualityError
+        from astock.research.outcome_feedback import (
+            SHANGHAI,
+            forecast_event_identity,
+            load_forecast_event,
+            load_forecast_event_basis,
+            validate_forecast_event_contract,
+        )
+
+        forecast, tree, forecast_hash, tree_hash = load_forecast_event_basis(
+            self.state, self.objects, request.forecast_artifact_id,
+        )
+        validate_forecast_event_contract(forecast, tree, request.definition)
+        identity = forecast_event_identity(request, forecast.company_id, forecast_hash, tree_hash)
+        artifact_id = f"ForecastEventProbability:{identity}"
+        with schedule_run_ownership(self.state.path, "forecast-event-freeze", identity):
+            if self.state.artifact_record(artifact_id) is not None:
+                event, _ = load_forecast_event(self.state, self.objects, artifact_id)
+                return event
+            require_active_institutional_inputs(
+                self.state, [forecast_hash, tree_hash, *forecast.source_object_hashes],
+            )
+            frozen_at = datetime.now(UTC)
+            if request.definition.period_end <= frozen_at.astimezone(SHANGHAI).date():
+                raise QualityError("EVENT_NOT_FROZEN_BEFORE_PERIOD_END")
+            if forecast.as_of > frozen_at:
+                raise QualityError("EVENT_FORECAST_NOT_YET_AVAILABLE")
+            event = ForecastEventProbability(
+                event_id=identity, company_id=forecast.company_id, frozen_at=frozen_at,
+                forecast_artifact_id=request.forecast_artifact_id,
+                forecast_object_hash=forecast_hash,
+                driver_tree_artifact_id=forecast.driver_tree_artifact_id,
+                driver_tree_object_hash=tree_hash, definition=request.definition,
+                probability=request.probability, probability_basis=request.probability_basis,
+                source_group=request.source_group,
+                source_artifact_ids=sorted({
+                    request.forecast_artifact_id, forecast.driver_tree_artifact_id,
+                }),
+                source_object_hashes=sorted({forecast_hash, tree_hash}), created_at=frozen_at,
+            )
+            ref = self.objects.put_json(event.model_dump(mode="json"))
+            self.state.register_artifact(
+                artifact_id=artifact_id, artifact_type="ForecastEventProbability",
+                schema_version=event.schema_version, object_hash=ref.sha256,
+                input_hashes=event.source_object_hashes,
+            )
+        return event
+
     def build_valuation(self, request: ValuationBuildRequest) -> ValuationPack:
         forecast, forecast_hash = self._load(
             request.forecast_pack_artifact_id,
@@ -575,6 +695,7 @@ class InstitutionalResearchService:
         self._require_company_as_of(request.company_id, request.as_of, company)
         if forecast.status is not InstitutionalArtifactStatus.READY:
             raise ValueError("valuation requires READY forecast")
+        tree = self._load_forecast_tree(forecast)
         if sufficiency.status is not InstitutionalArtifactStatus.READY:
             raise ValueError("valuation requires READY evidence sufficiency")
         if company.status is not InstitutionalArtifactStatus.READY:
@@ -643,19 +764,22 @@ class InstitutionalResearchService:
             periods = forecast_by_scenario[scenario].periods
             enterprise_value: Decimal | None
             if assumption.method is ValuationMethod.DCF_FCFF:
-                enterprise_value, equity_value = dcf_fcff_value(periods, assumption)
+                enterprise_value, equity_value = dcf_fcff_value(
+                    periods, assumption, valuation_date=request.as_of.date()
+                )
             elif assumption.method is ValuationMethod.MID_CYCLE_NORMALIZED:
                 if assumption.normalized_metric is None or assumption.valuation_multiple is None:
                     raise ValueError("mid-cycle valuation requires normalized metric and multiple")
                 enterprise_value = assumption.normalized_metric * assumption.valuation_multiple
-                equity_value = enterprise_value - assumption.net_debt
+                equity_value = equity_from_enterprise(enterprise_value, assumption)
             else:
                 if assumption.explicit_equity_value is None:
                     raise ValueError(
                         f"{assumption.method.value} requires explicit equity value in v1"
                     )
                 equity_value = assumption.explicit_equity_value
-                enterprise_value = equity_value + assumption.net_debt
+                # Equity-only methods do not manufacture an enterprise-value bridge.
+                enterprise_value = None
             per_share = equity_value / assumption.shares_outstanding
             expected_return = (
                 per_share / market_price - Decimal("1") if market_price is not None else None
@@ -683,6 +807,8 @@ class InstitutionalResearchService:
             forecast_by_scenario[ForecastScenario.BASE].periods,
             assumption_by_scenario[ForecastScenario.BASE],
         )
+        driver_sensitivity, driver_expectations = self._driver_sensitivity(request, forecast, tree)
+        expectations.extend(driver_expectations)
         values = [item.per_share_value for item in results]
         valuation_id = "valuation-pack:" + content_hash(
             {
@@ -693,6 +819,7 @@ class InstitutionalResearchService:
                 "results": [item.model_dump(mode="json") for item in results],
                 "expectations": [item.model_dump(mode="json") for item in expectations],
                 "sensitivity": [item.model_dump(mode="json") for item in sensitivity],
+                "driver_sensitivity": [item.model_dump(mode="json") for item in driver_sensitivity],
             }
         )
         valuation_source_bindings = {
@@ -728,6 +855,7 @@ class InstitutionalResearchService:
             value_range_high=max(values),
             market_implied_expectations=expectations,
             sensitivity_table=sensitivity,
+            driver_sensitivity=driver_sensitivity,
             market_price_anchor=request.market_price_anchor,
             assumption_claim_ids=sorted(claim_ids),
             assumption_evidence_ids=sorted(evidence_ids),
@@ -747,6 +875,88 @@ class InstitutionalResearchService:
             checkpoint_status=pack.status.value,
         )
         return pack
+
+
+    def _load_forecast_tree(self, forecast: ForecastPack) -> DriverTree:
+        """Read the forecast's exact frozen tree and validate canonical monetary units."""
+        tree, tree_hash = self._load(forecast.driver_tree_artifact_id, "DriverTree", DriverTree)
+        if tree_hash != forecast.driver_tree_object_hash:
+            raise ValueError("forecast driver tree lineage drifted")
+        validate_forecast_units(tree)
+        return tree
+
+    def _driver_sensitivity(
+        self, request: ValuationBuildRequest, forecast: ForecastPack, tree: DriverTree
+    ) -> tuple[list[DriverSensitivityPoint], list[MarketImpliedExpectation]]:
+        if not request.driver_sensitivity_requests:
+            return [], []
+        assumption = next(
+            item for item in request.scenario_assumptions if item.scenario is ForecastScenario.BASE
+        )
+        if assumption.method is not ValuationMethod.DCF_FCFF:
+            raise ValueError("operating-driver inverse currently requires DCF_FCFF")
+        base = next(item for item in forecast.scenarios if item.scenario is ForecastScenario.BASE)
+        if not base.driver_inputs:
+            raise ValueError("driver sensitivity requires frozen driver assumptions")
+        node_units = {node.node_id: node.unit for node in tree.draft.nodes}
+        inputs: dict[Any, dict[str, Decimal]] = defaultdict(dict)
+        for item in base.driver_inputs:
+            inputs[item.period_end][item.node_id] = item.value
+        sensitivities: list[DriverSensitivityPoint] = []
+        expectations: list[MarketImpliedExpectation] = []
+        for spec in request.driver_sensitivity_requests:
+            if spec.period_end not in inputs or spec.node_id not in inputs[spec.period_end]:
+                raise ValueError("driver sensitivity targets an unknown input/period")
+
+            def value_at(value: Decimal, *, spec=spec) -> Decimal:
+                periods = []
+                for period_end, values in sorted(inputs.items()):
+                    changed = dict(values)
+                    if period_end == spec.period_end:
+                        changed[spec.node_id] = value
+                    periods.append(forecast_period_from_nodes(
+                        tree, evaluate_driver_period(tree, changed), period_end
+                    ))
+                _, equity = dcf_fcff_value(
+                    periods, assumption, valuation_date=request.as_of.date()
+                )
+                return equity / assumption.shares_outstanding
+
+            target = (
+                request.market_price_anchor.price if request.market_price_anchor is not None
+                else value_at(inputs[spec.period_end][spec.node_id])
+            )
+            kind, roots, points = solve_bounded_driver(
+                value_at, target=target, lower=spec.lower, upper=spec.upper,
+                grid_points=spec.grid_points,
+            )
+            sensitivities.extend(
+                DriverSensitivityPoint(
+                    node_id=spec.node_id, period_end=spec.period_end,
+                    unit=node_units[spec.node_id], value=value, per_share_value=price,
+                    created_at=request.as_of,
+                )
+                for value, price in points
+            )
+            anchored = request.market_price_anchor is not None
+            solved = anchored and len(roots) == 1
+            expectations.append(MarketImpliedExpectation(
+                expectation="IMPLIED_OPERATING_DRIVER", scenario=ForecastScenario.BASE,
+                driver_node_id=spec.node_id, period_end=spec.period_end,
+                unit=node_units[spec.node_id],
+                solution_kind=kind if anchored else "MARKET_PRICE_ANCHOR_REQUIRED",
+                implied_value=roots[0] if solved else None,
+                status=(
+                    InstitutionalArtifactStatus.READY if solved
+                    else InstitutionalArtifactStatus.NEEDS_INFO
+                ),
+                reason_codes=(
+                    ["SAMPLED_DOMAIN_NOT_GLOBAL_UNIQUENESS"] if solved
+                    else [kind if anchored else "MARKET_PRICE_ANCHOR_REQUIRED"]
+                ),
+                created_at=request.as_of,
+            ))
+        return sensitivities, expectations
 
     def build_bundle(self, request: FundamentalModelBundleBuildRequest) -> FundamentalModelBundle:
         components: list[tuple[str, str, BaseModel, str]] = []
@@ -873,12 +1083,19 @@ class InstitutionalResearchService:
             raise ValueError("institutional decision context claims escape the model bundle")
         if not set(evidence_ids).issubset(bundle.evidence_ids):
             raise ValueError("institutional decision context evidence escapes the model bundle")
+        sampled = self._sampled_expectations(request, bundle, driver)
+        source_ids = sorted({
+            request.fundamental_model_bundle_artifact_id,
+            *(item.source_artifact_id for item in sampled),
+        })
+        source_hashes = sorted({bundle_hash, *(item.source_object_hash for item in sampled)})
         context_id = "institutional-context:" + content_hash(
             {
                 "bundle_hash": bundle_hash,
                 "company_id": request.company_id,
                 "as_of": request.as_of,
                 "draft": request.draft,
+                "sampled": sampled,
             }
         )
         context = InstitutionalDecisionContext(
@@ -888,22 +1105,76 @@ class InstitutionalResearchService:
             fundamental_model_bundle_artifact_id=request.fundamental_model_bundle_artifact_id,
             fundamental_model_bundle_object_hash=bundle_hash,
             draft=request.draft,
+            sampled_expectations=sampled,
             claim_ids=claim_ids,
             evidence_ids=evidence_ids,
-            source_artifact_ids=[request.fundamental_model_bundle_artifact_id],
-            source_object_hashes=[bundle_hash],
+            source_artifact_ids=source_ids,
+            source_object_hashes=source_hashes,
             created_at=request.as_of,
         )
         self._persist(
             context,
             artifact_type="InstitutionalDecisionContext",
             artifact_id=f"InstitutionalDecisionContext:{context.context_id}",
-            input_hashes=[bundle_hash],
+            input_hashes=source_hashes,
             checkpoint_scope="institutional-decision-context",
             checkpoint_key=request.company_id,
             checkpoint_status="READY",
         )
         return context
+
+
+    def _sampled_expectations(
+        self, request: InstitutionalDecisionContextBuildRequest,
+        bundle: FundamentalModelBundle, driver: DriverTree,
+    ) -> list[SampledExpectationComparison]:
+        if not request.draft.sampled_forecast_artifact_ids:
+            return []
+        from astock.providers.forecasts import SampledForecastAggregate
+
+        forecast, _ = self._load(bundle.forecast_pack_artifact_id, "ForecastPack", ForecastPack)
+        base = next(item for item in forecast.scenarios if item.scenario is ForecastScenario.BASE)
+        units = {node.node_id: node.unit for node in driver.draft.nodes}
+        result = []
+        for artifact_id in sorted(set(request.draft.sampled_forecast_artifact_ids)):
+            sample, object_hash = self._load(
+                artifact_id, "SampledForecastAggregate", SampledForecastAggregate
+            )
+            if sample.company_id != request.company_id or sample.as_of > request.as_of:
+                raise ValueError("sampled forecast identity/time does not match decision")
+            matching = [
+                period for period in base.periods
+                if period.period_end.year == sample.target_fiscal_year
+                and period.period_end.month == 12 and period.period_end.day == 31
+            ]
+            reasons = []
+            unit = units.get(driver.draft.output_bindings.get(sample.metric, ""))
+            if len(matching) != 1 or unit != sample.unit:
+                reasons.append("MATCHING_FORECAST_METRIC_PERIOD_UNIT_REQUIRED")
+            system_value = (
+                matching[0].metrics.get(sample.metric) if not reasons else None
+            )
+            if system_value is None:
+                reasons.append("SYSTEM_FORECAST_METRIC_MISSING")
+            if sample.median is None or sample.sample_count == 0:
+                reasons.append("SAMPLED_FORECAST_EMPTY")
+            comparable = not reasons
+            result.append(SampledExpectationComparison(
+                source_artifact_id=artifact_id, source_object_hash=object_hash,
+                metric=sample.metric, target_fiscal_year=sample.target_fiscal_year,
+                unit=sample.unit, system_forecast=system_value,
+                sampled_median=sample.median,
+                difference=(
+                    system_value - sample.median
+                    if comparable and system_value is not None and sample.median is not None
+                    else None
+                ),
+                sample_count=sample.sample_count, institution_count=sample.institution_count,
+                source_groups=list(sample.source_groups),
+                status="COMPARABLE" if comparable else "NOT_COMPARABLE",
+                reason_codes=sorted(set(reasons)), created_at=request.as_of,
+            ))
+        return result
 
     def finalize(self, request: InstitutionalResearchFinalizeRequest) -> FundamentalModelBundle:
         if request.evidence_sufficiency.frozen_evidence_pack_artifact_id == "":
@@ -970,6 +1241,7 @@ class InstitutionalResearchService:
                 company_economics_artifact_id=company_artifact,
                 market_price_anchor=request.market_price_anchor,
                 scenario_assumptions=request.valuation_scenarios,
+                driver_sensitivity_requests=request.driver_sensitivity_requests,
                 invalidation_conditions=request.valuation_invalidation_conditions,
                 created_at=request.as_of,
             )
@@ -987,6 +1259,102 @@ class InstitutionalResearchService:
                 created_at=request.as_of,
             )
         )
+
+    def invalidate_forecast(
+        self, forecast_artifact_id: str, *, changed_claim_ids: list[str],
+        invalidated_evidence_ids: list[str], invalidated_at, reason: str,
+    ) -> dict[str, Any]:
+        """Invalidate affected current descendants in the existing checkpoint lane.
+
+        Historical objects and unrelated company/industry facts remain immutable.
+        A new premise version must be built before these inputs can be reused.
+        """
+        import json
+
+        from astock.core.hashing import canonical_json_bytes
+        from astock.research.outcome_feedback import forecast_revision_impact
+
+        forecast, forecast_hash = self._load(
+            forecast_artifact_id, "ForecastPack", ForecastPack, allow_superseded=True
+        )
+        tree, tree_hash = self._load(
+            forecast.driver_tree_artifact_id, "DriverTree", DriverTree
+        )
+        if tree_hash != forecast.driver_tree_object_hash:
+            raise ValueError("forecast driver tree lineage drifted")
+        if invalidated_at < forecast.as_of or not reason.strip():
+            raise ValueError("invalid forecast revision event")
+        impact = forecast_revision_impact(
+            forecast, tree, changed_claim_ids=changed_claim_ids,
+            invalidated_evidence_ids=invalidated_evidence_ids,
+        )
+        if not impact["downstream_recalculation_required"]:
+            return {**impact, "invalidated_artifact_ids": [], "persistent_writes": False}
+        event = {
+            "schema_version": "forecast-premise-revision-v1", "impact": impact,
+            "forecast_artifact_id": forecast_artifact_id, "forecast_object_hash": forecast_hash,
+            "invalidated_at": invalidated_at.isoformat(), "reason": reason,
+        }
+        ref = self.objects.put_json(event)
+        event_id = "ForecastPremiseRevision:" + ref.sha256
+        self.state.register_artifact(
+            artifact_id=event_id, artifact_type="ForecastPremiseRevision",
+            schema_version=event["schema_version"], object_hash=ref.sha256,
+            input_hashes=[forecast_hash, tree_hash],
+        )
+        scopes = (
+            "institutional-forecast", "institutional-valuation",
+            "institutional-fundamental-model", "institutional-decision-context",
+        )
+        affected = {forecast_hash: forecast_artifact_id}
+        with self.state.transaction() as connection:
+            for scope in scopes:
+                row = connection.execute(
+                    "SELECT * FROM checkpoint WHERE scope_type=? AND scope_key=?",
+                    (scope, forecast.company_id),
+                ).fetchone()
+                if row is None:
+                    continue
+                cursor = json.loads(row["cursor_json"])
+                artifact_id = cursor.get("artifact_id")
+                record = self.state.artifact_record(artifact_id) if artifact_id else None
+                if record is None or not (
+                    record["object_hash"] in affected
+                    or set(record.get("input_hashes") or ()) & affected.keys()
+                ):
+                    continue
+                affected[str(record["object_hash"])] = artifact_id
+                connection.execute(
+                    "UPDATE checkpoint SET status=?,cursor_json=?,committed_at=? "
+                    "WHERE scope_type=? AND scope_key=? AND object_hash=?",
+                    (
+                        "SUPERSEDED",
+                        canonical_json_bytes({**cursor, "revision_artifact_id": event_id}).decode(),
+                        invalidated_at.isoformat(), scope, forecast.company_id, row["object_hash"],
+                    ),
+                )
+            for object_hash, artifact_id in affected.items():
+                cursor = {
+                    "artifact_id": artifact_id, "revision_artifact_id": event_id,
+                    "reason": "PREMISE_SUPERSEDED",
+                }
+                connection.execute(
+                    "INSERT INTO checkpoint(checkpoint_id,scope_type,scope_key,cursor_json,"
+                    "status,object_hash,committed_at) VALUES(?,?,?,?,?,?,?) "
+                    "ON CONFLICT(scope_type,scope_key) DO NOTHING",
+                    (
+                        content_hash({
+                            "scope": "institutional-invalidated-input", "hash": object_hash,
+                        }),
+                        "institutional-invalidated-input", object_hash,
+                        canonical_json_bytes(cursor).decode(), "SUPERSEDED", ref.sha256,
+                        invalidated_at.isoformat(),
+                    ),
+                )
+        return {
+            **impact, "revision_artifact_id": event_id,
+            "invalidated_artifact_ids": sorted(affected.values()), "persistent_writes": True,
+        }
 
     def status(self, company_id: str) -> dict[str, Any]:
         checkpoint = self.state.get_checkpoint("institutional-fundamental-model", company_id)
@@ -1107,20 +1475,42 @@ class InstitutionalResearchService:
                 object_hash=ref.sha256,
                 input_hashes=hashes,
             )
-        self.state.set_checkpoint(
-            scope_type=checkpoint_scope,
-            scope_key=checkpoint_key,
-            cursor={"artifact_id": artifact_id},
-            status=checkpoint_status,
-            object_hash=ref.sha256,
-        )
+        from astock.core.hashing import canonical_json_bytes, sha256_bytes
+        from astock.core.state import utc_now_text
+
+        # Immutable registration can precede this transaction. Advancing the
+        # current head and checking its complete ancestry must be indivisible.
+        with self.state.transaction() as connection:
+            require_active_institutional_inputs(
+                self.state, [ref.sha256, *hashes], connection=connection,
+            )
+            connection.execute(
+                "INSERT INTO checkpoint(checkpoint_id,scope_type,scope_key,cursor_json,"
+                "status,object_hash,committed_at) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(scope_type,scope_key) DO UPDATE SET cursor_json=excluded.cursor_json,"
+                "status=excluded.status,object_hash=excluded.object_hash,"
+                "committed_at=excluded.committed_at",
+                (
+                    sha256_bytes(f"{checkpoint_scope}:{checkpoint_key}".encode()),
+                    checkpoint_scope, checkpoint_key,
+                    canonical_json_bytes({"artifact_id": artifact_id}).decode(),
+                    checkpoint_status, ref.sha256, utc_now_text(),
+                ),
+            )
         return artifact_id
 
-    def _load(self, artifact_id: str, artifact_type: str, model_type: type[T]) -> tuple[T, str]:
+    def _load(
+        self, artifact_id: str, artifact_type: str, model_type: type[T], *,
+        allow_superseded: bool = False,
+    ) -> tuple[T, str]:
         record = self.state.artifact_record(artifact_id)
         if record is None or str(record["type"]) != artifact_type:
             raise ValueError(f"unknown {artifact_type} artifact")
         object_hash = str(record["object_hash"])
+        if not allow_superseded:
+            require_active_institutional_inputs(
+                self.state, [object_hash, *(record.get("input_hashes") or ())],
+            )
         if not self.objects.verify(object_hash):
             raise ValueError(f"{artifact_type} object is unavailable")
         return model_type.model_validate_json(self.objects.get_bytes(object_hash)), object_hash
@@ -1558,10 +1948,15 @@ class InstitutionalResearchService:
             ]
         base_result = next(item for item in results if item.scenario is ForecastScenario.BASE)
         target_equity = request.market_price_anchor.price * base_assumption.shares_outstanding
-        target_enterprise = target_equity + base_assumption.net_debt
+        if base_assumption.method is not ValuationMethod.DCF_FCFF:
+            return []
+        target_enterprise = target_equity - equity_adjustment(base_assumption)
         expectations: list[MarketImpliedExpectation] = []
         if base_assumption.method is ValuationMethod.DCF_FCFF:
-            growth = implied_terminal_growth(base_periods, base_assumption, target_enterprise)
+            growth = implied_terminal_growth(
+                base_periods, base_assumption, target_enterprise,
+                valuation_date=request.as_of.date(),
+            )
             expectations.append(
                 MarketImpliedExpectation(
                     expectation="IMPLIED_TERMINAL_GROWTH",
@@ -1617,7 +2012,9 @@ class InstitutionalResearchService:
                 changed = base_assumption.model_copy(
                     update={"discount_rate": rate, "terminal_growth": growth}
                 )
-                _, equity_value = dcf_fcff_value(base_periods, changed)
+                _, equity_value = dcf_fcff_value(
+                    base_periods, changed, valuation_date=request.as_of.date()
+                )
                 result.append(
                     ValuationSensitivityPoint(
                         discount_rate=rate,
@@ -1629,4 +2026,4 @@ class InstitutionalResearchService:
         return sorted(result, key=lambda item: (item.discount_rate, item.terminal_growth))
 
 
-__all__ = ["InstitutionalResearchService"]
+__all__ = ["InstitutionalResearchService", "require_active_institutional_inputs"]

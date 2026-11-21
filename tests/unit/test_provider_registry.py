@@ -14,6 +14,7 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
     registry = load_provider_registry(Path("configs/provider_registry.yaml"))
 
     assert [item.provider_id for item in registry.providers] == [
+        "eastmoney-forecasts",
         "eastmoney-5m",
         "sina-5m",
         "mootdx-fallback",
@@ -34,6 +35,7 @@ def test_project_provider_registry_is_strict_and_declares_only_implemented_provi
         "mof-fiscal-policy-release",
         "ndrc-pricing-policy-release",
         "akshare-reference-hints",
+        "tushare-reference",
         "tushare-structured",
         "tushare-reference-hints",
         "finnhub-news-hints",

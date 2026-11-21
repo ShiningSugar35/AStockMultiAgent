@@ -115,18 +115,21 @@ def test_technical_context_pair_rejects_partial_binding(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "change",
+    "change,reason",
     [
-        {"company_id": "600002"},
-        {"daily_release_object_hash": "f" * 64},
-        {"technical_snapshot_object_hash": "f" * 64},
-        {"as_of": NOW.replace(year=2024)},
+        ({"company_id": "600002"}, "market-context company mismatch"),
+        ({"daily_release_object_hash": "f" * 64}, "technical market-context provenance mismatch"),
+        (
+            {"technical_snapshot_object_hash": "f" * 64},
+            "technical market-context provenance mismatch",
+        ),
+        ({"as_of": NOW.replace(year=2024)}, "technical market-context provenance mismatch"),
     ],
 )
-def test_market_context_refuses_mismatched_technical_evidence(tmp_path, change):
+def test_market_context_refuses_mismatched_technical_evidence(tmp_path, change, reason):
     team, state, objects, plan, context, _, _ = _setup(tmp_path)
     changed = context.model_copy(update=change)
-    with pytest.raises(ValueError, match="technical"):
+    with pytest.raises(ValueError, match=reason):
         _submit(team, state, objects, plan, changed, ident="MarketContextPack:wrong")
 
 
@@ -140,7 +143,7 @@ def test_technical_context_cannot_cross_company_research_plans(tmp_path):
         cpu_count=4,
         memory_gib=8,
     )
-    with pytest.raises(ValueError, match="technical market-context provenance mismatch"):
+    with pytest.raises(ValueError, match="market-context company mismatch"):
         _submit(team, state, objects, another_plan, context, ident="MarketContextPack:cross-plan")
 
 

@@ -300,3 +300,34 @@ def test_outside_scratch_fallback_never_creates_the_rejected_path(tmp_path: Path
     assert worker.cleanup_confirmed
     assert not outside.exists()
     assert not worker.scratch_root.exists()
+
+def _exit_like_timeout() -> str:
+    os._exit(124)
+
+
+def test_target_exit_124_is_not_a_watchdog_timeout(tmp_path: Path) -> None:
+    worker = _worker(tmp_path, _exit_like_timeout)
+    with pytest.raises(RuntimeError, match="without a"):
+        worker()
+    assert worker.cleanup_confirmed
+
+
+def test_child_deadline_signal_survives_a_lagging_parent_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _worker(tmp_path, _blocking, (str(tmp_path / "late-clock.pid"),), seconds=1)
+    boundary = worker._check_boundary
+
+    def lagging_parent(end: float | None, deadline_reached=None) -> None:
+        original = worker.deadline_at
+        worker.deadline_at = datetime.now(UTC) + timedelta(seconds=60)
+        try:
+            boundary(time.monotonic() + 60, deadline_reached)
+        finally:
+            worker.deadline_at = original
+
+    monkeypatch.setattr(worker, "_check_boundary", lagging_parent)
+    with pytest.raises(WorkerDeadlineError, match="watchdog"):
+        worker()
+    assert worker.cleanup_confirmed
+    assert not Path(str(tmp_path / "late-clock.pid") + ".late").exists()

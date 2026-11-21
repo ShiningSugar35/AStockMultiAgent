@@ -230,8 +230,9 @@ def test_public_investment_exhaustion_is_not_an_endless_continue():
     decision = InvestmentRequestClosurePolicy.evaluate(
         request, plan, coverage, automatic_resolution_exhausted=True
     )
-    assert decision.state.value == "PUBLIC_DATA_UNAVAILABLE"
-    assert not decision.same_request_continuation_required
+    assert decision.state.value == "CONTINUE_AUTOMATICALLY"
+    assert decision.same_request_continuation_required
+    assert not decision.automatic_resolution_exhausted
     assert not decision.private_user_input_required
     assert decision.investment_conclusion_blocked
 
@@ -292,3 +293,45 @@ def test_golden_slice_rejects_stale_case_binding(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="scenario binding"):
         plan_golden_validation(tmp_path)
+
+
+@pytest.mark.parametrize(("changed", "required"), [
+    ("src/astock/core/request_budget.py", "tests/unit/test_public_pdf.py"),
+    ("src/astock/research/sla_runtime.py", "tests/unit/test_continuation_external_wave.py"),
+    ("src/astock/reports/service.py", "tests/unit/test_owned_commands.py"),
+    ("src/astock/research/institutional.py", "tests/unit/test_institutional_driver_contracts.py"),
+    ("src/astock/research/presentation.py", "tests/unit/test_narrative_fact_binding.py"),
+    ("src/astock/portfolio/allocation.py", "tests/unit/test_allocation_context.py"),
+    ("src/astock/documents/public_pdf.py", "tests/unit/test_web_original_resolution.py"),
+    ("src/astock/experiments/canonical_release.py",
+     "tests/integration/test_strategy_canonical_assembly.py"),
+    ("src/astock/candidates/factor_diagnostics.py", "tests/unit/test_factor_diagnostics.py"),
+    ("src/astock/investor_orchestration/macro.py", "tests/unit/test_macro_authority.py"),
+    ("src/astock/schemas/research_runtime.py",
+     "tests/unit/test_trading_classification_baseline.py"),
+    ("src/astock/shadow/statistics.py", "tests/unit/test_selection_statistics_contracts.py"),
+    ("scripts/validation_inputs.py", "tests/unit/test_validation_input_closure.py"),
+    ("third_party/qualifications/e02/reports/source-qualification-auditor.json",
+     "tests/unit/test_e02_external_qualification.py"),
+    ("tests/fixtures/providers/eastmoney-forecasts-success.json",
+     "tests/unit/test_sampled_forecasts.py"),
+])
+def test_completed_domain_changes_select_consumers_and_negative_cases(
+    changed: str, required: str,
+) -> None:
+    plan = plan_validation(ROOT, [changed], shards=2)
+    assert plan["scope"] == "IMPACT", plan["full_suite_reasons"]
+    assert required in plan["tests"]
+    assert 0 < plan["test_file_count"] < plan["repository_test_file_count"]
+    assert sorted(path for shard in plan["shards"] for path in shard) == plan["tests"]
+    assert plan["coverage_proven"] is False
+
+
+@pytest.mark.parametrize("changed", [
+    "pyproject.toml", "uv.lock", "src/astock/core/object_store.py",
+    "src/astock/research/unmapped_new_domain.py",
+])
+def test_domain_mappings_do_not_weaken_shared_or_unknown_fallback(changed: str) -> None:
+    plan = plan_validation(ROOT, [changed])
+    assert plan["scope"] == "FULL"
+    assert plan["test_file_count"] == plan["repository_test_file_count"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -66,6 +67,13 @@ from astock.schemas import (
     OfficialFinancialLineageKind,
 )
 from astock.schemas.financial_sources import FinancialProviderReportVersion
+
+
+@dataclass(frozen=True)
+class VerifiedFinancialRelease:
+    manifest: FinancialSourceReleaseManifest
+    facts: tuple[FinancialFact, ...]
+    observations: tuple[FinancialSourceObservation, ...]
 
 
 class FinancialSourceService:
@@ -239,15 +247,19 @@ class FinancialSourceService:
             ))
         ]
         if live and allow_network:
+            preferred_provider = (
+                self.config.provider_order[0] if self.config.provider_order else None
+            )
             ranked_definitions = self.provider_factory.definitions_for_capability(
                 "financial.statement_values",
-                source_hint=(self.config.provider_order[0] if self.config.provider_order else None),
+                source_hint=preferred_provider,
             )
             provider_order = [
                 definition.provider_id
                 for definition in ranked_definitions
                 if definition.provider_id in self.providers
             ]
+            provider_order.sort(key=lambda provider_id: provider_id != preferred_provider)
             excluded = [
                 provider_id
                 for provider_id in self.config.provider_order
@@ -468,6 +480,11 @@ class FinancialSourceService:
                 )
             )
             observed_statements = list(dict.fromkeys(item.statement_type for item in observations))
+        else:
+            _append_optional_official_values(
+                certifier, official, self.mappings, company_id, period_end, period_type, binding,
+                observations, provider_ids, raw_snapshot_ids, reasons,
+            )
         provider_available = max(item.available_to_system_at for item in observations)
         _, source_hash, source_descriptor = self.parquet.write_observations(
             company_id, period_end, provider_available, observations
@@ -637,6 +654,45 @@ class FinancialSourceService:
             "release": manifest.model_dump(mode="json"),
         }
 
+    def read_certified_release(
+        self,
+        company_id: str,
+        period_end: date,
+        period_type: FinancialPeriodType,
+        *,
+        as_of: datetime,
+    ) -> VerifiedFinancialRelease | None:
+        """Read the actually available certified version through the sole verifier."""
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise ValueError("financial release as_of must be timezone-aware")
+        row = self.repository.get(
+            company_id, period_end.isoformat(), period_type.value, as_of=as_of
+        )
+        if row is None:
+            return None
+        manifest = self._verified_manifest(row)
+        if (
+            manifest.status is not FinancialSourceReleaseStatus.CERTIFIED
+            or manifest.available_to_system_at > as_of
+            or manifest.schema_version != "financial-source-release-v2"
+            or manifest.official_lineage_kind not in {
+                OfficialFinancialLineageKind.CNINFO_EXHAUSTIVE_ENUMERATION,
+                OfficialFinancialLineageKind.OFFICIAL_WEB_EXACT_ITEM_ADMISSION,
+            }
+        ):
+            return None
+        return VerifiedFinancialRelease(
+            manifest=manifest,
+            facts=tuple(
+                fact for descriptor in manifest.certified_files
+                for fact in self.parquet.read_facts(descriptor)
+            ),
+            observations=tuple(
+                item for descriptor in manifest.source_files
+                for item in self.parquet.read_observations(descriptor)
+            ),
+        )
+
     def build_audit_request(
         self,
         company_id: str,
@@ -648,14 +704,15 @@ class FinancialSourceService:
         requested_rule_ids: list[str] | None = None,
     ) -> FinancialAuditRequest:
         row = self.repository.get(
-            company_id,
-            period_end.isoformat(),
-            period_type.value,
+            company_id, period_end.isoformat(), period_type.value, as_of=as_of
         )
         facts: list[FinancialFact] = []
         if row is not None:
             manifest = self._verified_manifest(row)
-            facts = self.parquet.read_facts(manifest.certified_files[0])
+            facts = [
+                fact for descriptor in manifest.certified_files
+                for fact in self.parquet.read_facts(descriptor)
+            ]
         return FinancialAuditRequest(
             company_id=company_id,
             as_of=as_of,
@@ -943,6 +1000,34 @@ def _official_recovery_observations(
     return observations
 
 
+def _append_optional_official_values(
+    certifier: FinancialPdfCertifier, official: OfficialFinancialReport,
+    mappings: list[FinancialFieldMapping], company_id: str, period_end: date,
+    period_type: FinancialPeriodType, binding: FinancialInstrumentBinding,
+    observations: list[FinancialSourceObservation], provider_ids: list[str],
+    raw_snapshot_ids: list[str], reasons: list[str],
+) -> None:
+    """Enrich an existing release from exact official rows without adding required fields."""
+    present = {item.field_code for item in observations if item.reported_value is not None}
+    optional = [item for item in mappings if item.optional and item.field_code not in present]
+    if not optional:
+        return
+    extracted, failures = certifier.extract_values(
+        official, period_end, period_type, optional,
+    )
+    reasons.extend(failures)
+    if not extracted:
+        return
+    observations.extend(_official_recovery_observations(
+        company_id, period_end, period_type, binding, official, extracted,
+    ))
+    if "official-financial-document" not in provider_ids:
+        provider_ids.append("official-financial-document")
+    for snapshot in (official.index_snapshot, official.snapshot):
+        if snapshot.snapshot_id not in raw_snapshot_ids:
+            raw_snapshot_ids.append(snapshot.snapshot_id)
+
+
 def _parse_provider(
     payload: FinancialProviderPayload,
     mappings: list[FinancialFieldMapping],
@@ -996,6 +1081,8 @@ def _parse_provider(
             if row.get("provider_report_version") is not None else None
         )
         for mapping in statement_mappings:
+            if mapping.optional and payload.provider_id not in mapping.provider_fields:
+                continue
             provider_field = mapping.provider_field(payload.provider_id)
             raw_value = row.get(provider_field)
             unit = mapping.provider_unit(payload.provider_id)

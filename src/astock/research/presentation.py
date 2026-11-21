@@ -24,6 +24,7 @@ from astock.schemas.presentation import (
     FactEquivalenceStatus,
     FactFingerprint,
     InvestorPresentationModel,
+    NarrativeFactBinding,
     PresentationAudit,
     PublicReportReference,
     RenderedResponse,
@@ -281,18 +282,31 @@ class ResponseGateway:
         ):
             context = context.model_copy(update={"task_type": narrative.task_type})
 
+        frozen_narrative = narrative
+        source_text = _narrative_source_text(frozen_narrative)
+        original_payload = _investor_payload(
+            frozen_narrative, context=context, policy=self.policy,
+        )
+        required = _required_fingerprint_for_payload(
+            original_payload, frozen_narrative.locked_facts,
+        )
+        source_statements = (
+            *_payload_source_phrases(original_payload),
+            f"判断把握：{_STRENGTH_LABELS[original_payload.conclusion_strength]}",
+        )
         narrative = _polish_narrative(narrative, context=context, policy=self.policy)
         payload = _investor_payload(narrative, context=context, policy=self.policy)
         text = normalize_public_text(
             _render_investor_text(payload, self.policy), policy=self.policy
         )
-        required = _required_fingerprint_for_payload(payload, narrative.locked_facts)
         audit = audit_public_answer(
             text,
             context=context,
             policy=self.policy,
-            source_text=_narrative_source_text(narrative),
+            source_text=source_text,
             required_fingerprint=required,
+            fact_bindings=frozen_narrative.fact_bindings,
+            source_statements=source_statements,
         )
         if audit.safe_to_send:
             return RenderedResponse(
@@ -304,6 +318,30 @@ class ResponseGateway:
                 safe_fallback_used=False,
                 raw_draft_exposed=False,
             )
+
+        # A failed editorial transformation may fall back to the intact source,
+        # but only after the same fact/privacy/public audit. No second model call.
+        if audit.fact_drift_detected:
+            original_text = _render_investor_text(original_payload, self.policy)
+            original_audit = audit_public_answer(
+                original_text,
+                context=context,
+                policy=self.policy,
+                source_text=source_text,
+                required_fingerprint=required,
+                fact_bindings=frozen_narrative.fact_bindings,
+                source_statements=source_statements,
+            )
+            if original_audit.safe_to_send:
+                return RenderedResponse(
+                    mode=context.mode,
+                    task_type=context.task_type,
+                    text=original_text,
+                    payload=original_payload,
+                    audit=original_audit,
+                    safe_fallback_used=True,
+                    raw_draft_exposed=False,
+                )
 
         safe_payload = InvestorPresentationModel(
             subject=_safe_fallback_subject(
@@ -538,6 +576,95 @@ def investor_view_from_acquisition(
     )
 
 
+def _source_statement_coverage(
+    text: str, statements: tuple[str, ...], policy: PresentationPolicy,
+) -> bool:
+    """Accept frozen prose plus fixed labels/glosses, never recombined new claims.
+
+    This is a conservative source-coverage check, not semantic entailment. A
+    rewrite outside the declared source spans falls back to the intact source.
+    """
+    def normalized(value: str) -> str:
+        return re.sub(r"\s+", "", value)
+
+    source = "\n".join(statements)
+    glosses = [
+        normalized(f"{term}指{explanation}")
+        for term, explanation in policy.term_explanations.items()
+        if term.casefold() in source.casefold()
+    ]
+    remainder = normalized(text)
+    if glosses:
+        notes = "(?:" + "|".join(re.escape(value) for value in glosses) + ")"
+        remainder = re.sub("（" + notes + "(?:；" + notes + ")*）", " ", remainder)
+    phrases = [*statements, "估值方面，", "主要风险在于：", "以上资料截至",
+               "若出现以下变化，需要重新审视上述判断：", "相关报告：", "资料来源："]
+    # The renderer joins reasons with one full stop; retain internal punctuation,
+    # questions, quotes, signs and parentheses until the entire source span matches.
+    sources = {normalized(value).rstrip("。") for value in phrases} - {""}
+    for phrase in sorted(sources, key=len, reverse=True):
+        remainder = remainder.replace(phrase, " ")
+    return re.fullmatch(r"[\s。；;，,:：]*", remainder) is not None
+
+
+def _audit_fact_equivalence(
+    stripped: str, source_text: str | None, required_fingerprint: FactFingerprint | None,
+    bindings: tuple[NarrativeFactBinding, ...],
+    source_statements: tuple[str, ...], policy: PresentationPolicy,
+) -> tuple[bool, bool, bool, set[str]]:
+    """Compare immutable source facts and their ordered statement bindings."""
+    findings: set[str] = set()
+    checked = source_text is not None or required_fingerprint is not None or bool(bindings)
+    known_entities = required_fingerprint.entities if required_fingerprint else ()
+    known_phrases = required_fingerprint.locked_phrases if required_fingerprint else ()
+    output_fingerprint = extract_fact_fingerprint(
+        stripped,
+        known_entities=known_entities,
+        known_phrases=known_phrases,
+    )
+    no_unexpected_facts = True
+    if source_text is not None:
+        allowed = extract_fact_fingerprint(
+            source_text,
+            known_entities=known_entities,
+        )
+        no_unexpected_facts = _fingerprint_contains(
+            allowed,
+            output_fingerprint,
+            include_locked_phrases=False,
+        )
+        if not no_unexpected_facts:
+            findings.add("PUBLIC_FACT_ADDED")
+    if source_statements and not _source_statement_coverage(
+        stripped, source_statements, policy,
+    ):
+        findings.update({"PUBLIC_FACT_ADDED", "PUBLIC_UNBOUND_STATEMENT"})
+        no_unexpected_facts = False
+    required_preserved = True
+    if required_fingerprint is not None:
+        required_preserved = _fingerprint_contains(
+            output_fingerprint,
+            required_fingerprint,
+        )
+        if not required_preserved:
+            findings.add("PUBLIC_REQUIRED_FACT_MISSING")
+    # Ordered source statements preserve entity/metric/period/unit/qualifier and
+    # local citation linkage. They are not inferred from the rewritten output.
+    binding_preserved = all(
+        _binding_statement_present(stripped, binding.statement)
+        and (source_text is None or _binding_statement_present(source_text, binding.statement))
+        for binding in bindings
+    )
+    if not binding_preserved:
+        findings.add("PUBLIC_FACT_BINDING_CHANGED")
+        required_preserved = False
+    fact_drift = not no_unexpected_facts or not required_preserved
+    if fact_drift:
+        findings.add("PUBLIC_FACT_DRIFT")
+
+    return checked, fact_drift, required_preserved, findings
+
+
 def audit_public_answer(
     text: str,
     *,
@@ -545,10 +672,18 @@ def audit_public_answer(
     policy: PresentationPolicy | None = None,
     source_text: str | None = None,
     required_fingerprint: FactFingerprint | None = None,
+    fact_bindings: Iterable[NarrativeFactBinding] = (),
+    source_statements: Iterable[str] = (),
     request_text: str | None = None,
     allowed_private_paths: Iterable[str] = (),
 ) -> PresentationAudit:
     selected = policy or load_presentation_policy()
+    bindings = tuple(fact_bindings)
+    statements = tuple(source_statements)
+    if bindings and not statements:
+        statements = tuple((source_text or "").splitlines()) or tuple(
+            binding.statement for binding in bindings
+        )
     resolved_context = context or ResponseContext(task_type=ResponseTaskType.DEEP_RESEARCH)
     budget = selected.budget(resolved_context.task_type)
     findings: set[str] = set()
@@ -611,38 +746,10 @@ def audit_public_answer(
         findings.add("PUBLIC_INTERNAL_PROCESS_EXPOSED")
     internal_exposed = bool(findings.intersection(_INTERNAL_FINDING_CODES))
 
-    checked = source_text is not None or required_fingerprint is not None
-    known_entities = required_fingerprint.entities if required_fingerprint else ()
-    known_phrases = required_fingerprint.locked_phrases if required_fingerprint else ()
-    output_fingerprint = extract_fact_fingerprint(
-        stripped,
-        known_entities=known_entities,
-        known_phrases=known_phrases,
+    checked, fact_drift, required_preserved, fact_findings = _audit_fact_equivalence(
+        stripped, source_text, required_fingerprint, bindings, statements, selected,
     )
-    no_unexpected_facts = True
-    if source_text is not None:
-        allowed = extract_fact_fingerprint(
-            source_text,
-            known_entities=known_entities,
-        )
-        no_unexpected_facts = _fingerprint_contains(
-            allowed,
-            output_fingerprint,
-            include_locked_phrases=False,
-        )
-        if not no_unexpected_facts:
-            findings.add("PUBLIC_FACT_ADDED")
-    required_preserved = True
-    if required_fingerprint is not None:
-        required_preserved = _fingerprint_contains(
-            output_fingerprint,
-            required_fingerprint,
-        )
-        if not required_preserved:
-            findings.add("PUBLIC_REQUIRED_FACT_MISSING")
-    fact_drift = not no_unexpected_facts or not required_preserved
-    if fact_drift:
-        findings.add("PUBLIC_FACT_DRIFT")
+    findings.update(fact_findings)
 
     ordered = sorted(findings)
     equivalence = (
@@ -934,7 +1041,7 @@ def _investor_payload(
         citations=_dedupe_items(narrative.citations),
         report_reference=_safe_report_reference(narrative.report_path),
     )
-    while payload.reasons and len(_render_investor_text(payload, policy)) > budget.max_chars:
+    while payload.reasons and _payload_character_estimate(payload, policy) > budget.max_chars:
         payload = payload.model_copy(update={"reasons": payload.reasons[:-1]})
     return payload
 
@@ -973,22 +1080,45 @@ def _render_developer_text(payload: DeveloperDiagnosticsModel) -> str:
     return "\n".join(lines)
 
 
-def _required_fingerprint_for_payload(
-    payload: InvestorPresentationModel,
-    extra: FactFingerprint | None,
-) -> FactFingerprint:
-    phrases = [
+def _payload_source_phrases(payload: InvestorPresentationModel) -> list[str]:
+    """Select source fields independently of any renderer or editorial output."""
+    return [
         payload.subject,
         payload.headline,
         *payload.valuation_or_odds,
+        *payload.reasons,
         payload.risk or "",
         payload.change_condition or "",
         payload.data_as_of or "",
         *payload.citations,
         payload.report_reference.file_name if payload.report_reference else "",
     ]
+
+
+def _payload_character_estimate(
+    payload: InvestorPresentationModel, policy: PresentationPolicy,
+) -> int:
+    """Bound field selection without allowing the renderer to erase required facts."""
+    phrases = _payload_source_phrases(payload)
+    source = "\n".join(phrases)
+    # A small fixed allowance covers labels/separators; final output still has
+    # its own measured budget audit. Glosses are counted once from source terms.
+    glosses = sum(
+        len(explanation) + 2 for term, explanation in policy.term_explanations.items()
+        if term in source
+    )
+    return sum(map(len, phrases)) + 2 * len(phrases) + 80 + glosses
+
+
+def _required_fingerprint_for_payload(
+    payload: InvestorPresentationModel,
+    extra: FactFingerprint | None,
+) -> FactFingerprint:
+    phrases = _payload_source_phrases(payload)
+    # Freeze from source fields, never from the renderer whose output we audit.
+    # This also protects legacy producers that have no typed fact_bindings yet.
     automatic = extract_fact_fingerprint(
-        _render_investor_text(payload),
+        "\n".join([*phrases, f"结论强度：{_STRENGTH_LABELS[payload.conclusion_strength]}"]),
         known_entities=[payload.subject],
         known_phrases=phrases,
     )
@@ -1135,6 +1265,12 @@ def _semantic_normalize(text: str) -> str:
         value,
     )
     return re.sub(r"[\s\W_]+", "", value, flags=re.UNICODE)
+
+
+def _binding_statement_present(text: str, statement: str) -> bool:
+    """Allow spacing only; punctuation, signs and clause order carry meaning."""
+
+    return re.sub(r"\s+", "", statement) in re.sub(r"\s+", "", text)
 
 
 def _normalized_phrase_present(text: str, phrase: str) -> bool:

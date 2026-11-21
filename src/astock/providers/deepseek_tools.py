@@ -10,7 +10,7 @@ from typing import Literal
 import httpx
 from pydantic import ValidationError
 
-from astock.core.credentials import resolve_credential
+from astock.core.credentials import CredentialResolution, resolve_credential
 from astock.core.source_resilience import parse_retry_after_seconds
 from astock.schemas.web_tools import WebToolHit, WebToolPolicy, WebToolRequest
 
@@ -43,21 +43,36 @@ class DeepSeekSearchFetchClient:
         if request.operation == "SEARCH" and len(request.query or "") > 128:
             raise ValueError("DeepSeek query exceeds 128 Unicode characters; refine it explicitly")
 
-    def execute(self, request: WebToolRequest) -> WebTransportResult:
+    def execute(
+        self, request: WebToolRequest, *, credential: CredentialResolution | None = None,
+        policy: WebToolPolicy | None = None,
+    ) -> WebTransportResult:
         self.validate_request(request)
-        credential = resolve_credential("DEEPSEEK_API_KEY", project_root=self.root)
+        credential = credential or resolve_credential("DEEPSEEK_API_KEY", project_root=self.root)
+        policy = policy or self.policy
         if not credential.configured:
             return WebTransportResult("FAILED", reason_code="CREDENTIAL_UNAVAILABLE")
         path = "/v1/tools/search" if request.operation == "SEARCH" else "/v1/tools/fetch"
         payload = (
-            {"query": request.query, "count": self.policy.max_results, "need_content": True}
+            {"query": request.query, "count": policy.max_results, "need_content": True}
             if request.operation == "SEARCH" else {"url": request.url}
         )
+        from astock.core.request_budget import RequestBudgetExhausted, current_request_budget
+
+        timeout = float(policy.timeout_seconds)
+        budget = current_request_budget()
+        if budget is not None:
+            try:
+                budget.reserve_attempt()
+                timeout = min(timeout, budget.remaining_seconds())
+            except RequestBudgetExhausted:
+                # The paid ledger claim can safely release: no physical request was sent.
+                return WebTransportResult("FAILED", reason_code="REQUEST_BUDGET_EXHAUSTED")
         began = time.monotonic()
         try:
             with httpx.Client(
                 transport=self.transport, follow_redirects=False, trust_env=False,
-                timeout=self.policy.timeout_seconds,
+                timeout=timeout,
             ) as client:
                 with client.stream(
                     "POST", "https://api.deepseek.com" + path,
@@ -77,11 +92,11 @@ class DeepSeekSearchFetchClient:
                     # Do not aggregate small network chunks before checking elapsed time.
                     for chunk in response.iter_bytes():
                         size += len(chunk)
-                        if size > self.policy.max_response_bytes:
+                        if size > policy.max_response_bytes:
                             return WebTransportResult(
                                 "UNKNOWN", billing="UNKNOWN", reason_code="RESPONSE_TOO_LARGE"
                             )
-                        if time.monotonic() - began > self.policy.timeout_seconds:
+                        if time.monotonic() - began > timeout:
                             return WebTransportResult(
                                 "UNKNOWN", billing="UNKNOWN", reason_code="TOTAL_DEADLINE"
                             )
@@ -89,7 +104,7 @@ class DeepSeekSearchFetchClient:
         except httpx.HTTPError:
             # Client timeout does not prove whether the server completed a paid operation.
             return WebTransportResult("UNKNOWN", billing="UNKNOWN", reason_code="TRANSPORT_UNKNOWN")
-        if time.monotonic() - began > self.policy.timeout_seconds:
+        if time.monotonic() - began > timeout:
             return WebTransportResult(
                 "UNKNOWN", billing="UNKNOWN", reason_code="TOTAL_DEADLINE"
             )
@@ -103,7 +118,7 @@ class DeepSeekSearchFetchClient:
                 if not isinstance(records, list):
                     raise ValueError("search result is not a list")
                 hits = []
-                for record in records[:self.policy.max_results]:
+                for record in records[:policy.max_results]:
                     try:
                         hits.append(WebToolHit(
                             url=record["url"], title=record.get("title", ""),

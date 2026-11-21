@@ -178,9 +178,19 @@ def test_partial_child_resumes_same_round_and_checkpoints_stay_bounded(
     assert resumed.status == "PENDING"
     assert resumed.completed_units == 9
     assert resumed.lease_generation == first.lease_generation + 1
-    heartbeat = campaign.checkpoint(
+    wrong_owner = campaign.checkpoint(
         "pm",
         "diagnostic-owner-can-change",
+        {},
+        round_id=resumed.round_id,
+        lease_generation=resumed.lease_generation,
+    )
+    assert not wrong_owner.checkpoint_applied
+    assert wrong_owner.checkpoint_disposition == "STALE_LEASE"
+    assert wrong_owner.owner == resumed.owner
+    heartbeat = campaign.checkpoint(
+        "pm",
+        resumed.owner,
         {},
         round_id=resumed.round_id,
         lease_generation=resumed.lease_generation,
@@ -210,14 +220,14 @@ def test_partial_child_resumes_same_round_and_checkpoints_stay_bounded(
     with pytest.raises(ValueError, match="incomplete"):
         campaign.checkpoint(
             "pm",
-            "wrapper-owner-name-can-change",
+            resumed.owner,
             {"status": "COMPLETE"},
             round_id=resumed.round_id,
             lease_generation=resumed.lease_generation,
         )
     completed = campaign.checkpoint(
         "pm",
-        "wrapper-owner-name-can-change",
+        resumed.owner,
         {"completed_units": 10, "status": "COMPLETE"},
         round_id=resumed.round_id,
         lease_generation=resumed.lease_generation,
@@ -278,6 +288,13 @@ def _patch_q3_releases(
         watch_campaign_module.FinancialSourceReleaseRepository,
         "get",
         fake_get,
+    )
+    # Portfolio policy tests isolate the comprehensive financial source verifier.
+    # Corrupt/missing canonical evidence has separate negative coverage below.
+    monkeypatch.setattr(
+        WatchCampaignService, "_verified_q3_release",
+        lambda self, instrument, row: row["release_id"]
+        if self._official_q3_release(instrument, row) else None,
     )
 
 
@@ -480,3 +497,95 @@ def test_new_report_reference_still_requires_existing_project_file(
             "pm", "owner", {"report_file": str(campaign.database.parent / "missing.md")}
         )
     assert campaign.load().model_dump(mode="json") == before
+
+
+def test_typed_row_without_verified_evidence_is_not_a_release(campaign, monkeypatch):
+    monkeypatch.setattr(
+        watch_campaign_module.FinancialSourceReleaseRepository, "get",
+        lambda self, company, period, period_type: _official_q3_row("XSHG:" + company),
+    )
+    monkeypatch.setattr(campaign, "_financial_service", lambda: SimpleNamespace(
+        read_certified_release=lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("official snapshot corrupt"))))
+    assert campaign.finalization_readiness()["q3_ready"] is False
+
+
+def test_recovery_projects_existing_members_and_never_reinitializes(campaign):
+    before = campaign.load().model_dump(mode="json")
+    events = len(campaign.subjects.store.subject_events())
+    plan = campaign.recovery_plan()
+    assert plan["members"] == campaign.members()
+    assert len(plan["requests"]) == 2
+    assert all(campaign.campaign_id in item["request_id"] for item in plan["requests"])
+    assert campaign.load().model_dump(mode="json") == before
+    assert len(campaign.subjects.store.subject_events()) == events
+
+
+def test_delta_recovery_only_fetches_missing_member_and_releases_same_generation(
+    campaign, monkeypatch,
+):
+    members = campaign.members()
+    calls = []
+    monkeypatch.setattr(campaign, "_verified_q3_release",
+                        lambda instrument, row: "known" if instrument == members[0] else None)
+    def sync(company, market, period, period_type, **kwargs):
+        calls.append(company)
+        return SimpleNamespace(model_dump=lambda **kwargs: {"status": "UNAVAILABLE"})
+    monkeypatch.setattr(campaign, "_financial_service", lambda: SimpleNamespace(sync=sync))
+    before = len(campaign.subjects.store.subject_events())
+    current = campaign.begin("pm", "2026-11-21", "recovery-owner")
+    result = campaign.recover_missing_q3(
+        slot="pm", owner="recovery-owner", round_id=current.round_id,
+        lease_generation=current.lease_generation, maximum_members=1,
+    )
+    assert calls == [members[1].split(":")[1]]
+    assert result["attempted"] == 1 and not result["readiness"]["ready"]
+    assert campaign.load().rounds["pm"].round_id == current.round_id
+    assert not campaign.load().rounds["pm"].owner
+    assert len(campaign.subjects.store.subject_events()) == before
+    with pytest.raises(ValueError, match="stale"):
+        campaign.recover_missing_q3(
+            slot="pm", owner="recovery-owner", round_id=current.round_id,
+            lease_generation=current.lease_generation,
+        )
+    assert len(calls) == 1
+
+
+def test_delta_transport_ends_with_owner_lease_and_cannot_spend_on_next_member(
+    campaign, monkeypatch,
+):
+    from astock.core.request_budget import current_request_budget
+
+    current = campaign.begin("pm", "2026-11-21", "short-owner", lease_seconds=10)
+    clock = [current.invocation_started_at]
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+    monkeypatch.setattr("astock.investor_orchestration.watch_campaign.datetime", Clock)
+    monkeypatch.setattr(campaign, "_verified_q3_release", lambda instrument, row: None)
+    calls = []
+    def sync(company, *args, **kwargs):
+        budget = current_request_budget()
+        assert budget is not None and budget.deadline_at == current.deadline_at
+        calls.append(company)
+        clock[0] = current.deadline_at + timedelta(seconds=1)
+        return SimpleNamespace(model_dump=lambda **kwargs: {"status": "UNAVAILABLE"})
+    monkeypatch.setattr(campaign, "_financial_service", lambda: SimpleNamespace(sync=sync))
+    result = campaign.recover_missing_q3(
+        slot="pm", owner="short-owner", round_id=current.round_id,
+        lease_generation=current.lease_generation, maximum_members=2, elapsed_budget_seconds=180,
+    )
+    assert len(calls) == 1 and not result["checkpoint"]["checkpoint_applied"]
+    successor = campaign.begin("pm", "2026-11-21", "new-owner")
+    assert successor.lease_acquired and successor.lease_generation == current.lease_generation + 1
+    assert successor.round_id == current.round_id
+
+
+def test_explicit_generation_also_requires_owning_identity(campaign):
+    current = campaign.begin("am", "2026-11-21", "owner")
+    result = campaign.checkpoint(
+        "am", "other-owner", {"checkpoint": "must not write"},
+        round_id=current.round_id, lease_generation=current.lease_generation,
+    )
+    assert not result.checkpoint_applied

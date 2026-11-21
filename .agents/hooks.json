@@ -1,0 +1,19 @@
+{
+  "astock-campaign-observer": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "D:\\AStockMultiAgent\\.venv\\Scripts\\python.exe -B -m astock.investor_orchestration.antigravity_hooks session-start --root D:\\AStockMultiAgent",
+        "timeout": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "D:\\AStockMultiAgent\\.venv\\Scripts\\python.exe -B -m astock.investor_orchestration.antigravity_hooks stop --root D:\\AStockMultiAgent",
+        "timeout": 10
+      }
+    ],
+    "enabled": true
+  }
+}

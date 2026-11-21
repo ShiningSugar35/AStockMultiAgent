@@ -24,6 +24,7 @@ from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.project_root import resolve_project_root
+from astock.core.request_budget import RequestBudgetExhausted, current_request_budget
 from astock.core.state import StateStore
 from astock.providers.base import MarketDataProvider
 from astock.research.process_worker import KillableResearchWorker, WorkerDeadlineError
@@ -268,13 +269,34 @@ class MootdxFallbackProvider:
         if not available:
             raise _unavailable(reason)
         started = time.perf_counter()
-        deadline = datetime.now(UTC) + timedelta(seconds=self.timeout_seconds)
-        acquired = _CONCURRENCY.acquire(timeout=self.timeout_seconds)
+        budget = current_request_budget()
+        timeout = (
+            min(self.timeout_seconds, budget.remaining_seconds())
+            if budget
+            else self.timeout_seconds
+        )
+        if timeout <= 0:
+            raise RequestBudgetExhausted("request elapsed budget exhausted")
+        deadline = datetime.now(UTC) + timedelta(seconds=timeout)
+        acquired = _CONCURRENCY.acquire(timeout=timeout)
         if not acquired:
             raise ProviderError(
                 "Mootdx worker budget exhausted", failure_class=FailureClass.TIMEOUT
             )
         try:
+            # One logical SDK launch; the SDK's internal TCP packets are not observable here.
+            if budget is not None:
+                budget.reserve_attempt()
+                deadline = min(
+                    deadline, datetime.now(UTC) + timedelta(seconds=budget.remaining_seconds())
+                )
+            remaining = (deadline - datetime.now(UTC)).total_seconds()
+            if remaining <= 0:
+                raise RequestBudgetExhausted("request elapsed budget exhausted")
+            wire = {
+                **wire, "timeout_seconds": remaining,
+                "connect_timeout_seconds": min(float(wire["connect_timeout_seconds"]), remaining),
+            }
             worker = KillableResearchWorker(
                 _isolated_capture,
                 (str(self.project_root), str(self.objects.root), wire),

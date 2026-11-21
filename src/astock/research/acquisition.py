@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from datetime import UTC, date, datetime, time, timedelta
 from threading import Lock
 from time import perf_counter
@@ -14,7 +14,7 @@ from astock.core.hashing import content_hash
 from astock.core.logging import emit_operational_event
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
-from astock.documents.repository import DocumentRepository
+from astock.documents.official_web import load_official_web_capture
 from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
 from astock.financial_sources.instrument import FinancialInstrumentResolver
 from astock.market_data import MarketReferenceService, ReferenceParquetStore
@@ -30,7 +30,6 @@ from astock.schemas import (
     OperationalSeverity,
     ReferenceCoverageStatus,
     ReferenceDatasetKind,
-    SourceClass,
 )
 from astock.schemas.adaptation import ValidatedResearchPlan
 from astock.schemas.documents import DisclosureExchange
@@ -39,6 +38,7 @@ from astock.schemas.research_acquisition import (
     AcquisitionAttempt,
     AcquisitionAttemptStatus,
     AcquisitionCapability,
+    CapabilityScheduleStep,
     CurrentResearchAcquisitionReport,
     CurrentResearchAcquisitionStatus,
     CurrentResearchSchedule,
@@ -47,6 +47,25 @@ from astock.schemas.research_acquisition import (
 from astock.settings import ProjectPaths
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+
+def _capability_network_allowed(
+    capability: AcquisitionCapability, allow_network: bool,
+    blocked: frozenset[AcquisitionCapability],
+) -> bool:
+    return allow_network and capability not in blocked
+
+
+def _financial_discovery_network_allowed(
+    steps: list[CapabilityScheduleStep], allow_network: bool,
+    blocked: frozenset[AcquisitionCapability],
+) -> bool:
+    financial = {
+        AcquisitionCapability.FINANCIAL_ANNUAL, AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+    }
+    return allow_network and any(
+        step.capability in financial and step.capability not in blocked for step in steps
+    )
 
 
 class CurrentResearchAcquisitionService:
@@ -81,6 +100,7 @@ class CurrentResearchAcquisitionService:
         reuse_report_artifact_id: str | None = None,
         trusted_identity_capture_ids: tuple[str, ...] = (),
         allow_network: bool = True,
+        network_blocked_capabilities: frozenset[AcquisitionCapability] = frozenset(),
     ) -> CurrentResearchAcquisitionReport:
         if market not in {Market.XSHG, Market.XSHE, Market.BJSE}:
             raise ValueError("current company research requires a stock exchange")
@@ -178,7 +198,10 @@ class CurrentResearchAcquisitionService:
                 )
             ):
                 financial_specs, period_discovery_reasons = self._discover_financial_periods(
-                    company_id, market, current_date, allow_network=allow_network
+                    company_id, market, current_date,
+                    allow_network=_financial_discovery_network_allowed(
+                        live_stage_steps, allow_network, network_blocked_capabilities,
+                    ),
                 )
                 financial_by_capability = {
                     capability: (period_end, period_type)
@@ -205,7 +228,9 @@ class CurrentResearchAcquisitionService:
                     financial_by_capability,
                     identity_verified=identity_verified,
                     trusted_identity_capture_ids=trusted_identity_capture_ids,
-                    allow_network=allow_network,
+                    allow_network=_capability_network_allowed(
+                        step.capability, allow_network, network_blocked_capabilities,
+                    ),
                 )
             stage_results = self._run_parallel(tasks, max_workers=schedule.max_workers)
             if period_discovery_reasons:
@@ -691,7 +716,10 @@ class CurrentResearchAcquisitionService:
             return []
         results: dict[AcquisitionCapability, AcquisitionAttempt] = {}
         with ThreadPoolExecutor(max_workers=min(max_workers, len(tasks))) as executor:
-            futures = {executor.submit(task): capability for capability, task in tasks.items()}
+            futures = {
+                executor.submit(copy_context().run, task): capability
+                for capability, task in tasks.items()
+            }
             for future in as_completed(futures):
                 capability = futures[future]
                 try:
@@ -826,91 +854,16 @@ class CurrentResearchAcquisitionService:
             Market.XSHE: "szse-official-web",
             Market.BJSE: "bse-official-web",
         }[market]
-        documents = DocumentRepository(self.state)
         now = self.clock()
         freshness_floor = now - timedelta(days=180)
         for capture_id in capture_ids:
-            artifact_id = (
-                capture_id
-                if capture_id.startswith("OfficialWebDocumentCapture:")
-                else f"OfficialWebDocumentCapture:{capture_id}"
-            )
-            artifact = self.state.artifact_record(artifact_id)
-            if (
-                artifact is None
-                or str(artifact.get("type") or "") != "OfficialWebDocumentCapture"
-                or not self.objects.verify(str(artifact.get("object_hash") or ""))
-            ):
-                continue
             try:
-                capture_payload = json.loads(
-                    self.objects.get_bytes(str(artifact["object_hash"]))
+                capture, document, _snapshot = load_official_web_capture(
+                    self.state, self.objects, capture_id, company_id=company_id, as_of=now,
                 )
-                capture_payload.pop("pit_id", None)
-                capture = OfficialWebDocumentCapture.model_validate(capture_payload)
-            except (json.JSONDecodeError, TypeError, ValueError):
+            except (TypeError, ValueError):
                 continue
-            if (
-                capture.source_id != expected_source
-                or capture.source_class is not SourceClass.PRIMARY_OFFICIAL_WEB
-                or capture.requested_capability
-                not in {"disclosure.document", "financial.official_document"}
-            ):
-                continue
-            document = documents.get_model(capture.document_id)
-            snapshot = self.state.get_snapshot(capture.snapshot_id)
-            admission = self.state.get_snapshot(capture.admission_snapshot_id)
-            if (
-                document is None
-                or company_id not in document.company_ids
-                or document.publisher != expected_source
-                or document.published_at < freshness_floor
-                or document.published_at > now
-                or document.source_url != str(capture.source_url)
-                or capture.observed_at > now
-                or snapshot is None
-                or admission is None
-                or snapshot.source_id != expected_source
-                or admission.source_id != f"{expected_source}:admission"
-                or snapshot.source_url != document.source_url
-                or admission.source_url != document.source_url
-                or snapshot.available_to_system_at > now
-                or admission.available_to_system_at > now
-                or snapshot.object_sha256 != capture.object_sha256
-                or artifact.get("input_hashes") != [snapshot.object_sha256, admission.object_sha256]
-                or not self.objects.verify(snapshot.object_sha256)
-                or not self.objects.verify(admission.object_sha256)
-            ):
-                continue
-            try:
-                admission_payload = json.loads(self.objects.get_bytes(admission.object_sha256))
-            except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-                continue
-            proposal = (
-                admission_payload.get("proposal") if isinstance(admission_payload, dict) else None
-            )
-            decision = (
-                admission_payload.get("decision") if isinstance(admission_payload, dict) else None
-            )
-            if (
-                not isinstance(proposal, dict)
-                or not isinstance(decision, dict)
-                or admission_payload.get("schema_version") != "official-web-admission-v1"
-                or admission_payload.get("document_id") != document.document_id
-                or admission_payload.get("document_snapshot_id") != snapshot.snapshot_id
-                or admission_payload.get("document_object_sha256") != snapshot.object_sha256
-                or admission_payload.get("exhaustive_proof_allowed") is not False
-                or proposal.get("requested_capability") != capture.requested_capability
-                or proposal.get("candidate_url") != document.source_url
-                or proposal.get("formal_use") is not True
-                or proposal.get("require_complete") is not False
-                or decision.get("requested_capability") != capture.requested_capability
-                or decision.get("allowed") is not True
-                or decision.get("source_id") != expected_source
-                or decision.get("formal_eligible") is not True
-                or decision.get("exhaustive_proof_allowed") is not False
-                or decision.get("admission_status") != "ADMIT_AFTER_SNAPSHOT"
-            ):
+            if capture.source_id != expected_source or document.published_at < freshness_floor:
                 continue
             return capture, (capture.snapshot_id, capture.admission_snapshot_id)
         return None

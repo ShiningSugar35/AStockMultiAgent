@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -81,7 +82,8 @@ class BseOfficialReferenceProvider(HttpProviderBase):
             workers = min(self.page_workers, total_pages - 1)
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
-                    executor.submit(self._fetch_page, page): page for page in range(1, total_pages)
+                    executor.submit(copy_context().run, self._fetch_page, page): page
+                    for page in range(1, total_pages)
                 }
                 for future in as_completed(futures):
                     page = futures[future]

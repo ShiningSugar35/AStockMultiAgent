@@ -24,6 +24,7 @@ from astock.research.config import (
 )
 from astock.research.diagnostics import ResearchDiagnosticsService
 from astock.research.formal_preparation import FormalResearchPreparationService
+from astock.research.institutional import require_active_institutional_inputs
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.request import ResearchRequestService
 from astock.research.runtime_inputs import ResearchRunInputResolver
@@ -205,6 +206,7 @@ class ResearchRunService:
                     "INSTITUTIONAL_DECISION_CONTEXT_COMPANY_MISMATCH",
                     "INSTITUTIONAL_DECISION_CONTEXT_AS_OF_MISMATCH",
                     "INSTITUTIONAL_DECISION_CONTEXT_MODEL_MISMATCH",
+                    "INSTITUTIONAL_PREMISE_SUPERSEDED",
                 },
             ),
             (
@@ -1462,6 +1464,8 @@ class ResearchRunService:
         object_hash = str(record["object_hash"])
         if not self.objects.verify(object_hash):
             raise ValueError(f"frozen artifact object unavailable: {artifact_id}")
+        # Resolver output can become stale before the current run consumes it.
+        require_active_institutional_inputs(self.state, [object_hash])
         return model.model_validate_json(self.objects.get_bytes(object_hash))
 
     def _ref(self, artifact_id: str) -> RuntimeArtifactReference:

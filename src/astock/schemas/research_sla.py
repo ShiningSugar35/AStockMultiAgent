@@ -187,6 +187,8 @@ class ResearchSchedulerTask(AStockModel):
     node_id: str = Field(min_length=1)
     candidate_id: str | None = None
     category: ResearchTaskCategory
+    # None preserves conservative recovery for legacy snapshots without this observation.
+    dispatch_attempted: bool | None = None
     status: ResearchSchedulerTaskStatus
     dependencies: list[str] = Field(default_factory=list)
     input_fingerprint: str = Field(min_length=1)

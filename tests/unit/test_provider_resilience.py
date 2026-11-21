@@ -287,6 +287,7 @@ def test_project_transport_and_reference_configs_enable_bounded_resilience() -> 
         "sse-official-master",
         "szse-official-master",
         "bse-official-master",
+        "tushare-master",
         "baostock-master",
         "eastmoney-master",
         "sina-master",

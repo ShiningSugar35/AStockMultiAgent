@@ -28,8 +28,9 @@ from astock.schemas.prospective import (
 from astock.schemas.shadow import ShadowEvaluationPolicy, ShadowStudyMode
 from astock.shadow.repository import ShadowRepository
 from astock.shadow.statistics import (
+    cscv_probability_of_backtest_overfitting,
     deflated_sharpe_probability,
-    time_fold_probability_of_backtest_overfitting,
+    sample_sharpe,
 )
 
 
@@ -477,6 +478,9 @@ class ProspectiveGovernanceService:
         self,
         strategy_returns: dict[str, list[float]],
         *,
+        effective_independent_trials: float | None = None,
+        return_frequency: str = "UNSPECIFIED",
+        cscv_blocks: int = 8,
         created_at: datetime | None = None,
     ) -> SelectionBiasDiagnostic:
         if not strategy_returns:
@@ -498,36 +502,52 @@ class ProspectiveGovernanceService:
             )
         if len(observation_counts) != 1:
             raise ValueError("selection-bias candidate return series must have equal length")
-        winner_name = max(
-            names,
-            key=lambda name: (
-                sum(strategy_returns[name]) / max(len(strategy_returns[name]), 1),
-                name,
-            ),
+        sharpes = {name: sample_sharpe(strategy_returns[name]) for name in names}
+        available = {name: value for name, value in sharpes.items() if value is not None}
+        winner_name = (
+            max(available, key=lambda name: (available[name], name)) if available else names[0]
         )
+        # A declared candidate count alone cannot establish independent trials,
+        # full search coverage, or a common return frequency.
+        complete = len(available) == selection_count and return_frequency != "UNSPECIFIED"
         dsr = deflated_sharpe_probability(
             strategy_returns[winner_name],
             selection_candidate_count=selection_count,
+            trial_sharpes=list(available.values()) if complete else None,
+            effective_trial_count=effective_independent_trials,
         )
-        pbo = time_fold_probability_of_backtest_overfitting(
+        pbo = cscv_probability_of_backtest_overfitting(
             [strategy_returns[name] for name in names],
-            fold_count=min(5, max(2, observation_count // 2)) if observation_count >= 4 else 2,
+            block_count=cscv_blocks,
         )
         if dsr is None or pbo is None:
             status = SelectionBiasDiagnosticStatus.INSUFFICIENT_INPUT
             findings = ["SELECTION_BIAS_DIAGNOSTIC_INSUFFICIENT_INPUT"]
         else:
             status = SelectionBiasDiagnosticStatus.COMPUTED
-            findings = ["DSR_PBO_DIAGNOSTIC_ONLY"]
+            findings = ["CSCV_NOT_CHRONOLOGICAL_DEPLOYMENT", "DSR_PBO_DIAGNOSTIC_ONLY"]
+        if effective_independent_trials is None:
+            findings.append("INDEPENDENT_TRIAL_ASSUMPTION_UNSPECIFIED")
+        if return_frequency == "UNSPECIFIED":
+            findings.append("RETURN_FREQUENCY_UNSPECIFIED")
         return SelectionBiasDiagnostic(
             diagnostic_id="selection-bias:"
-            + content_hash({"candidates": names, "returns": strategy_returns}),
+            + content_hash({
+                "candidates": names, "returns": strategy_returns,
+                "independent_trials": effective_independent_trials,
+                "frequency": return_frequency, "cscv_blocks": cscv_blocks,
+                "method_version": "dsr-cscv-v2",
+            }),
             selection_candidate_count=selection_count,
             observation_count=observation_count,
             status=status,
             deflated_sharpe_ratio=dsr,
             probability_of_backtest_overfitting=pbo,
-            finding_codes=findings,
+            method_version="dsr-cscv-v2",
+            effective_independent_trials=effective_independent_trials,
+            return_frequency=return_frequency,
+            cscv_blocks=cscv_blocks,
+            finding_codes=sorted(findings),
             created_at=timestamp,
         )
 

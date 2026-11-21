@@ -199,7 +199,15 @@ def project_simplex(values: np.ndarray) -> np.ndarray:
 
 
 def hierarchical_risk_weights(aligned: AlignedPortfolioData) -> np.ndarray:
+    """Average-linkage tree risk allocation, not canonical HRP serial bisection.
+
+    Distance is sqrt((1-correlation)/2); each dendrogram branch gets inverse
+    cluster variance, using inverse-diagonal variance within that cluster.
+    The historical API name stays compatible without claiming standard HRP.
+    """
     n = len(aligned.company_ids)
+    if n == 1:
+        return np.ones(1, dtype=float)
     if n == 2:
         variances = np.maximum(np.diag(aligned.covariance), 1e-12)
         inverse = 1.0 / variances

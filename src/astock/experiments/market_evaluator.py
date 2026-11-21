@@ -147,10 +147,10 @@ class CanonicalMarketEvaluator:
                     or item.volume_unit != "SHARE"
                     or not 0 < item.low <= min(item.open, item.close)
                     or not max(item.open, item.close) <= item.high
-                    or any(
+                    or (item.market != "INDEX" and any(
                         v * 100 != (v * 100).to_integral_value()
                         for v in (item.open, item.high, item.low, item.close)
-                    )
+                    ))
                 ):
                     raise ValueError("invalid canonical raw daily OHLC/units")
             if not session.limit_down <= bar.low <= bar.high <= session.limit_up:

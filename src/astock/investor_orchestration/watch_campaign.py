@@ -8,12 +8,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict
 
 from pydantic import Field
 
+from astock.core.errors import AStockError
+from astock.core.object_store import ObjectStore
+from astock.core.request_budget import RequestExecutionBudget
 from astock.core.state import StateStore
 from astock.financial_sources.repository import FinancialSourceReleaseRepository
 from astock.investor_orchestration.full_research import FullResearchRecommendationService
@@ -66,6 +69,34 @@ class Campaign(StrictModel):
     q3_release_ids: dict[str, str] = Field(default_factory=dict, max_length=50)
     final_recommendation_receipt_id: str | None = None
     lifecycle: Literal["OBSERVING", "PORTFOLIO_MONITORING"] = "OBSERVING"
+
+
+class CampaignReadiness(TypedDict):
+    campaign_id: str
+    q3_ready: bool
+    missing_q3: list[str]
+    q3_release_ids: dict[str, str]
+    portfolio_ready: bool
+    ready: bool
+    receipt_id: str | None
+    position_count: int
+    reason: str
+
+
+class CampaignRecoveryPlan(TypedDict):
+    campaign_id: str
+    report_period: str
+    members: list[str]
+    missing_q3: list[str]
+    requests: list[dict[str, str]]
+    existing_bindings: dict[str, str]
+    final_receipt_id: str | None
+
+
+class CampaignDeltaReport(TypedDict):
+    instrument_id: str
+    report: NotRequired[dict[str, object]]
+    failure_code: NotRequired[str]
 
 
 class WatchCampaignService:
@@ -255,6 +286,7 @@ class WatchCampaignService:
             if explicit_lease:
                 lease_matches = (
                     bool(current.owner)
+                    and current.owner == owner
                     and current.round_id == round_id
                     and current.lease_generation == lease_generation
                 )
@@ -322,7 +354,148 @@ class WatchCampaignService:
             and str(row.get("release_id") or "").strip()
         )
 
-    def finalization_readiness(self, receipt_id: str | None = None) -> dict[str, object]:
+    def _financial_service(self):
+        from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
+
+        root = self.database.parent.parent
+        return FinancialSourceService(
+            self.state, ObjectStore(self.database.parent / "objects" / "sha256"),
+            FinancialSourceParquetStore(
+                self.database.parent / "data" / "parquet" / "financial_sources"
+            ),
+            root,
+        )
+
+    def _verified_q3_release(self, instrument_id: str, row: dict[str, object] | None) -> str | None:
+        if row is None:
+            return None
+        from astock.schemas import FinancialPeriodType
+
+        try:
+            release = self._financial_service().read_certified_release(
+                instrument_id.split(":", 1)[1], date.fromisoformat(self.load().report_period),
+                FinancialPeriodType.QUARTERLY, as_of=datetime.now(UTC),
+            )
+            if release is None:
+                return None
+            manifest = release.manifest
+            bound_row = {**row, "official_lineage_kind": manifest.official_lineage_kind.value}
+            if (
+                not self._official_q3_release(instrument_id, bound_row)
+                or manifest.instrument_id != instrument_id
+                or manifest.release_id != row["release_id"]
+            ):
+                return None
+            return manifest.release_id
+        except (OSError, ValueError, AStockError):
+            return None
+
+    def recovery_plan(self) -> CampaignRecoveryPlan:
+        """Projection only: reuse the campaign and current registered member denominator."""
+        readiness = self.finalization_readiness()
+        missing = list(readiness["missing_q3"])
+        campaign = self.load()
+        return {
+            "campaign_id": self.campaign_id, "report_period": campaign.report_period,
+            "members": self.members(), "missing_q3": missing,
+            "requests": [
+                {"instrument_id": instrument,
+                 "request_id": f"{self.campaign_id}:{campaign.report_period}:{instrument}"}
+                for instrument in missing
+            ],
+            "existing_bindings": dict(campaign.bindings),
+            "final_receipt_id": campaign.final_recommendation_receipt_id,
+        }
+
+    def recover_missing_q3(
+        self, *, slot: str, owner: str, round_id: str, lease_generation: int,
+        maximum_members: int = 3, elapsed_budget_seconds: int = 180, live: bool = False,
+    ) -> dict[str, object]:
+        """Acquire unresolved Q3 members once per owned round generation at a time."""
+        with schedule_run_ownership(
+            self.database, "watch-campaign-q3", f"{round_id}:{lease_generation}"
+        ):
+            return self._recover_missing_q3(
+                slot=slot, owner=owner, round_id=round_id, lease_generation=lease_generation,
+                maximum_members=maximum_members,
+                elapsed_budget_seconds=elapsed_budget_seconds, live=live,
+            )
+
+    def _recover_missing_q3(
+        self, *, slot: str, owner: str, round_id: str, lease_generation: int,
+        maximum_members: int, elapsed_budget_seconds: int, live: bool,
+    ) -> dict[str, object]:
+        from astock.schemas import FinancialPeriodType, Market
+
+        if not 1 <= maximum_members <= 3 or not 1 <= elapsed_budget_seconds <= 600:
+            raise ValueError("campaign recovery exceeds the bounded work envelope")
+
+        def require_lease() -> CampaignRound:
+            current = self.load().rounds.get(slot)
+            if current is None or (
+                current.owner != owner or not owner or current.round_id != round_id
+                or current.lease_generation != lease_generation
+                or current.deadline_at <= datetime.now(UTC) or current.status != "PENDING"
+            ):
+                raise ValueError("stale campaign recovery lease")
+            return current
+
+        with schedule_run_ownership(self.database, SCOPE, self.campaign_id):
+            current = require_lease()
+        plan = self.recovery_plan()
+        selected = list(plan["missing_q3"])[:maximum_members]
+        budget = RequestExecutionBudget(
+            self.state, f"{round_id}:{lease_generation}:q3-recovery",
+            min(current.deadline_at, datetime.now(UTC) + timedelta(seconds=elapsed_budget_seconds)),
+            32,
+        )
+        reports: list[CampaignDeltaReport] = []
+        service = self._financial_service() if selected else None
+        with budget.bind():
+            for instrument in selected:
+                require_lease()
+                if budget.remaining_seconds() <= 0:
+                    break
+                market, company = instrument.split(":", 1)
+                assert service is not None
+                try:
+                    report = service.sync(
+                        company, Market(market), date.fromisoformat(str(plan["report_period"])),
+                        FinancialPeriodType.QUARTERLY, live=live,
+                    )
+                    reports.append({
+                        "instrument_id": instrument, "report": report.model_dump(mode="json"),
+                    })
+                except (OSError, ValueError, TimeoutError, AStockError) as exc:
+                    reports.append({
+                        "instrument_id": instrument, "failure_code": type(exc).__name__,
+                    })
+                try:
+                    require_lease()
+                except ValueError:
+                    # Evidence already frozen by sync remains usable; this generation stops.
+                    break
+        # No recommendation or release is inferred from successful transport.
+        readiness = self.finalization_readiness()
+        checkpoint = self.checkpoint(
+            slot, owner, {
+                "checkpoint": json.dumps(
+                    {"schema_version": "campaign-q3-delta-v1",
+                     "reports": [{
+                         "instrument_id": item["instrument_id"],
+                         "status": item.get("failure_code") or item.get("report", {}).get("status"),
+                         "release_id": item.get("report", {}).get("release_id"),
+                     } for item in reports],
+                     "missing_q3": readiness["missing_q3"]}, ensure_ascii=False
+                ),
+                "completed_units": len(readiness["q3_release_ids"]),
+                "total_units": len(self.members()), "status": "PARTIAL",
+            }, round_id=round_id, lease_generation=lease_generation,
+        )
+        return {"campaign_id": self.campaign_id, "attempted": len(reports), "reports": reports,
+                "readiness": readiness, "checkpoint": checkpoint.model_dump(mode="json")}
+
+    def finalization_readiness(self, receipt_id: str | None = None) -> CampaignReadiness:
         campaign = self.load()
         members = self.members()
         repository = FinancialSourceReleaseRepository(self.state)
@@ -335,13 +508,13 @@ class WatchCampaignService:
                 campaign.report_period,
                 "QUARTERLY",
             )
-            if not self._official_q3_release(instrument_id, row):
+            release_id = self._verified_q3_release(instrument_id, row)
+            if release_id is None:
                 missing_q3.append(instrument_id)
                 continue
-            assert row is not None
-            releases[instrument_id] = str(row["release_id"])
+            releases[instrument_id] = release_id
 
-        result: dict[str, object] = {
+        result: CampaignReadiness = {
             "campaign_id": self.campaign_id,
             "q3_ready": not missing_q3 and len(releases) == len(members),
             "missing_q3": missing_q3,
@@ -446,7 +619,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action",
-        choices=["init", "status", "bind", "begin", "checkpoint", "readiness", "finalize"],
+        choices=[
+            "init", "status", "bind", "begin", "checkpoint", "readiness",
+            "recovery-plan", "recover-q3", "finalize",
+        ],
     )
     parser.add_argument("--database", type=Path, default=Path("runtime/state.sqlite"))
     parser.add_argument("--campaign", default="ten-stock-q3-2026")
@@ -464,6 +640,9 @@ def main() -> None:
     )
     parser.add_argument("--input", type=Path)
     parser.add_argument("--receipt-id")
+    parser.add_argument("--maximum-members", type=int, default=3)
+    parser.add_argument("--elapsed-budget-seconds", type=int, default=180)
+    parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     service = WatchCampaignService(args.database, args.campaign)
     if args.action == "init":
@@ -492,6 +671,16 @@ def main() -> None:
             round_id=args.round_id,
             lease_generation=args.lease_generation,
         ).model_dump(mode="json")
+    elif args.action == "recovery-plan":
+        result = service.recovery_plan()
+    elif args.action == "recover-q3":
+        if not args.round_id or args.lease_generation is None:
+            parser.error("recover-q3 requires the existing round and lease generation")
+        result = service.recover_missing_q3(
+            slot=args.slot or "", owner=args.owner or "", round_id=args.round_id,
+            lease_generation=args.lease_generation, maximum_members=args.maximum_members,
+            elapsed_budget_seconds=args.elapsed_budget_seconds, live=args.live,
+        )
     elif args.action == "readiness":
         result = service.finalization_readiness(args.receipt_id)
     elif args.action == "finalize":

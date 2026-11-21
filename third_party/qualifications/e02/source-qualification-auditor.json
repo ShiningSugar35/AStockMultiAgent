@@ -21,7 +21,7 @@
   },
   "completeness_ceiling": "NOT_APPLICABLE",
   "controlled_live_validation": "FAIL",
-  "created_at": "2026-11-21T10:47:02Z",
+  "created_at": "2026-11-21T14:23:52Z",
   "evidence_version": "e02-qualification-evidence-v1",
   "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
@@ -39,15 +39,15 @@
       "source_ref": "repo:.agents/skills/source-qualification-auditor/SKILL.md"
     },
     {
-      "assertion": "The project is proprietary; these Repo Skills are project-owned and introduce no third-party runtime license or service ToS.",
-      "observed_at": "2026-09-21T10:48:00Z",
-      "sha256": "1be2a7aee6d7b87ddd42b5d68a19c52373389b38489cab6f60492a32e3d96c72",
+      "assertion": "This project-owned governance Skill adds no runtime dependency. The current project metadata includes the separately reviewed development-only Import Linter architecture check.",
+      "observed_at": "2026-11-21T14:23:52Z",
+      "sha256": "b1c5a10e618b6adad85db04a0dae45826935490f6aedbe4d92190a83b516edce",
       "source_ref": "repo:pyproject.toml"
     },
     {
-      "assertion": "The Repo Skill integration adds no runtime package dependency; the existing locked dependency graph is unchanged.",
-      "observed_at": "2026-09-21T10:48:00Z",
-      "sha256": "13ea4af85b82754a54a3cf60d0ad24f26fad103dfaddb29005983f11459b7d42",
+      "assertion": "This governance Skill adds no dedicated runtime dependency. The current lock binds the development-only Import Linter and Grimp additions; this refreshed source fingerprint does not assert a new validation result.",
+      "observed_at": "2026-11-21T14:23:52Z",
+      "sha256": "6f13b8341608ff7be7a3b5cd00916231c46d91b8c94fbfa0052106d0caf81946",
       "source_ref": "repo:uv.lock"
     },
     {
@@ -62,5 +62,5 @@
       "source_ref": "gap:source-qualification-auditor-controlled-live"
     }
   ],
-  "valid_from": "2026-11-21T10:47:02Z"
+  "valid_from": "2026-11-21T14:23:52Z"
 }

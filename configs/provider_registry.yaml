@@ -3,6 +3,23 @@ capability_gaps:
   - corporate_actions.ledger_ready
   - model.inference
 providers:
+  - provider_id: eastmoney-forecasts
+    adapter_class: astock.providers.forecasts:EastMoneyForecastProvider
+    capabilities: [research.forecast_samples]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: []
+    completeness_semantics: {research.forecast_samples: DISCOVERY_ONLY}
+    independence_group: EASTMONEY
+    cache_ttl_seconds: 3600
+    cost_class: LOW
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    priority: 40
+    probe_operation: forecast-samples
+    probe_target: {symbol: "600519", market: XSHG}
+    recorded_fixture: tests/fixtures/providers/eastmoney-forecasts-success.json
   - provider_id: eastmoney-5m
     adapter_class: astock.providers.eastmoney:EastMoney5mProvider
     capabilities: [market.raw_5m]
@@ -420,6 +437,27 @@ providers:
     recorded_fixture: tests/fixtures/providers/akshare-reference-hints-success.json
     optional_package: akshare
     transport_profile: eastmoney-browser-v1
+  - provider_id: tushare-reference
+    adapter_class: astock.providers.tushare_reference:TushareReferenceProvider
+    capabilities: [instrument.identity, instrument.master, market.daily_unadjusted]
+    source_class: SECONDARY_STRUCTURED
+    formal_capabilities: [instrument.identity, instrument.master, market.daily_unadjusted]
+    completeness_semantics:
+      instrument.identity: EXACT_ITEM
+      instrument.master: FULL_UNIVERSE
+      market.daily_unadjusted: CONTINUOUS_SERIES
+    independence_group: TUSHARE
+    cache_ttl_seconds: 3600
+    cost_class: LOW
+    transport: HTTP
+    officiality: SECONDARY_STRUCTURED
+    live_supported: true
+    timeout_seconds: 20
+    priority: 10
+    probe_operation: tushare-reference
+    probe_target: {symbol: "600519", market: XSHG}
+    recorded_fixture: tests/fixtures/providers/tushare-reference-success.json
+    credential_environment: TUSHARE_TOKEN
   - provider_id: tushare-structured
     adapter_class: astock.providers.tushare_structured:TushareStructuredProvider
     capabilities: [tushare.structured.query]

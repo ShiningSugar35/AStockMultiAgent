@@ -6,7 +6,7 @@ import re
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import AwareDatetime, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.market import Market
@@ -74,6 +74,41 @@ class ExpertDomainProfile(AStockModel):
         return self
 
 
+class FactorPriorityOverlay(BaseModel):
+    """One explicit research-order hypothesis over an already frozen factor panel."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    panel_artifact_id: str = Field(min_length=1, max_length=240)
+    direction: Literal["HIGH_FIRST", "LOW_FIRST"]
+    ranking_hypothesis: str = Field(min_length=1, max_length=500)
+    maximum_priority_bonus: float = Field(default=0.05, ge=0, le=0.1, allow_inf_nan=False)
+    max_age_hours: int = Field(default=24, ge=1, le=720)
+
+
+class FactorPriorityBinding(BaseModel):
+    """A provenance reference for queue ordering, never another independent vote."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    specification: FactorPriorityOverlay
+    panel_object_hash: str = Field(pattern=_SHA256_PATTERN)
+    factor_id: str
+    dependency_fingerprint: str = Field(pattern=_SHA256_PATTERN)
+    comparable_count: int = Field(ge=2, le=200)
+    comparable_member_ids: tuple[str, ...] = Field(min_length=2, max_length=200)
+    base_seed_id: str = Field(min_length=1)
+    percentile: float = Field(ge=0, le=1, allow_inf_nan=False)
+    base_priority: float = Field(ge=0, le=1, allow_inf_nan=False)
+    priority_bonus: float = Field(ge=0, le=0.1, allow_inf_nan=False)
+    independent_vote_weight: Literal[0] = 0
+    recommendation_allowed: Literal[False] = False
+
+
+    @model_validator(mode="after")
+    def distinct_comparable_members(self) -> FactorPriorityBinding:
+        if (self.comparable_member_ids != tuple(sorted(set(self.comparable_member_ids)))
+                or self.comparable_count != len(self.comparable_member_ids)):
+            raise ValueError("factor overlay comparable identities must reconcile")
+        return self
+
+
 class ResearchSeed(AStockModel):
     seed_id: str = Field(min_length=1)
     company_id: str = Field(pattern=r"^\d{6}$")
@@ -94,6 +129,7 @@ class ResearchSeed(AStockModel):
     )
     candidate_version_id: str | None = None
     candidate_strength: str | None = None
+    feature_priority: FactorPriorityBinding | None = None
     expert_author_source_ids: list[str] = Field(default_factory=list)
     expert_domain_names: list[str] = Field(default_factory=list)
     expert_domain_support_skill_ids: list[str] = Field(default_factory=list)
@@ -143,6 +179,7 @@ class ResearchSeedRequest(AStockModel):
     minimum_amount_cny: float = Field(default=20_000_000.0, ge=0)
     minimum_float_market_cap_cny: float = Field(default=2_000_000_000.0, ge=0)
     include_existing_candidates: bool = True
+    feature_overlay: FactorPriorityOverlay | None = None
     excluded_company_ids: list[str] = Field(default_factory=list, max_length=5000)
     live: bool = False
 
@@ -370,6 +407,8 @@ class ResearchSeedReport(AStockModel):
 
 __all__ = [
     "ExpertDomainEvidence",
+    "FactorPriorityBinding",
+    "FactorPriorityOverlay",
     "ExpertDomainProfile",
     "ResearchSeed",
     "ResearchSeedOrigin",

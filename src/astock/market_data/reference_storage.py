@@ -167,7 +167,8 @@ class ReferenceParquetStore:
             return path
         rows = []
         for record in batch.records:
-            payload = record.model_dump(mode="python", exclude={"created_at"})
+            # Match the logical hash serializer, including UTC and Decimal spelling.
+            payload = record.model_dump(mode="json", exclude={"created_at"})
             record_type = str(payload.get("record_type", type(record).__name__))
             record_id = str(
                 payload.get("observation_id")

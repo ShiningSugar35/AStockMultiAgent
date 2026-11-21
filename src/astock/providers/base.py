@@ -8,13 +8,16 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 import httpx
+from httpx import Client as HttpxClient
 
 from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import content_hash
+from astock.core.network_ownership import owned_network_request
 from astock.core.object_store import ObjectStore
+from astock.core.request_budget import current_request_budget
 from astock.core.source_resilience import parse_retry_after_seconds
 from astock.core.state import StateStore
-from astock.providers.http_resilience import HttpClientLike
+from astock.providers.http_resilience import HttpClientLike, configure_owned_http_client
 from astock.providers.runtime import build_provider_http_client
 from astock.schemas import (
     BarRequest,
@@ -46,6 +49,11 @@ class HttpProviderBase:
         self.object_store = object_store
         self.state = state
         self.client = client or build_provider_http_client(self.provider_id)
+        self._network_timeout_seconds = float(
+            getattr(self.client, "elapsed_budget_seconds", timeout_seconds)
+        )
+        if isinstance(self.client, HttpxClient):
+            configure_owned_http_client(self.client)
 
     def _get(self, url: str, *, params: dict[str, str | int]) -> tuple[httpx.Response, int]:
         return self._request("GET", url, params=params)
@@ -60,11 +68,58 @@ class HttpProviderBase:
         json: object = None,
         headers: Mapping[str, str] | None = None,
     ) -> tuple[httpx.Response, int]:
+        with owned_network_request(
+            self.state, getattr(self, "provider_id", "http-provider"), url,
+            timeout_seconds=self._network_timeout_seconds,
+        ):
+            return self._owned_request(method, url, params=params, data=data, json=json,
+                                       headers=headers)
+
+    def _owned_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, str | int] | None = None,
+        data: Mapping[str, str] | None = None,
+        json: object = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> tuple[httpx.Response, int]:
         """Execute one bounded transport request and normalize provider failures once."""
 
         started = time.perf_counter()
+        budget = current_request_budget()
+        if budget is not None and not (
+            isinstance(self.client, HttpxClient)
+            or getattr(self.client, "manages_request_budget", False)
+        ):
+            budget.reserve_attempt()
         try:
-            if json is None and headers is None:
+            if budget is not None and isinstance(self.client, HttpxClient):
+                response = self.client.request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    json=json,
+                    headers=headers,
+                    timeout=min(
+                        [
+                            budget.remaining_seconds(),
+                            *[
+                                value
+                                for value in (
+                                    self.client.timeout.connect,
+                                    self.client.timeout.read,
+                                    self.client.timeout.write,
+                                    self.client.timeout.pool,
+                                )
+                                if value is not None
+                            ],
+                        ]
+                    ),
+                )
+            elif json is None and headers is None:
                 response = self.client.request(method, url, params=params, data=data)
             else:
                 response = self.client.request(

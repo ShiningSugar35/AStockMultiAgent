@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -29,17 +30,20 @@ from astock.schemas.discovery_runtime import (
     DiscoveryConditionClaimAdmissionRequest,
     DiscoveryRefreshRequest,
 )
+from astock.schemas.financial import FinancialIndustryProfile
 from astock.schemas.knowledge_completion import KnowledgeConditionState
 from astock.settings import ProjectPaths
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
-def _services() -> tuple[ProjectPaths, StateStore, ObjectStore]:
+def _services(*, read_only: bool = False) -> tuple[ProjectPaths, StateStore, ObjectStore]:
     paths = ProjectPaths.discover()
-    paths.ensure_directories()
-    state = StateStore(paths.state_db, paths.root / "migrations")
-    state.migrate()
+    if not read_only:
+        paths.ensure_directories()
+    state = StateStore(paths.state_db, paths.root / "migrations", read_only=read_only)
+    if not read_only:
+        state.migrate()
     return paths, state, ObjectStore(paths.objects)
 
 
@@ -65,11 +69,19 @@ def _result_payload(result: Any) -> dict[str, object]:
 @app.command("schema")
 def schema() -> None:
     """Print the typed request schemas used by the standalone discovery boundary."""
+    from astock.candidates.registered_factor_diagnostics import (
+        FactorFreezeRequest,
+        FactorReportRequest,
+    )
+    from astock.candidates.registered_features import SupplementalFeatureRequest
 
     _emit(
         {
             "refresh": DiscoveryRefreshRequest.model_json_schema(),
             "admit": DiscoveryConditionClaimAdmissionRequest.model_json_schema(),
+            "features_supplemental": SupplementalFeatureRequest.model_json_schema(),
+            "factor_freeze": FactorFreezeRequest.model_json_schema(),
+            "factor_report": FactorReportRequest.model_json_schema(),
         }
     )
 
@@ -199,7 +211,10 @@ def refresh(
 def status() -> None:
     """Read the latest refresh/release checkpoints without creating synthetic results."""
 
-    _paths, state, _objects = _services()
+    _paths, state, _objects = _services(read_only=True)
+    if not state.path.is_file():
+        _emit({"status": "NOT_READY", "refresh": None, "release": None})
+        return
     refresh_checkpoint = state.get_checkpoint("verified-discovery-refresh", "latest")
     release_checkpoint = state.get_checkpoint("verified-discovery-seeds", "latest")
     evidence_need_count = (
@@ -223,6 +238,116 @@ def status() -> None:
             "release": release_checkpoint,
         }
     )
+
+
+
+@app.command("features")
+def features(
+    company_id: str,
+    period_end: str,
+    as_of: str,
+    industry_profile: FinancialIndustryProfile,
+    business_group_id: str,
+    supplemental_file: Annotated[
+        Path | None, typer.Option(exists=True, dir_okay=False, readable=True),
+    ] = None,
+) -> None:
+    """Explain local source-bound features without changing candidates, budgets or artifacts."""
+    from astock.candidates.registered_features import (
+        SupplementalFeatureRequest,
+        build_registered_features,
+    )
+    from astock.financial_sources.service import FinancialSourceService
+    from astock.financial_sources.storage import FinancialSourceParquetStore
+
+    try:
+        supplemental = (
+            SupplementalFeatureRequest.model_validate_json(
+                supplemental_file.read_text(encoding="utf-8")
+            ) if supplemental_file is not None else None
+        )
+        paths, state, objects = _services(read_only=True)
+        service = FinancialSourceService(
+            state, objects, FinancialSourceParquetStore(paths.parquet / "financial_sources"),
+            paths.root,
+        )
+        result = build_registered_features(
+            service, company_id=company_id, period_end=date.fromisoformat(period_end),
+            as_of=datetime.fromisoformat(as_of), industry_profile=industry_profile,
+            business_group_id=business_group_id, supplemental=supplemental,
+        )
+    except (OSError, RuntimeError, ValidationError, ValueError) as exc:
+        _emit({"status": "UNAVAILABLE", "failure_code": "CERTIFIED_FEATURE_INPUT_UNAVAILABLE"})
+        raise typer.Exit(code=2) from exc
+    _emit(result)
+
+
+
+@app.command("factor-freeze")
+def factor_freeze(
+    request_file: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True)],
+) -> None:
+    """Freeze a prospective factor population from actual registered feature readers."""
+    from astock.candidates.registered_factor_diagnostics import (
+        FactorFreezeRequest,
+        freeze_factor_panel,
+    )
+    from astock.financial_sources.service import FinancialSourceService
+    from astock.financial_sources.storage import FinancialSourceParquetStore
+    from astock.research.debate_evaluation import load_quality_policy
+
+    try:
+        paths = ProjectPaths.discover()
+        policy = load_quality_policy(paths.root / "configs/research_quality.yaml")
+        with request_file.open("rb") as handle:
+            raw = handle.read(policy.max_request_bytes + 1)
+        if len(raw) > policy.max_request_bytes:
+            raise ValueError("factor request byte budget exceeded")
+        request = FactorFreezeRequest.model_validate_json(raw)
+        paths, state, objects = _services()
+        service = FinancialSourceService(
+            state, objects, FinancialSourceParquetStore(paths.parquet / "financial_sources"),
+            paths.root,
+        )
+        result = freeze_factor_panel(service, request, policy)
+    except (OSError, RuntimeError, ValidationError, ValueError) as exc:
+        _emit({"status": "FAILED", "failure_code": "FACTOR_FREEZE_FAILED"})
+        raise typer.Exit(code=2) from exc
+    _emit(result)
+
+
+@app.command("factor-report")
+def factor_report(
+    request_file: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True)],
+) -> None:
+    """Read frozen factors and canonical outcomes without changing research or accounts."""
+    from astock.candidates.registered_factor_diagnostics import (
+        FactorReportRequest,
+        evaluate_registered_factor_panels,
+    )
+    from astock.market_data.official_calendar import load_official_trading_calendar
+    from astock.research.debate_evaluation import QualityError, load_quality_policy
+
+    try:
+        paths, state, objects = _services(read_only=True)
+        policy = load_quality_policy(paths.root / "configs/research_quality.yaml")
+        with request_file.open("rb") as handle:
+            raw = handle.read(policy.max_request_bytes + 1)
+        if len(raw) > policy.max_request_bytes:
+            raise ValueError("factor request byte budget exceeded")
+        request = FactorReportRequest.model_validate_json(raw)
+        if not state.path.is_file():
+            _emit({"status": "NOT_READY", "persistent_writes": False})
+            return
+        result = evaluate_registered_factor_panels(
+            state, objects, paths.parquet,
+            load_official_trading_calendar(paths.root / "configs/official_trading_calendar.yaml"),
+            policy, request,
+        )
+    except (OSError, RuntimeError, ValidationError, ValueError, QualityError) as exc:
+        _emit({"status": "UNAVAILABLE", "failure_code": "FACTOR_REPORT_INPUT_UNAVAILABLE"})
+        raise typer.Exit(code=2) from exc
+    _emit(result)
 
 
 if __name__ == "__main__":

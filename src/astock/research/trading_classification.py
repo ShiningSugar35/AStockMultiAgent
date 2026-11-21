@@ -186,6 +186,11 @@ class TradingClassificationService:
         )
         first = batches[0]
         self._validate_official_enumeration(batches)
+        from astock.documents.cninfo import freeze_disclosure_batch
+
+        query_artifact_ids = sorted(
+            freeze_disclosure_batch(self.state, self.objects, item) for item in batches
+        )
         snapshot_ids = sorted({item.raw_snapshot_id for item in batches})
         announcements = {
             item.announcement_id: item for batch in batches for item in batch.announcements
@@ -213,6 +218,7 @@ class TradingClassificationService:
                 "OFFICIAL_ENUMERATION_COMPLETE" if not candidates else "OFFICIAL_CANDIDATES_FOUND"
             ),
             "official_query_snapshot_ids": snapshot_ids,
+            "official_query_artifact_ids": query_artifact_ids,
             "candidate_announcement_ids": candidates,
             "observed_record_count": first.total_count,
         }
@@ -233,6 +239,7 @@ class TradingClassificationService:
             reference_status=payload["reference_status"],
             raw_snapshot_ids=snapshot_ids,
             official_query_snapshot_ids=snapshot_ids,
+            official_query_artifact_ids=query_artifact_ids,
             candidate_announcement_ids=candidates,
             observed_record_count=first.total_count,
             reason_codes=reason_codes,
@@ -824,6 +831,15 @@ class TradingClassificationService:
             if snapshot is None or not self.objects.verify(snapshot.object_sha256):
                 raise ValueError("official corporate-action baseline snapshot is unavailable")
             input_hashes.append(snapshot.object_sha256)
+        for artifact_id in baseline.official_query_artifact_ids:
+            from astock.documents.cninfo import load_disclosure_batch
+
+            batch = load_disclosure_batch(self.state, self.objects, artifact_id)
+            if batch.raw_snapshot_id not in baseline.official_query_snapshot_ids:
+                raise ValueError("corporate-action query receipt snapshot mismatch")
+            record = self.state.artifact_record(artifact_id)
+            assert record is not None
+            input_hashes.append(str(record["object_hash"]))
         input_hashes = sorted(set(input_hashes))
         object_ref = self.objects.put_json(baseline.model_dump(mode="json"))
         artifact_id = f"TradingClassificationCorporateActionBaseline:{baseline.baseline_id}"

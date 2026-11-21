@@ -12,10 +12,12 @@ routes:
     - {provider_id: sse-official-reference, operation: sse-official-master, markets: [XSHG]}
     - {provider_id: szse-official-reference, operation: szse-official-master, markets: [XSHE]}
     - {provider_id: bse-official-reference, operation: bse-official-master, markets: [BJSE]}
+    - {provider_id: tushare-reference, operation: tushare-master, markets: [XSHG, XSHE, BJSE]}
     - {provider_id: baostock-reference, operation: baostock-master}
     - {provider_id: eastmoney-reference, operation: eastmoney-master}
     - {provider_id: sina-reference, operation: sina-master}
   instrument.identity:
+    - {provider_id: tushare-reference, operation: tushare-identity, markets: [XSHG, XSHE, BJSE]}
     - {provider_id: bse-official-reference, operation: bse-official-exact, markets: [BJSE]}
     - {provider_id: baostock-reference, operation: baostock-identity}
     - {provider_id: eastmoney-reference, operation: eastmoney-exact}
@@ -24,6 +26,7 @@ routes:
   market.calendar:
     - {provider_id: baostock-reference, operation: baostock-calendar}
   market.daily_unadjusted:
+    - {provider_id: tushare-reference, operation: tushare-daily, markets: [XSHG, XSHE, BJSE], daily_volume_quantum_shares: 1}
     - {provider_id: baostock-reference, operation: baostock-daily}
     - {provider_id: eastmoney-reference, operation: eastmoney-daily, daily_volume_quantum_shares: 100}
     - {provider_id: sina-reference, operation: sina-daily}

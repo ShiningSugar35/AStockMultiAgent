@@ -108,7 +108,7 @@ def _reference_service(tmp_path: Path) -> MarketReferenceService:
     )
 
 
-def _block_baostock(
+def _block_primary_reference_sources(
     service: MarketReferenceService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -116,7 +116,8 @@ def _block_baostock(
         service,
         "_source_attempt_block_reason",
         lambda provider_id, _capability, *, live, breaker_scope=None: (
-            "CIRCUIT_OPEN" if live and provider_id == "baostock-reference" else None
+            "CIRCUIT_OPEN"
+            if live and provider_id in {"tushare-reference", "baostock-reference"} else None
         ),
     )
 
@@ -178,7 +179,7 @@ def test_exact_instrument_identity_prefers_single_security_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _reference_service(tmp_path)
-    _block_baostock(service, monkeypatch)
+    _block_primary_reference_sources(service, monkeypatch)
 
     def exact(symbol: str, market: Market, *, live: bool = False):
         assert symbol == "600989"
@@ -226,7 +227,7 @@ def test_exact_instrument_identity_falls_back_to_sina_before_bulk_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _reference_service(tmp_path)
-    _block_baostock(service, monkeypatch)
+    _block_primary_reference_sources(service, monkeypatch)
     monkeypatch.setattr(
         service.provider_factory.create("eastmoney-reference"),
         "fetch_identity",
@@ -290,7 +291,7 @@ def test_exact_instrument_identity_paginates_eastmoney_after_baostock_failure(
 ) -> None:
     service = _reference_service(tmp_path)
     pages: list[int] = []
-    _block_baostock(service, monkeypatch)
+    _block_primary_reference_sources(service, monkeypatch)
     monkeypatch.setattr(
         service.provider_factory.create("eastmoney-reference"),
         "fetch_identity",
@@ -356,7 +357,7 @@ def test_corporate_action_official_lookup_runs_even_when_baostock_is_unavailable
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _reference_service(tmp_path)
-    _block_baostock(service, monkeypatch)
+    _block_primary_reference_sources(service, monkeypatch)
     calls: list[str] = []
 
     def official(*_args: object):
@@ -392,7 +393,7 @@ def test_daily_market_falls_back_to_sina_when_baostock_and_eastmoney_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _reference_service(tmp_path)
-    _block_baostock(service, monkeypatch)
+    _block_primary_reference_sources(service, monkeypatch)
     monkeypatch.setattr(
         service.provider_factory.create("eastmoney-reference"),
         "fetch_daily",
@@ -1221,3 +1222,73 @@ def test_live_research_no_longer_requires_question_time_as_of_but_recorded_does(
     assert live_payload["company_id"] == "600938"
     assert recorded.exit_code != 0
     assert "--as-of is required for recorded or historical research" in recorded.output
+
+
+
+@pytest.mark.parametrize(
+    "allow_network,blocked,expected_financial,expected_discovery",
+    [
+        (True, frozenset({AcquisitionCapability.FINANCIAL_ANNUAL}),
+         {AcquisitionCapability.FINANCIAL_ANNUAL: False,
+          AcquisitionCapability.FINANCIAL_LATEST_INTERIM: True}, True),
+        (True, frozenset({AcquisitionCapability.FINANCIAL_ANNUAL,
+                          AcquisitionCapability.FINANCIAL_LATEST_INTERIM}),
+         {AcquisitionCapability.FINANCIAL_ANNUAL: False,
+          AcquisitionCapability.FINANCIAL_LATEST_INTERIM: False}, False),
+        (False, frozenset(),
+         {AcquisitionCapability.FINANCIAL_ANNUAL: False,
+          AcquisitionCapability.FINANCIAL_LATEST_INTERIM: False}, False),
+    ],
+)
+def test_acquisition_blocks_only_waiting_capabilities_and_reuses_completed_identity(
+    tmp_path, monkeypatch, allow_network, blocked, expected_financial, expected_discovery,
+):
+    paths = _paths(tmp_path)
+    paths.ensure_directories()
+    state = StateStore(paths.state_db, PROJECT_ROOT / "migrations")
+    state.migrate()
+    service = CurrentResearchAcquisitionService(
+        paths, state, ObjectStore(paths.objects), clock=lambda: NOW,
+    )
+    completed = _attempt(AcquisitionCapability.INSTRUMENT_IDENTITY)
+    monkeypatch.setattr(service, "_reusable_attempts", lambda *args, **kwargs: (
+        {AcquisitionCapability.INSTRUMENT_IDENTITY: completed}, None,
+    ))
+    def forbidden_identity(*args, **kwargs):
+        raise AssertionError("completed identity must be reused")
+    monkeypatch.setattr(service, "_identity_attempt", forbidden_identity)
+    discovery_modes = []
+    def periods(*args, allow_network=True):
+        discovery_modes.append(allow_network)
+        return [
+            (AcquisitionCapability.FINANCIAL_ANNUAL,
+             date(2025, 12, 31), FinancialPeriodType.ANNUAL),
+            (AcquisitionCapability.FINANCIAL_LATEST_INTERIM,
+             date(2026, 6, 30), FinancialPeriodType.SEMIANNUAL),
+        ], []
+    monkeypatch.setattr(service, "_discover_financial_periods", periods)
+    modes = {}
+    def financial(capability, *args, allow_network=True, **kwargs):
+        modes[capability] = allow_network
+        return _attempt(capability)
+    monkeypatch.setattr(service, "_financial_attempt", financial)
+    monkeypatch.setattr(
+        service, "_reference_attempt", lambda capability, _operation: _attempt(capability),
+    )
+    report = service.acquire(
+        "600519", Market.XSHG, reuse_report_artifact_id="already-verified-parent",
+        allow_network=allow_network, network_blocked_capabilities=blocked,
+    )
+    assert modes == expected_financial and discovery_modes == [expected_discovery]
+    assert completed in report.attempts
+    if not allow_network:
+        blocked_references = [
+            item for item in report.attempts
+            if item.capability in {
+                AcquisitionCapability.DAILY_MARKET, AcquisitionCapability.CORPORATE_ACTIONS,
+            }
+        ]
+        assert all(
+            "LOCAL_ONLY_NETWORK_DISABLED" in item.internal_reason_codes
+            for item in blocked_references
+        )

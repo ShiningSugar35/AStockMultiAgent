@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from math import isfinite
 from typing import Literal
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -137,8 +138,36 @@ class PortfolioCandidateInput(AStockModel):
     risk_group: str = Field(min_length=1)
 
 
+
+class PortfolioAllocationConstraints(AStockModel):
+    """Explicit research assumptions; these are not a verified account projection."""
+    current_weights: dict[str, float] = Field(default_factory=dict)
+    can_buy: dict[str, bool] = Field(default_factory=dict)
+    can_sell: dict[str, bool] = Field(default_factory=dict)
+    one_way_costs: dict[str, float] = Field(default_factory=dict)
+    additional_groups: dict[str, list[str]] = Field(default_factory=dict)
+    group_caps: dict[str, float] = Field(default_factory=dict)
+    min_cash: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
+    max_turnover: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_constraints(self) -> PortfolioAllocationConstraints:
+        for mapping in (self.current_weights, self.one_way_costs, self.group_caps):
+            if any(not key.strip() or not isfinite(value) or not 0 <= value <= 1
+                   for key, value in mapping.items()):
+                raise ValueError("allocation assumptions require finite fractions")
+        if sum(self.current_weights.values()) > 1.00000001:
+            raise ValueError("current allocation exceeds NAV")
+        for groups in self.additional_groups.values():
+            if (len(set(groups)) != len(groups)
+                    or any(group not in self.group_caps for group in groups)):
+                raise ValueError("additional groups require unique names and explicit caps")
+        return self
+
+
 class PortfolioConstructionRequest(AStockModel):
     schema_version: str = "portfolio-construction-request-v1"
+    allocation_constraints: PortfolioAllocationConstraints | None = None
     portfolio_id: str = Field(min_length=1)
     as_of: AwareDatetime
     candidates: list[PortfolioCandidateInput] = Field(min_length=2, max_length=20)
@@ -169,15 +198,25 @@ class PortfolioAllocationProposal(AStockModel):
     max_group_weight: float = Field(ge=0, le=1, allow_inf_nan=False)
     binding_constraint_codes: list[str]
     model_risk_codes: list[str]
+    allocator_contract_version: str = "legacy-score-v1"
+    solver_status: str = "LEGACY_SCORE_PROJECTION"
+    optimality_claim: bool = False
+    constraint_tolerance: float = Field(default=1e-8, gt=0, allow_inf_nan=False)
+    one_off_cost_fraction: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
+    turnover_sum_abs_weights: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
+    target_exposure_deviation: float | None = Field(default=None, allow_inf_nan=False)
+    return_basis: str = "UNSPECIFIED"
 
     @model_validator(mode="after")
     def validate_proposal(self) -> PortfolioAllocationProposal:
         if set(self.weights) == {""} or any(not key for key in self.weights):
             raise ValueError("portfolio proposal symbols cannot be blank")
-        if any(value < 0 or value > 1 for value in self.weights.values()):
+        if any(not isfinite(value) or value < 0 or value > 1 for value in self.weights.values()):
             raise ValueError("portfolio proposal weights must be within 0..1")
-        if sum(self.weights.values()) + self.cash_weight > 1.0000001:
+        if sum(self.weights.values()) + self.cash_weight + self.one_off_cost_fraction > 1.0000001:
             raise ValueError("portfolio proposal total allocation cannot exceed 100%")
+        if self.optimality_claim and self.solver_status != "OPTIMAL_RESEARCH":
+            raise ValueError("postprocessed or heuristic weights cannot retain optimality")
         for values in (self.binding_constraint_codes, self.model_risk_codes):
             if values != sorted(set(values)):
                 raise ValueError("portfolio proposal codes must be sorted and unique")
@@ -225,6 +264,7 @@ class PortfolioConstructionReport(AStockModel):
 
 
 __all__ = [
+    "PortfolioAllocationConstraints",
     "PortfolioAllocationMethod",
     "PortfolioAllocationProposal",
     "PortfolioAnalysisReport",

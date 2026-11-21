@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import ROUND_FLOOR, Decimal
 from hashlib import sha256
+from itertools import combinations
+from math import comb, e, fsum, isfinite, sqrt
 from statistics import NormalDist
 
 from astock.schemas import ShadowMetricInterval
@@ -219,40 +221,158 @@ def deterministic_cluster_bootstrap(
     )
 
 
+def sample_sharpe(returns: list[float]) -> float | None:
+    """Per-observation excess-return Sharpe; no implicit frequency conversion."""
+    if any(not isfinite(value) for value in returns):
+        raise ValueError("return observations must be finite")
+    if len(returns) < 2:
+        return None
+    average = fsum(returns) / len(returns)
+    variance = fsum((value - average) ** 2 for value in returns) / (len(returns) - 1)
+    return average / sqrt(variance) if variance > 1e-18 else None
+
+
+def expected_maximum_sharpe(
+    trial_sharpes: list[float], *, effective_trial_count: float
+) -> float | None:
+    """Bailey/Lopez de Prado (2014), Eq. (3): zero-skill selection threshold.
+
+    All attempted trials must be represented at the same return frequency.
+    Effective independent trials are an explicit research assumption, not a
+    count of cross-validation paths. The trial Sharpe *dispersion* is essential.
+    """
+    if any(not isfinite(value) for value in trial_sharpes):
+        raise ValueError("trial Sharpes must be finite")
+    if not isfinite(effective_trial_count) or not 1 <= effective_trial_count <= len(trial_sharpes):
+        raise ValueError("effective independent trials must be within the observed trial count")
+    if len(trial_sharpes) < 2:
+        return None
+    average = fsum(trial_sharpes) / len(trial_sharpes)
+    variance = fsum((value - average) ** 2 for value in trial_sharpes) / (len(trial_sharpes) - 1)
+    if variance <= 1e-18:
+        return None
+    if effective_trial_count == 1:
+        return 0.0
+    normal = NormalDist()
+    gamma = 0.5772156649015329
+    threshold = (
+        (1.0 - gamma) * normal.inv_cdf(1.0 - 1.0 / effective_trial_count)
+        + gamma * normal.inv_cdf(1.0 - 1.0 / (effective_trial_count * e))
+    )
+    # The extreme-value approximation is not reliable below two effective
+    # trials. Refuse rather than return a negative zero-skill hurdle.
+    return sqrt(variance) * threshold if effective_trial_count >= 2 else None
+
+
 def deflated_sharpe_probability(
     returns: list[float],
     *,
     selection_candidate_count: int,
+    trial_sharpes: list[float] | None = None,
+    effective_trial_count: float | None = None,
 ) -> float | None:
-    """Diagnostic DSR-style probability; never a production admission badge."""
+    """Paper-defined DSR with disclosed trial dispersion and dependence assumption.
 
-    if selection_candidate_count <= 1:
+    Missing full-trial context is NOT_EVALUABLE, never a fabricated DSR.
+    Inputs use one common observation frequency and excess-return convention.
+    This asymptotic statistic is diagnostic; it does not establish IID returns.
+    """
+    sharpe = sample_sharpe(returns)
+    if selection_candidate_count <= 1 or len(returns) < 8 or sharpe is None:
         return None
-    if len(returns) < 8:
+    if trial_sharpes is None or effective_trial_count is None:
+        return None
+    if len(trial_sharpes) != selection_candidate_count:
+        raise ValueError("DSR requires every attempted trial Sharpe")
+    threshold = expected_maximum_sharpe(
+        trial_sharpes, effective_trial_count=effective_trial_count
+    )
+    if threshold is None:
         return None
     n = len(returns)
-    average = sum(returns) / n
-    variance = sum((value - average) ** 2 for value in returns) / (n - 1)
-    if variance <= 1e-18:
+    average = fsum(returns) / n
+    m2 = fsum((value - average) ** 2 for value in returns) / n
+    if m2 <= 1e-18:
         return None
-    standard_deviation = variance**0.5
-    sharpe = average / standard_deviation
-    centered = [(value - average) / standard_deviation for value in returns]
-    skew = sum(value**3 for value in centered) / n
-    kurtosis = sum(value**4 for value in centered) / n
-    normal = NormalDist()
-    trials = float(selection_candidate_count)
-    euler_gamma = 0.5772156649015329
-    z_one = normal.inv_cdf(max(1e-12, min(1 - 1e-12, 1.0 - 1.0 / trials)))
-    z_two = normal.inv_cdf(max(1e-12, min(1 - 1e-12, 1.0 - 1.0 / (trials * 2.718281828459045))))
-    expected_max = (1.0 - euler_gamma) * z_one + euler_gamma * z_two
-    sampling_variance = (1.0 - skew * sharpe + ((kurtosis - 1.0) / 4.0) * sharpe * sharpe) / max(
-        n - 1, 1
-    )
+    skew = fsum((value - average) ** 3 for value in returns) / n / m2**1.5
+    kurtosis = fsum((value - average) ** 4 for value in returns) / n / m2**2
+    sampling_variance = (1.0 - skew * sharpe + (kurtosis - 1.0) / 4.0 * sharpe**2) / (n - 1)
     if sampling_variance <= 1e-18:
         return None
-    z_score = (sharpe - expected_max) / sampling_variance**0.5
-    return max(0.0, min(1.0, normal.cdf(z_score)))
+    return NormalDist().cdf((sharpe - threshold) / sqrt(sampling_variance))
+
+
+def cscv_probability_of_backtest_overfitting(
+    strategy_returns: list[list[float]],
+    *,
+    block_count: int = 8,
+    max_combinations: int = 4096,
+    metric: str = "SHARPE",
+) -> float | None:
+    """Bounded CSCV of Bailey et al. (2015), all complementary half-block splits.
+
+    Blocks are contiguous and equal length; no rows are discarded. Tied
+    in-sample winners are averaged, OOS ranks use midranks, and exact median
+    ties contribute one half. A constant cross-strategy rank is not evaluable.
+    CSCV is a selection diagnostic, NOT a chronological deployment backtest.
+    """
+    if block_count < 2 or block_count % 2 or block_count > 16:
+        raise ValueError("CSCV requires an even block count between 2 and 16")
+    if metric not in {"SHARPE", "MEAN"}:
+        raise ValueError("unsupported frozen CSCV selection metric")
+    if not 1 <= max_combinations <= 20000 or comb(block_count, block_count // 2) > max_combinations:
+        raise ValueError("CSCV combination budget exceeded")
+    if len(strategy_returns) < 2:
+        return None
+    lengths = {len(values) for values in strategy_returns}
+    if len(lengths) != 1:
+        raise ValueError("CSCV return series must align on identical observations")
+    if any(not isfinite(value) for values in strategy_returns for value in values):
+        raise ValueError("CSCV return observations must be finite")
+    n = lengths.pop()
+    if len(strategy_returns) > 512 or n * len(strategy_returns) * comb(
+        block_count, block_count // 2
+    ) > 20_000_000:
+        raise ValueError("CSCV observation-work budget exceeded")
+    if n < block_count * 2 or n % block_count:
+        return None
+    if all(values == strategy_returns[0] for values in strategy_returns[1:]):
+        return None
+    block_size = n // block_count
+    all_blocks = set(range(block_count))
+    estimates: list[float] = []
+    for selected in combinations(range(block_count), block_count // 2):
+        test_blocks = all_blocks - set(selected)
+        train_scores: list[float] = []
+        test_scores: list[float] = []
+        for values in strategy_returns:
+            train = [
+                values[i] for block in selected
+                for i in range(block * block_size, (block + 1) * block_size)
+            ]
+            test = [
+                values[i] for block in sorted(test_blocks)
+                for i in range(block * block_size, (block + 1) * block_size)
+            ]
+            train_score = sample_sharpe(train) if metric == "SHARPE" else fsum(train) / len(train)
+            test_score = sample_sharpe(test) if metric == "SHARPE" else fsum(test) / len(test)
+            if train_score is None or test_score is None:
+                return None
+            train_scores.append(train_score)
+            test_scores.append(test_score)
+        best = max(train_scores)
+        winners = [i for i, value in enumerate(train_scores) if value == best]
+        probabilities = []
+        for winner in winners:
+            score = test_scores[winner]
+            rank = 1 + sum(value < score for value in test_scores)
+            rank += (sum(value == score for value in test_scores) - 1) / 2
+            relative_rank = rank / (len(test_scores) + 1)
+            probabilities.append(
+                1.0 if relative_rank < 0.5 else 0.0 if relative_rank > 0.5 else 0.5
+            )
+        estimates.append(fsum(probabilities) / len(probabilities))
+    return fsum(estimates) / len(estimates)
 
 
 def time_fold_probability_of_backtest_overfitting(
@@ -260,41 +380,39 @@ def time_fold_probability_of_backtest_overfitting(
     *,
     fold_count: int = 5,
 ) -> float | None:
-    """Time-ordered PBO diagnostic for repeated strategy/parameter selection."""
+    """Legacy blocked-mean rank diagnostic; explicitly NOT paper CSCV-PBO.
 
+    Kept for historical callers. New production diagnostics use CSCV above.
+    """
     if len(strategy_returns) <= 1:
         return None
     lengths = {len(values) for values in strategy_returns}
     if len(lengths) != 1:
-        raise ValueError("PBO strategy return series must have equal length")
+        raise ValueError("blocked-mean series must have equal length")
+    if any(not isfinite(value) for values in strategy_returns for value in values):
+        raise ValueError("blocked-mean observations must be finite")
     observation_count = next(iter(lengths), 0)
     if observation_count < fold_count * 2 or fold_count < 2:
         return None
     boundaries = [round(index * observation_count / fold_count) for index in range(fold_count + 1)]
     overfit = 0
-    evaluated = 0
     for fold in range(fold_count):
         start, end = boundaries[fold], boundaries[fold + 1]
-        train_scores: list[float] = []
-        test_scores: list[float] = []
-        for values in strategy_returns:
-            test = values[start:end]
-            train = values[:start] + values[end:]
-            if not train or not test:
-                break
-            train_scores.append(sum(train) / len(train))
-            test_scores.append(sum(test) / len(test))
-        if len(train_scores) != len(strategy_returns):
-            continue
+        train_scores = [
+            fsum(values[:start] + values[end:]) / (observation_count - end + start)
+            for values in strategy_returns
+        ]
+        test_scores = [fsum(values[start:end]) / (end - start) for values in strategy_returns]
         winner = max(range(len(train_scores)), key=lambda index: (train_scores[index], -index))
-        ordered_test = sorted(test_scores)
-        median_test = ordered_test[len(ordered_test) // 2]
+        median_test = sorted(test_scores)[len(test_scores) // 2]
         overfit += int(test_scores[winner] < median_test)
-        evaluated += 1
-    return overfit / evaluated if evaluated else None
+    return overfit / fold_count
 
 
 __all__ = [
+    "sample_sharpe",
+    "expected_maximum_sharpe",
+    "cscv_probability_of_backtest_overfitting",
     "deflated_sharpe_probability",
     "deterministic_block_bootstrap",
     "deterministic_cluster_bootstrap",

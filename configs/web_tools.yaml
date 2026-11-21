@@ -10,5 +10,11 @@ max_paid_per_request: 4
 max_paid_per_day: 100
 max_paid_per_month: 2000
 max_paid_concurrency: 2
+# These slots cover only this system's owned backend requests, never host tools.
+max_owned_concurrency: 4
+max_owned_per_provider: 2
+max_owned_per_domain: 2
+shared_search_max_age_seconds: 300
+shared_pdf_max_age_seconds: 3600
 min_paid_interval_seconds: 1.0
 paid_request_price_cny: "0.005"

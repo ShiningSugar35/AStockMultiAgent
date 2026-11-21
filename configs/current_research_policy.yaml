@@ -3,6 +3,7 @@ default_lookback_days: 120
 minimum_lookback_days: 30
 maximum_lookback_days: 730
 max_workers: 4
+max_transport_attempts: 64
 automatic_resolution_budget_seconds: 1800
 manual_last: true
 capabilities:

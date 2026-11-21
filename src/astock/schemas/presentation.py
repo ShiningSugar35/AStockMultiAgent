@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class _PresentationModel(BaseModel):
@@ -112,6 +112,29 @@ class FactFingerprint(_PresentationModel):
         return self.direction_terms
 
 
+class NarrativeFactBinding(_PresentationModel):
+    """A read-only source statement; fields bind meaning, not just a bag of numbers."""
+
+    entity: str = Field(min_length=1)
+    metric: str = Field(min_length=1)
+    period: str = Field(min_length=1)
+    unit: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    qualifiers: list[str] = Field(default_factory=list)
+    citations: list[str] = Field(min_length=1)
+    statement: str = Field(min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def validate_binding(self) -> NarrativeFactBinding:
+        for value in (
+            self.entity, self.metric, self.period, self.unit, self.value,
+            *self.qualifiers, *self.citations,
+        ):
+            if not value.strip() or value not in self.statement:
+                raise ValueError("fact binding components must occur in its source statement")
+        return self
+
+
 class ResearchNarrativeBundle(_PresentationModel):
     """Read-only projection of existing frozen research facts for presentation."""
 
@@ -132,6 +155,7 @@ class ResearchNarrativeBundle(_PresentationModel):
     citations: list[str] = Field(default_factory=list, max_length=32)
     report_path: str | None = Field(default=None, max_length=2048)
     locked_facts: FactFingerprint | None = None
+    fact_bindings: list[NarrativeFactBinding] = Field(default_factory=list, max_length=128)
 
     @property
     def conclusion(self) -> str:
@@ -208,6 +232,7 @@ __all__ = [
     "FactEquivalenceStatus",
     "FactFingerprint",
     "InvestorPresentationModel",
+    "NarrativeFactBinding",
     "PresentationAudit",
     "PublicCitation",
     "PublicReportReference",

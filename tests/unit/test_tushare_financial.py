@@ -158,7 +158,14 @@ def test_absent_announcement_is_unknown_not_an_invented_timestamp():
 
 def test_money_and_shares_use_provider_specific_units():
     mappings = load_financial_field_mappings(ROOT / "configs/financial_field_mappings.yaml")
+    assert len([item for item in mappings if not item.optional]) == 18
+    optional = [item for item in mappings if item.optional]
+    assert len(optional) == 1
+    assert optional[0].field_code is FinancialFieldCode.CASH_DIVIDENDS_PAID
+    assert not optional[0].provider_fields
     for mapping in mappings:
+        if mapping.optional:
+            continue
         expected = (
             FinancialUnit.SHARES if mapping.field_code is FinancialFieldCode.SHARES_OUTSTANDING
             else FinancialUnit.CNY

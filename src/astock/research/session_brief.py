@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 
+from astock.core.errors import StorageError
 from astock.investor_orchestration.canonical_state import normalized_instrument
 from astock.market_data.official_calendar import OfficialTradingCalendarConfig
 from astock.research.debate_evaluation import QualityError, QualityPolicy, aware, digest, sealed
@@ -386,7 +387,13 @@ def render_session_brief(
     subject = normalized_instrument(instrument_id)
     if (
         receipt is None
+        or draft.get("result_id") != "session-brief:" + digest(
+            {key: value for key, value in draft.items() if key != "result_id"}
+        )
         or not published(receipt)
+        or draft.get("source_facts", {}).get("account_scope_hash") != digest(
+            {"account_id": receipt.request_contract.account_id}
+        )
         or draft.get("instrument_id") != subject
         or draft.get("source_facts", {}).get("instrument_id") != subject
         or subject not in {normalized_instrument(x) for x in receipt.candidate_universe}
@@ -495,12 +502,17 @@ class SessionBriefReuseService:
         key = digest({"context": context_id, "account": account_id, "subject": subject})
         checkpoint = self.context.state.get_checkpoint("session-brief-reuse", key)
         receipts = []
+        receipt_read_gaps = []
         for record in self.context.state.recent_artifact_records(
             "RecommendationResearchReceipt", limit=64
         ):
-            item, lineage = read_registered(
-                self.context, record["artifact_id"], RecommendationResearchReceipt
-            )
+            try:
+                item, lineage = read_registered(
+                    self.context, record["artifact_id"], RecommendationResearchReceipt
+                )
+            except (ValueError, OSError, StorageError):
+                receipt_read_gaps.append("RECEIPT_UNAVAILABLE")
+                continue
             if (
                 item.request_contract.account_id == account_id
                 and subject in {normalized_instrument(x) for x in item.candidate_universe}
@@ -511,6 +523,35 @@ class SessionBriefReuseService:
         receipts.sort(key=lambda pair: decision_completed_at(pair[0]), reverse=True)
         current = receipts[0] if receipts else (None, None)
         previous = receipts[1] if len(receipts) > 1 else (None, None)
+        optional_input_gaps = []
+
+        def latest(model):
+            candidates = []
+            for record in self.context.state.recent_artifact_records(model.__name__, limit=64):
+                try:
+                    item, binding = read_registered(self.context, record["artifact_id"], model)
+                except (ValueError, OSError, StorageError):
+                    optional_input_gaps.append({"type": model.__name__, "reason": "UNAVAILABLE"})
+                    continue
+                if (
+                    normalized_instrument(item.instrument_id) == subject
+                    and item.as_of <= aware(now)
+                ):
+                    candidates.append((item, binding))
+            if not candidates:
+                return None, None
+            candidates.sort(key=lambda pair: (pair[0].as_of, pair[1]["object_hash"]), reverse=True)
+            newest = candidates[0]
+            if any(
+                item.as_of == newest[0].as_of and binding["object_hash"] != newest[1]["object_hash"]
+                for item, binding in candidates[1:]
+            ):
+                optional_input_gaps.append({"type": model.__name__, "reason": "SAME_TIME_CONFLICT"})
+                return None, None
+            return newest
+
+        technical, technical_binding = latest(TechnicalIndicatorSnapshot)
+        events, events_binding = latest(NewsEventResearchPack)
         draft = build_session_brief(
             instrument_id=subject,
             account_id=account_id,
@@ -521,7 +562,14 @@ class SessionBriefReuseService:
             receipt=current[0],
             previous_receipt=previous[0],
             previous_fingerprint=(checkpoint["cursor"].get("fingerprint") if checkpoint else None),
-            lineage={"receipt": current[1], "previous_receipt": previous[1]},
+            technical=technical,
+            events=events,
+            lineage={
+                "receipt": current[1], "previous_receipt": previous[1],
+                "technical": technical_binding, "events": events_binding,
+                "optional_input_gaps": optional_input_gaps,
+                "receipt_read_gaps": sorted(set(receipt_read_gaps)),
+            },
         )
         # Never promote or enqueue this draft. The existing authenticated public
         # route alone owns display authorization; scheduled consent is insufficient.
@@ -539,7 +587,10 @@ class SessionBriefReuseService:
             artifact_type="SessionBrief",
             schema_version=draft["schema_version"],
             object_hash=ref.sha256,
-            input_hashes=[x["object_hash"] for x in (current[1], previous[1]) if x],
+            input_hashes=[
+                x["object_hash"]
+                for x in (current[1], previous[1], technical_binding, events_binding) if x
+            ],
         )
         self.context.state.set_checkpoint(
             scope_type="session-brief-reuse",

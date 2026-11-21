@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Protocol, runtime_checkable
@@ -299,15 +300,20 @@ class CurrentResearchSlaService:
         request_id: str,
         task_specs: Sequence[tuple[str, str | None, ResearchTaskCategory, Sequence[str], str]],
         budget_seconds: int | None = 2700,
+        deadline_at: datetime | None = None,
         legacy_batch_caller: str | None = None,
         legacy_batch_explicit: bool = True,
     ) -> ResearchSchedulerRun:
-        if budget_seconds is not None and (
-            type(budget_seconds) is not int or budget_seconds <= 0
-        ):
+        if budget_seconds is not None and (type(budget_seconds) is not int or budget_seconds <= 0):
             raise ValueError("research budget must be a positive integer when explicitly set")
         if legacy_batch_caller is not None and not legacy_batch_caller.strip():
             raise ValueError("legacy batch caller identity must not be blank")
+        if deadline_at is not None and (
+            deadline_at.tzinfo is None or deadline_at.utcoffset() is None
+        ):
+            raise ValueError("research deadline must be timezone-aware")
+        if deadline_at is not None and legacy_batch_caller is not None:
+            raise ValueError("absolute request deadline cannot use legacy batch recovery")
         now = self.clock()
         run_id = f"research-scheduler:{content_hash({'request_id': request_id})}"
         run = ResearchSchedulerRun(
@@ -316,11 +322,13 @@ class CurrentResearchSlaService:
             status=ResearchSchedulerRunStatus.RUNNING,
             generation=1,
             deadline_at=(
-                now + timedelta(seconds=budget_seconds)
+                deadline_at
+                if deadline_at is not None
+                else now + timedelta(seconds=budget_seconds)
                 if budget_seconds is not None
                 else datetime.max.replace(tzinfo=UTC)
             ),
-            overall_deadline_enforced=budget_seconds is not None,
+            overall_deadline_enforced=deadline_at is not None or budget_seconds is not None,
             started_at=now,
             created_at=now,
             updated_at=now,
@@ -372,6 +380,7 @@ class CurrentResearchSlaService:
                     node_id=node_id,
                     candidate_id=candidate_id,
                     category=category,
+                    dispatch_attempted=False,
                     status=(
                         ResearchSchedulerTaskStatus.READY
                         if not resolved_dependencies
@@ -408,10 +417,9 @@ class CurrentResearchSlaService:
                     self.objects.get_bytes(str(existing_row["object_hash"]))
                 )
                 old_tasks = self._tasks_from_connection(connection, existing.run_id)
-                if (
-                    not self._budget_contract_matches(existing, budget_seconds)
-                    or self._task_contract(old_tasks) != self._task_contract(tasks)
-                ):
+                if not self._budget_contract_matches(
+                    existing, budget_seconds, deadline_at
+                ) or self._task_contract(old_tasks) != self._task_contract(tasks):
                     raise ValueError(
                         "research request contract differs from its registered graph or budget"
                     )
@@ -440,8 +448,12 @@ class CurrentResearchSlaService:
 
     @staticmethod
     def _budget_contract_matches(
-        run: ResearchSchedulerRun, budget_seconds: int | None
+        run: ResearchSchedulerRun,
+        budget_seconds: int | None,
+        deadline_at: datetime | None = None,
     ) -> bool:
+        if deadline_at is not None:
+            return run.overall_deadline_enforced and run.deadline_at == deadline_at
         if budget_seconds is None:
             return not run.overall_deadline_enforced
         return (
@@ -463,14 +475,18 @@ class CurrentResearchSlaService:
             not tasks
             or None in candidates
             or len(set(candidates)) != len(candidates)
-            or any(task.dependencies or task.category is not ResearchTaskCategory.NETWORK
-                   for task in tasks)
+            or any(
+                task.dependencies or task.category is not ResearchTaskCategory.NETWORK
+                for task in tasks
+            )
         ):
             raise ValueError("legacy batch compatibility requires independent unique companies")
-        return tuple(sorted(
-            (str(task.candidate_id), task.category.value, task.input_fingerprint)
-            for task in tasks
-        ))
+        return tuple(
+            sorted(
+                (str(task.candidate_id), task.category.value, task.input_fingerprint)
+                for task in tasks
+            )
+        )
 
     def _compatible_legacy_batch(
         self,
@@ -496,17 +512,19 @@ class CurrentResearchSlaService:
         wanted = self._batch_input_contract(tasks)
         matching: list[ResearchSchedulerRun] = []
         for row in rows:
-            suffix = str(row["request_id"])[len(prefix):]
+            suffix = str(row["request_id"])[len(prefix) :]
             if len(suffix) != 64 or any(char not in "0123456789abcdef" for char in suffix):
                 continue
             existing = ResearchSchedulerRun.model_validate_json(
                 self.objects.get_bytes(str(row["object_hash"]))
             )
             old_tasks = self._tasks_from_connection(connection, existing.run_id)
-            if any(not task.node_id.startswith("company-run-") or
-                   not task.node_id.removeprefix("company-run-").isascii() or
-                   not task.node_id.removeprefix("company-run-").isdigit()
-                   for task in old_tasks):
+            if any(
+                not task.node_id.startswith("company-run-")
+                or not task.node_id.removeprefix("company-run-").isascii()
+                or not task.node_id.removeprefix("company-run-").isdigit()
+                for task in old_tasks
+            ):
                 if explicit:
                     raise ValueError("legacy batch request contract has non-batch task nodes")
                 continue
@@ -541,9 +559,85 @@ class CurrentResearchSlaService:
         handlers: Mapping[str, TaskHandler],
         *,
         resource_limits: Mapping[ResearchTaskCategory, int] | None = None,
+        recover_unowned: bool = True,
+        selected_node_ids: Collection[str] | None = None,
     ) -> ResearchSchedulerRun:
         with schedule_run_ownership(self.state.path, "current-research-scheduler", run_id):
-            return self._execute_owned(run_id, handlers, resource_limits=resource_limits)
+            return self._execute_owned(
+                run_id,
+                handlers,
+                resource_limits=resource_limits,
+                recover_unowned=recover_unowned,
+                selected_node_ids=selected_node_ids,
+            )
+
+    def _validate_selected_nodes(
+        self,
+        run_id: str,
+        selected_node_ids: Collection[str] | None,
+        recover_unowned: bool,
+    ) -> None:
+        if selected_node_ids is None:
+            return
+        if recover_unowned:
+            raise ValueError("selected dispatch cannot take over unrelated task leases")
+        known = {task.node_id for task in self.tasks(run_id)}
+        if not selected_node_ids or not set(selected_node_ids).issubset(known):
+            raise ValueError("selected dispatch requires existing task node identities")
+
+    @staticmethod
+    def _selected_tasks(
+        tasks: Mapping[str, ResearchSchedulerTask],
+        selected_node_ids: Collection[str] | None,
+    ) -> tuple[ResearchSchedulerTask, ...]:
+        return tuple(
+            task for task in tasks.values()
+            if selected_node_ids is None or task.node_id in selected_node_ids
+        )
+
+    @staticmethod
+    def _all_execution_tasks_terminal(tasks: Mapping[str, ResearchSchedulerTask]) -> bool:
+        terminal = {
+            ResearchSchedulerTaskStatus.COMPLETED,
+            ResearchSchedulerTaskStatus.FAILED,
+            ResearchSchedulerTaskStatus.CANCELLED,
+        }
+        return all(task.status in terminal for task in tasks.values())
+
+    @staticmethod
+    def _execution_limits(
+        resource_limits: Mapping[ResearchTaskCategory, int] | None,
+    ) -> dict[ResearchTaskCategory, int]:
+        limits = dict(_DEFAULT_LIMITS)
+        for category, value in (resource_limits or {}).items():
+            if value <= 0:
+                raise ValueError("research resource limits must be positive")
+            limits[category] = value
+        return limits
+
+    @staticmethod
+    def _initial_resource_usage(
+        tasks: Mapping[str, ResearchSchedulerTask], recover_unowned: bool,
+    ) -> dict[ResearchTaskCategory, int]:
+        usage = {category: 0 for category in ResearchTaskCategory}
+        if recover_unowned:
+            for task in tasks.values():
+                if task.status is ResearchSchedulerTaskStatus.RUNNING:
+                    usage[task.category] += 1
+        return usage
+
+    @staticmethod
+    def _refresh_unowned_tasks(
+        tasks: Mapping[str, ResearchSchedulerTask],
+        unowned: set[str],
+        running_by_category: dict[ResearchTaskCategory, int],
+        counted: bool,
+    ) -> None:
+        for task_id in tuple(unowned):
+            if tasks[task_id].status is not ResearchSchedulerTaskStatus.RUNNING:
+                if counted:
+                    running_by_category[tasks[task_id].category] -= 1
+                unowned.remove(task_id)
 
     def _execute_owned(
         self,
@@ -551,6 +645,8 @@ class CurrentResearchSlaService:
         handlers: Mapping[str, TaskHandler],
         *,
         resource_limits: Mapping[ResearchTaskCategory, int] | None = None,
+        recover_unowned: bool = True,
+        selected_node_ids: Collection[str] | None = None,
     ) -> ResearchSchedulerRun:
         run = self._run(run_id)
         if run.status not in {
@@ -558,18 +654,14 @@ class CurrentResearchSlaService:
             ResearchSchedulerRunStatus.RUNNING,
         }:
             return run
-        self._recover_expired_tasks_owned(run_id)
-        limits = dict(_DEFAULT_LIMITS)
-        if resource_limits is not None:
-            for category, value in resource_limits.items():
-                if value <= 0:
-                    raise ValueError("research resource limits must be positive")
-                limits[category] = value
+        self._validate_selected_nodes(run_id, selected_node_ids, recover_unowned)
+        if recover_unowned:
+            self._recover_expired_tasks_owned(run_id)
+        limits = self._execution_limits(resource_limits)
         pool = ThreadPoolExecutor(
             max_workers=sum(limits.values()), thread_name_prefix="astock-research"
         )
         running: dict[Future[str], ResearchSchedulerTask] = {}
-        running_by_category = {category: 0 for category in ResearchTaskCategory}
         run = self._run(run_id)
         task_state = {task.task_id: task for task in self.tasks(run_id)}
         unowned_task_ids = {
@@ -577,8 +669,7 @@ class CurrentResearchSlaService:
             for task in task_state.values()
             if task.status is ResearchSchedulerTaskStatus.RUNNING
         }
-        for task_id in unowned_task_ids:
-            running_by_category[task_state[task_id].category] += 1
+        running_by_category = self._initial_resource_usage(task_state, recover_unowned)
         try:
             # One scheduler-owned SQLite connection avoids repeatedly paying the
             # WAL/synchronous setup cost while independent network/LLM handlers run.
@@ -598,10 +689,9 @@ class CurrentResearchSlaService:
                         return self._run_from_connection(connection, run_id)
                     # A takeover may change tasks without changing run generation/status.
                     self._refresh_execution_projection(connection, run_id, task_state)
-                    for task_id in tuple(unowned_task_ids):
-                        if task_state[task_id].status is not ResearchSchedulerTaskStatus.RUNNING:
-                            running_by_category[task_state[task_id].category] -= 1
-                            unowned_task_ids.remove(task_id)
+                    self._refresh_unowned_tasks(
+                        task_state, unowned_task_ids, running_by_category, recover_unowned
+                    )
                     now = self.clock()
                     if self._deadline_hit(run, now):
                         self._cancel_cached_tasks(
@@ -615,7 +705,8 @@ class CurrentResearchSlaService:
                             future.cancel()
                         return self._finish_cached_run(connection, run, task_state, at=now)
 
-                    for task_id, task in tuple(task_state.items()):
+                    for task in self._selected_tasks(task_state, selected_node_ids):
+                        task_id = task.task_id
                         if task.status is not ResearchSchedulerTaskStatus.PENDING:
                             continue
                         dependency_states = [task_state[item].status for item in task.dependencies]
@@ -649,7 +740,10 @@ class CurrentResearchSlaService:
 
                     launchable: list[ResearchSchedulerTask] = []
                     reserved_by_category = dict(running_by_category)
-                    for task in sorted(task_state.values(), key=lambda item: item.task_id):
+                    for task in sorted(
+                        self._selected_tasks(task_state, selected_node_ids),
+                        key=lambda item: item.task_id,
+                    ):
                         if task.status is not ResearchSchedulerTaskStatus.READY:
                             continue
                         if reserved_by_category[task.category] >= limits[task.category]:
@@ -775,14 +869,13 @@ class CurrentResearchSlaService:
                             )
                         continue
 
-                    states = {task.status for task in task_state.values()}
-                    if not states or states <= {
-                        ResearchSchedulerTaskStatus.COMPLETED,
-                        ResearchSchedulerTaskStatus.FAILED,
-                        ResearchSchedulerTaskStatus.CANCELLED,
-                    }:
+                    if self._all_execution_tasks_terminal(task_state):
                         return self._finish_cached_run(connection, run, task_state, at=self.clock())
                     if unowned_task_ids:
+                        if not recover_unowned:
+                            # External completion is reconciled by the owning continuation.
+                            # Independent ready work has drained; do not convert expiry to retry.
+                            return self._run_from_connection(connection, run_id)
                         recovered = False
                         for task_id in tuple(unowned_task_ids):
                             task = task_state[task_id]
@@ -805,6 +898,10 @@ class CurrentResearchSlaService:
                             continue
                         # Independent ready work has been drained. Do not steal an
                         # unexpired lease or spin while only that branch is blocked.
+                        return self._run_from_connection(connection, run_id)
+                    if selected_node_ids is not None:
+                        # Selected work drained or awaits an unselected dependency.
+                        # Keep unrelated ready/host-waiting tasks in this same run.
                         return self._run_from_connection(connection, run_id)
                     time.sleep(0.01)
         finally:
@@ -1330,16 +1427,22 @@ class CurrentResearchSlaService:
             ),
         )
 
-    def _run(self, run_id: str) -> ResearchSchedulerRun:
-        with self.state.connect() as connection:
+    def get_run(self, run_id: str) -> ResearchSchedulerRun | None:
+        with closing(self.state.connect()) as connection:
             row = connection.execute(
                 "SELECT object_hash FROM research_scheduler_run WHERE run_id=?", (run_id,)
             ).fetchone()
         if row is None:
-            raise ValueError("research scheduler run is unavailable")
+            return None
         return ResearchSchedulerRun.model_validate_json(
             self.objects.get_bytes(str(row["object_hash"]))
         )
+
+    def _run(self, run_id: str) -> ResearchSchedulerRun:
+        run = self.get_run(run_id)
+        if run is None:
+            raise ValueError("research scheduler run is unavailable")
+        return run
 
     def _task(self, task_id: str) -> ResearchSchedulerTask:
         with self.state.connect() as connection:
@@ -1389,6 +1492,7 @@ class CurrentResearchSlaService:
                 task.model_copy(
                     update={
                         "status": ResearchSchedulerTaskStatus.RUNNING,
+                        "dispatch_attempted": True,
                         "lease_owner": f"local-executor:{uuid4().hex}",
                         "lease_expires_at": lease_expires_at,
                         "started_at": at,
@@ -1465,6 +1569,15 @@ class CurrentResearchSlaService:
             task.model_copy(
                 update={
                     "status": status,
+                    "dispatch_attempted": (
+                        True
+                        if status is ResearchSchedulerTaskStatus.RUNNING
+                        else False
+                        if status in {
+                            ResearchSchedulerTaskStatus.READY, ResearchSchedulerTaskStatus.PENDING
+                        }
+                        else task.dispatch_attempted
+                    ),
                     "result_artifact_id": result_artifact_id,
                     "error_code": error_code,
                     "lease_owner": lease_owner,

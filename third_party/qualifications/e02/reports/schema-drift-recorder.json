@@ -1,36 +1,36 @@
 {
-  "schema_version": "capability-qualification-report-v1",
-  "report_id": "58170b73938f6f85a94a3d098b05a003756d0f2927aea50735ad2a4be9a0f483",
-  "capability_id": "schema-drift-recorder",
-  "candidate_version": "sha256:9c19d3a5e104273a08bb576c7c4479f76597db5b39525b4e0a31d515ca58b0e5",
-  "requested_stage": "SHADOW",
   "admitted_stage": "SHADOW",
+  "candidate_version": "sha256:9c19d3a5e104273a08bb576c7c4479f76597db5b39525b4e0a31d515ca58b0e5",
+  "capability_id": "schema-drift-recorder",
   "checks": {
-    "license": "PASS",
-    "terms_of_service": "PASS",
-    "data_rights": "PASS",
-    "provenance": "PASS",
+    "cache_behavior": "PASS",
+    "cost": "PASS",
     "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "PASS",
+    "latency": "PASS",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "PASS",
+    "provenance": "PASS",
     "sbom": "PASS",
     "security_review": "PASS",
-    "maintenance": "PASS",
-    "cost": "PASS",
-    "latency": "PASS",
-    "cache_behavior": "PASS",
-    "offline_behavior": "PASS",
-    "failure_behavior": "PASS",
-    "exit_uninstall": "PASS"
+    "terms_of_service": "PASS"
   },
-  "recorded_validation": "PASS",
-  "controlled_live_validation": "FAIL",
-  "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
   "evidence_object_hashes": [
-    "577cf39d517288e1b389deb611f3c5a3516c963806afa5db9a6a44559a39861d"
+    "fa55b7b430c8ce35dbbb12a08c5a5521ea117844f9b52cfdb4fedf572264a567"
   ],
-  "valid_from": "2026-11-21T10:47:02Z",
   "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
     "END_TO_END_CONTROLLED_LIVE_DRIFT_CAPTURE_NOT_RUN"
-  ]
+  ],
+  "recorded_validation": "PASS",
+  "report_id": "00d1bb2bf3967181a709e42459cc5c915d0378140f6462ddf857000890aa5d27",
+  "requested_stage": "SHADOW",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-11-21T14:23:52Z"
 }

@@ -6,7 +6,6 @@ import io
 import mimetypes
 import os
 import shutil
-import subprocess
 import uuid
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -24,6 +23,7 @@ from astock.reports.policy import ReportPolicy, load_report_policy
 from astock.reports.preferences import PresentationPreferencesRepository
 from astock.reports.validation import validate_docx, validate_pdf, visual_qa_summary
 from astock.research.presentation import audit_public_answer
+from astock.research.process_worker import run_owned_command
 from astock.schemas.presentation import (
     InvestorPresentationModel,
     PublicReportReference,
@@ -757,17 +757,17 @@ class ReportService:
             return None
         probed_at = datetime.now(UTC)
         try:
-            completed = subprocess.run(
+            completed = run_owned_command(
                 [converter, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=self.policy.pdf.probe_timeout_seconds,
-                check=False,
-                env=self._subprocess_environment(self.paths.report_staging),
+                project_root=self.paths.root,
+                timeout_seconds=self.policy.pdf.probe_timeout_seconds,
+                environment=self._subprocess_environment(self.paths.report_staging),
+                max_output_bytes=64 * 1024,
+                merge_stderr=True,
             )
             if completed.returncode != 0:
                 return None
-            first_line = (completed.stdout or completed.stderr).strip().splitlines()
+            first_line = completed.stdout.strip().splitlines()
             converter_version = first_line[0][:120] if first_line else Path(converter).name
             return PdfConverterCapability(
                 probe_id=uuid.uuid4().hex,
@@ -776,7 +776,7 @@ class ReportService:
                 probed_at=probed_at,
                 probe_ok=True,
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, RuntimeError, TimeoutError):
             return None
 
     def _detect_pdf_converter(self) -> str | None:
@@ -803,13 +803,13 @@ class ReportService:
             str(pdf_path.parent),
             str(docx_path),
         ]
-        completed = subprocess.run(
+        completed = run_owned_command(
             command,
-            capture_output=True,
-            text=True,
-            timeout=self.policy.pdf.convert_timeout_seconds,
-            check=False,
-            env=self._subprocess_environment(docx_path.parent),
+            project_root=self.paths.root,
+            timeout_seconds=self.policy.pdf.convert_timeout_seconds,
+            environment=self._subprocess_environment(docx_path.parent),
+            max_output_bytes=1024 * 1024,
+            merge_stderr=True,
         )
         produced = pdf_path.parent / f"{docx_path.stem}.pdf"
         if completed.returncode != 0 or not produced.is_file():

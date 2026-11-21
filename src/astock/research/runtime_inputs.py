@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.financial_integrity.repository import FinancialIntegrityRepository
+from astock.research.institutional import require_active_institutional_inputs
 from astock.research.knowledge_port import KnowledgeSkillProvider
 from astock.research.repository import ResearchRepository
 from astock.research.trading_classification import TradingClassificationService
@@ -381,7 +382,7 @@ class ResearchRunInputResolver:
 
     def _latest_ready_fundamental_model(self, company_id: str, as_of) -> str | None:
         checkpoint = self.state.get_checkpoint("institutional-fundamental-model", company_id)
-        if checkpoint is None:
+        if checkpoint is None or checkpoint["status"] != "READY":
             return None
         artifact_id = str(checkpoint["cursor"].get("artifact_id", ""))
         if not artifact_id:
@@ -391,6 +392,10 @@ class ResearchRunInputResolver:
             return None
         object_hash = str(record["object_hash"])
         if not self.objects.verify(object_hash):
+            return None
+        try:
+            require_active_institutional_inputs(self.state, [object_hash])
+        except ValueError:
             return None
         bundle = FundamentalModelBundle.model_validate_json(self.objects.get_bytes(object_hash))
         if (
@@ -408,7 +413,7 @@ class ResearchRunInputResolver:
         fundamental_artifact_id: str | None,
     ) -> str | None:
         checkpoint = self.state.get_checkpoint("institutional-decision-context", company_id)
-        if checkpoint is None:
+        if checkpoint is None or checkpoint["status"] != "READY":
             return None
         artifact_id = str(checkpoint["cursor"].get("artifact_id", ""))
         if not artifact_id:
@@ -418,6 +423,10 @@ class ResearchRunInputResolver:
             return None
         object_hash = str(record["object_hash"])
         if not self.objects.verify(object_hash):
+            return None
+        try:
+            require_active_institutional_inputs(self.state, [object_hash])
+        except ValueError:
             return None
         context = InstitutionalDecisionContext.model_validate_json(
             self.objects.get_bytes(object_hash)
@@ -450,6 +459,11 @@ class ResearchRunInputResolver:
             missing.add("INSTITUTIONAL_DECISION_CONTEXT_REQUIRED")
             return
         try:
+            require_active_institutional_inputs(self.state, [object_hash])
+        except ValueError:
+            missing.add("INSTITUTIONAL_PREMISE_SUPERSEDED")
+            return
+        try:
             context = InstitutionalDecisionContext.model_validate_json(
                 self.objects.get_bytes(object_hash)
             )
@@ -479,6 +493,11 @@ class ResearchRunInputResolver:
         object_hash = str(record["object_hash"])
         if not self.objects.verify(object_hash):
             missing.add("FUNDAMENTAL_MODEL_BUNDLE_REQUIRED")
+            return
+        try:
+            require_active_institutional_inputs(self.state, [object_hash])
+        except ValueError:
+            missing.add("INSTITUTIONAL_PREMISE_SUPERSEDED")
             return
         try:
             bundle = FundamentalModelBundle.model_validate_json(self.objects.get_bytes(object_hash))

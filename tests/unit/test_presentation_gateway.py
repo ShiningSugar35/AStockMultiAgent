@@ -542,7 +542,9 @@ def test_gateway_never_echoes_internal_investor_text_on_audit_failure() -> None:
     assert "research-plan" not in rendered.text
     assert "NEEDS_INFO" not in rendered.text
     assert "artifact_id" not in rendered.text
-    assert "当前暂无可展示的投资结论" in rendered.text
+    assert "暂时无法可靠呈现投资判断" in rendered.text
+    assert "internal-value" not in rendered.text
+    assert rendered.safe_fallback_used
     assert rendered.audit.safe_to_send
     assert rendered.raw_draft_exposed is False
 

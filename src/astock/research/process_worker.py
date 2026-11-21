@@ -12,12 +12,14 @@ import multiprocessing
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from pathlib import Path
@@ -129,6 +131,7 @@ def _child_entry(
     args: tuple[Any, ...],
     output: Connection,
     start_gate: Any,
+    deadline_reached: Any,
     deadline_at: datetime | None,
     parent_pid: int,
     scratch: str,
@@ -137,15 +140,15 @@ def _child_entry(
     sys.dont_write_bytecode = True
     if os.name != "nt":
         os.setsid()
-    remaining = (
-        None if deadline_at is None else (deadline_at - datetime.now(UTC)).total_seconds()
-    )
+    remaining = None if deadline_at is None else (deadline_at - datetime.now(UTC)).total_seconds()
     end = None if remaining is None else time.monotonic() + max(0.0, remaining)
 
     def watchdog() -> None:
         while os.getppid() == parent_pid and (end is None or time.monotonic() < end):
             sleep_for = 0.05 if end is None else min(0.05, max(0.0, end - time.monotonic()))
             time.sleep(sleep_for)
+        if end is not None and time.monotonic() >= end:
+            deadline_reached.set()
         if os.name != "nt":
             os.killpg(os.getpid(), signal.SIGKILL)
         os._exit(124)
@@ -154,6 +157,7 @@ def _child_entry(
     if remaining is None:
         start_gate.wait()
     elif remaining <= 0 or not start_gate.wait(remaining):
+        deadline_reached.set()
         os._exit(124)
     for key in ("TMP", "TEMP", "TMPDIR", "XDG_CACHE_HOME", "MPLCONFIGDIR", "UV_CACHE_DIR"):
         os.environ[key] = scratch
@@ -263,9 +267,11 @@ class KillableResearchWorker:
         if process.is_alive():
             raise RuntimeError("research worker termination not confirmed")
 
-    def _check_boundary(self, end: float | None) -> None:
+    def _check_boundary(self, end: float | None, deadline_reached: Any = None) -> None:
         if self._cancelled.is_set():
             raise WorkerCancelledError("research worker cancelled")
+        if deadline_reached is not None and deadline_reached.is_set():
+            raise WorkerDeadlineError("research worker watchdog reached the request deadline")
         if end is not None and time.monotonic() >= end:
             raise WorkerDeadlineError("research request deadline expired")
         if self.deadline_at is not None and datetime.now(UTC) >= self.deadline_at:
@@ -289,6 +295,7 @@ class KillableResearchWorker:
         context = multiprocessing.get_context("spawn")
         receive, send = context.Pipe(duplex=False)
         gate = context.Event()
+        deadline_reached = context.Event()
         scratch: str | None = None
         try:
             with self._lock:
@@ -303,6 +310,7 @@ class KillableResearchWorker:
                         self.args,
                         send,
                         gate,
+                        deadline_reached,
                         self.deadline_at,
                         os.getpid(),
                         scratch,
@@ -317,14 +325,14 @@ class KillableResearchWorker:
                 gate.set()
                 send.close()
             while True:
-                self._check_boundary(end)
+                self._check_boundary(end, deadline_reached)
                 if receive.poll(0.05):
                     try:
                         message = json.loads(receive.recv_bytes(8192))
                     except (EOFError, OSError, ValueError) as exc:
-                        self._check_boundary(end)
+                        self._check_boundary(end, deadline_reached)
                         raise RuntimeError("research worker ended without a valid result") from exc
-                    self._check_boundary(end)
+                    self._check_boundary(end, deadline_reached)
                     if not isinstance(message, dict) or message.get("status") != "ok":
                         # No arbitrary child exception text, provider response or private path.
                         kind = (
@@ -341,7 +349,7 @@ class KillableResearchWorker:
                     return artifact_id
                 with self._lock:
                     if not process.is_alive():
-                        self._check_boundary(end)
+                        self._check_boundary(end, deadline_reached)
                         raise RuntimeError("research worker exited without a result")
         finally:
             with self._lock:
@@ -353,6 +361,126 @@ class KillableResearchWorker:
             send.close()
             if scratch is not None:
                 shutil.rmtree(scratch, ignore_errors=True)
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedCommandResult:
+    """Bounded output from a command whose complete process tree has exited."""
+
+    returncode: int
+    stdout: str
+    output_bytes: int
+    worker_pid: int | None
+    owned_worker_reaped: bool
+
+
+def _owned_command_target(
+    command: list[str],
+    cwd: str,
+    environment: dict[str, str],
+    result_path: str,
+    max_output_bytes: int,
+    merge_stderr: bool,
+) -> str:
+    # This callable is reached only after the existing worker start gate/Job.
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if merge_stderr else subprocess.DEVNULL,
+    )
+    assert process.stdout is not None
+    retained = bytearray()
+    overflow = False
+    with process.stdout:
+        while block := process.stdout.read(64 * 1024):
+            remaining = max_output_bytes - len(retained)
+            retained.extend(block[: max(0, remaining)])
+            if len(block) > remaining:
+                overflow = True
+                break
+    # Do not wait on an overflowing child. Closing the enclosing Job/group
+    # kills it and all descendants, including inherited pipe owners.
+    returncode = None if overflow else process.wait()
+    Path(result_path).write_text(
+        json.dumps(
+            {
+                "returncode": returncode,
+                "output": bytes(retained).decode("utf-8", errors="replace"),
+                "output_bytes": len(retained),
+                "output_limit_exceeded": overflow,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return "OwnedCommandResult:" + Path(result_path).parent.name
+
+
+def run_owned_command(
+    command: list[str],
+    *,
+    project_root: Path,
+    timeout_seconds: float,
+    environment: dict[str, str] | None = None,
+    max_output_bytes: int = 1024 * 1024,
+    merge_stderr: bool = False,
+) -> OwnedCommandResult:
+    """Run trusted code/config-selected commands using the single owned launcher.
+
+    Request JSON must never choose arbitrary commands. No exception or receipt
+    exposes command arguments, credentials, SDK output, or environment values.
+    """
+    import math
+
+    if not command or not all(isinstance(item, str) and item for item in command):
+        raise ValueError("owned command must contain nonempty arguments")
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0 or max_output_bytes <= 0:
+        raise ValueError("owned command budgets must be positive and finite")
+    root = project_root.resolve()
+    scratch_root = root / ".scratchpad"
+    scratch_root.mkdir(exist_ok=True)
+    if not scratch_root.resolve().is_relative_to(root):
+        raise ValueError("owned command scratch must remain project-local")
+    temporary = Path(tempfile.mkdtemp(prefix="command-", dir=scratch_root))
+    result_path = temporary / "result.json"
+    child_environment = dict(os.environ if environment is None else environment)
+    for key in ("TEMP", "TMP", "TMPDIR", "XDG_CACHE_HOME", "MPLCONFIGDIR"):
+        child_environment[key] = str(temporary)
+    child_environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    child_environment["RUFF_CACHE_DIR"] = str(temporary / "ruff")
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        child_environment[key] = "1"
+    worker = KillableResearchWorker(
+        _owned_command_target,
+        (command, str(root), child_environment, str(result_path), max_output_bytes, merge_stderr),
+        deadline_at=datetime.now(UTC) + timedelta(seconds=timeout_seconds),
+        project_root=root,
+        scratch_root=temporary / "worker",
+    )
+    try:
+        expected = "OwnedCommandResult:" + temporary.name
+        if worker() != expected or not worker.cleanup_confirmed:
+            raise RuntimeError("owned command result ownership mismatch")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if result["output_limit_exceeded"]:
+            raise RuntimeError("owned command output budget exceeded")
+        return OwnedCommandResult(
+            returncode=int(result["returncode"]),
+            stdout=str(result["output"]),
+            output_bytes=int(result["output_bytes"]),
+            worker_pid=worker.last_pid,
+            owned_worker_reaped=worker.cleanup_confirmed,
+        )
+    finally:
+        if worker.cleanup_confirmed:
+            shutil.rmtree(temporary)
 
 
 def run_company_request(

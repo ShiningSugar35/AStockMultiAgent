@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -23,6 +22,7 @@ from astock.providers.supplemental import (
     _sdk_environment,
     normalize_daily,
 )
+from astock.research.process_worker import WorkerDeadlineError
 from astock.schemas import SourceSnapshot
 from tests.unit.test_current_research_continuation import PROJECT_ROOT, _runtime
 
@@ -345,9 +345,9 @@ def test_worker_timeout_and_error_privacy(tmp_path, monkeypatch):
     _, state, objects = _runtime(tmp_path)
 
     def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired("worker", 20, stderr="do-not-leak")
+        raise WorkerDeadlineError("do-not-leak")
 
-    monkeypatch.setattr(subprocess, "run", timeout)
+    monkeypatch.setattr("astock.providers.supplemental.run_owned_command", timeout)
     with pytest.raises(ProviderError) as caught:
         AKShareHintProvider(objects, state).fetch_hints(request())
     assert caught.value.failure_class is FailureClass.TIMEOUT
@@ -364,8 +364,7 @@ def test_sdk_capture_is_not_a_fabricated_http_snapshot(tmp_path, monkeypatch):
         "adjust": "",
     }
     monkeypatch.setattr(
-        subprocess,
-        "run",
+        "astock.providers.supplemental.run_owned_command",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=0,
             stdout=json.dumps(payload),
@@ -411,8 +410,7 @@ def test_cli_schema_registration():
 def test_sdk_network_failure_is_not_a_missing_capability(tmp_path, monkeypatch):
     _, state, objects = _runtime(tmp_path)
     monkeypatch.setattr(
-        subprocess,
-        "run",
+        "astock.providers.supplemental.run_owned_command",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
             stdout=json.dumps({"failure_class": "NETWORK", "error_type": "ProxyError"}),
@@ -481,14 +479,14 @@ def test_sdk_obeys_transport_profile_and_bounded_fallback(
             ),
         )
 
-    monkeypatch.setattr(subprocess, "run", worker)
+    monkeypatch.setattr("astock.providers.supplemental.run_owned_command", worker)
     rows, _ = cast(Any, service.factory.create(definition.provider_id)).fetch_hints(request())
     assert rows[0]["symbol"] == "600519"
-    assert [("HTTPS_PROXY" in call["env"]) for call in seen] == expected_lanes
-    assert all(0 < call["timeout"] <= definition.timeout_seconds for call in seen)
+    assert [("HTTPS_PROXY" in call["environment"]) for call in seen] == expected_lanes
+    assert all(0 < call["timeout_seconds"] <= definition.timeout_seconds for call in seen)
     for call, inherit in zip(seen, expected_lanes, strict=True):
         if not inherit:
-            assert call["env"]["NO_PROXY"] == "*"
+            assert call["environment"]["NO_PROXY"] == "*"
     assert __import__("os").environ["HTTPS_PROXY"] == "http://127.0.0.1:1"
 
 
@@ -502,7 +500,7 @@ def test_sdk_does_not_route_around_access_or_invalid_data(tmp_path, monkeypatch,
         seen.append(kwargs)
         return SimpleNamespace(returncode=1, stdout=json.dumps({"failure_class": failure}))
 
-    monkeypatch.setattr(subprocess, "run", worker)
+    monkeypatch.setattr("astock.providers.supplemental.run_owned_command", worker)
     with pytest.raises(ProviderError):
         cast(Any, service.factory.create("akshare-reference-hints")).fetch_hints(request())
     assert len(seen) == 1

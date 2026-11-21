@@ -38,6 +38,7 @@ astock = "astock.cli:app"
 [dependency-groups]
 dev = [
   "hypothesis>=6.150.0,<7",
+  "import-linter>=2.17,<3",
   "pyright>=1.1.408,<2",
   "pytest>=9.0.0,<10",
   "pytest-cov>=7.0.0,<8",
@@ -70,3 +71,46 @@ pythonVersion = "3.12"
 typeCheckingMode = "standard"
 include = ["src", "tests"]
 exclude = ["runtime", ".venv"]
+
+[tool.importlinter]
+root_package = "astock"
+
+[[tool.importlinter.contracts]]
+name = "Core and schemas stay below business services"
+type = "forbidden"
+source_modules = ["astock.core", "astock.schemas"]
+forbidden_modules = [
+  "astock.providers", "astock.research", "astock.portfolio",
+  "astock.paper_trading", "astock.investor_orchestration", "astock.reports",
+]
+
+[[tool.importlinter.contracts]]
+name = "Providers cannot orchestrate research or write portfolios"
+type = "forbidden"
+source_modules = ["astock.providers"]
+forbidden_modules = [
+  "astock.research", "astock.portfolio", "astock.paper_trading",
+  "astock.investor_orchestration",
+]
+allow_indirect_imports = true
+# Fixed subprocess adapters reuse the one owned launcher; no business research calls.
+ignore_imports = [
+  "astock.providers.mootdx_fallback -> astock.research.process_worker",
+  "astock.providers.supplemental -> astock.research.process_worker",
+]
+unmatched_ignore_imports_alerting = "error"
+
+[[tool.importlinter.contracts]]
+name = "Research has no new account or execution dependencies"
+type = "forbidden"
+source_modules = ["astock.research"]
+forbidden_modules = ["astock.paper_trading", "astock.external_accounts"]
+allow_indirect_imports = true
+# Existing read-only readiness/market-rule/verification consumers, audited by name.
+ignore_imports = [
+  "astock.research.runtime_readiness -> astock.paper_trading.ledger",
+  "astock.research.runtime -> astock.paper_trading.operation",
+  "astock.research.trade_view -> astock.paper_trading.operation",
+  "astock.research.trading_classification -> astock.paper_trading.operation",
+]
+unmatched_ignore_imports_alerting = "error"

@@ -52,6 +52,7 @@ class ReceiptProjection(SimpleNamespace):
         return {
             "receipt_id": self.receipt_id,
             "receipt_hash": self.receipt_hash,
+            "account_id": self.request_contract.account_id,
             "as_of": self.as_of.isoformat(),
             "published": self.publication.formal_recommendation_allowed,
         }
@@ -66,6 +67,7 @@ def receipt() -> Any:
     return ReceiptProjection(
         receipt_id="r",
         receipt_hash="b" * 64,
+        request_contract=SimpleNamespace(account_id=None),
         as_of=NOW,
         holding_reviews=(),
         publication=SimpleNamespace(formal_recommendation_allowed=True, status="PUBLISH"),

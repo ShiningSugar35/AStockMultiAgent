@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.schemas.reference_data import DailyBarObservation, DatasetReleaseManifest
+from astock.schemas.research_team import MarketContextPack
 from astock.schemas.technical import TechnicalIndicatorSnapshot
 from astock.technical.policy import TechnicalAnalysisPolicy
 from astock.technical.service import SHANGHAI, TechnicalAnalysisService
@@ -63,6 +65,7 @@ def analyze_registered_daily(
     as_of: datetime | None = None,
     parquet_root: Path | None = None,
     register: bool = False,
+    market_context: MarketContextPack | None = None,
 ) -> TechnicalIndicatorSnapshot:
     from astock.market_data.official_calendar import load_official_trading_calendar
 
@@ -80,6 +83,15 @@ def analyze_registered_daily(
     boundary = boundary.astimezone(UTC)
     if manifest.available_to_system_at > boundary:
         raise ValueError("daily release is unavailable at this decision boundary")
+    if market_context is not None:
+        if (
+            market_context.daily_release_artifact_id != artifact_id
+            or market_context.daily_release_object_hash != source_hash
+            or market_context.company_id != bars[-1].symbol
+            or market_context.current_close != bars[-1].close
+            or market_context.as_of != boundary
+        ):
+            raise ValueError("technical source does not match the market context binding")
     calendar = load_official_trading_calendar(calendar_path)
     expected = calendar.open_dates(
         bars[-1].market,
@@ -111,3 +123,42 @@ def analyze_registered_daily(
             input_hashes=[source_hash, snapshot.policy_sha256, snapshot.context_sha256],
         )
     return snapshot
+
+def attach_market_context(
+    state: StateStore,
+    objects: ObjectStore,
+    context: MarketContextPack,
+    *,
+    policy: TechnicalAnalysisPolicy,
+    calendar_path: Path,
+    parquet_root: Path | None = None,
+) -> tuple[MarketContextPack, TechnicalIndicatorSnapshot]:
+    """Enrich an existing context from its exact registered daily parent.
+
+    No network or caller-supplied indicator values are accepted. Invalid parent,
+    company, time or price bindings fail before a derived artifact is persisted;
+    callers may keep their original context and surface the missing provenance.
+    """
+    with closing(state.connect()) as connection:
+        row = connection.execute(
+            "SELECT release_id FROM market_reference_release "
+            "WHERE manifest_artifact_id=? AND manifest_object_hash=?",
+            (context.daily_release_artifact_id, context.daily_release_object_hash),
+        ).fetchone()
+    if row is None:
+        raise ValueError("market context has no matching registered daily release")
+    snapshot = analyze_registered_daily(
+        state, objects, str(row["release_id"]),
+        policy=policy, calendar_path=calendar_path, as_of=context.as_of,
+        parquet_root=parquet_root, register=True, market_context=context,
+    )
+    artifact_id = "TechnicalIndicatorSnapshot:" + snapshot.snapshot_id.removeprefix("technical:")
+    record = state.artifact_record(artifact_id)
+    if record is None:
+        raise ValueError("technical snapshot registration is missing")
+    enriched = MarketContextPack.model_validate({
+        **context.model_dump(mode="python"),
+        "technical_snapshot_artifact_id": artifact_id,
+        "technical_snapshot_object_hash": str(record["object_hash"]),
+    })
+    return enriched, snapshot

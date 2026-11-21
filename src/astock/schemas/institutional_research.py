@@ -7,11 +7,12 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from astock.schemas.base import AStockModel
 from astock.schemas.entry_quality import EntryQualityState
 from astock.schemas.evidence import ClaimType, EvidenceGrade, FactStatus
+from astock.schemas.market import Market
 
 _SHA256 = r"^[0-9a-f]{64}$"
 
@@ -384,10 +385,36 @@ class CompanySegmentEconomics(AStockModel):
     metrics: list[EvidenceBoundMetric] = Field(default_factory=list)
 
 
+class OperatingReconciliation(AStockModel):
+    """A same-period, same-unit reconciliation, including explicit eliminations."""
+
+    total: EvidenceBoundMetric
+    components: dict[str, EvidenceBoundMetric] = Field(min_length=1)
+    eliminations: EvidenceBoundMetric
+    tolerance: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @model_validator(mode="after")
+    def reconcile(self) -> OperatingReconciliation:
+        metrics = [self.total, self.eliminations, *self.components.values()]
+        if self.total.period_end is None or any(
+            item.period_end != self.total.period_end or item.unit != self.total.unit
+            or not item.value.is_finite() for item in metrics
+        ):
+            raise ValueError("operating reconciliation requires the same finite unit and period")
+        difference = self.total.value - (
+            sum((item.value for item in self.components.values()), Decimal("0"))
+            + self.eliminations.value
+        )
+        if abs(difference) > self.tolerance:
+            raise ValueError("operating components do not reconcile to the total")
+        return self
+
+
 class CompanyEconomicsDraft(AStockModel):
     archetype: CompanyArchetype
     archetype_basis: EvidenceBoundStatement
     segments: list[CompanySegmentEconomics] = Field(default_factory=list)
+    reconciliations: list[OperatingReconciliation] = Field(default_factory=list, max_length=16)
     pricing_power: EvidenceBoundStatement | None = None
     customer_concentration: EvidenceBoundStatement | None = None
     supplier_dependency: EvidenceBoundStatement | None = None
@@ -569,6 +596,29 @@ class DriverTree(AStockModel):
         return self
 
 
+class DriverAssumptionCondition(AStockModel):
+    lower_bound: Decimal | None = None
+    upper_bound: Decimal | None = None
+    invalidation_condition: str = Field(min_length=1)
+    next_review_event: str = Field(min_length=1)
+    next_review_at: AwareDatetime | None = None
+    counter_evidence_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> DriverAssumptionCondition:
+        if any(
+            value is not None and not value.is_finite()
+            for value in (self.lower_bound, self.upper_bound)
+        ):
+            raise ValueError("driver assumption bounds must be finite")
+        if (
+            self.lower_bound is not None and self.upper_bound is not None
+            and self.lower_bound > self.upper_bound
+        ):
+            raise ValueError("driver assumption range is reversed")
+        return self
+
+
 class DriverInputValue(AStockModel):
     node_id: str = Field(min_length=1)
     period_end: date
@@ -577,9 +627,28 @@ class DriverInputValue(AStockModel):
     claim_ids: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
     provenance_note: str = Field(min_length=1)
+    unit: str | None = None
+    epistemic_type: InstitutionalClaimType = InstitutionalClaimType.VALUATION_ASSUMPTION
+    verification: DriverAssumptionCondition | None = None
 
     @model_validator(mode="after")
     def validate_lineage(self) -> DriverInputValue:
+        if not self.value.is_finite():
+            raise ValueError("driver input must be finite")
+        if self.epistemic_type not in {
+            InstitutionalClaimType.FORECAST, InstitutionalClaimType.VALUATION_ASSUMPTION,
+            InstitutionalClaimType.MANAGEMENT_ASSERTION,
+        }:
+            raise ValueError(
+                "future driver input is a forecast or assumption, not an observed fact"
+            )
+        if self.verification is not None:
+            lower, upper = self.verification.lower_bound, self.verification.upper_bound
+            if (
+                (lower is not None and self.value < lower)
+                or (upper is not None and self.value > upper)
+            ):
+                raise ValueError("driver input is outside its declared range")
         if self.claim_ids != sorted(set(self.claim_ids)):
             raise ValueError("driver assumption claim ids must be sorted and unique")
         if self.evidence_ids != sorted(set(self.evidence_ids)):
@@ -648,6 +717,7 @@ class ForecastScenarioPack(AStockModel):
     assumption_claim_ids: list[str]
     assumption_evidence_ids: list[str]
     assumption_notes: list[str]
+    driver_inputs: list[DriverInputValue] = Field(default_factory=list)
 
 
 class ForecastBuildRequest(AStockModel):
@@ -691,6 +761,77 @@ class ForecastPack(AStockModel):
         return self
 
 
+class ForecastEventDefinition(BaseModel):
+    """A fixed event predicate; unsupported kinds remain explicit hypotheses."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    kind: str = Field(default="FINANCIAL_THRESHOLD", pattern=r"^[A-Z][A-Z0-9_]{0,63}$")
+    description: str = Field(min_length=1, max_length=2000)
+    market: Market
+    period_end: date
+    metric: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,63}$")
+    comparison: Literal["GT", "GE", "LT", "LE"] | None = None
+    threshold: Decimal | None = Field(default=None, allow_inf_nan=False)
+    unit: str | None = Field(default=None, min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def defined(self) -> ForecastEventDefinition:
+        if self.market is Market.INDEX:
+            raise ValueError("forecast events require a listed company")
+        if self.kind == "FINANCIAL_THRESHOLD" and (
+            self.metric is None or self.comparison is None or self.threshold is None
+            or self.unit is None or (self.period_end.month, self.period_end.day) != (12, 31)
+        ):
+            raise ValueError("financial events require an annual metric, threshold, and unit")
+        return self
+
+
+class ForecastEventBuildRequest(BaseModel):
+    """No caller clock, outcome label, or claimed certification is accepted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    forecast_artifact_id: str = Field(min_length=1)
+    definition: ForecastEventDefinition
+    probability: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    probability_basis: str = Field(min_length=1, max_length=4000)
+    source_group: str = Field(min_length=1, max_length=200)
+
+
+class ForecastEventProbability(AStockModel):
+    """An immutable, uncalibrated judgement bound to a registered forecast."""
+
+    schema_version: str = Field(
+        default="forecast-event-probability-v1", pattern=r"^forecast-event-probability-v1$",
+    )
+    event_id: str = Field(min_length=1)
+    company_id: str = Field(pattern=r"^\d{6}$")
+    frozen_at: AwareDatetime
+    forecast_artifact_id: str = Field(min_length=1)
+    forecast_object_hash: str = Field(pattern=_SHA256)
+    driver_tree_artifact_id: str = Field(min_length=1)
+    driver_tree_object_hash: str = Field(pattern=_SHA256)
+    definition: ForecastEventDefinition
+    probability: Decimal = Field(ge=0, le=1, allow_inf_nan=False)
+    probability_basis: str = Field(min_length=1, max_length=4000)
+    source_group: str = Field(min_length=1, max_length=200)
+    epistemic_status: Literal["FORECAST"] = "FORECAST"
+    calibrated_probability: Literal[False] = False
+    source_artifact_ids: list[str]
+    source_object_hashes: list[str]
+
+    @model_validator(mode="after")
+    def source_binding(self) -> ForecastEventProbability:
+        if self.source_artifact_ids != sorted({
+            self.forecast_artifact_id, self.driver_tree_artifact_id,
+        }) or self.source_object_hashes != sorted({
+            self.forecast_object_hash, self.driver_tree_object_hash,
+        }):
+            raise ValueError("event sources must bind its exact forecast and driver tree")
+        if self.created_at != self.frozen_at:
+            raise ValueError("event creation must equal its server freeze time")
+        return self
+
+
 class ValuationMethod(StrEnum):
     DCF_FCFF = "DCF_FCFF"
     SOTP = "SOTP"
@@ -700,12 +841,58 @@ class ValuationMethod(StrEnum):
     SCENARIO_VALUE = "SCENARIO_VALUE"
 
 
+class EquityValueAdjustments(AStockModel):
+    """Explicit consolidated-EV to fully diluted parent-equity adjustments, in CNY.
+
+    Cash already netted in net_debt must not be counted again as non-operating assets.
+    Explicit zero means the author assessed applicability; absence is not zero.
+    """
+
+    non_operating_assets_excluding_cash: Decimal = Field(ge=0)
+    minority_interests: Decimal = Field(ge=0)
+    other_senior_claims: Decimal = Field(ge=0)
+    share_count_basis: Literal["FULLY_DILUTED"]
+    basis_note: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def finite(self) -> EquityValueAdjustments:
+        if not all(value.is_finite() for value in (
+            self.non_operating_assets_excluding_cash, self.minority_interests,
+            self.other_senior_claims,
+        )):
+            raise ValueError("equity bridge adjustments must be finite")
+        return self
+
+
+class DriverSensitivityRequest(AStockModel):
+    node_id: str = Field(min_length=1)
+    period_end: date
+    lower: Decimal
+    upper: Decimal
+    grid_points: int = Field(default=17, ge=3, le=65)
+
+    @model_validator(mode="after")
+    def bounded(self) -> DriverSensitivityRequest:
+        if not self.lower.is_finite() or not self.upper.is_finite() or self.lower >= self.upper:
+            raise ValueError("driver search requires a finite increasing domain")
+        return self
+
+
+class DriverSensitivityPoint(AStockModel):
+    node_id: str
+    period_end: date
+    unit: str
+    value: Decimal
+    per_share_value: Decimal
+
+
 class ValuationScenarioAssumption(AStockModel):
     scenario: ForecastScenario
     method: ValuationMethod
     discount_rate: Decimal | None = None
     terminal_growth: Decimal | None = None
-    net_debt: Decimal = Decimal("0")
+    net_debt: Decimal | None = None
+    equity_adjustments: EquityValueAdjustments | None = None
     shares_outstanding: Decimal = Field(gt=0)
     normalized_metric: Decimal | None = None
     valuation_multiple: Decimal | None = None
@@ -731,7 +918,13 @@ class ValuationSensitivityPoint(AStockModel):
 
 
 class MarketImpliedExpectation(AStockModel):
-    expectation: Literal["IMPLIED_TERMINAL_GROWTH", "IMPLIED_FCFF_SCALE"]
+    expectation: Literal[
+        "IMPLIED_TERMINAL_GROWTH", "IMPLIED_FCFF_SCALE", "IMPLIED_OPERATING_DRIVER"
+    ]
+    driver_node_id: str | None = None
+    period_end: date | None = None
+    unit: str | None = None
+    solution_kind: str | None = None
     scenario: ForecastScenario
     implied_value: Decimal | None = None
     status: InstitutionalArtifactStatus
@@ -779,6 +972,9 @@ class ValuationBuildRequest(AStockModel):
     company_economics_artifact_id: str = Field(min_length=1)
     market_price_anchor: MarketPriceAnchor | None = None
     scenario_assumptions: list[ValuationScenarioAssumption] = Field(min_length=3, max_length=3)
+    driver_sensitivity_requests: list[DriverSensitivityRequest] = Field(
+        default_factory=list, max_length=8
+    )
     invalidation_conditions: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -809,6 +1005,7 @@ class ValuationPack(AStockModel):
     value_range_high: Decimal
     market_implied_expectations: list[MarketImpliedExpectation]
     sensitivity_table: list[ValuationSensitivityPoint]
+    driver_sensitivity: list[DriverSensitivityPoint] = Field(default_factory=list)
     market_price_anchor: MarketPriceAnchor | None = None
     assumption_claim_ids: list[str]
     assumption_evidence_ids: list[str]
@@ -891,6 +1088,9 @@ class InstitutionalResearchFinalizeRequest(AStockModel):
     market_price_anchor: MarketPriceAnchor | None = None
     valuation_scenarios: list[ValuationScenarioAssumption] = Field(min_length=3, max_length=3)
     valuation_invalidation_conditions: list[str] = Field(min_length=1)
+    driver_sensitivity_requests: list[DriverSensitivityRequest] = Field(
+        default_factory=list, max_length=8
+    )
 
     @model_validator(mode="after")
     def validate_finalize(self) -> InstitutionalResearchFinalizeRequest:
@@ -905,6 +1105,23 @@ class InstitutionalResearchFinalizeRequest(AStockModel):
         return self
 
 
+class SampledExpectationComparison(AStockModel):
+    source_artifact_id: str
+    source_object_hash: str = Field(pattern=_SHA256)
+    metric: str
+    target_fiscal_year: int
+    unit: str
+    system_forecast: Decimal | None = None
+    sampled_median: Decimal | None = None
+    difference: Decimal | None = None
+    sample_count: int = Field(ge=0)
+    institution_count: int = Field(ge=0)
+    source_groups: list[str]
+    status: Literal["COMPARABLE", "NOT_COMPARABLE"]
+    reason_codes: list[str] = Field(default_factory=list)
+    full_market_consensus: Literal[False] = False
+
+
 class InstitutionalDecisionContextDraft(AStockModel):
     decision_question: str = Field(min_length=1)
     decision_horizon_end: date
@@ -913,6 +1130,7 @@ class InstitutionalDecisionContextDraft(AStockModel):
     key_driver_ids: list[str] = Field(min_length=3, max_length=5)
     competing_hypotheses: list[EvidenceBoundStatement] = Field(min_length=1)
     portfolio_context: str | None = None
+    sampled_forecast_artifact_ids: list[str] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def validate_context(self) -> InstitutionalDecisionContextDraft:
@@ -943,6 +1161,7 @@ class InstitutionalDecisionContext(AStockModel):
     fundamental_model_bundle_artifact_id: str = Field(min_length=1)
     fundamental_model_bundle_object_hash: str = Field(pattern=_SHA256)
     draft: InstitutionalDecisionContextDraft
+    sampled_expectations: list[SampledExpectationComparison] = Field(default_factory=list)
     claim_ids: list[str]
     evidence_ids: list[str]
     source_artifact_ids: list[str]
@@ -1040,6 +1259,9 @@ __all__ = [
     "EvidenceSufficiencyRequest",
     "EvidenceSufficiencyState",
     "ForecastBuildRequest",
+    "ForecastEventBuildRequest",
+    "ForecastEventDefinition",
+    "ForecastEventProbability",
     "ForecastPack",
     "ForecastPeriod",
     "ForecastScenario",

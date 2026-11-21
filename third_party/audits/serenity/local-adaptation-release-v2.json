@@ -16,7 +16,7 @@
     },
     {
       "path": "src/astock/cli.py",
-      "sha256": "18cbe2c49383e1e47205ef59d86ae6af49b8c01643935e2da8ace67b9483d4de",
+      "sha256": "27ee6df76fe779dab78a07aba61bf11fdb7f9a3db145c8a96c99e1c0a5a6ce51",
       "purpose": "shared Serenity local adaptation"
     },
     {
@@ -41,12 +41,12 @@
     },
     {
       "path": "src/astock/research/runtime.py",
-      "sha256": "dab0ea283b9b228d1195b2fc0714531eb52f45867fb7c65634659b4e4fca8c5f",
+      "sha256": "2392ecdcf117c00717fa0e16af74fd7d617c982e62e2782edf4226b6d1c3cb93",
       "purpose": "shared Serenity local adaptation"
     },
     {
       "path": "src/astock/research/runtime_inputs.py",
-      "sha256": "ce353d871020760130efba92a5ecff8ccd0149390bf7d7135aad5d5dc2eecf55",
+      "sha256": "59731aa4f469dfd6429eb2edf29e1c22cf057a3938b0299c0cc8cc1c38a1844b",
       "purpose": "shared Serenity local adaptation"
     },
     {
@@ -91,7 +91,7 @@
     },
     {
       "path": "src/astock/schemas/research_runtime.py",
-      "sha256": "2dd2df087a3727b6ce1abc02bd9048191a8d7f634db0e13cbe7d0c4cef39f4cd",
+      "sha256": "896da51088234b91653744a4d1a75bc9ec4e5fc5ea061ab28da4f90ed82bfbd8",
       "purpose": "shared Serenity local adaptation"
     },
     {
@@ -110,6 +110,6 @@
       "purpose": "shared Serenity local adaptation"
     }
   ],
-  "local_adaptation_sha256": "f3343055e64c4c9e40b97689517c1530fbf07a1294aa777e9e11325091075dd0",
+  "local_adaptation_sha256": "1e44238cc1f372d5441893dfdeb99b6284f1251f87927c4abbef188fb62159d8",
   "upgrade_policy": "The active local adaptation audit is updated in place when current implementation changes; upstream third-party source audit manifests remain independently frozen."
 }

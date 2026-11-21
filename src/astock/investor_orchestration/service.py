@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from contextlib import closing
 from typing import Any, NamedTuple
 
+from astock.core.errors import StorageError
 from astock.investor_orchestration.capabilities import (
     CapabilityDependencyContext,
     CapabilityExecutionResult,
@@ -33,6 +36,10 @@ from astock.investor_orchestration.recommendation_fulfillment import (
 )
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
+from astock.schemas.research_continuation import (
+    CurrentResearchContinuation,
+    PublicRecoveryCoverage,
+)
 
 
 class CurrentRegisteredExecution(NamedTuple):
@@ -315,6 +322,44 @@ class InvestorOrchestrationService:
         )
         return preflight, plan, coverage
 
+    def _registered_public_recovery(
+        self, request: InvestorRequestEnvelope,
+    ) -> tuple[PublicRecoveryCoverage, ...]:
+        verifier = self.gateway.verifier
+        if verifier is None or not request.entity_ids:
+            return ()
+        from astock.research.recovery_evidence import build_public_recovery_coverage
+
+        with closing(verifier.state.connect()) as connection:
+            rows = connection.execute(
+                "SELECT cursor_json,object_hash FROM checkpoint "
+                "WHERE scope_type='current-research-continuation' "
+                "AND json_extract(cursor_json,'$.request_id')=? "
+                "ORDER BY committed_at,scope_key LIMIT 33", (request.request_id,),
+            ).fetchall()
+        if len(rows) > 32:
+            return ()
+        proofs = []
+        for row in rows:
+            try:
+                identity = json.loads(row["cursor_json"])["artifact_id"]
+                registered = verifier.state.artifact_record(identity)
+                if (registered is None or registered["type"] != "CurrentResearchContinuation"
+                        or registered["object_hash"] != row["object_hash"]
+                        or verifier.objects.path_for(row["object_hash"]).stat().st_size > 4194304):
+                    return ()
+                record = CurrentResearchContinuation.model_validate_json(
+                    verifier.objects.get_bytes(row["object_hash"])
+                )
+                if record.request_id != request.request_id:
+                    return ()
+                proofs.append(build_public_recovery_coverage(
+                    verifier.state, verifier.objects, record,
+                ))
+            except (OSError, ValueError, KeyError, TypeError, StorageError):
+                return ()
+        return tuple(proofs)
+
     def closure_status(
         self,
         request: InvestorRequestEnvelope,
@@ -338,6 +383,7 @@ class InvestorOrchestrationService:
             plan,
             coverage,
             automatic_resolution_exhausted=automatic_resolution_exhausted,
+            public_recovery_evidence=self._registered_public_recovery(request),
             private_user_input_required=private_user_input_required,
             private_input_capabilities=private_input_capabilities,
             automatic_budget_exhausted=automatic_budget_exhausted,

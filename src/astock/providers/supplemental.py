@@ -3,11 +3,11 @@
 A hint is not a certified financial fact, full-universe proof or recommendation.
 AKShare preserves its EASTMONEY origin; optional credentials never enter URLs.
 """
+
 from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import time
 from datetime import UTC, date, datetime
@@ -23,12 +23,14 @@ from astock.core.errors import FailureClass, ProviderError
 from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.project_root import resolve_project_root
+from astock.core.request_budget import current_request_budget
 from astock.core.state import StateStore
 from astock.providers.base import HttpProviderBase
 from astock.providers.config import load_provider_registry
 from astock.providers.http_resilience import HttpClientLike
 from astock.providers.runtime import ProviderFactory, TransportProfile, load_transport_profiles
 from astock.providers.tushare_structured import TushareQueryRequest, TushareStructuredProvider
+from astock.research.process_worker import WorkerDeadlineError, run_owned_command
 from astock.schemas import Market, SourceSnapshot
 
 
@@ -92,9 +94,19 @@ def _sdk_environment(*, trust_env: bool = True) -> dict[str, str]:
     local = root / ".ai-bridge" / "provider-sdk" / "akshare"
     local.mkdir(parents=True, exist_ok=True)
     allowed = {
-        "SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "PROCESSOR_ARCHITECTURE",
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE",
-        "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATH",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
     }
     env = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     if not trust_env:
@@ -102,9 +114,18 @@ def _sdk_environment(*, trust_env: bool = True) -> dict[str, str]:
         # NO_PROXY=* also suppresses requests' Windows system-proxy discovery.
         # This child-only environment never changes the user's proxy configuration.
         env["NO_PROXY"] = "*"
-    env.update({key: str(local) for key in (
-        "TEMP", "TMP", "TMPDIR", "XDG_CACHE_HOME", "MPLCONFIGDIR",
-    )})
+    env.update(
+        {
+            key: str(local)
+            for key in (
+                "TEMP",
+                "TMP",
+                "TMPDIR",
+                "XDG_CACHE_HOME",
+                "MPLCONFIGDIR",
+            )
+        }
+    )
     env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"})
     return env
 
@@ -113,7 +134,10 @@ class AKShareHintProvider(_HintPersistence):
     provider_id = "akshare-reference-hints"
 
     def __init__(
-        self, objects: ObjectStore, state: StateStore, timeout_seconds: float = 20,
+        self,
+        objects: ObjectStore,
+        state: StateStore,
+        timeout_seconds: float = 20,
         transport_profile: TransportProfile | None = None,
     ) -> None:
         self.object_store, self.state = objects, state
@@ -121,7 +145,8 @@ class AKShareHintProvider(_HintPersistence):
         self.transport_profile = transport_profile
 
     def fetch_hints(
-        self, request: SupplementalRequest,
+        self,
+        request: SupplementalRequest,
     ) -> tuple[list[dict[str, str]], SourceSnapshot]:
         if request.capability != "market.reference.hint":
             raise ValueError("AKShare hint capability mismatch")
@@ -142,7 +167,8 @@ class AKShareHintProvider(_HintPersistence):
         limit = profile.max_attempts if profile else 1
         deadline = time.monotonic() + self.timeout_seconds
         last_error = ProviderError(
-            "AKShare recovery budget exhausted", failure_class=FailureClass.TIMEOUT,
+            "AKShare recovery budget exhausted",
+            failure_class=FailureClass.TIMEOUT,
         )
         for attempt in range(limit):
             remaining = deadline - time.monotonic()
@@ -164,7 +190,7 @@ class AKShareHintProvider(_HintPersistence):
                 if exc.failure_class not in {FailureClass.NETWORK, FailureClass.TIMEOUT}:
                     raise
                 if profile and attempt + 1 < limit:
-                    delay = profile.backoff_seconds * (2 ** attempt)
+                    delay = profile.backoff_seconds * (2**attempt)
                     if delay >= deadline - time.monotonic():
                         break
                     if delay > 0:
@@ -173,18 +199,41 @@ class AKShareHintProvider(_HintPersistence):
 
     @staticmethod
     def _worker_once(
-        request: SupplementalRequest, *, timeout: float, trust_env: bool,
+        request: SupplementalRequest,
+        *,
+        timeout: float,
+        trust_env: bool,
     ) -> dict[str, Any]:
+        budget = current_request_budget()
+        if budget is not None:
+            budget.reserve_attempt()
+            timeout = min(timeout, budget.remaining_seconds())
         try:
-            result = subprocess.run(
-                [sys.executable, "-B", "-m", "astock.providers.supplemental_worker",
-                 request.symbol, request.start.isoformat(), request.end.isoformat(), str(timeout)],
-                capture_output=True, text=True, encoding="utf-8", errors="strict",
-                timeout=timeout, check=False, env=_sdk_environment(trust_env=trust_env),
+            result = run_owned_command(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "astock.providers.supplemental_worker",
+                    request.symbol,
+                    request.start.isoformat(),
+                    request.end.isoformat(),
+                    str(timeout),
+                ],
+                project_root=resolve_project_root(),
+                timeout_seconds=timeout,
+                environment=_sdk_environment(trust_env=trust_env),
+                max_output_bytes=8 * 1024 * 1024,
             )
-        except subprocess.TimeoutExpired:
+        except WorkerDeadlineError:
             raise ProviderError(
-                "AKShare bounded worker timed out", failure_class=FailureClass.TIMEOUT,
+                "AKShare bounded worker timed out",
+                failure_class=FailureClass.TIMEOUT,
+            ) from None
+        except (RuntimeError, OSError):
+            raise ProviderError(
+                "AKShare owned worker failed",
+                failure_class=FailureClass.CAPABILITY_UNAVAILABLE,
             ) from None
         if result.returncode != 0:
             try:
@@ -232,12 +281,19 @@ class TushareHintProvider:
     provider_id = "tushare-reference-hints"
 
     def __init__(
-        self, objects: ObjectStore, state: StateStore, *,
-        client: httpx.Client | None = None, timeout_seconds: float = 20,
+        self,
+        objects: ObjectStore,
+        state: StateStore,
+        *,
+        client: httpx.Client | None = None,
+        timeout_seconds: float = 20,
         project_root: Path | None = None,
     ) -> None:
         self.structured = TushareStructuredProvider(
-            objects, state, client=client, project_root=project_root,
+            objects,
+            state,
+            client=client,
+            project_root=project_root,
             timeout_seconds=timeout_seconds,
         )
         self.state = state
@@ -246,19 +302,22 @@ class TushareHintProvider:
         self.structured.close()
 
     def fetch_hints(
-        self, request: SupplementalRequest,
+        self,
+        request: SupplementalRequest,
     ) -> tuple[list[dict[str, str]], SourceSnapshot]:
         if request.capability != "market.reference.hint":
             raise ValueError("Tushare hint capability mismatch")
-        result = self.structured.query(TushareQueryRequest(
-            endpoint="daily",
-            params={
-                "ts_code": request.ts_code,
-                "start_date": request.start.strftime("%Y%m%d"),
-                "end_date": request.end.strftime("%Y%m%d"),
-            },
-            fields=("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"),
-        ))
+        result = self.structured.query(
+            TushareQueryRequest(
+                endpoint="daily",
+                params={
+                    "ts_code": request.ts_code,
+                    "start_date": request.start.strftime("%Y%m%d"),
+                    "end_date": request.end.strftime("%Y%m%d"),
+                },
+                fields=("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"),
+            )
+        )
         snapshot = self.state.get_snapshot(result["source_snapshot_id"])
         if snapshot is None:
             raise _invalid("Tushare shared query snapshot is unavailable")
@@ -269,7 +328,8 @@ class FinnhubNewsHintProvider(_CredentialHttpProvider):
     provider_id = "finnhub-news-hints"
 
     def fetch_hints(
-        self, request: SupplementalRequest,
+        self,
+        request: SupplementalRequest,
     ) -> tuple[list[dict[str, str]], SourceSnapshot]:
         if request.capability not in {"news.discovery.lead", "news.global.lead"}:
             raise ValueError("Finnhub is a global news lead, not certified A-share coverage")
@@ -278,7 +338,9 @@ class FinnhubNewsHintProvider(_CredentialHttpProvider):
         for credential in self.credentials("FINNHUB_API_KEY"):
             try:
                 response, _ = self._request(
-                    "GET", "https://finnhub.io/api/v1/news", params={"category": "general"},
+                    "GET",
+                    "https://finnhub.io/api/v1/news",
+                    params={"category": "general"},
                     headers={"X-Finnhub-Token": credential},
                 )
             except ProviderError as exc:
@@ -314,14 +376,19 @@ class FinnhubNewsHintProvider(_CredentialHttpProvider):
             except (KeyError, TypeError, ValueError, OverflowError, OSError):
                 continue
             if (
-                not headline or not url.startswith("https://")
+                not headline
+                or not url.startswith("https://")
                 or not request.start <= published.date() <= request.end
             ):
                 continue
-            rows.append({
-                "title": headline, "url": url, "published_at": published.isoformat(),
-                "publisher": str(item.get("source", "")),
-            })
+            rows.append(
+                {
+                    "title": headline,
+                    "url": url,
+                    "published_at": published.isoformat(),
+                    "publisher": str(item.get("source", "")),
+                }
+            )
         return rows, snapshot
 
 
@@ -335,7 +402,8 @@ def _credential(name: str, *, project_root: Path | None = None) -> str:
             failure_class=FailureClass.DATA_QUALITY,
         )
     raise ProviderError(
-        "Optional provider is not configured", failure_class=FailureClass.AUTH_REQUIRED,
+        "Optional provider is not configured",
+        failure_class=FailureClass.AUTH_REQUIRED,
     )
 
 
@@ -343,9 +411,7 @@ def _credentials(name: str, *, project_root: Path | None = None) -> tuple[str, .
     resolution = resolve_credential(name, project_root=project_root)
     if resolution.configured and resolution.value is not None:
         values = tuple(
-            dict.fromkeys(
-                item.strip() for item in resolution.value.split(",") if item.strip()
-            )
+            dict.fromkeys(item.strip() for item in resolution.value.split(",") if item.strip())
         )
         if not values or len(values) > 8:
             raise ProviderError(
@@ -359,16 +425,21 @@ def _credentials(name: str, *, project_root: Path | None = None) -> tuple[str, .
             failure_class=FailureClass.DATA_QUALITY,
         )
     raise ProviderError(
-        "Optional provider is not configured", failure_class=FailureClass.AUTH_REQUIRED,
+        "Optional provider is not configured",
+        failure_class=FailureClass.AUTH_REQUIRED,
     )
 
 
 def normalize_daily(
-    raw_rows: list[Any], request: SupplementalRequest, *, kind: str,
+    raw_rows: list[Any],
+    request: SupplementalRequest,
+    *,
+    kind: str,
 ) -> list[dict[str, str]]:
     """Validate symbol, dates, finite OHLCV and explicit source units; keep raw extras."""
     keys = (
-        ("日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额") if kind == "akshare"
+        ("日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额")
+        if kind == "akshare"
         else ("trade_date", "open", "high", "low", "close", "vol", "amount")
     )
     rows: dict[str, dict[str, str]] = {}
@@ -377,8 +448,7 @@ def normalize_daily(
             if not isinstance(raw, dict):
                 raise ValueError("row must be an object")
             identity = (
-                str(raw.get("股票代码", "")) if kind == "akshare"
-                else str(raw.get("ts_code", ""))
+                str(raw.get("股票代码", "")) if kind == "akshare" else str(raw.get("ts_code", ""))
             )
             if identity != (request.symbol if kind == "akshare" else request.ts_code):
                 raise ValueError("security identity mismatch")
@@ -391,13 +461,19 @@ def normalize_daily(
             op, high, low, close, volume, amount = numbers
             if (
                 min(op, high, low, close) <= 0
-                or high < max(op, low, close) or low > min(op, high, close)
+                or high < max(op, low, close)
+                or low > min(op, high, close)
             ):
                 raise ValueError("OHLC identity invalid")
             row = {
-                "symbol": request.symbol, "market": request.market.value,
-                "date": day.isoformat(), "open": str(op), "high": str(high),
-                "low": str(low), "close": str(close), "volume_shares": str(volume * 100),
+                "symbol": request.symbol,
+                "market": request.market.value,
+                "date": day.isoformat(),
+                "open": str(op),
+                "high": str(high),
+                "low": str(low),
+                "close": str(close),
+                "volume_shares": str(volume * 100),
                 "amount_yuan": str(amount * (1000 if kind == "tushare" else 1)),
                 "adjustment": "UNADJUSTED",
             }
@@ -430,9 +506,13 @@ class SupplementalEvidenceService:
     def collect(self, request: SupplementalRequest, *, live: bool = False) -> dict[str, Any]:
         request = SupplementalRequest.model_validate(request.model_dump())
         definitions = (
-            self.factory.definitions_for_capability(request.capability) if live else
-            [item for item in self.factory.registry.providers
-             if request.capability in item.capabilities]
+            self.factory.definitions_for_capability(request.capability)
+            if live
+            else [
+                item
+                for item in self.factory.registry.providers
+                if request.capability in item.capabilities
+            ]
         )
         captures, attempts = [], []
         collect_all_independent_news_sources = request.capability == "news.discovery.lead"
@@ -446,7 +526,9 @@ class SupplementalEvidenceService:
                 attempts.append({"provider_id": provider_id, "status": "BUDGET_RESERVED"})
                 continue
             allowed = self.factory.claim_capability_attempt(
-                provider_id, request.capability, live=live,
+                provider_id,
+                request.capability,
+                live=live,
             )
             if not allowed:
                 attempts.append({"provider_id": provider_id, "status": "COOLDOWN"})
@@ -483,45 +565,61 @@ class SupplementalEvidenceService:
                         failure_class=FailureClass.DATA_QUALITY,
                     )
                 envelope = {
-                    "schema_version": "supplemental-evidence-v1", "provider_id": provider_id,
+                    "schema_version": "supplemental-evidence-v1",
+                    "provider_id": provider_id,
                     "independence_group": definition.independence_group,
-                    "request": request.model_dump(mode="json"), "records": records,
+                    "request": request.model_dump(mode="json"),
+                    "records": records,
                     "source_snapshot_id": snapshot.snapshot_id,
                     "source_object_hash": snapshot.object_sha256,
-                    "mode": "LIVE" if live else "RECORDED", "formal_use_allowed": False,
+                    "mode": "LIVE" if live else "RECORDED",
+                    "formal_use_allowed": False,
                     "full_universe_proven": False,
                 }
                 ref = self.objects.put_json(envelope)
                 artifact_id = "SupplementalEvidenceCapture:" + ref.sha256
                 self.state.register_artifact(
-                    artifact_id=artifact_id, artifact_type="SupplementalEvidenceCapture",
-                    schema_version="supplemental-evidence-v1", object_hash=ref.sha256,
+                    artifact_id=artifact_id,
+                    artifact_type="SupplementalEvidenceCapture",
+                    schema_version="supplemental-evidence-v1",
+                    object_hash=ref.sha256,
                     input_hashes=[snapshot.object_sha256],
                 )
-                captures.append({
-                    "artifact_id": artifact_id, "provider_id": provider_id,
-                    "record_count": len(records), "source_snapshot_id": snapshot.snapshot_id,
-                    "independence_group": definition.independence_group,
-                })
+                captures.append(
+                    {
+                        "artifact_id": artifact_id,
+                        "provider_id": provider_id,
+                        "record_count": len(records),
+                        "source_snapshot_id": snapshot.snapshot_id,
+                        "independence_group": definition.independence_group,
+                    }
+                )
                 self.factory.record_capability_success(provider_id, request.capability, live=live)
                 attempts.append({"provider_id": provider_id, "status": "CAPTURED"})
                 if live and not collect_all_independent_news_sources:
                     # Reference hints stop after one source; news discovery keeps all sources.
                     break
             except (ProviderError, ValueError, KeyError) as exc:
-                error = exc if isinstance(exc, ProviderError) else _invalid(
-                    "Supplemental response contract invalid",
+                error = (
+                    exc
+                    if isinstance(exc, ProviderError)
+                    else _invalid(
+                        "Supplemental response contract invalid",
+                    )
                 )
                 self.factory.record_capability_failure(
-                    provider_id, request.capability, error, live=live,
+                    provider_id,
+                    request.capability,
+                    error,
+                    live=live,
                 )
                 attempts.append({"provider_id": provider_id, "status": error.failure_class.value})
         return {
             "status": "REFERENCE_HINTS_CAPTURED" if captures else "PUBLIC_DATA_UNAVAILABLE",
-            "captures": captures, "attempts": attempts, "manual_actions": [],
-            "independence_groups": sorted(
-                {str(item["independence_group"]) for item in captures}
-            ),
+            "captures": captures,
+            "attempts": attempts,
+            "manual_actions": [],
+            "independence_groups": sorted({str(item["independence_group"]) for item in captures}),
             "multi_source_news_attempted": collect_all_independent_news_sources,
             "automatic_recovery_next": "OFFICIAL_WEB_AND_CANONICAL_ACQUISITION_VALIDATION",
             "formal_use_allowed": False,

@@ -217,3 +217,95 @@ def test_large_release_verification_and_tail_use_bounded_parquet_batches(source)
                 parquet_root=parquet.root,
                 max_release_rows=1000,
             )
+
+
+def test_market_context_producer_attaches_exact_parent_without_price_authority(source):
+    from astock.schemas.research_team import MarketContextPack
+    from astock.technical.registered import attach_market_context, load_daily_release
+
+    state, objects, parquet, _, row = source
+    _, bars, parent_id, parent_hash = load_daily_release(
+        state, objects, row["release_id"], limit=20, parquet_root=parquet.root,
+    )
+    context = MarketContextPack(
+        as_of=datetime.fromisoformat(row["available_to_system_at"]),
+        company_id="600519", current_close=bars[-1].close,
+        daily_release_artifact_id=parent_id, daily_release_object_hash=parent_hash,
+        market_anchor_artifact_id="anchor:existing", market_anchor_object_hash="a"*64,
+    )
+    before = _counts(state)
+    kwargs = {
+        "policy": load_technical_analysis_policy(ROOT / "configs/technical_analysis.yaml"),
+        "calendar_path": ROOT / "configs/official_trading_calendar.yaml",
+        "parquet_root": parquet.root,
+    }
+    enriched, snapshot = attach_market_context(state, objects, context, **kwargs)
+    assert enriched.current_close == context.current_close
+    assert enriched.market_anchor_artifact_id == context.market_anchor_artifact_id
+    assert enriched.technical_snapshot_artifact_id and enriched.technical_snapshot_object_hash
+    assert snapshot.source_object_hash == context.daily_release_object_hash
+    assert _counts(state) == (before[0]+1, before[1], before[2])
+    assert attach_market_context(state, objects, enriched, **kwargs)[0] == enriched
+
+    for changed in (
+        {"company_id": "000001"},
+        {"current_close": context.current_close + 1},
+        {"daily_release_object_hash": "f"*64},
+    ):
+        with pytest.raises(ValueError):
+            attach_market_context(
+                state, objects, context.model_copy(update=changed), **kwargs,
+            )
+    assert _counts(state) == (before[0]+1, before[1], before[2])
+
+
+def test_real_research_team_boundary_enriches_context_and_preserves_original(source):
+    from astock.research.team import ResearchTeamService
+    from astock.schemas.research_team import MarketContextPack, ResearchRoleOutput
+    from astock.technical.registered import load_daily_release
+    from tests.unit.test_research_team import NOW, _register_acquisition_report
+
+    state, objects, parquet, _, row = source
+    _, bars, parent_id, parent_hash = load_daily_release(
+        state, objects, row["release_id"], limit=20, parquet_root=parquet.root,
+    )
+    team = ResearchTeamService(project_root=ROOT, state=state, objects=objects)
+    acquisition_id, _ = _register_acquisition_report(state, objects, company_id="600519")
+    plan = team.create_company_plan(
+        company_id="600519", acquisition_report_artifact_id=acquisition_id,
+        as_of=NOW, cpu_count=4, memory_gib=8,
+    )
+    anchor = objects.put_json({"existing": "price-anchor"})
+    state.register_artifact(
+        artifact_id="MarketPriceAnchor:existing", artifact_type="MarketPriceAnchor",
+        schema_version="fixture-v1", object_hash=anchor.sha256, input_hashes=[],
+    )
+    context = MarketContextPack(
+        as_of=datetime.fromisoformat(row["available_to_system_at"]), company_id="600519",
+        current_close=bars[-1].close,
+        daily_release_artifact_id=parent_id, daily_release_object_hash=parent_hash,
+        market_anchor_artifact_id="MarketPriceAnchor:existing",
+        market_anchor_object_hash=anchor.sha256,
+    )
+    original = objects.put_json(context.model_dump(mode="json"))
+    state.register_artifact(
+        artifact_id="MarketContextPack:original", artifact_type="MarketContextPack",
+        schema_version=context.schema_version, object_hash=original.sha256,
+        input_hashes=[parent_hash],
+    )
+    result = team.register_role_output(ResearchRoleOutput(
+        plan_id=plan.plan_id, task_id="company-market-context",
+        output_contract="MarketContextPack", member_artifact_ids=["MarketContextPack:original"],
+        readiness_check_results={"MARKET_PRICE_ANCHOR": True}, summary="已核验日线研究上下文",
+        created_at=NOW,
+    ))
+    assert result["status"] == "REGISTERED" and result["technical_observations"] == []
+    output = ResearchRoleOutput.model_validate_json(objects.get_bytes(str(result["object_hash"])))
+    assert output.member_artifact_ids != ["MarketContextPack:original"]
+    record = state.artifact_record(output.member_artifact_ids[0])
+    assert record is not None
+    enriched = MarketContextPack.model_validate_json(objects.get_bytes(str(record["object_hash"])))
+    assert enriched.technical_snapshot_artifact_id
+    assert enriched.current_close == context.current_close
+    assert state.artifact_record("MarketContextPack:original")["object_hash"] == original.sha256
+    assert MarketContextPack.model_validate_json(objects.get_bytes(original.sha256)) == context

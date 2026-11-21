@@ -75,6 +75,8 @@ class FinancialFieldCode(StrEnum):
     NET_CASH_OPERATING = "NET_CASH_OPERATING"
     NET_CASH_INVESTING = "NET_CASH_INVESTING"
     NET_CASH_FINANCING = "NET_CASH_FINANCING"
+    # Cash paid to this issuer's ordinary shareholders; excludes interest and proposals.
+    CASH_DIVIDENDS_PAID = "CASH_DIVIDENDS_PAID"
     EXCHANGE_EFFECT = "EXCHANGE_EFFECT"
     NET_PROFIT_INCOME = "NET_PROFIT_INCOME"
     NET_PROFIT_CASH_FLOW = "NET_PROFIT_CASH_FLOW"

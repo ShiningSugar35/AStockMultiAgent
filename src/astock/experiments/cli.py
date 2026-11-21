@@ -17,7 +17,9 @@ import typer
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from astock.core.errors import StorageError
 from astock.core.hashing import canonical_json_bytes
+from astock.experiments.selection_seal import ExperimentRunUnavailable, RegisteredExperimentRun
 from astock.experiments.validation import (
     Budget,
     Plan,
@@ -68,19 +70,25 @@ def plan_document(path: str, policy_path: str | None = None) -> dict[str, Any]:
     }
 
 
-def run_document(plan: Plan, state: Any, objects: Any, artifact_id: str) -> dict[str, Any]:
+def run_document(
+    plan: Plan, state: Any, objects: Any, artifact_id: str,
+    *, recover_recorded: bool = False,
+) -> dict[str, Any]:
     from astock.experiments.market_evaluator import CanonicalMarketEvaluator
-    from astock.experiments.selection_seal import RegisteredSelectionSeal
     from astock.experiments.validation import Coordinator
 
-    evaluator = CanonicalMarketEvaluator(state, objects, artifact_id, plan)
-    result = Coordinator(plan, evaluator, RegisteredSelectionSeal(state, objects, plan)).run()
-    result["execution_model"] = "LAGGED_SIGNAL_DAILY_CLOSE_MARK_TO_MARKET"
-    result["market_validation_claim"] = False
-    result["trust_boundary"] = "HOST_ADMITTED_CANONICAL_RELEASE_AND_LAGGED_DAILY_CLOSE_MODEL"
-    result.pop("report_hash")
-    result["report_hash"] = digest(result)
-    return result
+    run = RegisteredExperimentRun(state, objects, plan, artifact_id)
+    previous = run.begin(recover_recorded=recover_recorded)
+    if previous is not None:
+        return previous
+    stage = "CONSTRUCT_EVALUATOR"
+    try:
+        evaluator = CanonicalMarketEvaluator(state, objects, artifact_id, plan)
+        stage = "COORDINATE"
+        result = Coordinator(plan, evaluator, run.seal, recorder=run).run()
+        return run.complete(result)
+    except Exception as exc:
+        raise ExperimentRunUnavailable(run.fail(stage, exc)) from None
 
 
 class DiagnosticRequest(BaseModel):
@@ -101,13 +109,69 @@ def register_commands(app: Any, services: Any, emit: Any) -> None:
         )
         raise typer.Exit(2)
 
+
+    @app.command("strategy-market-assemble")
+    def assemble_command(request_file: str, register: bool = False) -> None:
+        from astock.experiments.canonical_release import (
+            MarketAssemblyRequest,
+            assemble_registered_market_release,
+        )
+        from astock.market_data.reference import MarketReferenceService
+        from astock.market_data.reference_storage import ReferenceParquetStore
+
+        try:
+            request = MarketAssemblyRequest.model_validate_json(
+                bounded_read(Path(request_file), 262144),
+            )
+            paths, state, objects = services()
+            reference = MarketReferenceService(
+                state, objects, ReferenceParquetStore(paths.parquet),
+                paths.root / "tests" / "fixtures" / "reference",
+            )
+            result = assemble_registered_market_release(
+                state, objects, reference, request,
+                calendar_path=paths.root / "configs" / "official_trading_calendar.yaml",
+                register=register,
+            )
+        except (OSError, ValueError, TypeError, sqlite3.DatabaseError):
+            fail()
+            return
+        emit(result)
+
     @app.command("strategy-validation-run")
-    def run_command(request: str, market_release_artifact_id: str) -> None:
+    def run_command(
+        request: str, market_release_artifact_id: str, recover_recorded: bool = False,
+    ) -> None:
         try:
             plan = load_plan(request)
             _, state, objects = services()
-            result = run_document(plan, state, objects, market_release_artifact_id)
-        except (OSError, ValueError, TypeError, sqlite3.DatabaseError, yaml.YAMLError):
+            result = run_document(
+                plan, state, objects, market_release_artifact_id, recover_recorded=recover_recorded,
+            )
+        except ExperimentRunUnavailable as exc:
+            emit(exc.report)
+            raise typer.Exit(2) from None
+        except (
+            OSError, ValueError, TypeError, sqlite3.DatabaseError, yaml.YAMLError, StorageError,
+        ):
+            fail()
+            return
+        emit(json.loads(canonical_json_bytes(result)))
+
+
+    @app.command("strategy-validation-cpcv")
+    def cpcv_command(request_file: str) -> None:
+        from astock.experiments.cross_validation import (
+            CPCVRequest,
+            build_grouped_cpcv_report,
+        )
+
+        try:
+            request = CPCVRequest.model_validate_json(
+                bounded_read(Path(request_file), Policy().max_request_bytes),
+            )
+            result = build_grouped_cpcv_report(request)
+        except (OSError, ValueError, TypeError):
             fail()
             return
         emit(json.loads(canonical_json_bytes(result)))
@@ -175,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-db")
     parser.add_argument("--objects-dir")
     parser.add_argument("--market-release")
+    parser.add_argument("--recover-recorded", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
@@ -197,9 +262,12 @@ def main(argv: list[str] | None = None) -> int:
                 load_plan(args.request, args.policy),
                 StateStore(database),
                 ObjectStore(objects_dir),
-                args.market_release,
+                args.market_release, recover_recorded=args.recover_recorded,
             )
-    except (OSError, ValueError, TypeError, sqlite3.DatabaseError, yaml.YAMLError):
+    except ExperimentRunUnavailable as exc:
+        print(canonical_json_bytes(exc.report).decode("utf-8"), file=sys.stderr)
+        return 2
+    except (OSError, ValueError, TypeError, sqlite3.DatabaseError, yaml.YAMLError, StorageError):
         print(
             json.dumps({"authority": "RESEARCH_ONLY", "error": "INVALID_OR_OVER_BUDGET_REQUEST"}),
             file=sys.stderr,

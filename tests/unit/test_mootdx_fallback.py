@@ -6,7 +6,7 @@ import json
 import struct
 import sys
 import zlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -18,6 +18,7 @@ from pydantic import ValidationError
 import astock.providers.mootdx_fallback as module
 from astock.core.errors import FailureClass, ProviderError
 from astock.core.object_store import ObjectStore
+from astock.core.request_budget import RequestBudgetExhausted, RequestExecutionBudget
 from astock.core.state import StateStore
 from astock.providers.mootdx_fallback import (
     MootdxFallbackProvider,
@@ -455,3 +456,43 @@ def test_changed_protocol_cannot_change_units_silently(object_store, state, monk
     with pytest.raises(ProviderError) as caught:
         _provider(object_store, state).fetch_bars(_request())
     assert caught.value.failure_class is FailureClass.INVALID_RESPONSE
+
+
+def test_shared_budget_caps_sdk_launch_and_socket_timeouts(object_store, state, monkeypatch):
+    calls = _fake_worker(monkeypatch, object_store, [_row()])
+    budget = RequestExecutionBudget(
+        state, "mootdx-sdk-budget", datetime.now(UTC) + timedelta(seconds=2), 1,
+    )
+    with budget.bind():
+        _provider(object_store, state).fetch_bars(_request())
+        with pytest.raises(RequestBudgetExhausted):
+            _provider(object_store, state).fetch_bars(_request())
+    assert len(calls) == 1
+    assert 0 < calls[0]["connect_timeout_seconds"] <= calls[0]["timeout_seconds"] <= 2
+    assert budget.remaining_attempts() == 0
+
+
+def test_waiting_for_sdk_slot_cannot_reset_request_deadline(object_store, state, monkeypatch):
+    calls = _fake_worker(monkeypatch, object_store, [_row()])
+    now = [datetime.now(UTC)]
+    released = []
+
+    class DelayedSlot:
+        def acquire(self, *, timeout):
+            assert 0 < timeout <= 2
+            now[0] += timedelta(seconds=3)
+            return True
+
+        def release(self):
+            released.append(True)
+
+    monkeypatch.setattr(module, "_CONCURRENCY", DelayedSlot())
+    budget = RequestExecutionBudget(
+        state, "mootdx-delayed-slot", now[0] + timedelta(seconds=2), 1,
+        clock=lambda: now[0],
+    )
+    with budget.bind(), pytest.raises(RequestBudgetExhausted):
+        _provider(object_store, state).fetch_bars(_request())
+    assert not calls
+    assert released == [True]
+    assert budget.remaining_attempts() == 1

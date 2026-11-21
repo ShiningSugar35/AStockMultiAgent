@@ -899,6 +899,8 @@ class PortfolioTransitionRequest(AStockModel):
     selected_method: PortfolioAllocationMethod = PortfolioAllocationMethod.EQUAL_WEIGHT_CONSTRAINED
     portfolio_nav_fen: int | None = Field(default=None, gt=0)
     current_quantities: dict[str, int] = Field(default_factory=dict)
+    implementation_account_id: str | None = Field(default=None, min_length=1)
+    implementation_lane: Literal["ACTUAL", "PAPER"] | None = None
     implementation_costs: list[PortfolioImplementationCostInput] = Field(default_factory=list)
     trading_rules: list[InstrumentTradingUnitRule] = Field(default_factory=list)
     supplemental_assets: list[SupplementalPortfolioAsset] = Field(default_factory=list)
@@ -906,6 +908,8 @@ class PortfolioTransitionRequest(AStockModel):
 
     @model_validator(mode="after")
     def validate_request(self) -> PortfolioTransitionRequest:
+        if (self.implementation_account_id is None) != (self.implementation_lane is None):
+            raise ValueError("implementation assessment requires both account and lane")
         if any(value < 0 for value in self.current_quantities.values()):
             raise ValueError("current quantities cannot be negative")
         instrument_ids = [item.instrument_id for item in self.trading_rules]
@@ -915,6 +919,24 @@ class PortfolioTransitionRequest(AStockModel):
         if len(supplemental_ids) != len(set(supplemental_ids)):
             raise ValueError("supplemental assets must be unique")
         return self
+
+
+class PortfolioImplementationAssessment(AStockModel):
+    """Read-only output after existing bands/lots; never an execution authorization."""
+    schema_version: str = "portfolio-implementation-assessment-v1"
+    status: Literal["RESEARCH_PROJECTED", "UNQUALIFIED", "INFEASIBLE", "STALE_CONTEXT"]
+    projected_weights: dict[str, float] = Field(default_factory=dict)
+    projected_quantities: dict[str, int] = Field(default_factory=dict)
+    reason_codes: list[str] = Field(default_factory=list)
+    context_fingerprint: str | None = None
+    account_revision: str | None = None
+    total_l1_turnover: float | None = Field(default=None, ge=0, le=2)
+    one_off_cost_fraction: float | None = Field(default=None, ge=0, le=1)
+    cash_after_cost: float | None = Field(default=None, ge=0, le=1)
+    annualized_volatility: float | None = Field(default=None, ge=0)
+    target_exposure_deviation: float | None = None
+    optimality_claim: Literal[False] = False
+    execution_allowed: Literal[False] = False
 
 
 class PortfolioTransitionReport(AStockModel):
@@ -930,6 +952,7 @@ class PortfolioTransitionReport(AStockModel):
     hedge_candidates: list[HedgeInstrumentCandidate]
     estimated_turnover_weight: float = Field(ge=0, le=2)
     estimated_implementation_cost_fen: int | None = Field(default=None, ge=0)
+    implementation_assessment: PortfolioImplementationAssessment | None = None
     warning_codes: list[str]
     source_artifact_ids: list[str]
     source_object_hashes: list[str]
@@ -992,6 +1015,7 @@ __all__ = [
     "PortfolioComplementScreenReport",
     "PortfolioComplementScreenRequest",
     "PortfolioImplementationCostInput",
+    "PortfolioImplementationAssessment",
     "PortfolioIntentProfile",
     "PortfolioRiskGap",
     "PortfolioRiskObjective",

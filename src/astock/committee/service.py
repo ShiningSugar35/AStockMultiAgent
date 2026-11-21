@@ -11,6 +11,7 @@ from astock.core.hashing import canonical_json_bytes, content_hash, sha256_bytes
 from astock.core.object_store import ObjectStore
 from astock.core.policy import PolicyEngine
 from astock.core.state import StateStore
+from astock.research.institutional import require_active_institutional_inputs
 from astock.schemas import (
     BaseCasePack,
     CommitteeAccessPolicy,
@@ -192,6 +193,9 @@ class CommitteeService:
         return self._rules_reference(self.configured_rules, persist=True)
 
     def plan(self, request: CommitteeDecisionRequest) -> CommitteePlanReport:
+        require_active_institutional_inputs(
+            self.state, [item.object_sha256 for item in request.artifact_references],
+        )
         prepared = self._prepare(request, persist=False)
         return CommitteePlanReport(
             request_sha256=prepared.request_hash,
@@ -207,6 +211,9 @@ class CommitteeService:
         )
 
     def decide(self, request: CommitteeDecisionRequest) -> CommitteeExecution:
+        require_active_institutional_inputs(
+            self.state, [item.object_sha256 for item in request.artifact_references],
+        )
         prepared = self._prepare(request, persist=True)
         return CommitteeExecution(
             assessment=prepared.assessment,

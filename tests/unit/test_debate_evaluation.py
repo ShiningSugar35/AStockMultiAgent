@@ -250,10 +250,7 @@ def test_dispute_reviewer_rejects_over_budget_response(tmp_path):
     assert team.run_dispute_reviewer("plan", lambda _: "ok")["status"] == "RESERVED"
 
 
-@pytest.mark.parametrize("same_value", [False, True])
-def test_team_reviewer_inputs_bind_registered_cases_once(tmp_path, same_value):
-    from types import SimpleNamespace
-
+def _registered_case_team(tmp_path, same_value=False, cases=None, source=None, bind_source=True):
     from astock.core.object_store import ObjectStore
     from astock.core.state import StateStore
     from astock.investor_orchestration.store import InvestorOrchestrationStore
@@ -261,6 +258,7 @@ def test_team_reviewer_inputs_bind_registered_cases_once(tmp_path, same_value):
     from astock.schemas.research_team import (
         ResearchRoleOutput,
         ResearchRoleResult,
+        ResearchTeamPlan,
         ResearchTeamTaskState,
     )
 
@@ -270,12 +268,49 @@ def test_team_reviewer_inputs_bind_registered_cases_once(tmp_path, same_value):
     team.state = StateStore(store.path)
     team.objects = ObjectStore(tmp_path / "objects")
     team.project_root = ROOT
-    from typing import Any, cast
-
-    team.get_plan = lambda plan_id: cast(Any, SimpleNamespace(company_id="600000"))
+    plan = ResearchTeamPlan.model_validate({
+        "plan_id": "plan", "scope": "COMPANY", "company_id": "600000",
+        "acquisition_report_artifact_id": "recorded-acquisition",
+        "depth": "INSTITUTIONAL", "backend": "CHAT_ORCHESTRATED",
+        "as_of": NOW, "created_at": NOW, "policy_version": "recorded-review-status",
+        "automatic_resolution_budget_seconds": 60,
+        "hardware_budget": {
+            "resource_class": "LOW_RESOURCE", "cpu_count": 2, "memory_gib": 8,
+            "provider_workers": 1, "agent_workers": 1, "duckdb_threads": 1,
+            "max_parallel_companies": 1, "max_deep_candidates": 1, "created_at": NOW,
+        },
+        "tasks": [
+            {
+                "task_id": "bull-case", "role": "BULL", "stage": 0,
+                "output_contract": "IndependentBullCase", "created_at": NOW,
+            },
+            {
+                "task_id": "bear-case", "role": "BEAR", "stage": 0,
+                "output_contract": "IndependentBearCase", "created_at": NOW,
+            },
+            {
+                "task_id": "investment-red-team", "role": "REVIEWER", "stage": 1,
+                "dependencies": ["bear-case", "bull-case"],
+                "output_contract": "ChallengerAssessment", "created_at": NOW,
+            },
+        ],
+    })
+    team.get_plan = lambda plan_id: plan if plan_id == plan.plan_id else None
     _, bull, bear, _, _ = inputs()
+    if cases is not None:
+        bull, bear = cases
     if same_value:
         bear = bear.model_copy(update={"valuation_per_share": bull.valuation_per_share})
+    source_hashes = []
+    if source is not None:
+        ref = team.objects.put_json(source.model_dump(mode="json"))
+        for identity in ("source-one", "source-copy"):
+            team.state.register_artifact(
+                artifact_id=identity, artifact_type=type(source).__name__,
+                schema_version=source.schema_version, object_hash=ref.sha256, input_hashes=[],
+            )
+        if bind_source:
+            source_hashes = [ref.sha256]
     for task_id, case in (("bull-case", bull), ("bear-case", bear)):
         ref = team.objects.put_json(case.model_dump(mode="json"))
         team.state.register_artifact(
@@ -283,7 +318,7 @@ def test_team_reviewer_inputs_bind_registered_cases_once(tmp_path, same_value):
             artifact_type=type(case).__name__,
             schema_version=case.schema_version,
             object_hash=ref.sha256,
-            input_hashes=[],
+            input_hashes=source_hashes,
         )
         output = ResearchRoleOutput(
             plan_id="plan",
@@ -315,9 +350,138 @@ def test_team_reviewer_inputs_bind_registered_cases_once(tmp_path, same_value):
             status="COMPLETE",
             object_hash=ref.sha256,
         )
+    return team
+
+
+@pytest.mark.parametrize("same_value", [False, True])
+def test_team_reviewer_inputs_bind_registered_cases_once(tmp_path, same_value):
+    team = _registered_case_team(tmp_path, same_value=same_value)
     first = team.reviewer_input("plan")
     assert first == team.reviewer_input("plan")
     assert bool(first["reviewer_questions"]) is not same_value
     assert first["additional_llm_calls"] == 0
     assert first["publication_authority"] is False
     assert len(team.state.recent_artifact_records("ReviewerDisputeInput")) == 1
+
+
+def test_status_does_not_dispatch_or_reserve_dispute_review(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    team = _registered_case_team(tmp_path)
+    callback = Mock(side_effect=AssertionError("status must not call the host"))
+    # Even a legacy attached callback cannot turn a status query into dispatch.
+    monkeypatch.setattr(team, "dispute_reviewer", callback, raising=False)
+    status = team.status("plan")
+    assert status["status"] == "IN_PROGRESS"
+    assert status["completed_tasks"] == ["bear-case", "bull-case"]
+    assert status["ready_tasks"] == ["investment-red-team"]
+    reviewer_input = status["reviewer_input"]
+    assert isinstance(reviewer_input, dict)
+    assert reviewer_input["status"] == "DISPUTED"
+    assert reviewer_input["reviewer_questions"]
+    assert reviewer_input["cross_review"] is None
+    identity = reviewer_input["artifact_id"]
+    assert isinstance(identity, str)
+    assert team.status("plan") == status
+    callback.assert_not_called()
+    assert team.state.get_checkpoint("dispute-reviewer", identity) is None
+
+
+def test_reviewer_prepared_operation_accepts_one_late_result(tmp_path):
+    team = _registered_case_team(tmp_path)
+    reservation = team.run_dispute_reviewer("plan")
+    assert reservation["dispatch_granted"] and reservation["status"] == "RESERVED"
+    repeated = team.run_dispute_reviewer("plan", lambda _: pytest.fail("must not redispatch"))
+    assert repeated["operation_id"] == reservation["operation_id"]
+    args = dict(
+        operation_id=reservation["operation_id"], input_hash=reservation["input_hash"],
+        response="The material dispute remains unresolved.",
+    )
+    identity = reservation["input"]["artifact_id"]
+    with pytest.raises(ValueError, match="IDENTITY_MISMATCH"):
+        team.complete_dispute_reviewer(identity, **{**args, "operation_id": "foreign"})
+    result = team.complete_dispute_reviewer(identity, **args)
+    assert result["status"] == "COMPLETE" and not result["publication_authority"]
+    assert team.complete_dispute_reviewer(identity, **args) == result
+    assert team.run_dispute_reviewer("plan") == result
+    with pytest.raises(ValueError, match="CALLBACK_CONFLICT"):
+        team.complete_dispute_reviewer(identity, **{**args, "response": "different result"})
+
+
+@pytest.mark.parametrize("kind,material,expected", [
+    ("FACT", True, True), ("ASSUMPTION", True, True),
+    ("CALCULATION", True, True), ("STYLE", True, False), ("FACT", False, False),
+])
+def test_material_typed_disputes_bind_sources_without_style_calls(
+    tmp_path, kind, material, expected
+):
+    from astock.schemas.research_team import ResearchCasePosition
+
+    _, bull, bear, _, _ = inputs()
+    cases = []
+    for case, stance in ((bull, "growth"), (bear, "reversal")):
+        position = ResearchCasePosition(
+            topic_id="profit", kind=kind, material=material, statement=case.case,
+            position=stance, evidence_artifact_ids=["source-one", "source-copy"],
+        )
+        cases.append(case.model_copy(update={
+            "positions": [position], "valuation_per_share": bull.valuation_per_share,
+        }))
+    source = _position_source()
+    team = _registered_case_team(tmp_path, cases=cases, source=source)
+    ref = team.objects.put_json(source.model_dump(mode="json"))
+    result = team.reviewer_input("plan")
+    assert bool(result["reviewer_questions"]) is expected
+    if expected:
+        assert result["reviewer_questions"][0]["source_hashes"] == [ref.sha256]
+    else:
+        assert team.run_dispute_reviewer("plan")["status"] == "SKIPPED"
+    assert result["additional_llm_calls"] == 0
+
+
+def test_structured_dispute_with_unbound_quote_rejected(tmp_path):
+    from astock.schemas.research_team import ResearchCasePosition
+
+    _, bull, bear, _, _ = inputs()
+    bull = bull.model_copy(update={"positions": [ResearchCasePosition(
+        topic_id="profit", kind="FACT", material=True, statement="not in the case",
+        position="growth", evidence_artifact_ids=["irrelevant"],
+    )]})
+    team = _registered_case_team(tmp_path, cases=(bull, bear))
+    with pytest.raises(ValueError, match="POSITION_NOT_BOUND"):
+        team.reviewer_input("plan")
+
+
+def _position_source():
+    from astock.schemas.evidence import EvidenceGrade
+    from astock.schemas.research import FrozenEvidencePack, ResearchCoverageStatus
+
+    return FrozenEvidencePack(
+        pack_id="recorded-position-input", company_id="600000", as_of=NOW,
+        claim_ids=["claim:fixture"], evidence_ids=["evidence:fixture"],
+        conflict_ids=[], open_conflict_ids=[],
+        evidence_grade_by_id={"evidence:fixture": EvidenceGrade.PRIMARY_OFFICIAL},
+        coverage_status=ResearchCoverageStatus.COMPLETE, degradation_codes=[],
+        frozen_input_sha256="1" * 64, frozen_at=NOW,
+    )
+
+
+@pytest.mark.parametrize("fault", ["company", "future", "outside-case"])
+def test_typed_dispute_rejects_foreign_future_or_unbound_sources(tmp_path, fault):
+    from astock.schemas.research_team import ResearchCasePosition
+
+    _, bull, bear, _, _ = inputs()
+    bull = bull.model_copy(update={"positions": [ResearchCasePosition(
+        topic_id="profit", kind="FACT", material=True, statement=bull.case,
+        position="growth", evidence_artifact_ids=["source-one"],
+    )]})
+    source = _position_source()
+    if fault == "company":
+        source = source.model_copy(update={"company_id": "000001"})
+    elif fault == "future":
+        source = source.model_copy(update={"as_of": NOW + timedelta(days=1)})
+    team = _registered_case_team(
+        tmp_path, cases=(bull, bear), source=source, bind_source=fault != "outside-case",
+    )
+    with pytest.raises(ValueError, match="POSITION_SOURCE"):
+        team.reviewer_input("plan")

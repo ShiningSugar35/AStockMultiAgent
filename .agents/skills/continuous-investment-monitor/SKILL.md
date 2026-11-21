@@ -17,6 +17,8 @@ description: Keep analyzed, recommended, held, catalyst-bound, and open-paper-or
 10. 完成增量研究后更新 reviewed boundary，再完成/失败对应持久任务；失败必须保留为可审计失败。正常投资者输出只说“什么变了、影响是什么、现在 HOLD/ADD/TRIM/EXIT 或组合条件如何改变”。需要盘前、盘中或盘后自然语言概览时，可按需使用现役 `research-session-brief` 基于同一已核准研究/技术快照做增量投影；它仍为 `DRAFT/public_approved=false`，正式公开仅由原 `ResponseGateway` 执行认证及公开审计，不增加调度器、不自行执行外部消息动作或新建通知队列。
 11. 没有可用独立 Agent worker 时，daemon 可以继续更新确定性事件和 replay，但语义 task 必须留在持久队列，下一次 Agent 会话优先消费；不得把“已排队”冒充“已分析”。
 
+12. Antigravity 的 campaign 任务可按现役 workflow 安装并绑定原生事件观察：必须使用宿主真实会话 ID 和本轮已取得的 owner/round/lease；无法匹配时只跳过 native 观察，研究仍沿原 checkpoint 继续。不得把普通停止或后台未结束当作研究完成，也不得要求用户另开会话才能续接。
+
 ## Workflows
 
 - [`docs/workflows/workflow-holding-rebalance-decision.md`](../../../docs/workflows/workflow-holding-rebalance-decision.md)

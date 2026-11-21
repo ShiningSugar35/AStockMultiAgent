@@ -60,6 +60,14 @@ fields:
     provider_fields: {eastmoney-financial: NET_CASH_OPERATING, sina-financial: net_cash_operating, tushare-financial: n_cashflow_act}
     unit: TEN_THOUSAND_CNY
     provider_units: {tushare-financial: CNY}
+  # Optional exact official row. No provider alias: the usual cashflow payout item
+  # combines dividends, profits and interest, and is not this fact.
+  CASH_DIVIDENDS_PAID:
+    statement_type: CASH_FLOW_STATEMENT
+    official_label: 向本公司普通股股东支付的现金股利
+    provider_fields: {}
+    unit: CNY
+    optional: true
   NET_CASH_INVESTING:
     statement_type: CASH_FLOW_STATEMENT
     official_label: 投资活动产生的现金流量净额

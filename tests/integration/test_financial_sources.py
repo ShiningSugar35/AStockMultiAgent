@@ -47,6 +47,7 @@ from astock.schemas import (
     FinancialUnit,
     Market,
     OfficialFinancialLineageKind,
+    ProviderHealthStatus,
     RunStatus,
     SourceClass,
     SourceSnapshot,
@@ -148,6 +149,18 @@ def _replace_page_text(
         )
 
 
+def _cash_statement_page(
+    service: FinancialSourceService, report: OfficialFinancialReport,
+) -> tuple[DocumentPage, str]:
+    matches = []
+    for page in report.pages:
+        text = service.objects.get_bytes(page.text_object_sha256).decode("utf-8")
+        if "合并现金流量表" in text and "经营活动产生的现金流量净额" in text:
+            matches.append((page, text))
+    assert len(matches) == 1, "recorded report must have one explicit cash flow statement page"
+    return matches[0]
+
+
 def test_live_financial_route_does_not_readd_health_excluded_provider(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -219,14 +232,34 @@ def test_all_secondary_financial_sources_can_recover_from_official_report(
     assert report.coverage.certified_fact_count == 18
     assert "STRUCTURED_FINANCIAL_SOURCES_UNAVAILABLE" in report.reason_codes
     assert "OFFICIAL_DOCUMENT_RECOVERY_USED" in report.reason_codes
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
+    assert row is not None
+    manifest = service._verified_manifest(row)
+    assert manifest.available_to_system_at > ORIGINAL_AS_OF
+    historical = service.run_audit(
+        "000001", PERIOD_END, FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+        industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+    )
+    assert historical.status is RunStatus.NEEDS_INFO
+    assert historical.input_fact_ids == []
+    assert historical.verified_numbers == []
     pack = service.run_audit(
         "000001",
         PERIOD_END,
         FinancialPeriodType.ANNUAL,
-        as_of=ORIGINAL_AS_OF,
+        as_of=manifest.available_to_system_at,
         industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
     )
-    assert pack.status is RunStatus.SUCCEEDED
+    assert pack.status is RunStatus.SUCCEEDED, json.dumps({
+        "company_id": report.company_id,
+        "period_end": PERIOD_END.isoformat(),
+        "request_as_of": manifest.available_to_system_at.isoformat(),
+        "release_available_at": manifest.available_to_system_at.isoformat(),
+        "report_created_at": report.created_at.isoformat(),
+        "input_fact_ids": pack.input_fact_ids,
+        "evidence_gaps": [gap.model_dump(mode="json") for gap in pack.evidence_gaps],
+    }, ensure_ascii=False)
     assert len(pack.verified_numbers) == 18
 
 
@@ -434,15 +467,25 @@ def test_recorded_financial_source_reaches_existing_audit_contract(tmp_path: Pat
     assert report.coverage.certified_fact_count == 18
     assert report.provider_ids == ["sina-financial"]
     assert service.status("000001", PERIOD_END, FinancialPeriodType.ANNUAL)["status"] == "AVAILABLE"
-
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
+    assert row is not None
+    manifest = service._verified_manifest(row)
     pack = service.run_audit(
         "000001",
         PERIOD_END,
         FinancialPeriodType.ANNUAL,
-        as_of=ORIGINAL_AS_OF,
+        as_of=manifest.available_to_system_at,
         industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
     )
-    assert pack.status is RunStatus.SUCCEEDED
+    assert pack.status is RunStatus.SUCCEEDED, json.dumps({
+        "company_id": report.company_id,
+        "period_end": PERIOD_END.isoformat(),
+        "request_as_of": manifest.available_to_system_at.isoformat(),
+        "release_available_at": manifest.available_to_system_at.isoformat(),
+        "report_created_at": report.created_at.isoformat(),
+        "input_fact_ids": pack.input_fact_ids,
+        "evidence_gaps": [gap.model_dump(mode="json") for gap in pack.evidence_gaps],
+    }, ensure_ascii=False)
     assert len(pack.verified_numbers) == 18
     assert not pack.evidence_gaps
     assert len(pack.source_snapshot_ids) == 1
@@ -1379,7 +1422,7 @@ def test_parquet_tamper_is_reported_as_corrupt(tmp_path: Path) -> None:
             "000001",
             PERIOD_END,
             FinancialPeriodType.ANNUAL,
-            as_of=ORIGINAL_AS_OF,
+            as_of=manifest.available_to_system_at,
             industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
         )
 
@@ -1395,6 +1438,7 @@ def test_manifest_corruption_is_not_downgraded_to_needs_info(tmp_path: Path) -> 
     )
     row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
     assert row is not None
+    manifest = service._verified_manifest(row)
     service.objects.path_for(str(row["manifest_object_hash"])).write_bytes(b"tampered")
     assert service.status("000001", PERIOD_END, FinancialPeriodType.ANNUAL)["status"] == "CORRUPT"
     with pytest.raises(StorageError):
@@ -1402,7 +1446,7 @@ def test_manifest_corruption_is_not_downgraded_to_needs_info(tmp_path: Path) -> 
             "000001",
             PERIOD_END,
             FinancialPeriodType.ANNUAL,
-            as_of=ORIGINAL_AS_OF,
+            as_of=manifest.available_to_system_at,
             industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
         )
 
@@ -1517,7 +1561,7 @@ def test_financial_source_cli_live_without_as_of_preserves_capture_cutoff(
     assert captured["live"] is True
 
 
-def _capture_existing_annual(service: FinancialSourceService):
+def _capture_existing_annual(service: FinancialSourceService, *, extra_cash_rows: str = ""):
     fixture = json.loads(
         (PROJECT_ROOT / "tests/fixtures/financial_sources/cninfo_reports_000001.json").read_text(
             encoding="utf-8"
@@ -1533,9 +1577,19 @@ def _capture_existing_annual(service: FinancialSourceService):
         "formal_use": True, "require_complete": False,
         "reason": "reuse a captured original after the network budget is spent",
     })
+    content = base64.b64decode(fixture["reports"][0]["pdf_base64"], validate=True)
+    if extra_cash_rows:
+        import pymupdf
+
+        with pymupdf.open(stream=content, filetype="pdf") as pdf:
+            page = pdf[-1]
+            page.insert_text(
+                (40, page.rect.height - 60), extra_cash_rows, fontname="china-s", fontsize=9,
+            )
+            content = pdf.tobytes()
     return OfficialWebDocumentCaptureService(service.state, service.objects).capture(
         proposal,
-        base64.b64decode(fixture["reports"][0]["pdf_base64"], validate=True),
+        content,
         title="平安银行股份有限公司2025年年度报告",
         company_ids=["000001"], published_at=observed - timedelta(days=1),
         period_end=PERIOD_END, document_type=DocumentType.ANNUAL_REPORT,
@@ -1560,6 +1614,8 @@ def _install_tushare_financial_mock(service, monkeypatch, *, rejected_endpoint=N
             "end_date": "20251231", "report_type": "1", "comp_type": "2", "update_flag": "1",
         }
         for mapping in service.mappings:
+            if mapping.optional and not mapping.provider_fields:
+                continue
             if mapping.statement_type.value == statement:
                 value = legacy_row[mapping.provider_field("sina-financial")]
                 # Reuse the established legacy number contract for mock wire conversion:
@@ -1618,6 +1674,14 @@ def test_tushare_routes_through_existing_official_certifier_once(
     service = _service(tmp_path)
     capture = _capture_existing_annual(service)
     client, calls, legacy = _install_tushare_financial_mock(service, monkeypatch)
+
+    def source_health(provider_id: str, _capability: str) -> ProviderHealthStatus:
+        return (
+            ProviderHealthStatus.HEALTHY if provider_id == "sina-financial"
+            else ProviderHealthStatus.NOT_PROBED
+        )
+
+    monkeypatch.setattr(service.provider_factory, "capability_health_status", source_health)
     monkeypatch.setattr(service.official, "_live_candidates", lambda *args, **kwargs: [])
     parse_calls = []
     parse = financial_service._parse_provider
@@ -1628,6 +1692,11 @@ def test_tushare_routes_through_existing_official_certifier_once(
 
     monkeypatch.setattr(financial_service, "_parse_provider", counted_parse)
     try:
+        ranked = service.provider_factory.definitions_for_capability(
+            "financial.statement_values", source_hint="tushare-financial",
+        )
+        assert ranked[0].provider_id == "sina-financial"
+        assert any(item.provider_id == "tushare-financial" for item in ranked)
         report = service.sync(
             "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL, live=True,
         )
@@ -1661,6 +1730,43 @@ def test_tushare_routes_through_existing_official_certifier_once(
         binding, as_of=None,
     )
     assert not _cross_provider_conflicts([*observations, *legacy_observations])
+
+
+@pytest.mark.parametrize(
+    "blocked_health", [ProviderHealthStatus.UNAVAILABLE, ProviderHealthStatus.CORRUPT],
+)
+def test_financial_preference_does_not_restore_an_unavailable_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocked_health: ProviderHealthStatus,
+) -> None:
+    service = _service(tmp_path)
+    client, calls, legacy = _install_tushare_financial_mock(service, monkeypatch)
+
+    def source_health(provider_id: str, _capability: str) -> ProviderHealthStatus:
+        if provider_id == "tushare-financial":
+            return blocked_health
+        return (
+            ProviderHealthStatus.HEALTHY if provider_id == "sina-financial"
+            else ProviderHealthStatus.NOT_PROBED
+        )
+
+    monkeypatch.setattr(service.provider_factory, "capability_health_status", source_health)
+    monkeypatch.setattr(service.providers["sina-financial"], "fetch", lambda *a, **k: legacy)
+    monkeypatch.setattr(service.official, "get", lambda *args, **kwargs: None)
+    try:
+        ranked = service.provider_factory.definitions_for_capability(
+            "financial.statement_values", source_hint="tushare-financial",
+        )
+        assert all(item.provider_id != "tushare-financial" for item in ranked)
+        report = service.sync(
+            "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL, live=True,
+        )
+    finally:
+        client.close()
+    assert calls == []
+    assert report.provider_ids == ["sina-financial"]
+    assert "TUSHARE_FINANCIAL_HEALTH_OR_BREAKER_SKIPPED" in report.reason_codes
+    assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
+    assert report.release_id is None
 
 
 def test_tushare_success_without_official_original_is_never_certified(
@@ -1758,3 +1864,125 @@ def test_financial_local_only_never_substitutes_recorded_release_or_fixture(
     )
     assert report.status is FinancialSourceReleaseStatus.NEEDS_INFO
     assert report.release_id is None and report.coverage.certified_fact_count == 0
+
+
+@pytest.mark.parametrize(("dividend_row", "expected_value"), [
+    ("向本公司普通股股东支付的现金股利 20", Decimal("20")),
+    ("", None),
+    ("分配股利、利润或偿付利息支付的现金 20", None),
+    ("拟向本公司普通股股东支付的现金股利 20", None),
+    ("向本公司普通股股东支付的现金股利（每股） 20", None),
+    ("向本公司普通股股东支付的现金股利（含利息） 20", None),
+    ("子公司支付给少数股东的股利、利润 20", None),
+    ("向本公司普通股股东支付的现金股利\n其他现金支付 20", None),
+    ("向本公司普通股股东支付的现金股利 20\n向本公司普通股股东支付的现金股利 30", None),
+])
+def test_optional_pure_cash_dividends_use_official_paid_row_only(
+    tmp_path: Path, dividend_row: str, expected_value: Decimal | None,
+) -> None:
+    service = _service(tmp_path)
+    official = service.official.get(
+        "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF, live=False,
+    )
+    assert official is not None
+    page, text = _cash_statement_page(service, official)
+    changed = text.replace(
+        "经营活动产生的现金流量净额",
+        dividend_row + "\n经营活动产生的现金流量净额", 1,
+    )
+    assert changed != text
+    _replace_page_text(service, page, changed)
+    report = service.sync(
+        "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF,
+    )
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    row = service.repository.get("000001", PERIOD_END.isoformat(), FinancialPeriodType.ANNUAL.value)
+    assert row is not None
+    manifest = service._verified_manifest(row)
+    facts = service.parquet.read_facts(manifest.certified_files[0])
+    dividends = [item for item in facts
+                 if item.field_code is FinancialFieldCode.CASH_DIVIDENDS_PAID]
+    assert report.coverage.certified_fact_count == 18 + (expected_value is not None)
+    if expected_value is None:
+        assert not dividends
+        return
+    assert len(dividends) == 1 and dividends[0].reported_value == expected_value
+    assert dividends[0].unit is FinancialUnit.TEN_THOUSAND_CNY
+    assert dividends[0].period_end == PERIOD_END
+    observations = service.parquet.read_observations(manifest.source_files[0])
+    bound = [item for item in observations
+             if item.field_code is FinancialFieldCode.CASH_DIVIDENDS_PAID]
+    assert len(bound) == 1 and bound[0].provider_id == "official-financial-document"
+    assert bound[0].statement_scope.value == "CONSOLIDATED"
+    assert bound[0].source_snapshot_id == manifest.official_snapshot_id
+    assert bound[0].period_start == date(PERIOD_END.year, 1, 1)
+
+
+@pytest.mark.parametrize("header_change", ["currency", "period", "parent"])
+def test_pure_cash_dividends_require_explicit_consolidated_period_and_currency(
+    tmp_path: Path, header_change: str,
+) -> None:
+    service = _service(tmp_path)
+    official = service.official.get(
+        "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF, live=False,
+    )
+    assert official is not None
+    page, text = _cash_statement_page(service, official)
+    changed = text.replace(
+        "经营活动产生的现金流量净额",
+        "向本公司普通股股东支付的现金股利 20\n经营活动产生的现金流量净额", 1,
+    )
+    cash_start = changed.index("合并现金流量表")
+    cash = changed[cash_start:]
+    if header_change == "currency":
+        cash = cash.replace("币种：人民币", "")
+    elif header_change == "period":
+        cash = cash.replace("2025", "2024")
+    else:
+        cash = cash.replace("合并现金流量表", "母公司现金流量表")
+    _replace_page_text(service, page, changed[:cash_start] + cash)
+    reloaded = service.official.get(
+        "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+        as_of=ORIGINAL_AS_OF, live=False,
+    )
+    assert reloaded is not None
+    mapping = next(item for item in service.mappings
+                   if item.field_code is FinancialFieldCode.CASH_DIVIDENDS_PAID)
+    extracted, _ = FinancialPdfCertifier(service.state, service.objects).extract_values(
+        reloaded, PERIOD_END, FinancialPeriodType.ANNUAL, [mapping],
+    )
+    assert extracted == []
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_optional_dividend_official_original_keeps_required_release_readable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ambiguous: bool,
+) -> None:
+    service = _service(tmp_path)
+    cash_rows = "向本公司普通股股东支付的现金股利 20"
+    if ambiguous:
+        cash_rows += "\n向本公司普通股股东支付的现金股利 30"
+    capture = _capture_existing_annual(service, extra_cash_rows=cash_rows)
+    _deny_network_and_fixtures(service, monkeypatch)
+    report = service.sync(
+        "000001", Market.XSHE, PERIOD_END, FinancialPeriodType.ANNUAL,
+        live=True, allow_network=False,
+    )
+    assert report.status is FinancialSourceReleaseStatus.CERTIFIED
+    assert report.official_snapshot_id == capture.snapshot_id
+    assert report.coverage.certified_fact_count == (18 if ambiguous else 19)
+    assert "SECONDARY_FIELD_MISSING:CASH_DIVIDENDS_PAID" not in report.reason_codes
+    if ambiguous:
+        assert "OPTIONAL_OFFICIAL_VALUE_AMBIGUOUS:CASH_DIVIDENDS_PAID" in report.reason_codes
+    verified = service.read_certified_release(
+        "000001", PERIOD_END, FinancialPeriodType.ANNUAL,
+        as_of=datetime.now(UTC) + timedelta(seconds=1),
+    )
+    assert verified is not None
+    cash_facts = [item for item in verified.facts
+                  if item.field_code is FinancialFieldCode.CASH_DIVIDENDS_PAID]
+    assert len(cash_facts) == (0 if ambiguous else 1)
+    assert len(verified.facts) - len(cash_facts) == 18

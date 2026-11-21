@@ -64,6 +64,16 @@ class ProviderSelfProbeRunner:
             if not isinstance(rows, list):
                 raise ValueError("supplemental capture rows must be a list")
             record_count, quality = len(rows), bool(rows)
+        elif operation == "tushare-reference":
+            from astock.providers.tushare_reference import TushareReferenceProvider
+
+            if not isinstance(provider, TushareReferenceProvider):
+                raise ValueError("Tushare reference probe adapter mismatch")
+            rows, _snapshot = provider.fetch_instruments(
+                Market(str(definition.probe_target["market"])),
+                symbol=str(definition.probe_target["symbol"]), live=True,
+            )
+            record_count, quality = len(rows), len(rows) == 1
         elif operation == "tushare-structured":
             from astock.providers.tushare_structured import (
                 TushareQueryRequest,
@@ -94,6 +104,18 @@ class ProviderSelfProbeRunner:
             record_count, quality = self._disclosure_search(provider, definition.probe_target)
         elif operation == "news-lead":
             record_count, quality = self._news_lead(provider, definition.probe_target)
+        elif operation == "forecast-samples":
+            from astock.providers.forecasts import EastMoneyForecastProvider
+
+            if not isinstance(provider, EastMoneyForecastProvider):
+                raise ValueError("forecast probe adapter mismatch")
+            end = datetime.now(UTC).date()
+            result = provider.capture(
+                str(definition.probe_target["symbol"]),
+                Market(str(definition.probe_target["market"])), end - timedelta(days=30), end,
+                max_pages=1, page_size=1,
+            )
+            record_count, quality = len(result.observations), result.rejected_rows == 0
         elif operation == "macro-indicator":
             record_count, quality = self._macro_indicator(provider, definition.probe_target)
         else:
@@ -353,6 +375,8 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
             item for item in capabilities
             if item in {"market.reference.hint", "news.global.lead"}
         ]
+    elif operation == "tushare-reference":
+        selected = [item for item in capabilities if item == "instrument.identity"]
     elif operation == "tushare-structured":
         selected = [item for item in capabilities if item == "tushare.structured.query"]
     elif operation == "market-bars":
@@ -377,6 +401,8 @@ def _checked_capabilities(definition: ProviderDefinition) -> list[str]:
         selected = [item for item in capabilities if item == "disclosure.discover"]
     elif operation == "news-lead":
         selected = [item for item in capabilities if item == "news.discovery.lead"]
+    elif operation == "forecast-samples":
+        selected = [item for item in capabilities if item == "research.forecast_samples"]
     elif operation == "macro-indicator":
         selected = [item for item in capabilities if item.startswith("macro.")]
     else:

@@ -113,6 +113,7 @@ _EXPECTED_STATEMENTS: dict[FinancialFieldCode, FinancialStatementType] = {
     FinancialFieldCode.NET_CASH_OPERATING: FinancialStatementType.CASH_FLOW_STATEMENT,
     FinancialFieldCode.NET_CASH_INVESTING: FinancialStatementType.CASH_FLOW_STATEMENT,
     FinancialFieldCode.NET_CASH_FINANCING: FinancialStatementType.CASH_FLOW_STATEMENT,
+    FinancialFieldCode.CASH_DIVIDENDS_PAID: FinancialStatementType.CASH_FLOW_STATEMENT,
     FinancialFieldCode.EXCHANGE_EFFECT: FinancialStatementType.CASH_FLOW_STATEMENT,
     FinancialFieldCode.NET_PROFIT_CASH_FLOW: FinancialStatementType.CASH_FLOW_STATEMENT,
 }

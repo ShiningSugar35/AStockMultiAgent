@@ -114,6 +114,26 @@ def test_registered_public_brief_never_promotes_an_unlicensed_draft():
     assert display["receipt_id"] == receipt.receipt_id
     assert "已发布研究观点" in display["presentation_text"]
 
+    # Content integrity and account binding survive a valid unrelated receipt.
+    from astock.research.debate_evaluation import digest
+
+    rewritten = {**draft, "text": "a different recommendation"}
+    assert not render_session_brief(
+        rewritten, receipt, instrument_id="XSHG:600001"
+    )["public_approved"]
+    wrong_account = {
+        **draft,
+        "source_facts": {
+            **draft["source_facts"], "account_scope_hash": digest({"account_id": "foreign"}),
+        },
+    }
+    wrong_account["result_id"] = "session-brief:" + digest(
+        {key: value for key, value in wrong_account.items() if key != "result_id"}
+    )
+    assert not render_session_brief(
+        wrong_account, receipt, instrument_id="XSHG:600001"
+    )["public_approved"]
+
     # A valid receipt must not publish the same draft under another security.
     mismatch = render_session_brief(draft, receipt, instrument_id="XSHG:600002")
     assert mismatch["status"] == "NOT_AUTHORIZED_FOR_DISPLAY"
@@ -257,3 +277,35 @@ def test_monitor_private_target_without_account_fails_closed():
         SimpleNamespace(reasons=["MANUAL"]), now=datetime(2026, 11, 2, 8, tzinfo=UTC)
     )
     assert result["status"] == "MONITOR_BRIEF_RESEARCH_SCOPE_REQUIRED"
+
+
+def test_optional_missing_objects_do_not_block_receipt_projection(tmp_path):
+    from astock.core.object_store import ObjectStore
+    from astock.core.state import StateStore
+    from astock.investor_orchestration.store import InvestorOrchestrationStore
+    from astock.research.quality_cli import QualityServices
+    from astock.research.session_brief import SessionBriefReuseService
+
+    policy, calendar = setup()
+    store = InvestorOrchestrationStore(tmp_path / "state.sqlite")
+    store.initialize()
+    state = StateStore(store.path)
+    objects = ObjectStore(tmp_path / "objects")
+    state.register_artifact(
+        artifact_id="missing-optional", artifact_type="TechnicalIndicatorSnapshot",
+        schema_version="technical-indicator-snapshot-v1", object_hash="f" * 64, input_hashes=[],
+    )
+    reuse = SessionBriefReuseService(QualityServices(state, objects, None, calendar, policy))
+    result = reuse.project(
+        instrument_id="XSHG:600000", account_id=None, context_id="optional-not-a-gate",
+        now=datetime(2026, 11, 2, 8, tzinfo=UTC),
+    )
+    assert result["status"] == "DRAFT" and not result["public_approved"]
+    record = state.artifact_record(result["artifact_id"])
+    assert record is not None
+    import json
+
+    draft = json.loads(objects.get_bytes(record["object_hash"]))
+    assert draft["lineage"]["optional_input_gaps"] == [
+        {"type": "TechnicalIndicatorSnapshot", "reason": "UNAVAILABLE"}
+    ]

@@ -125,8 +125,8 @@ def test_canonical_cli_runs_real_accounting_and_consumes_holdout(tmp_path, capsy
         ]
         assert main(arguments) == 0
         report = json.loads(capsys.readouterr().out)
-        assert main(arguments) == 2
-        assert not capsys.readouterr().out
+        assert main(arguments) == 0
+        assert json.loads(capsys.readouterr().out) == report
     assert report["market_validation_claim"] is False
     assert report["paper_ledger_write_allowed"] is False
     assert report["trials"][-1]["query"]["phase"] == "FINAL_HOLDOUT"
@@ -134,11 +134,12 @@ def test_canonical_cli_runs_real_accounting_and_consumes_holdout(tmp_path, capsy
     assert report["selection_receipt"].startswith("StrategySelectionStudyRun:")
     from astock.experiments.validation import digest
 
-    report_hash = report.pop("report_hash")
-    assert report_hash == digest(report)
-    with pytest.raises(typer.Exit):
-        app.commands["strategy-validation-run"](str(path), artifact)
-    assert output.pop()["status"] == "UNAVAILABLE"
+    report_hash = report["report_hash"]
+    assert report_hash == digest({
+        key: value for key, value in report.items() if key != "report_hash"
+    })
+    app.commands["strategy-validation-run"](str(path), artifact)
+    assert output.pop() == report
     with pytest.raises(typer.Exit):
         app.commands["strategy-validation-run"](str(path), "absent")
     assert output.pop()["status"] == "UNAVAILABLE"
@@ -165,3 +166,81 @@ def test_standalone_execution_requires_explicit_existing_stores(tmp_path, capsys
         == 2
     )
     assert not absent.exists()
+
+
+
+def test_canonical_run_records_constructor_failure_before_any_evaluation(tmp_path):
+    from astock.core.object_store import ObjectStore
+    from astock.core.state import StateStore
+    from astock.experiments.cli import run_document
+    from astock.experiments.selection_seal import ExperimentRunUnavailable, RegisteredExperimentRun
+    from astock.investor_orchestration.store import InvestorOrchestrationStore
+    from tests.unit.test_strategy_validation import canonical_fixture
+
+    metadata = InvestorOrchestrationStore(tmp_path / "state.sqlite")
+    metadata.initialize()
+    state, objects = StateStore(metadata.path), ObjectStore(tmp_path / "objects")
+    _, plan = canonical_fixture()
+    with pytest.raises(ExperimentRunUnavailable) as failed:
+        run_document(plan, state, objects, "absent")
+    assert failed.value.report["experiment_status"] == "FAILED"
+    assert failed.value.report["details"]["failure"]["stage"] == "CONSTRUCT_EVALUATOR"
+    assert all(item["status"] == "NOT_ATTEMPTED"
+               for item in failed.value.report["details"]["attempts"])
+    record = RegisteredExperimentRun(state, objects, plan, "absent")
+    row = state.artifact_record(record.artifact_id)
+    assert row is not None
+    frozen = json.loads(objects.get_bytes(row["object_hash"]))
+    assert frozen["plan"] == plan.model_dump(mode="json")
+
+
+def test_actual_cli_recovers_complete_recorded_results_without_evaluator(tmp_path, monkeypatch):
+    from astock.core.object_store import ObjectStore
+    from astock.core.state import StateStore
+    from astock.experiments.market_evaluator import CanonicalMarketEvaluator
+    from astock.experiments.selection_seal import RegisteredExperimentRun, RegisteredSelectionSeal
+    from astock.investor_orchestration.store import InvestorOrchestrationStore
+    from tests.unit.test_strategy_validation import canonical_fixture, register_canonical
+
+    class StopBeforeFinalReceipt(BaseException):
+        pass
+
+    class App:
+        commands = {}
+
+        def command(self, name):
+            def register(function):
+                self.commands[name] = function
+                return function
+            return register
+
+    metadata = InvestorOrchestrationStore(tmp_path / "state.sqlite")
+    metadata.initialize()
+    state, objects = StateStore(metadata.path), ObjectStore(tmp_path / "objects")
+    release, plan = canonical_fixture()
+    artifact = register_canonical(state, objects, release)
+    path = tmp_path / "request.json"
+    path.write_text(plan.request.model_dump_json(), encoding="utf-8")
+    app, output = App(), []
+    register_commands(app, lambda: (None, state, objects), output.append)
+    complete = RegisteredExperimentRun.complete
+
+    def stop(*args, **kwargs):
+        raise StopBeforeFinalReceipt()
+
+    monkeypatch.setattr(RegisteredExperimentRun, "complete", stop)
+    with pytest.raises(StopBeforeFinalReceipt):
+        app.commands["strategy-validation-run"](str(path), artifact)
+    monkeypatch.setattr(RegisteredExperimentRun, "complete", complete)
+
+    def no_execution(*args, **kwargs):
+        raise AssertionError("recorded recovery must not construct an evaluator or claim holdout")
+
+    monkeypatch.setattr(CanonicalMarketEvaluator, "__init__", no_execution)
+    monkeypatch.setattr(RegisteredSelectionSeal, "__call__", no_execution)
+    app.commands["strategy-validation-run"](str(path), artifact, recover_recorded=True)
+    report = output.pop()
+    assert report["trials"][-1]["query"]["phase"] == "FINAL_HOLDOUT"
+    assert report["market_validation_claim"] is False
+    app.commands["strategy-validation-run"](str(path), artifact)
+    assert output.pop() == report

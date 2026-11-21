@@ -13,6 +13,7 @@ from typing import Any, cast
 import yaml
 
 from astock.core.artifact_reading import decode_registered_artifact
+from astock.core.errors import StorageError
 from astock.core.hashing import content_hash
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
@@ -278,10 +279,8 @@ class ResearchTeamService:
         state: StateStore,
         objects: ObjectStore,
         policy: ResearchTeamPolicy | None = None,
-        dispute_reviewer=None,
     ) -> None:
         self.project_root = project_root
-        self.dispute_reviewer = dispute_reviewer
         self.state = state
         self.objects = objects
         self.policy = policy or load_research_team_policy(
@@ -459,24 +458,9 @@ class ResearchTeamService:
                 "registered member artifact"
             )
 
-        member_hashes: list[str] = []
-        for member_artifact_id in output.member_artifact_ids:
-            record = self.state.artifact_record(member_artifact_id)
-            if record is None or not self.objects.verify(str(record["object_hash"])):
-                raise ValueError("role output references an unavailable member artifact")
-            member_hashes.append(str(record["object_hash"]))
-        if task.role is ResearchTaskRole.MARKET_CONTEXT:
-            for member_artifact_id in output.member_artifact_ids:
-                member = self.state.artifact_record(member_artifact_id)
-                if member is not None and str(member["type"]) == "MarketContextPack":
-                    context = MarketContextPack.model_validate_json(
-                        self.objects.get_bytes(str(member["object_hash"]))
-                    )
-                    if context.technical_snapshot_artifact_id is not None and (
-                        (plan.company_id is not None and context.company_id != plan.company_id)
-                        or not self._market_context_technical_valid(context)
-                    ):
-                        raise ValueError("technical market-context provenance mismatch")
+        output, member_hashes, technical_observations = self._resolve_role_output_members(
+            output, task, plan,
+        )
         if task.role is ResearchTaskRole.UNIVERSE:
             universe_is_full = self._universe_output_has_full_coverage(output)
             if output.readiness_check_results.get("UNIVERSE_COVERAGE") is not universe_is_full:
@@ -545,9 +529,74 @@ class ResearchTeamService:
             "task_id": task.task_id,
             "role": task.role.value,
             "output_contract": task.output_contract,
+            "technical_observations": technical_observations,
             "artifact_id": artifact_id,
             "object_hash": ref.sha256,
         }
+
+    def _resolve_role_output_members(
+        self, output: ResearchRoleOutput, task: ResearchTeamTask, plan: ResearchTeamPlan,
+    ) -> tuple[ResearchRoleOutput, list[str], list[dict[str, str]]]:
+        """Resolve immutable member lineage and optional canonical technical enrichment."""
+        member_hashes: list[str] = []
+        member_ids: list[str] = []
+        technical_observations: list[dict[str, str]] = []
+        for member_artifact_id in output.member_artifact_ids:
+            record = self.state.artifact_record(member_artifact_id)
+            if record is None or not self.objects.verify(str(record["object_hash"])):
+                raise ValueError("role output references an unavailable member artifact")
+            member_hash = str(record["object_hash"])
+            if (
+                task.role is ResearchTaskRole.MARKET_CONTEXT
+                and record["type"] == "MarketContextPack"
+            ):
+                context = MarketContextPack.model_validate_json(
+                    self.objects.get_bytes(member_hash)
+                )
+                if plan.company_id is not None and context.company_id != plan.company_id:
+                    raise ValueError("market-context company mismatch")
+                if context.technical_snapshot_artifact_id is not None:
+                    if not self._market_context_technical_valid(context):
+                        raise ValueError("technical market-context provenance mismatch")
+                else:
+                    from astock.technical.policy import load_technical_analysis_policy
+                    from astock.technical.registered import attach_market_context
+
+                    try:
+                        enriched, _ = attach_market_context(
+                            self.state, self.objects, context,
+                            policy=load_technical_analysis_policy(
+                                self.project_root / "configs" / "technical_analysis.yaml"
+                            ),
+                            calendar_path=(
+                                self.project_root / "configs" / "official_trading_calendar.yaml"
+                            ),
+                        )
+                    except (ValueError, OSError, StorageError) as exc:
+                        # Optional research enrichment never changes price authority
+                        # or blocks an otherwise complete canonical market context.
+                        technical_observations.append({
+                            "artifact_id": member_artifact_id,
+                            "status": "TECHNICAL_INPUT_UNAVAILABLE",
+                            "reason_type": type(exc).__name__,
+                        })
+                    else:
+                        ref = self.objects.put_json(enriched.model_dump(mode="json"))
+                        derived_id = "MarketContextPack:" + ref.sha256
+                        self.state.register_artifact(
+                            artifact_id=derived_id, artifact_type="MarketContextPack",
+                            schema_version=enriched.schema_version, object_hash=ref.sha256,
+                            input_hashes=[
+                                member_hash, str(enriched.technical_snapshot_object_hash),
+                                enriched.daily_release_object_hash,
+                            ],
+                        )
+                        member_artifact_id, member_hash = derived_id, ref.sha256
+            member_ids.append(member_artifact_id)
+            member_hashes.append(member_hash)
+        if member_ids != output.member_artifact_ids:
+            output = output.model_copy(update={"member_artifact_ids": member_ids})
+        return output, member_hashes, technical_observations
 
     def evaluate_coverage(self, request: ResearchCoverageRequest) -> ResearchCoverageReport:
         def score(completed: list[str], required: list[str], *, empty: float = 0.0) -> float:
@@ -725,8 +774,6 @@ class ResearchTeamService:
         for task in plan.tasks:
             if task.task_id in pending and set(task.dependencies).issubset(completed_set):
                 ready.append(task.task_id)
-        if "investment-red-team" in ready and getattr(self, "dispute_reviewer", None) is not None:
-            self.run_dispute_reviewer(plan_id, self.dispute_reviewer)
         return {
             "status": "COMPLETE" if len(completed) == len(plan.tasks) else "IN_PROGRESS",
             "plan_id": plan_id,
@@ -754,6 +801,7 @@ class ResearchTeamService:
         if plan is None:
             raise ValueError("unknown research-team plan")
         cases: dict[str, Any] = {}
+        case_source_hashes: dict[str, set[str]] = {}
         hashes = []
         for task_id, model in (
             ("bull-case", IndependentBullCase),
@@ -792,6 +840,7 @@ class ResearchTeamService:
                     if task_id in cases:
                         raise ValueError("AMBIGUOUS_REVIEWER_CASE")
                     cases[task_id] = case
+                    case_source_hashes[task_id] = set(member.get("input_hashes") or ())
                     hashes.append(str(member["object_hash"]))
         if len(cases) != 2:
             return {"status": "TYPED_CASES_UNAVAILABLE", "publication_authority": False}
@@ -803,29 +852,32 @@ class ResearchTeamService:
         quality = load_quality_policy(self.project_root / "configs/research_quality.yaml")
         if any(len(case.case) > quality.max_text_chars for case in (bull, bear)):
             raise ValueError("INPUT_LIMIT")
-        disputed = bull.valuation_per_share != bear.valuation_per_share
+        questions = []
+        if bull.valuation_per_share != bear.valuation_per_share:
+            questions.append({
+                "topic_id": "valuation",
+                "kind": "ASSUMPTION",
+                "bull_quote": bull.case,
+                "bear_quote": bear.case,
+                "question": "核对冻结证据与估值假设；未核实的分歧继续保留。",
+            })
+        position_questions, source_hashes = self._reviewer_position_questions(
+            bull, bear, case_source_hashes,
+        )
+        questions.extend(position_questions)
+        hashes.extend(source_hashes)
+        deferred = max(0, len(questions) - quality.max_questions)
+        questions = questions[:quality.max_questions]
+        disputed = bool(questions)
         body = sealed(
             "reviewer-dispute-input",
             {
                 "plan_id": plan_id,
                 "company_id": bull.company_id,
-                "input_hashes": sorted(hashes),
+                "input_hashes": sorted(set(hashes)),
                 "status": "DISPUTED" if disputed else "NO_DISAGREEMENT",
-                "reviewer_questions": (
-                    [
-                        {
-                            "topic_id": "valuation",
-                            "bull_quote": bull.case,
-                            "bear_quote": bear.case,
-                            "question": (
-                                "Verify valuation assumptions against frozen evidence; "
-                                "keep unverified disputes open."
-                            ),
-                        }
-                    ]
-                    if disputed
-                    else []
-                ),
+                "reviewer_questions": questions,
+                "deferred_question_count": deferred,
                 "reviewer_task_id": "investment-red-team",
                 "maximum_rounds": quality.cross_response_rounds if disputed else 0,
                 "generation_limit": quality.cross_response_limit if disputed else 0,
@@ -833,7 +885,7 @@ class ResearchTeamService:
                 "publication_authority": False,
             },
         )
-        identity = "ReviewerDisputeInput:" + digest({"plan": plan_id, "inputs": sorted(hashes)})
+        identity = "ReviewerDisputeInput:" + digest({"plan": plan_id, "frozen_input": body})
         existing = self.state.artifact_record(identity)
         if existing is None:
             ref = self.objects.put_json(body)
@@ -842,7 +894,7 @@ class ResearchTeamService:
                 artifact_type="ReviewerDisputeInput",
                 schema_version=body["schema_version"],
                 object_hash=ref.sha256,
-                input_hashes=sorted(hashes),
+                input_hashes=sorted(set(hashes)),
             )
         review = self.state.get_checkpoint("dispute-reviewer", identity)
         return {
@@ -851,7 +903,71 @@ class ResearchTeamService:
             "cross_review": dict(review["cursor"]) if review else None,
         }
 
-    def run_dispute_reviewer(self, plan_id: str, reviewer) -> dict[str, Any]:
+    def _reviewer_position_questions(
+        self, bull: Any, bear: Any, case_source_hashes: dict[str, set[str]],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Bind typed material disagreements to the two cases' own frozen sources."""
+        hashes: list[str] = []
+        questions: list[dict[str, Any]] = []
+        from astock.schemas.institutional_research import DriverTree, ForecastPack, ValuationPack
+        from astock.schemas.research import FrozenEvidencePack
+
+        source_models = {
+            "FrozenEvidencePack": FrozenEvidencePack,
+            "CompanyFundamentalSnapshot": CompanyFundamentalSnapshot,
+            "DriverTree": DriverTree, "ForecastPack": ForecastPack, "ValuationPack": ValuationPack,
+        }
+        positions = {}
+        for side, case in (("BULL", bull), ("BEAR", bear)):
+            indexed = {}
+            for position in case.positions:
+                if position.topic_id in indexed or position.statement not in case.case:
+                    raise ValueError("REVIEWER_POSITION_NOT_BOUND")
+                bindings = []
+                for artifact_id in position.evidence_artifact_ids:
+                    record = self.state.artifact_record(artifact_id)
+                    if record is None or not self.objects.verify(str(record["object_hash"])):
+                        raise ValueError("REVIEWER_POSITION_SOURCE_UNAVAILABLE")
+                    source_hash = str(record["object_hash"])
+                    if source_hash not in case_source_hashes[side.lower() + "-case"]:
+                        raise ValueError("REVIEWER_POSITION_SOURCE_NOT_IN_CASE")
+                    model = source_models.get(str(record["type"]))
+                    if model is None:
+                        raise ValueError("REVIEWER_POSITION_SOURCE_SCOPE_MISMATCH")
+                    source = decode_registered_artifact(
+                        self.objects.get_bytes(source_hash), model,
+                        registry_schema_version=record["schema_version"],
+                    )
+                    source_as_of = getattr(source, "as_of", None)
+                    if (
+                        getattr(source, "company_id", None) != case.company_id
+                        or source_as_of is None or source_as_of > case.as_of
+                    ):
+                        raise ValueError("REVIEWER_POSITION_SOURCE_SCOPE_MISMATCH")
+                    bindings.append(source_hash)
+                    hashes.append(source_hash)
+                indexed[position.topic_id] = (position, sorted(set(bindings)))
+            positions[side] = indexed
+        for topic in sorted(positions["BULL"].keys() & positions["BEAR"].keys()):
+            left, left_sources = positions["BULL"][topic]
+            right, right_sources = positions["BEAR"][topic]
+            if (
+                not (left.material or right.material)
+                or "STYLE" in {left.kind, right.kind}
+                or (left.position == right.position and left.kind == right.kind)
+            ):
+                continue
+            questions.append({
+                "topic_id": topic,
+                "kind": left.kind if left.kind == right.kind else "EPISTEMIC_CLASSIFICATION",
+                "bull_quote": left.statement,
+                "bear_quote": right.statement,
+                "source_hashes": sorted(set(left_sources) | set(right_sources)),
+                "question": "区分事实、假设和计算分歧，说明对结论的影响，不为达成共识改写证据。",
+            })
+        return questions, hashes
+
+    def run_dispute_reviewer(self, plan_id: str, reviewer=None) -> dict[str, Any]:
         """One opt-in host call on a disputed frozen input, never a second vote.
 
         An interrupted call stays reserved: automatic retries could duplicate a
@@ -863,8 +979,16 @@ class ResearchTeamService:
         key = str(payload["artifact_id"])
         from astock.core.hashing import canonical_json_bytes, sha256_bytes
         from astock.core.state import utc_now_text
+        from astock.research.debate_evaluation import digest
 
-        reserved = {"status": "RESERVED", "reason": "REVIEWER_CALL_ALREADY_RESERVED"}
+        input_hash = digest({k: v for k, v in payload.items() if k != "cross_review"})
+        operation_id = "dispute-review:" + digest({"input": key, "hash": input_hash})
+        reserved = {
+            "status": "RESERVED", "reason": "REVIEWER_CALL_ALREADY_RESERVED",
+            "operation_id": operation_id, "input_hash": input_hash,
+            "generation_limit": payload["generation_limit"],
+            "publication_authority": False,
+        }
         # Claim in the existing checkpoint lane atomically; set_checkpoint is an
         # upsert and cannot express insert-only ownership across worker sessions.
         with self.state.transaction() as connection:
@@ -884,24 +1008,74 @@ class ResearchTeamService:
         if not inserted:
             checkpoint = self.state.get_checkpoint("dispute-reviewer", key)
             return dict(checkpoint["cursor"]) if checkpoint else reserved
+        if reviewer is None:
+            return {**reserved, "dispatch_granted": True, "input": payload}
         response = reviewer(payload)
+        return self.complete_dispute_reviewer(
+            key, operation_id=operation_id, input_hash=input_hash, response=response
+        )
+
+    def complete_dispute_reviewer(
+        self, input_artifact_id: str, *, operation_id: str, input_hash: str, response: str
+    ) -> dict[str, Any]:
+        """Reconcile an already reserved host result; never dispatch another generation."""
+        from astock.core.hashing import canonical_json_bytes
+        from astock.core.state import utc_now_text
+        from astock.research.debate_evaluation import digest
+
+        checkpoint = self.state.get_checkpoint("dispute-reviewer", input_artifact_id)
+        if checkpoint is None:
+            raise ValueError("REVIEWER_OPERATION_NOT_RESERVED")
+        reservation = dict(checkpoint["cursor"])
+        if (reservation.get("operation_id"), reservation.get("input_hash")) != (
+            operation_id, input_hash
+        ):
+            raise ValueError("REVIEWER_CALLBACK_IDENTITY_MISMATCH")
         if (
             not isinstance(response, str)
             or not response
-            or len(response) > payload["generation_limit"]
+            or len(response) > reservation["generation_limit"]
         ):
             raise ValueError("REVIEWER_RESPONSE_OUT_OF_BOUNDS")
-        ref = self.objects.put_json(
-            {"input_artifact_id": key, "response": response, "publication_authority": False}
-        )
-        result = {"status": "COMPLETE", "object_hash": ref.sha256, "publication_authority": False}
-        self.state.set_checkpoint(
-            scope_type="dispute-reviewer",
-            scope_key=key,
-            cursor=result,
-            status="COMPLETE",
-            object_hash=ref.sha256,
-        )
+        response_hash = digest({"response": response})
+        if reservation.get("status") == "COMPLETE":
+            if reservation.get("response_hash") != response_hash:
+                raise ValueError("REVIEWER_CALLBACK_CONFLICT")
+            return reservation
+        if reservation.get("status") != "RESERVED":
+            raise ValueError("REVIEWER_OPERATION_NOT_RESERVED")
+        ref = self.objects.put_json({
+            "input_artifact_id": input_artifact_id, "input_hash": input_hash,
+            "operation_id": operation_id, "response": response, "publication_authority": False,
+        })
+        result = {
+            **reservation, "status": "COMPLETE", "object_hash": ref.sha256,
+            "response_hash": response_hash, "publication_authority": False,
+        }
+        with self.state.transaction() as connection:
+            row = connection.execute(
+                "SELECT cursor_json,status FROM checkpoint WHERE scope_type=? AND scope_key=?",
+                ("dispute-reviewer", input_artifact_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("REVIEWER_OPERATION_NOT_RESERVED")
+            import json
+
+            current = json.loads(row["cursor_json"])
+            if current.get("status") == "COMPLETE":
+                if current.get("response_hash") != response_hash:
+                    raise ValueError("REVIEWER_CALLBACK_CONFLICT")
+                return current
+            if current != reservation:
+                raise ValueError("REVIEWER_RESERVATION_CHANGED")
+            connection.execute(
+                "UPDATE checkpoint SET cursor_json=?,status=?,object_hash=?,committed_at=? "
+                "WHERE scope_type=? AND scope_key=? AND status='RESERVED'",
+                (
+                    canonical_json_bytes(result).decode(), "COMPLETE", ref.sha256,
+                    utc_now_text(), "dispute-reviewer", input_artifact_id,
+                ),
+            )
         return result
 
     def evaluate_readiness(

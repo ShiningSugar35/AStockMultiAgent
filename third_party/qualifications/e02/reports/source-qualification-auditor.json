@@ -1,36 +1,36 @@
 {
-  "schema_version": "capability-qualification-report-v1",
-  "report_id": "f271b068d7995c88475223b32ca3bf26cf1c6ac12f0214fd7e36576c083b608e",
-  "capability_id": "source-qualification-auditor",
-  "candidate_version": "sha256:a0c1e4da23623cd6ad238a6ffbd61110e7008bd3247a5ad70d55fe6c95f826ba",
-  "requested_stage": "PRODUCTION_BACKUP",
   "admitted_stage": "SHADOW",
+  "candidate_version": "sha256:a0c1e4da23623cd6ad238a6ffbd61110e7008bd3247a5ad70d55fe6c95f826ba",
+  "capability_id": "source-qualification-auditor",
   "checks": {
-    "license": "PASS",
-    "terms_of_service": "PASS",
-    "data_rights": "PASS",
-    "provenance": "PASS",
+    "cache_behavior": "NOT_APPLICABLE",
+    "cost": "PASS",
     "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "PASS",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "PASS",
+    "provenance": "PASS",
     "sbom": "PASS",
     "security_review": "PASS",
-    "maintenance": "PASS",
-    "cost": "PASS",
-    "latency": "FAIL",
-    "cache_behavior": "NOT_APPLICABLE",
-    "offline_behavior": "PASS",
-    "failure_behavior": "PASS",
-    "exit_uninstall": "PASS"
+    "terms_of_service": "PASS"
   },
-  "recorded_validation": "PASS",
-  "controlled_live_validation": "FAIL",
-  "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
   "evidence_object_hashes": [
-    "0aa3d71444ed7c969410185a0d556e65f65774b559e6c6aaa7a5711d40c5de9c"
+    "2cc291eca306c8638c78559595c5e777fe80c6f3f35f68eb97375b6ac4e2efc6"
   ],
-  "valid_from": "2026-11-21T10:47:02Z",
   "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
     "CONTROLLED_LIVE_SKILL_EXECUTION_NOT_FROZEN"
-  ]
+  ],
+  "recorded_validation": "PASS",
+  "report_id": "40ae75a85c5bbe05e522d894e0e60a793906a63b1097f4ed4ba3a7cd3284534a",
+  "requested_stage": "PRODUCTION_BACKUP",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-11-21T14:23:52Z"
 }

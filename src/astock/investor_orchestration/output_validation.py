@@ -27,6 +27,7 @@ from astock.investor_orchestration.models import (
 )
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.utils import content_hash, utc_now
+from astock.research.institutional import require_active_institutional_inputs
 from astock.research.validation_cache import ResearchValidationCache
 
 _SCHEMA_MODULES = {
@@ -115,6 +116,7 @@ class RegisteredOutputVerifier:
         record = self.state.artifact_record(artifact_id)
         if record is None or record["type"] != model.__name__:
             raise ValueError("output is not registered with the required artifact type")
+        require_active_institutional_inputs(self.state, [str(record["object_hash"])])
         return artifact_reading.decode_registered_artifact(
             self.objects.get_bytes(str(record["object_hash"])),
             model,
@@ -152,6 +154,10 @@ class RegisteredOutputVerifier:
             }
         )
         for artifact_id in artifact_ids:
+            record = self.state.artifact_record(artifact_id)
+            if record is not None:
+                # Mutable premise eligibility is never inherited from an immutable cache proof.
+                require_active_institutional_inputs(self.state, [str(record["object_hash"])])
             self.validation_cache.verify_once(
                 artifact_id=artifact_id,
                 validator_hash=self._validator_hash,

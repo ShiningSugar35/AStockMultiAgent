@@ -9,7 +9,13 @@ from typing import cast
 
 import pytest
 
-from astock.candidates.discovery_features import build_discovery_features, peer_percentile
+from astock.candidates.discovery_features import (
+    build_discovery_features,
+    observed_peer_percentile,
+    official_guidance_direction,
+    paired_relative_change,
+    peer_percentile,
+)
 from astock.schemas.financial import (
     FinancialDurationSemantics as Duration,
 )
@@ -63,7 +69,7 @@ def fact(
         Statement.BALANCE_SHEET
         if instant
         else Statement.CASH_FLOW_STATEMENT
-        if field in {Field.NET_CASH_OPERATING, Field.NET_CASH_FINANCING}
+        if field in {Field.NET_CASH_OPERATING, Field.NET_CASH_FINANCING, Field.CASH_DIVIDENDS_PAID}
         else Statement.INCOME_STATEMENT
     )
     semantics = (
@@ -466,3 +472,102 @@ def test_numeric_context_is_local_and_invalid_raw_inputs_invalidate_keys():
     first = packet(rows)
     rows[0] = rows[0].model_copy(update={"reported_value": Decimal("2e1000000")})
     assert packet(rows).semantic_fingerprint != first.semantic_fingerprint
+
+
+def test_three_year_cash_and_roe_stability_require_all_periods_and_positive_equity():
+    rows = corpus() + [
+        fact(Field.NET_CASH_OPERATING, 64, 2024, 12),
+        fact(Field.NET_CASH_OPERATING, 54, 2023, 12),
+        *(fact(Field.TOTAL_EQUITY, value, year, 12)
+          for year, value in ((2022, 400), (2023, 600), (2024, 1000), (2025, 1000))),
+    ]
+    result = packet(rows)
+    assert result.feature("CASH_CONVERSION_THREE_YEAR_FLOOR").value == Decimal(".8")
+    # 2025=100/1000=.1, 2024=80/800=.1, 2023=60/500=.12.
+    assert result.feature("TOTAL_EQUITY_ROE_THREE_YEAR_RANGE").value == Decimal(".02")
+    revised = [
+        item.model_copy(update={"reported_value": Decimal("-1")})
+        if item.field_code is Field.TOTAL_EQUITY and item.period_end.year == 2022 else item
+        for item in rows
+    ]
+    negative = packet(revised)
+    assert negative.feature("TOTAL_EQUITY_ROE_THREE_YEAR_RANGE").status is Status.NOT_APPLICABLE
+    assert (
+        negative.feature("REVENUE_TTM").dependency_fingerprint
+        == result.feature("REVENUE_TTM").dependency_fingerprint
+    )
+    assert packet().feature("CASH_CONVERSION_THREE_YEAR_FLOOR").status is Status.INSUFFICIENT_DATA
+    assert (
+        packet(rows, industry=Industry.BANK).feature("CASH_CONVERSION_THREE_YEAR_FLOOR").status
+        is Status.NOT_APPLICABLE
+    )
+
+
+def test_feature_manifest_preserves_unknowns_and_does_not_create_a_vote():
+    from astock.candidates.discovery_features import feature_manifest
+
+    manifest = feature_manifest(packet())
+    dividend = next(item for item in manifest if item["metric_id"] == "DIVIDEND_CASH_COVERAGE")
+    assert dividend["value"] is None and dividend["missing_policy"] == "UNKNOWN_NOT_ZERO"
+    assert all(item["independent_vote_weight"] == 0 for item in manifest)
+    assert all(not item["historical_point_in_time_claim"] for item in manifest)
+
+
+def test_pure_cash_dividends_use_matching_ttm_and_money_units():
+    rows = corpus() + [
+        fact(Field.CASH_DIVIDENDS_PAID, 40, 2025, 12),
+        fact(Field.CASH_DIVIDENDS_PAID, 15, 2025, 6),
+        fact(Field.CASH_DIVIDENDS_PAID, 25, 2026, 6),
+    ]
+    result = packet(rows).feature("DIVIDEND_CASH_COVERAGE")
+    assert result.value == Decimal("3.4")  # operating cash 170 / pure dividends 50
+    assert len(result.source_fact_ids) == 6
+    bad = rows[:-1] + [rows[-1].model_copy(update={"unit": Unit.CNY_PER_SHARE})]
+    assert packet(bad).feature("DIVIDEND_CASH_COVERAGE").value is None
+    assert packet(rows[:-1]).feature("DIVIDEND_CASH_COVERAGE").value is None
+
+
+def test_zero_cash_dividend_is_not_infinite_coverage():
+    rows = corpus() + [
+        fact(Field.CASH_DIVIDENDS_PAID, 0, year, month)
+        for year, month in ((2025, 12), (2025, 6), (2026, 6))
+    ]
+    result = packet(rows).feature("DIVIDEND_CASH_COVERAGE")
+    assert result.status is Status.NOT_APPLICABLE and result.value is None
+
+
+def test_paired_changes_do_not_impute_negative_or_zero_baselines():
+    value, count, unavailable = paired_relative_change([
+        (Decimal(3), Decimal(2)), (Decimal(11), Decimal(10)),
+        (Decimal(2), Decimal(0)), (Decimal(1), Decimal(-1)),
+    ])
+    assert value == Decimal("0.3") and count == 2 and unavailable == 2
+    assert paired_relative_change([]) == (None, 0, 0)
+
+
+def test_explicit_peer_description_requires_ten_observed_distinct_companies():
+    values = {str(index): Decimal(index) for index in range(10)}
+    percentile, ids = observed_peer_percentile("4", values)
+    assert percentile == Decimal("0.45") and len(ids) == 10
+    unavailable = values | {"9": None}
+    assert observed_peer_percentile("4", unavailable)[0] is None
+
+
+def test_guidance_category_requires_exact_issuer_period_and_marked_field():
+    text = "证券代码：600001\n2026年度业绩预告\n业绩预告类型：预增\n"
+    assert official_guidance_direction(
+        text, company_id="600001", period_start=date(2026, 1, 1), period_end=date(2026, 12, 31),
+    ) == ("预增", ())
+    for invalid in (
+        text.replace("600001", "600002"),
+        text.replace("2026年度", "2025年度"),
+        text.replace("业绩预告类型：预增", "不属于预增"),
+        text.replace("业绩预告类型：预增", "□预增 □预减"),
+        text.replace("业绩预告类型：预增", "√预增 √预减"),
+        "证券代码：600001\n2025年度业绩预告\n√预增\n2026年度对比说明",
+        "证券代码：600001\n2026年度业绩预告\n2025年度业绩预告\n√预增",
+    ):
+        assert official_guidance_direction(
+            invalid, company_id="600001",
+            period_start=date(2026, 1, 1), period_end=date(2026, 12, 31),
+        )[0] is None

@@ -16,6 +16,8 @@ from astock.investor_orchestration.models import (
 from astock.investor_orchestration.recommendation_fulfillment import (
     RecommendationFulfillmentAssessment,
 )
+from astock.schemas.research_acquisition import AcquisitionCapability
+from astock.schemas.research_continuation import PublicRecoveryCoverage
 
 
 class InvestmentRequestNotTerminalError(RuntimeError):
@@ -42,6 +44,7 @@ class InvestmentClosureDecision(StrictModel):
     investment_conclusion_blocked: bool
     investor_view_allowed: bool
     automatic_resolution_exhausted: bool = False
+    public_recovery_evidence: tuple[PublicRecoveryCoverage, ...] = ()
     private_user_input_required: bool = False
     automatic_budget_exhausted: bool = False
     private_input_capabilities: tuple[str, ...] = ()
@@ -56,6 +59,56 @@ _MATERIAL_INVESTMENT_INTENTS = frozenset(
     }
 )
 _SUCCESS = {CapabilityRunStatus.COMPLETED, CapabilityRunStatus.REUSED}
+
+
+_RECOVERY_CAPABILITIES = {
+    AcquisitionCapability.INSTRUMENT_IDENTITY: "ENTITY_IDENTITY",
+    AcquisitionCapability.DAILY_MARKET: "CURRENT_MARKET",
+    AcquisitionCapability.CORPORATE_ACTIONS: "EVENT_RESEARCH",
+    AcquisitionCapability.FINANCIAL_ANNUAL: "FINANCIAL_INTEGRITY",
+    AcquisitionCapability.FINANCIAL_LATEST_INTERIM: "FINANCIAL_INTEGRITY",
+}
+
+
+def _public_routes_exhausted(
+    request: InvestorRequestEnvelope, plan: CapabilityExecutionPlan,
+    remaining: tuple[str, ...], evidence: tuple[PublicRecoveryCoverage, ...],
+) -> bool:
+    if not request.entity_ids or not remaining or not evidence:
+        return False
+    by_entity: dict[str, list[PublicRecoveryCoverage]] = {}
+    for proof in evidence:
+        if proof.request_id != request.request_id:
+            raise ValueError("public recovery evidence belongs to another request")
+        by_entity.setdefault(f"{proof.market.value}:{proof.company_id}", []).append(proof)
+    if set(request.entity_ids) != set(by_entity):
+        return False
+    exhausted_by_entity = []
+    for proofs in by_entity.values():
+        # Multiple continuations for one issuer must each finish their declared gaps.
+        exhausted = set()
+        for proof in proofs:
+            empty = proof.exhausted_capabilities()
+            for capability in empty:
+                target = _RECOVERY_CAPABILITIES[capability]
+                related = {item for item in proof.missing_capabilities
+                           if _RECOVERY_CAPABILITIES[item] == target}
+                if related.issubset(empty):
+                    exhausted.add(target)
+        incomplete_targets = {
+            _RECOVERY_CAPABILITIES[item] for proof in proofs
+            for item in set(proof.missing_capabilities) - proof.exhausted_capabilities()
+        }
+        exhausted_by_entity.append(exhausted - incomplete_targets)
+    blocked = set.intersection(*exhausted_by_entity)
+    while True:
+        descendants = {
+            node.capability_id for node in plan.nodes if set(node.dependencies) & blocked
+        }
+        if descendants.issubset(blocked):
+            break
+        blocked.update(descendants)
+    return set(remaining).issubset(blocked)
 
 
 class InvestmentRequestClosurePolicy:
@@ -73,6 +126,7 @@ class InvestmentRequestClosurePolicy:
         coverage: CapabilityCoverageReceipt,
         *,
         automatic_resolution_exhausted: bool = False,
+        public_recovery_evidence: tuple[PublicRecoveryCoverage, ...] = (),
         private_user_input_required: bool = False,
         private_input_capabilities: tuple[str, ...] = (),
         automatic_budget_exhausted: bool = False,
@@ -128,6 +182,10 @@ class InvestmentRequestClosurePolicy:
             blocked.update(descendants)
         remaining_automatic = tuple(sorted(set(missing) - blocked))
         private_needed = bool(private_scope)
+        # A caller boolean is retained only for API compatibility, never as evidence.
+        automatic_resolution_exhausted = _public_routes_exhausted(
+            request, plan, remaining_automatic, public_recovery_evidence,
+        )
 
         terminal_coverage = (
             not missing
@@ -172,6 +230,7 @@ class InvestmentRequestClosurePolicy:
             investment_conclusion_blocked=not ready,
             investor_view_allowed=ready,
             automatic_resolution_exhausted=automatic_resolution_exhausted,
+            public_recovery_evidence=public_recovery_evidence,
             automatic_budget_exhausted=automatic_budget_exhausted,
             private_user_input_required=private_needed and not ready,
             private_input_capabilities=tuple(sorted(private_scope)),

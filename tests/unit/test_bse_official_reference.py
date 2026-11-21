@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs
@@ -9,6 +10,7 @@ import httpx
 import pytest
 
 from astock.core.object_store import ObjectStore
+from astock.core.request_budget import RequestBudgetExhausted, RequestExecutionBudget
 from astock.core.state import StateStore
 from astock.market_data.reference import MarketReferenceService
 from astock.market_data.reference_storage import ReferenceParquetStore
@@ -221,3 +223,28 @@ def test_bse_official_route_is_bjse_scoped(tmp_path: Path) -> None:
 
     assert bjse[0].provider_id == "bse-official-reference"
     assert all(item.provider_id != "bse-official-reference" for item in xshg)
+
+
+
+@pytest.mark.parametrize("maximum", [1, 2])
+def test_parallel_bse_pages_share_original_request_attempt_budget(
+    state: StateStore, object_store: ObjectStore, maximum: int,
+) -> None:
+    pages = {
+        page: _page(page, total=3, size=1, rows=[_row(f"92000{page}")])
+        for page in range(3)
+    }
+    provider = _provider(state, object_store, pages)
+    sent: list[str] = []
+    client = cast(httpx.Client, provider.client)
+    client.event_hooks["request"].append(lambda item: sent.append(item.content.decode()))
+    budget = RequestExecutionBudget(
+        state, "bse-page-budget", datetime.now(UTC) + timedelta(seconds=30), maximum,
+    )
+    try:
+        with budget.bind(), pytest.raises(RequestBudgetExhausted):
+            provider.fetch_master(Market.BJSE, live=True)
+    finally:
+        client.close()
+    assert len(sent) == maximum
+    assert budget.remaining_attempts() == 0

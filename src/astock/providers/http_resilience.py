@@ -9,8 +9,11 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 import httpx
+from httpx import Client as HttpxClient
 
 from astock.core.logging import emit_operational_event
+from astock.core.network_ownership import check_owned_network_hop
+from astock.core.request_budget import current_request_budget
 from astock.core.source_resilience import (
     classify_http_status,
     classify_source_error,
@@ -46,6 +49,8 @@ class HttpClientLike(Protocol):
 
 class ResilientHttpClient:
     """Try a bounded sequence of ENV/DIRECT HTTP lanes with jittered backoff."""
+
+    manages_request_budget = True
 
     def __init__(
         self,
@@ -89,6 +94,9 @@ class ResilientHttpClient:
             )
             for trust_env in lane_trust_env
         ]
+        for _, client in self._lanes:
+            if isinstance(client, HttpxClient):
+                configure_owned_http_client(client)
 
     @property
     def headers(self) -> httpx.Headers:
@@ -143,16 +151,11 @@ class ResilientHttpClient:
                 )
             lane_name, client = self._lanes[attempt % len(self._lanes)]
             try:
-                if json is None and headers is None:
-                    response = client.request(
-                        normalized_method, url, params=params, data=data,
-                        timeout=min(self.timeout_seconds, remaining),
-                    )
-                else:
-                    response = client.request(
-                        normalized_method, url, params=params, data=data, json=json,
-                        headers=headers, timeout=min(self.timeout_seconds, remaining),
-                    )
+                response = _lane_request(
+                    client, normalized_method, url, params=params, data=data, json=json,
+                    headers=headers, timeout=min(self.timeout_seconds, remaining),
+                    deadline=started + self.elapsed_budget_seconds,
+                )
             except httpx.HTTPError as exc:
                 last_error = exc
                 retry_planned = attempt + 1 < attempt_limit
@@ -206,16 +209,18 @@ class ResilientHttpClient:
                     "attempt": attempt + 1,
                     "attempt_limit": attempt_limit,
                     "status_code": response.status_code,
-                    "retry_after_seconds": response.extensions.get(
-                        "astock_retry_after_seconds"
-                    ),
+                    "retry_after_seconds": response.extensions.get("astock_retry_after_seconds"),
                     "retry_planned": retry_planned,
                 },
             )
             last_response = response
             if not retry_planned:
                 return response
-            if not self._sleep(attempt, started):
+            if not self._sleep(
+                attempt,
+                started,
+                retry_after_seconds=response.extensions.get("astock_retry_after_seconds"),
+            ):
                 return response
             response.close()
         if last_error is not None:  # pragma: no cover - defensive boundary
@@ -227,10 +232,18 @@ class ResilientHttpClient:
         for _, client in self._lanes:
             client.close()
 
-    def _sleep(self, attempt: int, started: float) -> bool:
+    def _sleep(
+        self,
+        attempt: int,
+        started: float,
+        *,
+        retry_after_seconds: object = None,
+    ) -> bool:
         delay = self.backoff_seconds * (2**attempt)
         if self.jitter_seconds > 0:
             delay += random.uniform(0.0, self.jitter_seconds)
+        if isinstance(retry_after_seconds, (int, float)):
+            delay = max(delay, float(retry_after_seconds))
         remaining = self._remaining_budget(started)
         if remaining <= 0 or delay >= remaining:
             return False
@@ -239,7 +252,58 @@ class ResilientHttpClient:
         return self._remaining_budget(started) > 0
 
     def _remaining_budget(self, started: float) -> float:
-        return self.elapsed_budget_seconds - (time.monotonic() - started)
+        remaining = self.elapsed_budget_seconds - (time.monotonic() - started)
+        budget = current_request_budget()
+        return remaining if budget is None else min(remaining, budget.remaining_seconds())
+
+
+def configure_owned_http_client(client: HttpxClient) -> None:
+    if _before_owned_http_send not in client.event_hooks["request"]:
+        client.event_hooks["request"].append(_before_owned_http_send)
+
+
+def _before_owned_http_send(request: httpx.Request) -> None:
+    """HTTPX invokes this before every physical send, including redirects."""
+    check_owned_network_hop(str(request.url))
+    budget = current_request_budget()
+    deadline = request.extensions.get("astock_elapsed_deadline")
+    remaining = (
+        max(0.0, float(deadline) - time.monotonic())
+        if isinstance(deadline, (int, float)) else float("inf")
+    )
+    if remaining <= 0:
+        raise httpx.TimeoutException("HTTP acquisition elapsed budget exhausted", request=request)
+    if budget is not None:
+        budget.reserve_attempt()
+        remaining = min(remaining, budget.remaining_seconds())
+    original = request.extensions.get("timeout", {})
+    if isinstance(original, dict):
+        request.extensions["timeout"] = {
+            phase: min(float(value), remaining) if isinstance(value, (float, int)) else remaining
+            for phase, value in original.items()
+        }
+
+
+def _lane_request(
+    client: HttpxClient, method: str, url: str, *,
+    params: Mapping[str, str | int] | None, data: Mapping[str, str] | None,
+    json: object, headers: Mapping[str, str] | None, timeout: float, deadline: float,
+) -> httpx.Response:
+    if isinstance(client, HttpxClient):
+        return client.request(
+            method, url, params=params, data=data, json=json, headers=headers, timeout=timeout,
+            extensions={"astock_elapsed_deadline": deadline},
+        )
+    # Non-HTTPX injected clients keep their declared single-request protocol.
+    budget = current_request_budget()
+    if budget is not None:
+        budget.reserve_attempt()
+        timeout = min(timeout, budget.remaining_seconds())
+    if json is None and headers is None:
+        return client.request(method, url, params=params, data=data, timeout=timeout)
+    return client.request(
+        method, url, params=params, data=data, json=json, headers=headers, timeout=timeout,
+    )
 
 
 def _safe_endpoint(url: str) -> dict[str, str | int | None]:

@@ -48,3 +48,13 @@
 - material event 只触发必要模块，不做无差别全文重研。
 - 正常投资者回答不暴露内部运行术语。
 - 按现行影响计划验证改动涉及的采集、幂等、续接和账本合同；只在共享基础或未解释跨域风险扩大时扩展到全仓。不得重复运行已足够证明本次改动的检查。
+
+## Antigravity 的可选原生事件
+
+官方 [Hooks 协议](https://antigravity.google/docs/hooks) 的 workspace 配置使用 `.agents/hooks.json`。用本项目 Python 执行 `python -B -m astock.investor_orchestration.antigravity_hooks install --root <项目绝对路径>`；安装器写入实际绝对 Python/项目路径，合并保留已有 hooks，单次观察限制为 10 秒。迁移项目目录后重新执行安装。它只适用于 Antigravity，其他宿主照常使用既有业务命令。
+
+SessionStart 只在已有 canonical StateStore 记录宿主提供的 conversationId 和本项目 workspace，并按官方 injectSteps 协议向当前会话注入这两个已验证的绑定元数据；不读取 transcript、lastUserInput 或 error 正文。使用该注入的真实会话 ID，在现役 `watch_campaign begin` 已返回 owner/round/lease 之后执行 `python -B -m astock.investor_orchestration.antigravity_hooks bind --root <项目绝对路径> --conversation-id <宿主真实ID> --campaign <campaign_id> --slot <am或pm> --owner <原owner> --round-id <原round_id> --lease-generation <原generation>`。不得猜“最近会话”，也不得把 PreInvocation.invocationNum 当成 Stop.executionNum。
+
+Stop 仅在已绑定、未过期且同代际的 campaign 上调用既有 HostContinuationPolicy/checkpoint。`max_steps_exceeded` 或 `error` 且 `fullyIdle=true` 时保存原进度为 PARTIAL，供下一次业务执行续接；不增加完成数、不重置请求预算。普通 model_stop、未知原因和仍有后台任务的停止只作观察。Stop 与失败的 hook 输出 `{}`；SessionStart 仅注入绑定元数据，不强制继续、不加定时器。
+
+一个会话的观察绑定保持不可变。新 round、未知会话、错 workspace 或迟到旧 lease 只能使该 native 观察不适用，业务继续沿原 coordinator/checkpoint 执行，不要求用户为此另开会话。协议 fixture 与配置安装可在本地验证；只有目标宿主真正触发后才登记原生运行成功，安装配置本身不算触发证据。

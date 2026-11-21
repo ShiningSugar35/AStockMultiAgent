@@ -1,37 +1,37 @@
 {
-  "schema_version": "capability-qualification-report-v1",
-  "report_id": "7da818bce1bedf38349f2cf95c4497e67f355ae927e5bd3a2fe80f576e3d2362",
-  "capability_id": "report-visual-qa",
-  "candidate_version": "sha256:9dd7d968b17beb56a688f0248b9b35571f95bfcf96e8d3f7baca678951fee129",
-  "requested_stage": "SHADOW",
   "admitted_stage": "SHADOW",
+  "candidate_version": "sha256:9dd7d968b17beb56a688f0248b9b35571f95bfcf96e8d3f7baca678951fee129",
+  "capability_id": "report-visual-qa",
   "checks": {
-    "license": "PASS",
-    "terms_of_service": "PASS",
-    "data_rights": "PASS",
-    "provenance": "PASS",
+    "cache_behavior": "PASS",
+    "cost": "PASS",
     "credential_handling": "PASS",
+    "data_rights": "PASS",
+    "exit_uninstall": "PASS",
+    "failure_behavior": "FAIL",
+    "latency": "FAIL",
+    "license": "PASS",
+    "maintenance": "PASS",
+    "offline_behavior": "PASS",
+    "provenance": "PASS",
     "sbom": "PASS",
     "security_review": "PASS",
-    "maintenance": "PASS",
-    "cost": "PASS",
-    "latency": "FAIL",
-    "cache_behavior": "PASS",
-    "offline_behavior": "PASS",
-    "failure_behavior": "FAIL",
-    "exit_uninstall": "PASS"
+    "terms_of_service": "PASS"
   },
-  "recorded_validation": "PASS",
-  "controlled_live_validation": "FAIL",
-  "source_class_ceiling": "UNKNOWN",
   "completeness_ceiling": "NOT_APPLICABLE",
+  "controlled_live_validation": "FAIL",
   "evidence_object_hashes": [
-    "7505b793ea78e4befc076558e18b1660082db81a2cbb48ea9825890658fb11a7"
+    "75af35ba0d5a145ecea5fd7ec0958f4a163fae7cd38107ea815da234e83cb087"
   ],
-  "valid_from": "2026-11-21T10:47:02Z",
   "expires_at": "2026-12-20T10:48:00Z",
   "reason_codes": [
     "RENDERED_PAGE_CONTROLLED_LIVE_NOT_RUN",
     "VISUAL_LATENCY_AND_FAILURE_BEHAVIOR_NOT_VALIDATED"
-  ]
+  ],
+  "recorded_validation": "PASS",
+  "report_id": "0588d6a2fbed408c9f49fdd4983296fa38b4baaf6d33120ef586b5662882704f",
+  "requested_stage": "SHADOW",
+  "schema_version": "capability-qualification-report-v1",
+  "source_class_ceiling": "UNKNOWN",
+  "valid_from": "2026-11-21T14:23:52Z"
 }

@@ -301,7 +301,10 @@ def test_registry_version_and_same_version_capability_drift_require_new_probe(
     assert version_service.status("eastmoney-5m").status == ProviderHealthStatus.NOT_PROBED
 
     capability_payload = original.registry.model_dump(mode="python")
-    capability_payload["providers"][0]["capabilities"].append("market.experimental")
+    capability_definition = next(
+        item for item in capability_payload["providers"] if item["provider_id"] == "eastmoney-5m"
+    )
+    capability_definition["capabilities"].append("market.experimental")
     capability_service = ProviderProbeService(
         project_root=Path.cwd(),
         registry=ProviderRegistry.model_validate(capability_payload),
@@ -455,7 +458,9 @@ def test_different_identities_rebuild_latest_by_completion_not_commit_order(
 
 def test_same_completion_time_uses_probe_id_as_stable_latest_tie_break(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    provider = service.registry.providers[0]
+    provider = next(
+        item for item in service.registry.providers if item.provider_id == "eastmoney-5m"
+    )
     completed_at = datetime(2026, 7, 22, 15, 30, tzinfo=UTC)
     common = {
         "provider_id": provider.provider_id,
@@ -649,7 +654,10 @@ def test_cli_unreadable_recorded_fixture_is_degraded_and_path_safe(
 ) -> None:
     runtime = tmp_path / "runtime"
     registry = load_provider_registry(Path("configs/provider_registry.yaml"))
-    configured_fixture = (Path.cwd() / registry.providers[0].recorded_fixture).resolve()
+    provider = next(
+        item for item in registry.providers if item.provider_id == "eastmoney-5m"
+    )
+    configured_fixture = (Path.cwd() / provider.recorded_fixture).resolve()
     original = Path.read_bytes
 
     def fail_selected(path: Path) -> bytes:

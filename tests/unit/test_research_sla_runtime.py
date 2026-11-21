@@ -529,3 +529,40 @@ def test_deadline_marks_running_work_cancelled_without_waiting_for_handler(tmp_p
         ResearchSchedulerRunStatus.PARTIAL,
     }
     assert service.tasks(run.run_id)[0].status is ResearchSchedulerTaskStatus.CANCELLED
+
+def test_selected_dispatch_leaves_unselected_dependencies_and_siblings_pending(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    run = service.create_run(
+        request_id="selected-native-wave", budget_seconds=60,
+        task_specs=[
+            ("waiting-host", "600519", ResearchTaskCategory.NETWORK, [], "source-a"),
+            ("dependent", "600519", ResearchTaskCategory.NETWORK, ["waiting-host"], "source-b"),
+            ("ready-original", "600519", ResearchTaskCategory.NETWORK, [], "source-c"),
+        ],
+    )
+    calls: list[str] = []
+
+    def handler(task):
+        calls.append(task.node_id)
+        return "artifact:" + task.node_id
+
+    service.execute(
+        run.run_id, {"dependent": handler, "ready-original": handler},
+        recover_unowned=False, selected_node_ids={"dependent", "ready-original"},
+    )
+    tasks = {task.node_id: task for task in service.tasks(run.run_id)}
+    assert calls == ["ready-original"]
+    assert tasks["ready-original"].status is ResearchSchedulerTaskStatus.COMPLETED
+    assert tasks["waiting-host"].status is ResearchSchedulerTaskStatus.READY
+    assert tasks["waiting-host"].dispatch_attempted is False
+    assert tasks["dependent"].status is ResearchSchedulerTaskStatus.PENDING
+    service.execute(
+        run.run_id, {"waiting-host": handler, "dependent": handler},
+        recover_unowned=False, selected_node_ids={"waiting-host", "dependent"},
+    )
+    assert calls == ["ready-original", "waiting-host", "dependent"]
+    assert all(
+        task.status is ResearchSchedulerTaskStatus.COMPLETED for task in service.tasks(run.run_id)
+    )

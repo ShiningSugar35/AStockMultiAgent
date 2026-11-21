@@ -26,6 +26,7 @@ from astock.core.object_store import ObjectStore
 from astock.core.project_root import resolve_project_root
 from astock.core.source_resilience import parse_retry_after_seconds
 from astock.core.state import StateStore
+from astock.providers.http_resilience import configure_owned_http_client
 from astock.schemas import SourceSnapshot
 
 Endpoint = Literal[
@@ -515,18 +516,33 @@ class TushareStructuredProvider:
         return result
 
     def _http_body(self, payload: dict[str, Any]) -> tuple[bytes, int, int | None]:
+        from astock.core.network_ownership import owned_network_request
+
+        with owned_network_request(
+            self.state, self.provider_id, HTTP_ENDPOINT, timeout_seconds=self.timeout_seconds,
+        ):
+            return self._owned_http_body(payload)
+
+    def _owned_http_body(self, payload: dict[str, Any]) -> tuple[bytes, int, int | None]:
+        from astock.core.request_budget import current_request_budget
+
         started = time.monotonic()
+        timeout = self.timeout_seconds
+        budget = current_request_budget()
+        if budget is not None:
+            timeout = min(timeout, budget.remaining_seconds())
+        configure_owned_http_client(self.client)
         try:
             with self.client.stream(
                 "POST", HTTP_ENDPOINT, json=payload, follow_redirects=False,
-                timeout=self.timeout_seconds,
+                timeout=timeout,
             ) as response:
                 size = response.headers.get("content-length")
                 if size is not None and int(size) > self.config.max_response_bytes:
                     raise _error("Tushare response is oversized", FailureClass.INVALID_RESPONSE)
                 content = bytearray()
                 for chunk in response.iter_bytes():
-                    if time.monotonic() - started > self.timeout_seconds:
+                    if time.monotonic() - started > timeout:
                         raise _error("Tushare elapsed budget expired", FailureClass.TIMEOUT)
                     if len(content) + len(chunk) > self.config.max_response_bytes:
                         raise _error("Tushare response is oversized", FailureClass.INVALID_RESPONSE)

@@ -154,7 +154,7 @@ class CninfoDisclosureProvider:
                 "resolution_snapshot_ids": resolution_snapshot_ids,
             }
         )
-        return DisclosureSearchBatch(
+        batch = DisclosureSearchBatch(
             batch_id=batch_id,
             provider_id=self.provider_id,
             request=request,
@@ -166,6 +166,8 @@ class CninfoDisclosureProvider:
             resolution_snapshot_ids=resolution_snapshot_ids,
             provider_latency_ms=latency_ms,
         )
+        freeze_disclosure_batch(self.state, self.object_store, batch)
+        return batch
 
     def search_all(
         self,
@@ -557,3 +559,44 @@ def cninfo_org_id(symbol: str, exchange: DisclosureExchange) -> str:
 
 def _column_for_exchange(exchange: DisclosureExchange) -> str:
     return "sse" if exchange is DisclosureExchange.SSE else "szse"
+
+
+def freeze_disclosure_batch(
+    state: StateStore, objects: ObjectStore, batch: DisclosureSearchBatch,
+) -> str:
+    """Preserve actual POST scope/page metadata with its immutable raw response."""
+    source = state.get_snapshot(batch.raw_snapshot_id)
+    if source is None or not objects.verify(source.object_sha256):
+        raise ValueError("disclosure query receipt requires its raw response")
+    ref = objects.put_json(batch.model_dump(mode="json"))
+    artifact_id = "DisclosureSearchBatch:" + ref.sha256
+    existing = state.artifact_record(artifact_id)
+    if existing is not None:
+        if existing["type"] != "DisclosureSearchBatch" or existing["object_hash"] != ref.sha256:
+            raise ValueError("disclosure query receipt identity collision")
+        return artifact_id
+    state.register_artifact(
+        artifact_id=artifact_id, artifact_type="DisclosureSearchBatch",
+        schema_version=batch.schema_version, object_hash=ref.sha256,
+        input_hashes=[source.object_sha256],
+    )
+    return artifact_id
+
+
+def load_disclosure_batch(
+    state: StateStore, objects: ObjectStore, artifact_id: str,
+) -> DisclosureSearchBatch:
+    record = state.artifact_record(artifact_id)
+    if record is None or record["type"] != "DisclosureSearchBatch":
+        raise ValueError("registered disclosure query receipt is missing")
+    object_hash = str(record["object_hash"])
+    if not objects.verify(object_hash) or artifact_id != "DisclosureSearchBatch:" + object_hash:
+        raise ValueError("disclosure query receipt hash mismatch")
+    batch = DisclosureSearchBatch.model_validate_json(objects.get_bytes(object_hash))
+    snapshot = state.get_snapshot(batch.raw_snapshot_id)
+    if (snapshot is None or snapshot.fetch_status is not FetchStatus.SUCCEEDED
+            or snapshot.source_id != "cninfo-disclosures:index"
+            or record["input_hashes"] != [snapshot.object_sha256]
+            or not objects.verify(snapshot.object_sha256)):
+        raise ValueError("disclosure query receipt raw lineage mismatch")
+    return batch

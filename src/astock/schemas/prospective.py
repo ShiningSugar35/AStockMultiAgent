@@ -237,6 +237,10 @@ class SelectionBiasDiagnostic(AStockModel):
     selection_candidate_count: int = Field(ge=1)
     observation_count: int = Field(ge=0)
     status: SelectionBiasDiagnosticStatus
+    method_version: str = "legacy-dsr-style-blocked-mean-v1"
+    effective_independent_trials: float | None = Field(default=None, ge=1, allow_inf_nan=False)
+    return_frequency: str = "UNSPECIFIED"
+    cscv_blocks: int | None = Field(default=None, ge=2, le=16)
     deflated_sharpe_ratio: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     probability_of_backtest_overfitting: float | None = Field(
         default=None, ge=0, le=1, allow_inf_nan=False
@@ -255,6 +259,11 @@ class SelectionBiasDiagnostic(AStockModel):
             self.deflated_sharpe_ratio is None or self.probability_of_backtest_overfitting is None
         ):
             raise ValueError("computed selection-bias diagnostic requires DSR and PBO")
+        if (
+            self.effective_independent_trials is not None
+            and self.effective_independent_trials > self.selection_candidate_count
+        ):
+            raise ValueError("independent trials cannot exceed disclosed trials")
         if self.finding_codes != sorted(set(self.finding_codes)):
             raise ValueError("selection-bias finding codes must be sorted and unique")
         return self

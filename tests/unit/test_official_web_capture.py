@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,6 +11,7 @@ from astock.cli import app
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.documents import DocumentRepository, OfficialWebDocumentCaptureService
+from astock.documents.official_web import load_official_web_capture
 from astock.schemas import (
     AgentSourceProposal,
     DocumentType,
@@ -192,3 +193,97 @@ def test_exchange_financial_report_url_is_formally_admitted(tmp_path: Path) -> N
 
     assert capture.requested_capability == "financial.official_document"
     assert capture.source_id == "sse-official-web"
+
+
+def _readable_capture(service: OfficialWebDocumentCaptureService):
+    return service.capture(
+        _proposal(), PDF, title="测试公司2026年度业绩预告", company_ids=["600519"],
+        published_at=PUBLISHED, document_type=DocumentType.ANNOUNCEMENT, observed_at=OBSERVED,
+    )
+
+
+def test_verified_official_reader_is_local_and_obeys_identity_and_cutoff(tmp_path, monkeypatch):
+    service, state, objects = _service(tmp_path)
+    capture = _readable_capture(service)
+
+    def no_write(*args, **kwargs):
+        raise AssertionError("verified original reader must not persist or recapture")
+
+    monkeypatch.setattr(objects, "put_json", no_write)
+    monkeypatch.setattr(objects, "put_bytes", no_write)
+    monkeypatch.setattr(state, "register_artifact", no_write)
+    monkeypatch.setattr(state, "register_snapshot", no_write)
+    loaded, document, snapshot = load_official_web_capture(
+        state, objects, capture.capture_id, company_id="600519", as_of=OBSERVED,
+    )
+    assert loaded == capture and document.document_id == capture.document_id
+    assert snapshot.object_sha256 == capture.object_sha256
+    with pytest.raises(ValueError, match="cutoff"):
+        load_official_web_capture(
+            state, objects, capture.capture_id, company_id="600519",
+            as_of=OBSERVED - timedelta(seconds=1),
+        )
+    with pytest.raises(ValueError, match="company"):
+        load_official_web_capture(
+            state, objects, capture.capture_id, company_id="000001", as_of=OBSERVED,
+        )
+    with pytest.raises(ValueError, match="capability"):
+        load_official_web_capture(
+            state, objects, capture.capture_id, company_id="600519", as_of=OBSERVED,
+            capabilities=("financial.official_document",),
+        )
+
+
+@pytest.mark.parametrize("source_kind", ["original", "admission"])
+def test_verified_official_reader_rejects_corrupted_original_or_admission(tmp_path, source_kind):
+    service, state, objects = _service(tmp_path)
+    capture = _readable_capture(service)
+    snapshot_id = (
+        capture.snapshot_id if source_kind == "original" else capture.admission_snapshot_id
+    )
+    snapshot = state.get_snapshot(snapshot_id)
+    assert snapshot is not None
+    objects.path_for(snapshot.object_sha256).write_bytes(b"altered source")
+    with pytest.raises(ValueError, match="raw source"):
+        load_official_web_capture(
+            state, objects, capture.capture_id, company_id="600519", as_of=OBSERVED,
+        )
+
+
+def test_verified_official_reader_rechecks_frozen_admission_bindings(tmp_path):
+    service, state, objects = _service(tmp_path)
+    capture = _readable_capture(service)
+    admission = state.get_snapshot(capture.admission_snapshot_id)
+    assert admission is not None
+    payload = json.loads(objects.get_bytes(admission.object_sha256))
+    payload["document_object_sha256"] = "f" * 64
+    changed = objects.put_json(payload)
+    other_admission = admission.model_copy(update={
+        "snapshot_id": admission.snapshot_id + ":wrong-original",
+        "object_sha256": changed.sha256, "byte_size": changed.byte_size,
+    })
+    state.register_snapshot(other_admission)
+    forged = capture.model_copy(update={
+        "capture_id": capture.capture_id + ":wrong-original",
+        "admission_snapshot_id": other_admission.snapshot_id,
+    })
+    frozen = objects.put_json(forged.model_dump(mode="json"))
+    state.register_artifact(
+        artifact_id=f"OfficialWebDocumentCapture:{forged.capture_id}",
+        artifact_type="OfficialWebDocumentCapture", schema_version=forged.schema_version,
+        object_hash=frozen.sha256,
+        input_hashes=[capture.object_sha256, other_admission.object_sha256],
+    )
+    with pytest.raises(ValueError, match="admission binding"):
+        load_official_web_capture(
+            state, objects, forged.capture_id, company_id="600519", as_of=OBSERVED,
+        )
+    with state.transaction() as connection:
+        connection.execute(
+            "DELETE FROM document_snapshot WHERE document_id=? AND snapshot_id=?",
+            (capture.document_id, capture.snapshot_id),
+        )
+    with pytest.raises(ValueError, match="not registered to its document"):
+        load_official_web_capture(
+            state, objects, capture.capture_id, company_id="600519", as_of=OBSERVED,
+        )

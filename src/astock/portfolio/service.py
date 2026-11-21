@@ -19,6 +19,7 @@ from astock.core.state import StateStore
 from astock.market_data.reference import MarketReferenceService
 from astock.paper_trading.ledger import LedgerService
 from astock.paper_trading.operation import MarketReferencePaperVerifier
+from astock.portfolio.allocation import AllocationContext, ReturnBasis
 from astock.portfolio.allocators import (
     PortfolioAllocatorRegistry,
     default_portfolio_allocator_registry,
@@ -36,6 +37,7 @@ from astock.portfolio.total_return import build_total_return_research_series
 from astock.schemas.committee import CommitteeRuleConfig, TradeProtocolOutcome
 from astock.schemas.market import Market
 from astock.schemas.portfolio import (
+    PortfolioAllocationConstraints,
     PortfolioAllocationProposal,
     PortfolioAnalysisReport,
     PortfolioAnalysisRequest,
@@ -320,7 +322,17 @@ class PortfolioService:
                 float(self.committee_rules.max_total_exposure),
                 len(admitted) * float(self.committee_rules.max_single_position),
             )
-            proposals = self._proposals(aligned, groups, target)
+            # Current corporate-action captures establish only applied known
+            # actions, not exhaustive historical vintages. Preserve that limit.
+            return_basis: ReturnBasis = (
+                "PARTIAL_GROSS_TOTAL_RETURN"
+                if any(item.corporate_action_release_id for item in histories)
+                else "PRICE_ONLY"
+            )
+            proposals = self._proposals(
+                aligned, groups, target, assumptions=request.allocation_constraints,
+                return_basis=return_basis,
+            )
             report = PortfolioConstructionReport(
                 report_id="portfolio-construction:"
                 + content_hash(
@@ -880,32 +892,64 @@ class PortfolioService:
         aligned: _Aligned,
         groups: dict[str, str],
         target: float,
+        *,
+        assumptions: PortfolioAllocationConstraints | None = None,
+        return_basis: ReturnBasis = "PRICE_ONLY",
     ) -> list[PortfolioAllocationProposal]:
+        specified = assumptions is not None
+        constraints = assumptions or PortfolioAllocationConstraints()
+        company_ids = aligned.company_ids
+        for mapping in (
+            constraints.current_weights, constraints.can_buy, constraints.can_sell,
+            constraints.one_way_costs, constraints.additional_groups,
+        ):
+            if set(mapping) - set(company_ids):
+                raise ValueError("allocation contains holdings outside the admitted universe")
+        if constraints.one_way_costs and set(constraints.one_way_costs) != set(company_ids):
+            raise ValueError(
+                "allocation requires complete one-way costs or explicitly excludes all costs"
+            )
+        memberships = tuple(
+            tuple(sorted({groups[key], *constraints.additional_groups.get(key, [])}))
+            for key in company_ids
+        )
+        caps = dict(constraints.group_caps)
+        for group in groups.values():
+            caps[group] = min(
+                caps.get(group, 1.0), float(self.committee_rules.max_industry_exposure),
+            )
+        context = AllocationContext(
+            aligned=aligned,
+            current_weights=tuple(constraints.current_weights.get(key, 0.0) for key in company_ids),
+            groups=memberships, group_caps=caps, target_exposure=target,
+            max_single=float(self.committee_rules.max_single_position),
+            can_buy=tuple(constraints.can_buy.get(key, True) for key in company_ids),
+            can_sell=tuple(constraints.can_sell.get(key, True) for key in company_ids),
+            one_way_costs=tuple(constraints.one_way_costs.get(key, 0.0) for key in company_ids),
+            min_cash=constraints.min_cash, max_turnover=constraints.max_turnover,
+            return_basis=return_basis,
+        )
         proposals: list[PortfolioAllocationProposal] = []
         for method in self.allocator_policy.enabled_methods:
             plugin = self.allocator_registry.get(method)
-            raw_scores = plugin.build_scores(aligned)
-            if raw_scores.shape != (len(aligned.company_ids),):
-                raise ValueError(f"portfolio allocator returned an invalid score vector: {method}")
-            weights, binding = self._constrain_scores(
-                aligned.company_ids,
-                raw_scores,
-                groups,
-                target=target,
-            )
-            vector = np.array([weights[item] for item in aligned.company_ids], dtype=float)
+            allocation = self.allocator_registry.allocate(method, context)
+            if not allocation.weights:
+                raise ValueError("portfolio allocation constraints have no feasible solution")
+            weights = dict(zip(company_ids, allocation.weights, strict=True))
+            binding = set(allocation.binding_codes)
+            vector = np.array(allocation.weights, dtype=float)
             invested = float(vector.sum())
             normalized = vector / invested if invested > 0 else vector
             hhi = float(np.sum(normalized**2)) if invested > 0 else 0.0
             group_weights: dict[str, float] = {}
-            for company_id, weight in weights.items():
-                group = groups[company_id]
-                group_weights[group] = group_weights.get(group, 0.0) + weight
+            for company_id, names in zip(company_ids, memberships, strict=True):
+                for group in names:
+                    group_weights[group] = group_weights.get(group, 0.0) + weights[company_id]
             proposals.append(
                 PortfolioAllocationProposal(
                     method=method,
                     weights=dict(sorted((key, float(value)) for key, value in weights.items())),
-                    cash_weight=max(0.0, 1.0 - invested),
+                    cash_weight=float(allocation.cash_after_cost or 0.0),
                     ex_ante_annualized_volatility=sqrt(
                         max(float(vector @ aligned.covariance @ vector), 0.0) * _ANNUALIZATION
                     ),
@@ -914,8 +958,22 @@ class PortfolioService:
                     max_group_weight=max(group_weights.values(), default=0.0),
                     binding_constraint_codes=sorted(binding),
                     model_risk_codes=sorted(
-                        {*plugin.model_risk_codes, "RISK_GROUP_IS_CALLER_SUPPLIED"}
+                        {*plugin.model_risk_codes, *allocation.reason_codes,
+                         "RISK_GROUP_IS_CALLER_SUPPLIED",
+                         "CALLER_SUPPLIED_HOLDING_ASSUMPTIONS"
+                         if specified else "FRESH_PORTFOLIO_ASSUMPTION",
+                         "IMPLEMENTATION_COSTS_EXCLUDED"
+                         if not constraints.one_way_costs else "ONE_OFF_COST_ESTIMATE",
+                         "RETURN_VINTAGE_AND_ACTION_COVERAGE_NOT_PROVEN"}
                     ),
+                    allocator_contract_version=context.schema_version,
+                    solver_status=allocation.status,
+                    optimality_claim=allocation.optimality_claim,
+                    constraint_tolerance=context.tolerance,
+                    one_off_cost_fraction=float(allocation.one_off_cost_fraction or 0.0),
+                    turnover_sum_abs_weights=allocation.turnover,
+                    target_exposure_deviation=allocation.target_deviation,
+                    return_basis=context.return_basis,
                 )
             )
         return proposals

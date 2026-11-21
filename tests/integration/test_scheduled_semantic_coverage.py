@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -193,8 +194,6 @@ def _canonical_market_anchor(bank: RecordedBank, *, symbol: str = COMPANY) -> st
     This dual-gate test runs outside market hours too: it audits prior-close
     prices under PRE_OPEN, leaving the production intraday freshness unchanged.
     """
-    from zoneinfo import ZoneInfo
-
     from astock.investor_orchestration.regime_reference_views import CanonicalRegimeReferenceViews
     from astock.market_data.reference import MarketReferenceService
     from astock.market_data.reference_storage import ReferenceParquetStore
@@ -339,8 +338,8 @@ def _five_family_source_report(
             DisclosureSearchRequest(
                 symbol=symbol,
                 exchange=DisclosureExchange.SSE,
-                start_date=interval_start.date(),
-                end_date=interval_end.date(),
+                start_date=interval_start.astimezone(ZoneInfo("Asia/Shanghai")).date(),
+                end_date=interval_end.astimezone(ZoneInfo("Asia/Shanghai")).date(),
             )
         )
     disclosure_ids = []
@@ -402,7 +401,9 @@ def _five_family_source_report(
     )
     report_id = audit.register(request)
     report = audit.verify_registered(report_id)
-    assert report.all_families_checked, report.checks
+    assert report.all_families_checked, [
+        check.model_dump(mode="json") for check in report.checks
+    ]
     return audit, request, report_id
 
 

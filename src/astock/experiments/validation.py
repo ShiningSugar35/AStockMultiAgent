@@ -70,6 +70,8 @@ class Request(Frozen):
     input_release_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     benchmark_id: str = Field(min_length=1, max_length=128)
     timestamps: tuple[datetime, ...]
+    # Optional actual label information ends. Empty retains the explicit fixed horizon.
+    label_end_times: tuple[datetime, ...] = ()
     candidates: tuple[Candidate, ...]
     stresses: tuple[Stress, ...] = (Stress(stress_id="base"),)
     min_train_bars: int = Field(ge=1)
@@ -81,19 +83,39 @@ class Request(Frozen):
     purge_bars: int = Field(ge=0)
     embargo_bars: int = Field(ge=0)
     selection_metric: Literal["MEAN_NET_EXCESS_RETURN"] = "MEAN_NET_EXCESS_RETURN"
+    hypothesis: str | None = Field(default=None, min_length=1, max_length=4096)
+    analysis_timing: Literal[
+        "UNSPECIFIED", "DECLARED_BEFORE_ANALYSIS", "POST_HOC"
+    ] = "UNSPECIFIED"
+    stability_score_tolerance: Decimal | None = Field(default=None, ge=0, le=1)
 
-    @field_validator("timestamps")
+    @field_validator("hypothesis")
+    @classmethod
+    def nonblank_hypothesis(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("hypothesis must be nonblank or explicitly unspecified")
+        return value
+
+    @field_validator("timestamps", "label_end_times")
     @classmethod
     def utc_times(cls, values: tuple[datetime, ...]) -> tuple[datetime, ...]:
         if any(v.tzinfo is None or v.utcoffset() is None for v in values):
             raise ValueError("timestamps require explicit timezone")
         normalized = tuple(v.astimezone(UTC) for v in values)
-        if any(a >= b for a, b in zip(normalized, normalized[1:], strict=False)):
-            raise ValueError("timestamps must be strictly increasing")
         return normalized
 
     @model_validator(mode="after")
     def identities(self) -> Request:
+        if any(a >= b for a, b in zip(self.timestamps, self.timestamps[1:], strict=False)):
+            raise ValueError("timestamps must be strictly increasing")
+        if self.label_end_times and (
+            len(self.label_end_times) != len(self.timestamps)
+            or any(
+                end < start
+                for start, end in zip(self.timestamps, self.label_end_times, strict=True)
+            )
+        ):
+            raise ValueError("label intervals must align and end at or after their observations")
         ids = [c.candidate_id for c in self.candidates]
         if not ids or len(ids) != len(set(ids)):
             raise ValueError("candidate identities must be nonempty and unique")
@@ -171,20 +193,39 @@ def make_plan(request: Request, policy: Policy | None = None) -> Plan:
     ):
         raise ValueError("parameter budget exceeded")
     gap = request.label_horizon_bars + request.purge_bars + request.embargo_bars
+    def training_stop(stop: int, test_start: int) -> int:
+        if not request.label_end_times:
+            return stop
+        boundary = request.timestamps[test_start]
+        # Retain a chronological prefix; never fit a scaler/selector on a label
+        # whose information interval reaches the evaluation period.
+        crossing = [i for i in range(stop) if request.label_end_times[i] >= boundary]
+        result = min(crossing, default=stop)
+        if result < request.min_train_bars:
+            raise ValueError("actual label overlap leaves insufficient training history")
+        return result
+
     folds: list[Fold] = []
     for number in range(request.fold_count):
         start = request.min_train_bars + gap + number * request.step_bars
         stop = start + request.test_bars
         if stop > request.holdout_start - gap:
             raise ValueError("fold or its label/purge/embargo buffer reaches final holdout")
+        if request.label_end_times and any(
+            request.label_end_times[i] >= request.timestamps[request.holdout_start]
+            for i in range(start, stop)
+        ):
+            raise ValueError("OOS label information reaches the final holdout")
         folds.append(
             Fold(
                 number=number + 1,
-                train=Window(start=0, stop=start - gap),
+                train=Window(start=0, stop=training_stop(start - gap, start)),
                 test=Window(start=start, stop=stop),
             )
         )
-    final_train = Window(start=0, stop=request.holdout_start - gap)
+    final_train = Window(
+        start=0, stop=training_stop(request.holdout_start - gap, request.holdout_start)
+    )
     # A conservative operation bound: every row/candidate/stress plus selected tests.
     rows = sum(f.train.size for f in folds) + final_train.size
     tests = sum(f.test.size for f in folds) + len(request.timestamps) - request.holdout_start
@@ -263,6 +304,16 @@ class Evaluator(Protocol):
         require selection_hash. The coordinator cannot sandbox host Python.
         """
         ...
+
+
+class TrialRecorder(Protocol):
+    """Synchronous immutable observations; failures never authorize a retry."""
+
+    def started(self, query: Query) -> None: ...
+
+    def succeeded(self, query: Query, trial: dict[str, Any]) -> None: ...
+
+    def failed(self, query: Query, stage: str, error: Exception) -> None: ...
 
 
 class Selection(Frozen):
@@ -344,19 +395,225 @@ def metrics(evidence: Evidence, stress: Stress) -> dict[str, Any]:
             "interval_note": "USE_CLUSTERED_PROSPECTIVE_INFERENCE_FOR_DEPENDENT_RETURNS",
             "inference_label": "DESCRIPTIVE_DEPENDENT_PERIODS_NO_ADMISSION",
             "stress_basis": "FIXED_EXECUTIONS_ACCOUNTING_SENSITIVITY",
+            "turnover_sum": sum((row.turnover for row in evidence.rows), Decimal(0)),
+            "turnover_mean": mean([row.turnover for row in evidence.rows]),
+            "turnover_maximum": max(row.turnover for row in evidence.rows),
+            "turnover_basis": "SUM_OF_TRADED_NOTIONAL_OVER_EACH_PERIOD_START_NAV",
+            "fee_return_sum": sum(
+                (row.fee_return * stress.fee_multiplier for row in evidence.rows), Decimal(0),
+            ),
+            "slippage_return_sum": sum(
+                (row.slippage_return + row.turnover * stress.extra_slippage_bps / Decimal(10000)
+                 for row in evidence.rows), Decimal(0),
+            ),
+            "cost_summary_basis": "SUM_OF_PERIOD_NAV_FRACTIONS_NOT_A_CASH_AMOUNT",
         }
+
+
+def _numeric_parameters(candidate: Candidate) -> dict[str, Decimal] | None:
+    parameters = candidate.parameters
+    if not parameters or any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in parameters.values()
+    ):
+        return None
+    return {key: Decimal(str(value)) for key, value in parameters.items()}
+
+
+def _parameter_neighbors(
+    candidates: tuple[Candidate, ...], points: dict[str, dict[str, Decimal]],
+) -> dict[str, set[str]]:
+    """Observed adjacent grid points only; never interpolate untested parameters."""
+    neighbors: dict[str, set[str]] = {item.candidate_id: set() for item in candidates}
+    axes = sorted(points[candidates[0].candidate_id])
+    for axis in axes:
+        slices: dict[tuple[tuple[str, Decimal], ...], list[tuple[Decimal, str]]] = {}
+        for identity, point in points.items():
+            fixed = tuple((key, point[key]) for key in axes if key != axis)
+            slices.setdefault(fixed, []).append((point[axis], identity))
+        for values in slices.values():
+            ordered = sorted(values)
+            for left, right in zip(ordered, ordered[1:], strict=False):
+                neighbors[left[1]].add(right[1])
+                neighbors[right[1]].add(left[1])
+    return neighbors
+
+
+def _observed_region(
+    winner: str, scores: dict[str, Decimal], neighbors: dict[str, set[str]], tolerance: Decimal,
+) -> list[str]:
+    eligible = {identity for identity, score in scores.items()
+                if scores[winner] - score <= tolerance}
+    visited: set[str] = set()
+    pending = [winner]
+    while pending:
+        identity = pending.pop()
+        if identity in visited:
+            continue
+        visited.add(identity)
+        pending.extend((neighbors[identity] & eligible) - visited)
+    return sorted(visited)
+
+
+def training_parameter_stability(
+    plan: Plan, commitment: Commitment, trials: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """A training-only descriptive grid; never evidence of out-of-sample robustness."""
+    candidates = plan.request.candidates
+    result: dict[str, Any] = {
+        "status": "UNKNOWN", "reason_code": None,
+        "basis": "OBSERVED_ADJACENT_TRAINING_PARAMETER_GRID",
+        "score_tolerance": plan.request.stability_score_tolerance,
+        "market_robustness_claim": False, "interpolation_allowed": False, "windows": [],
+    }
+    parsed = {item.candidate_id: _numeric_parameters(item) for item in candidates}
+    if len(candidates) < 2 or any(point is None for point in parsed.values()):
+        result["reason_code"] = "INSUFFICIENT_COMPARABLE_NUMERIC_PARAMETER_POINTS"
+        return result
+    points = {key: point for key, point in parsed.items() if point is not None}
+    if (
+        len({item.strategy_version for item in candidates}) != 1
+        or len({tuple(sorted(point)) for point in points.values()}) != 1
+    ):
+        result["reason_code"] = "HETEROGENEOUS_STRATEGY_OR_PARAMETER_DIMENSIONS"
+        return result
+    dimension_count = len(next(iter(points.values())))
+    if len(points) * dimension_count * dimension_count > plan.policy.max_work_units:
+        result["reason_code"] = "PARAMETER_GRID_WORK_BUDGET"
+        return result
+    if len({tuple(sorted(point.items())) for point in points.values()}) != len(points):
+        result["reason_code"] = "DUPLICATE_NUMERIC_PARAMETER_POINT"
+        return result
+    neighbors = _parameter_neighbors(candidates, points)
+    tolerance = plan.request.stability_score_tolerance
+    for selection in commitment.selections:
+        phase = "FINAL_TRAIN" if selection.phase == "FINAL_HOLDOUT" else "TRAIN"
+        matches = [trial for trial in trials if (
+            trial["query"]["phase"] == phase
+            and trial["query"]["fold_number"] == selection.fold_number
+            and trial["query"]["window"] == selection.train_window.model_dump(mode="json")
+        )]
+        scores = {
+            trial["query"]["candidate"]["candidate_id"]:
+                Decimal(str(trial["metrics"][0]["mean_net_excess_return"]))
+            for trial in matches
+        }
+        if len(matches) != len(candidates) or set(scores) != set(points):
+            raise ValueError("training stability requires every frozen candidate exactly once")
+        winner = selection.candidate.candidate_id
+        adjacent = sorted(neighbors[winner])
+        observed = [winner, *adjacent]
+        region = (
+            _observed_region(winner, scores, neighbors, tolerance) if tolerance is not None else []
+        )
+        result["windows"].append({
+            "phase": phase, "fold_number": selection.fold_number,
+            "train_window": selection.train_window.model_dump(mode="json"),
+            "selected_candidate_id": winner, "neighbor_candidate_ids": adjacent,
+            "neighbor_score_differences": {
+                key: scores[key] - scores[winner] for key in adjacent
+            },
+            "observed_score_min": min(scores[key] for key in observed),
+            "observed_score_max": max(scores[key] for key in observed),
+            "stable_observed_candidate_ids": region if adjacent and tolerance is not None else None,
+            "region_reason_code": (
+                "NO_OBSERVED_ADJACENT_PARAMETER" if not adjacent else
+                "TOLERANCE_NOT_PREREGISTERED" if tolerance is None else None
+            ),
+        })
+    result["status"] = "DESCRIPTIVE_TRAINING_ONLY"
+    return result
+
+
+
+def select_training_result(
+    request: Request, phase: str, number: int, window: Window,
+    target: Literal["OOS", "FINAL_HOLDOUT"], trials: list[dict[str, Any]],
+) -> Selection:
+    matches = [trial for trial in trials if (
+        trial["query"]["phase"] == phase and trial["query"]["fold_number"] == number
+        and trial["query"]["window"] == window.model_dump(mode="json")
+    )]
+    by_id = {trial["query"]["candidate"]["candidate_id"]: trial for trial in matches}
+    candidates = sorted(request.candidates, key=lambda item: item.candidate_id)
+    if len(matches) != len(candidates) or set(by_id) != {item.candidate_id for item in candidates}:
+        raise ValueError("selection requires every frozen training candidate exactly once")
+    for item in candidates:
+        if by_id[item.candidate_id]["query"]["candidate"] != item.model_dump(mode="json"):
+            raise ValueError("recorded training candidate parameters mismatch")
+    scores = {
+        key: Decimal(str(trial["metrics"][0]["mean_net_excess_return"]))
+        for key, trial in by_id.items()
+    }
+    winner = min(candidates, key=lambda item: (-scores[item.candidate_id], item.candidate_id))
+    return Selection(
+        phase=target, fold_number=number, candidate=winner, train_window=window,
+        training_evidence_hashes=tuple(
+            by_id[item.candidate_id]["evidence_hash"] for item in candidates
+        ),
+        training_score=scores[winner.candidate_id],
+    )
+
+
+def build_experiment_report(
+    plan: Plan, commitment: Commitment, receipt: str, trials: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """One report builder for live execution and explicitly requested recorded recovery."""
+    selections = []
+    for selection in commitment.selections:
+        phase = "FINAL_TRAIN" if selection.phase == "FINAL_HOLDOUT" else "TRAIN"
+        expected = select_training_result(
+            plan.request, phase, selection.fold_number, selection.train_window,
+            selection.phase, trials,
+        )
+        if digest(expected) != digest(selection):
+            raise ValueError("registered selection differs from recorded training results")
+        selections.append({
+            "phase": phase, "fold_number": selection.fold_number,
+            "selected_candidate_id": selection.candidate.candidate_id,
+            "nonselected_candidate_ids": sorted(
+                candidate.candidate_id for candidate in plan.request.candidates
+                if candidate.candidate_id != selection.candidate.candidate_id
+            ),
+            "rule": "MAX_MEAN_NET_EXCESS_RETURN_THEN_LEXICAL_CANDIDATE_ID",
+        })
+    report = {
+        "schema_version": "strategy-experiment-report-v1",
+        "authority": "RESEARCH_ONLY", "implementation_version": VERSION,
+        "plan_hash": digest(plan), "policy_hash": digest(plan.policy),
+        "input_release_hash": plan.request.input_release_hash,
+        "hypothesis": plan.request.hypothesis,
+        "hypothesis_status": "PROVIDED" if plan.request.hypothesis is not None else "UNSPECIFIED",
+        "analysis_timing": plan.request.analysis_timing,
+        "timing_basis": "CALLER_DECLARATION_NOT_PROOF_OF_UNTOUCHED_ECONOMIC_DATA",
+        "commitment": commitment.model_dump(mode="json"), "commitment_hash": digest(commitment),
+        "selection_receipt": receipt, "trials": trials, "selection_outcomes": selections,
+        "parameter_stability": training_parameter_stability(plan, commitment, trials),
+        "trust_boundary": "HOST_EXECUTOR_AND_REGISTERED_EVIDENCE_NOT_LOOKAHEAD_PROOF",
+        "statistical_authority": "DESCRIPTIVE_ONLY_USE_EXISTING_PROSPECTIVE_GOVERNANCE",
+        "paper_ledger_write_allowed": False, "recommendation_authority": False,
+    }
+    report["report_hash"] = digest(report)
+    if len(canonical_json_bytes(report)) > plan.policy.max_artifact_bytes:
+        raise ValueError("experiment report exceeds artifact budget")
+    return report
+
 
 
 class Coordinator:
     """One attempt per instance, including failed attempts; no implicit retry."""
 
-    def __init__(self, plan: Plan, evaluator: Evaluator, seal: Seal) -> None:
+    def __init__(
+        self, plan: Plan, evaluator: Evaluator, seal: Seal,
+        *, recorder: TrialRecorder | None = None,
+    ) -> None:
         rebuilt = make_plan(plan.request, plan.policy)
         if digest(rebuilt) != digest(plan):
             raise ValueError("plan is not canonical")
         self._plan_json = plan.model_dump_json()
         self.evaluator = evaluator
         self.seal = seal
+        self.recorder = recorder
         self._used = False
 
     def run(self) -> dict[str, Any]:
@@ -389,25 +646,41 @@ class Coordinator:
                 window=window,
                 selection_hash=selection_hash,
             )
-            # Pass a fresh copy so a host evaluator cannot mutate our parameter maps.
-            evidence = self.evaluator.evaluate(
-                Query.model_validate_json(query.model_dump_json()), budget
-            )
-            budget.check()
-            evidence = Evidence.model_validate_json(evidence.model_dump_json())
-            aligned(evidence, query, plan)
-            values = [metrics(evidence, stress) for stress in request.stresses]
-            budget.check()
-            trials.append(
-                {
-                    "query": query.model_dump(mode="json"),
-                    "query_hash": digest(query),
-                    "evidence_hash": digest(evidence),
-                    "source_snapshot_ids": evidence.source_snapshot_ids,
-                    "execution_artifact_ids": evidence.execution_artifact_ids,
-                    "metrics": values,
-                }
-            )
+            if self.recorder is not None:
+                self.recorder.started(query)
+            stage = "EVALUATE"
+            try:
+                # A fresh copy prevents a host evaluator mutating frozen parameter maps.
+                evidence = self.evaluator.evaluate(
+                    Query.model_validate_json(query.model_dump_json()), budget
+                )
+                stage = "VALIDATE_EVIDENCE"
+                budget.check()
+                evidence = Evidence.model_validate_json(evidence.model_dump_json())
+                aligned(evidence, query, plan)
+                stage = "CALCULATE_METRICS"
+                values = [metrics(evidence, stress) for stress in request.stresses]
+                budget.check()
+            except Exception as exc:
+                if self.recorder is not None:
+                    self.recorder.failed(query, stage, exc)
+                raise
+            trial = {
+                "query": query.model_dump(mode="json"),
+                "query_hash": digest(query),
+                "evidence_hash": digest(evidence),
+                "source_snapshot_ids": evidence.source_snapshot_ids,
+                "execution_artifact_ids": evidence.execution_artifact_ids,
+                "metrics": values,
+                "evaluation_status": "SUCCEEDED",
+                "score_classification": (
+                    "POSITIVE_EXCESS" if values[0]["mean_net_excess_return"] > 0
+                    else "NON_POSITIVE_EXCESS"
+                ),
+            }
+            if self.recorder is not None:
+                self.recorder.succeeded(query, trial)
+            trials.append(trial)
             return evidence, values[0]["mean_net_excess_return"]
 
         training: list[
@@ -417,22 +690,10 @@ class Coordinator:
         # All selections, including final selection, are fixed before ANY test read.
         # Scores never use OOS results or stress scenarios to change the winner.
         for number, window, phase, target in training:
-            scores: list[tuple[Decimal, str, Candidate]] = []
-            hashes: list[str] = []
             for candidate in sorted(request.candidates, key=lambda c: c.candidate_id):
-                evidence, score = evaluate(phase, number, window, candidate)
-                hashes.append(digest(evidence))
-                scores.append((score, candidate.candidate_id, candidate))
-            winner = sorted(scores, key=lambda item: (-item[0], item[1]))[0]
+                evaluate(phase, number, window, candidate)
             selections.append(
-                Selection(
-                    phase=target,
-                    fold_number=number,
-                    candidate=winner[2],
-                    train_window=window,
-                    training_evidence_hashes=tuple(hashes),
-                    training_score=winner[0],
-                )
+                select_training_result(request, phase, number, window, target, trials)
             )
         commitment = Commitment(
             plan_hash=plan_hash,
@@ -465,24 +726,10 @@ class Coordinator:
                 selection.candidate,
                 digest(selection),
             )
-        report = {
-            "schema_version": "strategy-experiment-report-v1",
-            "authority": "RESEARCH_ONLY",
-            "implementation_version": VERSION,
-            "plan_hash": plan_hash,
-            "policy_hash": digest(plan.policy),
-            "input_release_hash": request.input_release_hash,
-            "commitment": commitment.model_dump(mode="json"),
-            "commitment_hash": digest(commitment),
-            "selection_receipt": receipt,
-            "trials": trials,
-            "trust_boundary": "HOST_EXECUTOR_AND_REGISTERED_EVIDENCE_NOT_LOOKAHEAD_PROOF",
-            "statistical_authority": "DESCRIPTIVE_ONLY_USE_EXISTING_PROSPECTIVE_GOVERNANCE",
-            "paper_ledger_write_allowed": False,
-            "recommendation_authority": False,
-        }
-        report["report_hash"] = digest(report)
+        report = build_experiment_report(plan, commitment, receipt, trials)
+        budget.check()
         return report
+
 
 
 def diagnose(plan: Plan, query: Query, evidence: Evidence) -> dict[str, Any]:

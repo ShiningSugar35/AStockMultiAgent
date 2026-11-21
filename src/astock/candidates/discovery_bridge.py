@@ -8,7 +8,9 @@ without upgrading legacy keyword-based EXPERT_SKILL seeds.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from astock.candidates.discovery_theses import (
     DiscoveryThesisResult,
@@ -17,7 +19,15 @@ from astock.candidates.discovery_theses import (
 from astock.core.hashing import content_hash
 from astock.schemas.knowledge_completion import KnowledgeConditionState
 from astock.schemas.market import Market
-from astock.schemas.research_seeds import ResearchSeed, ResearchSeedOrigin
+from astock.schemas.research_seeds import (
+    FactorPriorityBinding,
+    FactorPriorityOverlay,
+    ResearchSeed,
+    ResearchSeedOrigin,
+)
+
+if TYPE_CHECKING:
+    from astock.candidates.registered_factor_diagnostics import FrozenFactorMember
 
 VERIFIED_DISCOVERY_MARKER = "VERIFIED_DISCOVERY_THESIS"
 
@@ -325,10 +335,83 @@ def merge_discovery_seed_tranche(
     )
 
 
+def _factor_priority_seed(
+    seed: ResearchSeed, member: FrozenFactorMember, peers: tuple[FrozenFactorMember, ...],
+    specification: FactorPriorityOverlay, panel_hash: str, factor_id: str,
+) -> ResearchSeed:
+    values = [item.value for item in peers if item.value is not None]
+    if member.value is None or len(values) < 2 or min(values) == max(values):
+        return seed
+    if seed.feature_priority is not None:
+        raise ValueError("factor priority cannot be added twice to the same seed")
+    percentile = (
+        sum(value < member.value for value in values)
+        + (sum(value == member.value for value in values) - 1) / 2
+    ) / (len(values) - 1)
+    rank = percentile if specification.direction == "HIGH_FIRST" else 1 - percentile
+    bonus = min(1 - seed.research_priority_score, rank * specification.maximum_priority_bonus)
+    binding = FactorPriorityBinding(
+        specification=specification, panel_object_hash=panel_hash, factor_id=factor_id,
+        dependency_fingerprint=member.dependency_fingerprint,
+        comparable_count=len(values), percentile=percentile,
+        comparable_member_ids=tuple(sorted(
+            item.instrument_id for item in peers if item.value is not None
+        )),
+        base_seed_id=seed.seed_id,
+        base_priority=seed.research_priority_score, priority_bonus=bonus,
+    )
+    return seed.model_copy(update={
+        "seed_id": "research-seed:factor-overlay:" + content_hash({
+            "base": seed.seed_id, "binding": binding.model_dump(mode="json"),
+        }),
+        "research_priority_score": seed.research_priority_score + bonus,
+        "feature_priority": binding,
+        "reason_codes": sorted(
+            set(seed.reason_codes) | {"FEATURE_PRIORITY_ONLY_NO_ADDITIONAL_VOTE"}
+        ),
+    })
+
+
+def apply_factor_priority_overlay(
+    seeds: tuple[ResearchSeed, ...], members: tuple[FrozenFactorMember, ...], *,
+    specification: FactorPriorityOverlay, panel_hash: str, factor_id: str,
+) -> tuple[ResearchSeed, ...]:
+    """Reorder within existing non-blind cohort slots; membership and budgets do not change."""
+    if specification.maximum_priority_bonus == 0:
+        return seeds
+    by_identity = {member.instrument_id: member for member in members}
+    groups: dict[str, list[FrozenFactorMember]] = defaultdict(list)
+    for member in members:
+        if member.value is not None:
+            groups[member.business_group_id].append(member)
+    pools: dict[tuple[ResearchSeedOrigin, ...], list[ResearchSeed]] = defaultdict(list)
+    for seed in seeds:
+        if ResearchSeedOrigin.MARKET in seed.origins:
+            continue
+        member = by_identity.get(f"{seed.market.value}:{seed.company_id}")
+        changed = seed if member is None else _factor_priority_seed(
+            seed, member, tuple(groups[member.business_group_id]),
+            specification, panel_hash, factor_id,
+        )
+        pools[tuple(seed.origins)].append(changed)
+    ranked = {
+        origin: iter(
+            sorted(items, key=lambda item: (-item.research_priority_score, item.company_id))
+            if any(item.feature_priority is not None for item in items) else items
+        )
+        for origin, items in pools.items()
+    }
+    return tuple(
+        seed if ResearchSeedOrigin.MARKET in seed.origins else next(ranked[tuple(seed.origins)])
+        for seed in seeds
+    )
+
+
 __all__ = [
     "DiscoverySeedBudgetResult",
     "DiscoverySeedCompanyContext",
     "VERIFIED_DISCOVERY_MARKER",
     "build_verified_discovery_seed",
+    "apply_factor_priority_overlay",
     "merge_discovery_seed_tranche",
 ]

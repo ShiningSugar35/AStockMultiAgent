@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from pydantic import ValidationError
 
+from astock.core.credentials import credential_is_configured
 from astock.core.errors import AStockError, StorageError
 from astock.core.hashing import canonical_json_bytes, content_hash
 from astock.core.object_store import ObjectStore
@@ -51,6 +52,7 @@ from astock.providers.exchange_official_reference import (
 from astock.providers.runtime import ProviderFactory, load_transport_profiles
 from astock.providers.sina_reference import SinaReferenceProvider
 from astock.providers.symbols import market_from_baostock_code
+from astock.providers.tushare_reference import TushareReferenceProvider
 from astock.schemas import (
     AdjustmentMode,
     AmountUnit,
@@ -177,7 +179,16 @@ class MarketReferenceService:
     ) -> list[ReferenceRouteStep]:
         """Keep recorded replay deterministic; route live acquisition by capability policy."""
 
-        configured = tuple(step for step in self.config.route(capability) if step.supports(market))
+        configured = tuple(
+            step for step in self.config.route(capability)
+            if step.supports(market) and (
+                step.provider_id != "tushare-reference" or (
+                    live and credential_is_configured(
+                        "TUSHARE_TOKEN", project_root=self.project_root
+                    )
+                )
+            )
+        )
         if not configured:
             scope = market.value if market is not None else "GLOBAL"
             raise ValueError(f"No market-reference route for {capability}:{scope}")
@@ -203,6 +214,9 @@ class MarketReferenceService:
             configured,
             key=lambda step: (
                 route_stage[id(step)],
+                0 if step.provider_id == "tushare-reference" and capability in {
+                    "instrument.identity", "market.daily_unadjusted"
+                } else 1,
                 rank_by_provider.get(step.provider_id, len(rank_by_provider)),
                 configured_position[id(step)],
             ),
@@ -305,6 +319,14 @@ class MarketReferenceService:
         status = self.provider_factory.capability_health_status(step.provider_id, capability)
         return status in {ProviderHealthStatus.UNAVAILABLE, ProviderHealthStatus.CORRUPT}
 
+    @staticmethod
+    def _fetch_tushare_instruments(
+        provider: object, market: Market | None, *, symbol: str | None = None, live: bool,
+    ) -> tuple[list[InstrumentRecord], SourceSnapshot]:
+        if not isinstance(provider, TushareReferenceProvider) or market is None:
+            raise ValueError("Tushare instruments require the reference adapter and an exchange")
+        return provider.fetch_instruments(market, symbol=symbol, live=live)
+
     def _run_identity_route_step(
         self,
         step: ReferenceRouteStep,
@@ -314,6 +336,15 @@ class MarketReferenceService:
         live: bool,
     ) -> tuple[list[InstrumentRecord], list[str], datetime, list[str]]:
         provider = self._route_provider(step, "instrument.identity", live=live)
+        if step.operation == "tushare-identity":
+            records, snapshot = self._fetch_tushare_instruments(
+                provider, market, symbol=symbol, live=live,
+            )
+            if len(records) != 1:
+                return [], [snapshot.snapshot_id], snapshot.available_to_system_at, [
+                    "TUSHARE_TARGET_IDENTITY_NOT_FOUND"
+                ]
+            return records, [snapshot.snapshot_id], snapshot.available_to_system_at, []
         if step.operation == "bse-official-exact":
             if not isinstance(provider, BseOfficialReferenceProvider):
                 raise ValueError("bse-official-exact requires a BSE official adapter")
@@ -443,6 +474,17 @@ class MarketReferenceService:
         live: bool,
     ) -> tuple[list[DailyBarObservation], list[str], datetime, list[str], bool]:
         provider = self._route_provider(step, "market.daily_unadjusted", live=live)
+        if step.operation == "tushare-daily":
+            if not isinstance(provider, TushareReferenceProvider):
+                raise ValueError("Tushare daily requires the reference adapter")
+            records, snapshot = provider.fetch_daily_records(
+                symbol, market, start, end, live=live
+            )
+            complete = self._daily_window_complete(records, market, start, end)
+            return (
+                records, [snapshot.snapshot_id], snapshot.available_to_system_at,
+                [] if complete else ["TUSHARE_DAILY_WINDOW_INCOMPLETE"], complete,
+            )
         if step.operation == "baostock-daily":
             if not isinstance(provider, BaoStockReferenceProvider):
                 raise ValueError("baostock-daily requires a BaoStock adapter")
@@ -697,6 +739,13 @@ class MarketReferenceService:
         live: bool,
     ) -> tuple[list[InstrumentRecord], list[str], datetime, list[str], bool]:
         provider = self._route_provider(step, "instrument.master", live=live)
+        if step.operation == "tushare-master":
+            records, snapshot = self._fetch_tushare_instruments(provider, market, live=live)
+            # An API row count alone is not an official market denominator.
+            return (
+                records, [snapshot.snapshot_id], snapshot.available_to_system_at,
+                ["TUSHARE_MASTER_COVERAGE_UNPROVEN"], False,
+            )
         if step.operation in {"sse-official-master", "szse-official-master"}:
             expected_market = (
                 Market.XSHG if step.operation == "sse-official-master" else Market.XSHE
@@ -839,28 +888,28 @@ class MarketReferenceService:
                 complete,
             )
         if step.operation == "sina-master":
-            if not isinstance(provider, SinaReferenceProvider):
-                raise ValueError("sina-master requires a Sina reference adapter")
-            if market is None:
-                raise ValueError("sina-master requires an explicit market")
-            payload, snapshot = provider.fetch_master(market, live=live)
-            records = _parse_sina_master(
-                payload,
-                snapshot.snapshot_id,
-                snapshot.available_to_system_at,
-                market,
-            )
-            coverage_ratio = _sina_master_coverage_ratio(payload, len(records))
-            complete = coverage_ratio is not None and coverage_ratio >= _FULL_MARKET_COVERAGE_RATIO
-            reasons = [] if complete else ["SINA_MASTER_COVERAGE_UNPROVEN"]
-            return (
-                records,
-                [snapshot.snapshot_id],
-                snapshot.available_to_system_at,
-                reasons,
-                complete,
-            )
+            return self._run_sina_master_route(provider, market, live=live)
         raise ValueError(f"Unsupported master route operation: {step.operation}")
+
+    @staticmethod
+    def _run_sina_master_route(
+        provider: object, market: Market | None, *, live: bool,
+    ) -> tuple[list[InstrumentRecord], list[str], datetime, list[str], bool]:
+        if not isinstance(provider, SinaReferenceProvider):
+            raise ValueError("sina-master requires a Sina reference adapter")
+        if market is None:
+            raise ValueError("sina-master requires an explicit market")
+        payload, snapshot = provider.fetch_master(market, live=live)
+        records = _parse_sina_master(
+            payload,
+            snapshot.snapshot_id,
+            snapshot.available_to_system_at,
+            market,
+        )
+        coverage_ratio = _sina_master_coverage_ratio(payload, len(records))
+        complete = coverage_ratio is not None and coverage_ratio >= _FULL_MARKET_COVERAGE_RATIO
+        reasons = [] if complete else ["SINA_MASTER_COVERAGE_UNPROVEN"]
+        return records, [snapshot.snapshot_id], snapshot.available_to_system_at, reasons, complete
 
     def _run_calendar_route_step(
         self,

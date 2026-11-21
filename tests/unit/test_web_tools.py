@@ -5,11 +5,13 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import httpx
 import pytest
 
+from astock.core.network_ownership import NETWORK_SCOPE
 from astock.core.object_store import ObjectStore
 from astock.core.state import StateStore
 from astock.providers.deepseek_tools import DeepSeekSearchFetchClient
@@ -377,7 +379,7 @@ def test_content_cache_failure_rolls_back_terminal_state_and_recovers(runtime, m
     monkeypatch.setattr(service.repository, "_store_content_entries", fail_cache)
     with pytest.raises(RuntimeError, match="cache commit failure"):
         service.run(request(), no_host())
-    assert service.repository.get(operation_id(request()))["status"] == "PAID_RUNNING"
+    assert service.repository.get(operation_id(request()))["status"] == "UNKNOWN"
     monkeypatch.setattr(service.repository, "_store_content_entries", write_cache)
     assert service.run(request(), no_host())["status"] == "SUCCEEDED"
     assert service.run(
@@ -421,3 +423,343 @@ def test_slow_small_chunks_cannot_hide_elapsed_deadline(runtime, monkeypatch):
     assert result["reason_code"] == "TOTAL_DEADLINE"
     assert len(consumed) == 2
     assert len(calls) == 1
+
+
+
+def test_canonical_web_reuse_keeps_independent_request_receipts_and_one_fee(runtime):
+    service, calls, _, _ = runtime
+    first = service.run(request(), no_host())
+    other = request(request_id="different-investor-request", query="  公司   财报  ")
+    second = service.run(other)  # Existing raw is usable without a new paid authorization.
+    assert first["status"] == second["status"] == "SUCCEEDED"
+    assert first["operation_id"] != second["operation_id"]
+    assert first["dispatch_id"] != second["dispatch_id"]
+    assert first["billing"] == "CHARGED" and second["billing"] == "NOT_CHARGED"
+    assert len(calls) == 1
+    payload = json.loads(service.objects.get_bytes(second["result_hash"]))
+    assert payload["request"]["request_id"] == other.request_id
+    assert payload["request"]["query"] == other.query
+    assert not payload["formal_use_allowed"] and not payload["exhaustive_proof_allowed"]
+    day = service.state.get_checkpoint("web-tool-budget", "day:2026-11-21")
+    assert day is not None and day["cursor"]["reserved_or_charged"] == 1
+
+
+def test_concurrent_shared_search_cannot_take_same_operation_or_second_fee(runtime, monkeypatch):
+    service, calls, _, _ = runtime
+    entered, release = Event(), Event()
+    execute = service.client.execute
+
+    def held(item, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return execute(item, **kwargs)
+
+    monkeypatch.setattr(service.client, "execute", held)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(service.run, request(), no_host())
+        try:
+            assert entered.wait(10)
+            same = service.run(request(), no_host())
+            other_request = request(request_id="concurrent-other")
+            other = service.run(other_request, no_host())
+            assert same["status"] == "PAID_RUNNING"
+            assert other["status"] == "SHARED_WAITING"
+            assert other["billing"] == "NOT_CHARGED"
+        finally:
+            release.set()
+        first = owner.result(timeout=10)
+    recovered = service.run(other_request, no_host())
+    assert first["status"] == recovered["status"] == "SUCCEEDED"
+    assert recovered["operation_id"] != first["operation_id"] and len(calls) == 1
+
+
+def test_unknown_shared_paid_completion_cannot_be_rebought_by_another_request(runtime):
+    service, calls, responses, clock = runtime
+    responses[0] = httpx.ReadTimeout("remote outcome unknown")
+    first = service.run(request(), no_host())
+    clock[0] += timedelta(seconds=600)
+    second_request = request(request_id="new-request-after-cache-age")
+    declared = no_host().model_copy(update={
+        "observed_at": clock[0] - timedelta(seconds=1),
+        "expires_at": clock[0] + timedelta(minutes=5),
+    })
+    second = service.run(second_request, declared)
+    assert first["status"] == second["status"] == "UNKNOWN"
+    assert first["billing"] == "UNKNOWN" and second["billing"] == "NOT_CHARGED"
+    assert second["operation_id"] != first["operation_id"] and len(calls) == 1
+    restarted = WebToolExecutionService(
+        ROOT, service.state, service.objects, policy=service.policy,
+        client=service.client, clock=lambda: clock[0],
+    )
+    assert restarted.run(second_request, declared)["status"] == "UNKNOWN"
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("changed", ["scope", "fact", "authorization", "freshness"])
+def test_shared_web_identity_and_freshness_do_not_cross_authority_or_subject(
+    runtime, monkeypatch, changed,
+):
+    service, calls, _, clock = runtime
+    first = service.run(request(), no_host())
+    clock[0] += timedelta(seconds=2)
+    changes: dict[str, Any] = {"request_id": "another-subject"}
+    if changed == "scope":
+        changes["evidence_scope"] = "company:000001:2026"
+    elif changed == "fact":
+        changes["expected_fact"] = "a different reporting period"
+    elif changed == "authorization":
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "another-unit-test-key")
+    else:
+        changes["fresh_after"] = clock[0]
+    second = service.run(request(**changes), no_host())
+    assert first["status"] == second["status"] == "SUCCEEDED" and len(calls) == 2
+
+
+def test_denied_fee_claim_does_not_strand_a_known_undispatched_shared_generation(runtime):
+    service, calls, _, clock = runtime
+    service.policy = service.policy.model_copy(update={"max_paid_per_request": 1})
+    assert service.run(request(query="first allowance"), no_host())["status"] == "SUCCEEDED"
+    clock[0] += timedelta(seconds=2)
+    denied = service.run(request(query="second canonical query"), no_host())
+    assert denied["status"] == "BUDGET_EXHAUSTED"
+    clock[0] += timedelta(seconds=2)
+    admitted = service.run(
+        request(request_id="has-own-allowance", query="second canonical query"), no_host(),
+    )
+    assert admitted["status"] == "SUCCEEDED" and len(calls) == 2
+    assert admitted["shared_generation"] == 2
+
+
+@pytest.mark.parametrize("limit,provider,domain,reason", [
+    ("max_owned_concurrency", "another-provider", "other.example", "OWNED_GLOBAL_CONCURRENCY"),
+    ("max_owned_per_provider", "fixture-provider", "other.example", "OWNED_PROVIDER_CONCURRENCY"),
+    ("max_owned_per_domain", "another-provider", "same.example", "OWNED_DOMAIN_CONCURRENCY"),
+])
+def test_owned_capacity_scopes_are_atomic_and_terminal_release_preserves_unknown_key(
+    state, limit, provider, domain, reason,
+):
+    repository = WebToolOperationRepository(state)
+    policy = load_web_tool_policy(ROOT).model_copy(update={
+        "max_owned_concurrency": 4, "max_owned_per_provider": 4,
+        "max_owned_per_domain": 4, limit: 1,
+    })
+    first, acquired = repository.claim_acquisition(
+        {"key": "one"}, provider="fixture-provider", domain="same.example",
+        policy=policy, now=NOW, deadline_at=NOW + timedelta(seconds=30), fresh_after=NOW,
+    )
+    assert acquired
+    repository.start_acquisition(first["acquisition_id"], first["generation"], NOW)
+    blocked, acquired = repository.claim_acquisition(
+        {"key": "two"}, provider=provider, domain=domain, policy=policy,
+        now=NOW, deadline_at=NOW + timedelta(seconds=30), fresh_after=NOW,
+    )
+    assert not acquired and blocked["reason_code"] == reason
+    repository.finish_acquisition(
+        first["acquisition_id"], first["generation"], status="UNKNOWN", now=NOW,
+    )
+    unknown, acquired = repository.claim_acquisition(
+        {"key": "one"}, provider="fixture-provider", domain="same.example",
+        policy=policy, now=NOW, deadline_at=NOW + timedelta(seconds=30), fresh_after=NOW,
+    )
+    assert not acquired and unknown["status"] == "UNKNOWN"
+    _second, acquired = repository.claim_acquisition(
+        {"key": "two"}, provider=provider, domain=domain, policy=policy,
+        now=NOW, deadline_at=NOW + timedelta(seconds=30), fresh_after=NOW,
+    )
+    assert acquired
+
+
+def test_expired_live_owned_lease_still_counts_but_reused_pid_does_not(state, monkeypatch):
+    from astock.storage_retention import ProcessIdentity
+
+    repository = WebToolOperationRepository(state)
+    policy = load_web_tool_policy(ROOT).model_copy(update={"max_owned_concurrency": 1})
+    first, _ = repository.claim_acquisition(
+        {"key": "one"}, provider="fixture", domain="same.example", policy=policy,
+        now=NOW, deadline_at=NOW + timedelta(seconds=1), fresh_after=NOW,
+    )
+    repository.start_acquisition(first["acquisition_id"], first["generation"], NOW)
+    later = NOW + timedelta(seconds=2)
+    blocked, acquired = repository.claim_acquisition(
+        {"key": "two"}, provider="other", domain="other.example", policy=policy,
+        now=later, deadline_at=later + timedelta(seconds=10), fresh_after=NOW,
+    )
+    assert not acquired and blocked["reason_code"] == "OWNED_GLOBAL_CONCURRENCY"
+    monkeypatch.setattr(
+        "astock.core.network_ownership.process_identity",
+        lambda _pid: ProcessIdentity("ALIVE", first["owner_create_time"] + 100),
+    )
+    _second, acquired = repository.claim_acquisition(
+        {"key": "two"}, provider="other", domain="other.example", policy=policy,
+        now=later, deadline_at=later + timedelta(seconds=10), fresh_after=NOW,
+    )
+    assert acquired
+    retained = state.get_checkpoint(NETWORK_SCOPE, first["acquisition_id"])
+    assert retained is not None and retained["cursor"]["status"] == "UNKNOWN"
+
+
+def test_shared_receipt_frozen_before_own_publish_recovers_without_another_transport(
+    runtime, monkeypatch,
+):
+    service, calls, _, _ = runtime
+    publish = service._publish
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("before per-request publication")
+
+    monkeypatch.setattr(service, "_publish", crash)
+    with pytest.raises(RuntimeError, match="per-request"):
+        service.run(request(), no_host())
+    monkeypatch.setattr(service, "_publish", publish)
+    recovered = service.run(request(), no_host())
+    follower = service.run(request(request_id="late-consumer"), no_host())
+    assert recovered["status"] == follower["status"] == "SUCCEEDED"
+    assert recovered["billing"] == "CHARGED" and follower["billing"] == "NOT_CHARGED"
+    assert len(calls) == 1
+
+
+def test_shared_dispatch_uses_the_same_credential_snapshot_after_rotation(runtime, monkeypatch):
+    service, calls, _, clock = runtime
+    claim = service.repository.claim_paid_acquisition
+
+    def rotate_after_claim(*args, **kwargs):
+        result = claim(*args, **kwargs)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "rotated-fixture-key")
+        return result
+
+    monkeypatch.setattr(service.repository, "claim_paid_acquisition", rotate_after_claim)
+    first = service.run(request(), no_host())
+    assert first["status"] == "SUCCEEDED"
+    assert calls[0].headers["Authorization"] == "Bearer unit-test-key"
+    monkeypatch.setattr(service.repository, "claim_paid_acquisition", claim)
+    clock[0] += timedelta(seconds=2)
+    second = service.run(request(request_id="rotated-consumer"), no_host())
+    assert second["status"] == "SUCCEEDED" and len(calls) == 2
+    assert calls[1].headers["Authorization"] == "Bearer rotated-fixture-key"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "unit-test-key")
+    third = service.run(request(request_id="original-credential-consumer"))
+    assert third["status"] == "SUCCEEDED" and len(calls) == 2
+
+
+def test_shared_wire_identity_tracks_the_actual_injected_client_policy(runtime):
+    service, calls, _, clock = runtime
+    service.client.policy = service.policy.model_copy(update={"max_results": 2})
+    assert service.run(request(), no_host())["status"] == "SUCCEEDED"
+    service.client.policy = service.policy.model_copy(update={"max_results": 3})
+    clock[0] += timedelta(seconds=2)
+    assert service.run(request(request_id="new-wire-policy"), no_host())["status"] == "SUCCEEDED"
+    assert [json.loads(item.content)["count"] for item in calls] == [2, 3]
+
+
+def test_returned_transport_frees_paid_concurrency_even_if_own_publication_crashes(
+    runtime, monkeypatch,
+):
+    service, calls, _, clock = runtime
+    service.policy = service.policy.model_copy(update={"max_paid_concurrency": 1})
+    publish = service._publish
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("publication crash")
+
+    monkeypatch.setattr(service, "_publish", crash)
+    with pytest.raises(RuntimeError, match="publication crash"):
+        service.run(request(), no_host())
+    cursor = service.repository.get(operation_id(request()))
+    assert cursor is not None and cursor["status"] == "UNKNOWN"
+    assert cursor["billing"] == "RESERVED"
+    monkeypatch.setattr(service, "_publish", publish)
+    clock[0] += timedelta(seconds=2)
+    unrelated = service.run(request(request_id="next-query", query="独立问题"), no_host())
+    assert unrelated["status"] == "SUCCEEDED" and len(calls) == 2
+    assert service.run(request(), no_host())["billing"] == "CHARGED"
+    day = service.state.get_checkpoint("web-tool-budget", "day:2026-11-21")
+    assert day is not None and day["cursor"]["reserved_or_charged"] == 2
+
+
+def test_joined_shared_result_that_is_too_old_finishes_only_that_consumer_as_stale(
+    runtime, monkeypatch,
+):
+    service, calls, _, clock = runtime
+    entered, release = Event(), Event()
+    freeze = service._freeze_shared_result
+
+    def held(*args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return freeze(*args, **kwargs)
+
+    newer = request(request_id="newer-observation", fresh_after=NOW + timedelta(seconds=1))
+    monkeypatch.setattr(service, "_freeze_shared_result", held)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        owner = executor.submit(service.run, request(), no_host())
+        try:
+            assert entered.wait(10)
+            clock[0] += timedelta(seconds=1)
+            joined = service.run(newer, no_host())
+            assert joined["status"] == "SHARED_WAITING"
+        finally:
+            release.set()
+        assert owner.result(timeout=10)["status"] == "SUCCEEDED"
+    recovered = service.run(newer, no_host())
+    assert recovered["status"] == "FAILED" and recovered["billing"] == "NOT_CHARGED"
+    assert recovered["reason_code"] == "SHARED_RESULT_STALE" and len(calls) == 1
+    assert service.run(newer, no_host())["dispatch_id"] == recovered["dispatch_id"]
+
+
+def test_frozen_not_charged_result_settles_dead_owners_unknown_reservation_once(
+    runtime, monkeypatch,
+):
+    from astock.storage_retention import ProcessIdentity
+
+    service, calls, responses, _ = runtime
+    responses[0] = httpx.Response(200, json={"results": []})
+    publish = service._publish
+    returned = service.repository.shared_consumer_unknown
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("hard exit before per-request result")
+
+    # A hard process exit cannot execute the Python finally callback.
+    monkeypatch.setattr(service.repository, "shared_consumer_unknown", lambda *args: None)
+    monkeypatch.setattr(service, "_publish", crash)
+    with pytest.raises(RuntimeError, match="hard exit"):
+        service.run(request(), no_host())
+    with monkeypatch.context() as identity:
+        identity.setattr(
+            "astock.core.network_ownership.process_identity",
+            lambda _pid: ProcessIdentity("DEAD"),
+        )
+        unknown = service.repository.reconcile_owner(operation_id(request()), NOW)
+    assert unknown["billing"] == "UNKNOWN" and unknown["status"] == "UNKNOWN"
+    monkeypatch.setattr(service.repository, "shared_consumer_unknown", returned)
+    monkeypatch.setattr(service, "_publish", publish)
+    assert service.run(request(), no_host())["billing"] == "NOT_CHARGED"
+    assert service.run(request(), no_host())["billing"] == "NOT_CHARGED"
+    day = service.state.get_checkpoint("web-tool-budget", "day:2026-11-21")
+    assert day is not None and day["cursor"]["reserved_or_charged"] == 0
+    assert len(calls) == 1
+
+
+def test_frozen_shared_receipt_repairs_head_failure_before_releasing_global_slot(
+    runtime, monkeypatch,
+):
+    service, calls, _, clock = runtime
+    service.policy = service.policy.model_copy(update={"max_owned_concurrency": 1})
+    finish = service.repository.finish_acquisition
+    failures = []
+
+    def fail_once(*args, **kwargs):
+        if kwargs.get("result_hash") and not failures:
+            failures.append(1)
+            raise RuntimeError("shared head commit interrupted")
+        return finish(*args, **kwargs)
+
+    monkeypatch.setattr(service.repository, "finish_acquisition", fail_once)
+    with pytest.raises(RuntimeError, match="shared head"):
+        service.run(request(), no_host())
+    clock[0] += timedelta(seconds=2)
+    other = service.run(request(request_id="unrelated", query="other original"), no_host())
+    assert other["status"] == "SUCCEEDED" and len(calls) == 2
+    original = service.run(request(), no_host())
+    assert original["status"] == "SUCCEEDED" and original["billing"] == "CHARGED"
+    assert len(calls) == 2

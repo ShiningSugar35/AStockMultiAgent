@@ -2,7 +2,7 @@
 
 > 状态：RELEASED（软件实现提交 `7bb7288`；External Dependency Resilience v0.1.0 安全门增强已正式发布）
 >
-> 日期：2026-08-24；现行集成校正：2026-08-28
+> 初始日期：2026-08-24；现行合同更新：2026-11-21
 >
 > 适用范围：AStockMultiAgent 当前主线；默认运行入口为 ChatGPT/Codex Chat 会话唤醒，不依赖后台常驻 LLM 服务。
 >
@@ -328,89 +328,15 @@ A 股公告优先入口包括上海证券交易所最新公告和巨潮资讯。
 - https://www.sse.com.cn/disclosure/listedinfo/announcement/
 - https://www.cninfo.com.cn/
 
-## 9. 验收标准
+## 9. 验证与历史证据
 
-### P0 — Full Research 上游安全门
+当前实现按受影响路径选择 unit/integration/negative 与静态依赖检查；软件完成、真实宿主观测、数据源资格与自然前向样本分别记录，最新结论见根目录 `进度验收.md`。Source/identity/financial arithmetic/ledger/Publication 不变量保留；可选指标缺失只影响依赖分支，不增加相邻重复门禁。
 
-- [x] 缺任一 required readiness check，`full_research_input_ready` 必须为 false；
-- [x] Full-market readiness 不暴露正式荐股授权字段，且不拥有 Publication 权威；
-- [x] 0 market seed / Universe 未证明时禁止人工手挑候选进入正式 Full Research；
-- [x] Seed/Candidate/Research Plan 本身 recommendation authority 永远为 false；
-- [x] 完整 required checks（当前 18 项，含 `TEAM_DAG_COMPLETE`）全部 PASS 才能得到 `READY`；
-- [x] recommendation-required Role 必须绑定已注册且 ObjectStore 可验证的 member artifact；
-- [x] Role 声明的 `evidence_id` 必须真实存在、excerpt object 可验证，Result Evidence 必须与 Role Outputs 并集一致；
-- [x] 正式买入排序只能由最终 `RecommendationResearchReceipt + Publication Gate` 发布。
+2026-08-24 的软件发布基线为 `7bb7288`，其测试与人工跳过项保存在该 Git 版本；External Dependency Resilience v0.1.0 基线为 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc`。这些历史通过数不代表当前树复测，故当前文档不继续复制旧任务清单和旧测试总数。
 
-### P1 — 团队编排
+## 10. 当前状态的读取
 
-- [x] 可生成持久、版本化 full-market Research Team Plan；
-- [x] Macro / Policy / Liquidity 可并行；
-- [x] company 深研以 shortlist fan-out；
-- [x] Bull/Bear 必须是不同 `independent_context_id`；
-- [x] Reviewer 在 Bull/Bear 后；Committee 在 Reviewer 后；Portfolio 在 Committee 后；
-- [x] task result 依赖不满足时拒绝登记 COMPLETE；
-- [x] Chat-only 环境无需 API key 即可建立/恢复任务图；
-- [x] `AGENT_RUNTIME` 仅作为可选执行后端，仍复用同一 Research Team DAG、FullResearchInputReadiness、Mandatory Research DAG 与 Publication Gate，当前默认不启用。
-
-### P2 — 行业与 Skill 偏置治理
-
-- [x] `minimum_domain_skill_share` 从 schema、代码和测试中删除；
-- [x] 只有绝对 Skill 命中数参与 expert-domain gate；
-- [x] 大量无关 Skill 不得稀释一个已满足绝对命中数的行业；
-- [x] blind market tranche 在 expert overlay 前得到保留；
-- [x] Expert Overlay bonus 从版本化 policy 注入 Request，业务 Service 不再复制 `0.15` 阈值；
-- [x] Expert Skill 不直接创建 recommendation；
-- [x] 行业 Archetype registry 覆盖 22 类主要 A 股行业研究框架；
-- [x] 行业分类无法可靠解析时显式 `UNCLASSIFIED`，禁止凭空套模板；
-- [x] `research-coverage-score` 分离 Universal / Industry / Private Skill / Evidence Coverage，Private Skill 始终 edge-only。
-
-### 性能与硬件
-
-- [x] LOW_RESOURCE 配置 provider/agent/DB 并发均不得超过政策上限；
-- [x] XSHG / XSHE / BJSE market snapshot 在允许预算内并行获取；
-- [x] 本轮相同快照通过 ObjectStore/session lineage 复用；
-- [x] 不要求后台 daemon、定时任务或 GPU；
-- [x] 单个 provider 失败不会阻塞其他市场/独立任务，Universe 总覆盖不足则 fail closed；
-- [x] 当前实机 `8 logical CPU / 15.73 GiB RAM` 被正确识别为 `LOW_RESOURCE`：provider=2、agent=2、DuckDB=2、parallel companies=2、deep shortlist=6。
-
-### 工程质量
-
-- [x] 新增/修改 unit tests 全通过；
-- [x] `uv run pytest -q` 全仓通过：`929 passed / 18 skipped / 0 failed`，918.16s；
-- [x] `uv run ruff check .` 通过；
-- [x] `uv run pyright` 通过：`0 errors / 0 warnings / 0 informations`；
-- [x] `git diff --check` 通过（仅 CRLF→LF 提示，无 diff error）；
-- [x] SQLite integrity 审计通过：`PASS / integrity_check=ok / read_only=true`；
-- [x] 无真实券商执行能力被引入；
-- [x] 未回退工作区既有 Continuous Monitor 等未提交实现，最终作为同一集成发布树共同回归。
-
-### 人工 / 显式 live 验证（本次按用户授权跳过，不伪装为 PASS）
-
-- `SKIPPED_MANUAL`：30-document 真实 OCR benchmark；
-- `SKIPPED_MANUAL`：approved local-only private-book visual coverage；
-- `SKIPPED_MANUAL`：Candidate/CNINFO/行情/reference provider 的显式 live probe；
-- `SKIPPED_MANUAL`：Continuous Monitor 长时间 daemon、真实自然语言场景与 crash/source-degradation 观察。
-
-上述项目只影响真实环境长期观察结论，不阻断本次软件代码、Schema、CLI、Workflow 与确定性安全门发布。
-
-## 10. 实施顺序与状态记录
-
-| 阶段 | 工作 | 状态 |
-|---|---|---|
-| P0.1 | Recommendation Readiness schema/service/gate | COMPLETE |
-| P0.2 | Candidate fail-open 禁止与 blind tranche | COMPLETE |
-| P0.3 | On-demand acquisition / hardware-aware I/O | COMPLETE |
-| P1.1 | Research Team policy + DAG planner | COMPLETE |
-| P1.2 | durable task/result/checkpoint | COMPLETE |
-| P1.3 | Chat/Codex Skill/Workflow 集成 | COMPLETE |
-| P2.1 | 删除 Skill share gate | COMPLETE |
-| P2.2 | Industry Archetype registry | COMPLETE |
-| P2.3 | Coverage/Skill bias 审计接口 | COMPLETE |
-| REVIEW | 两轮安全门返工 + 配置漂移/产品合同终审 | PASS |
-| TEST | 定向 + 全仓 + Ruff + Pyright + diff + integrity | PASS |
-| RELEASE | CLI/Workflow 启用、验收文档迁移 | RELEASED |
-
-软件实现发布提交 `7bb7288` 已成功推送 `origin/main`。发布状态以本节历史测试证据为准；当时的人工 / live 长时间观察保持 `SKIPPED_MANUAL`，不得反向改写为该次发布已经验收。
+团队任务/游标由现有 StateStore 和 Artifact Registry 读取；未完成开发只在 `planning/work_packages_v1.yaml` 与 `开发计划.md` 保留。原生宿主未产生真实指令加载/执行轨迹时，只能报告未观测；安装文件或进程存在不能代替运行验证。
 
 ## 11. External Dependency Resilience 现行集成校正
 
@@ -419,3 +345,31 @@ A 股公告优先入口包括上海证券交易所最新公告和巨潮资讯。
 - CNINFO、交易所 exact-item、secondary financial 的降级链遵循 typed official lineage。Official Web exact-item 只能恢复已知报告，不能证明 exhaustive enumeration；恢复为 PARTIAL 时精确估值和正式推荐继续关闭。
 - Provider health/breaker 按 capability 隔离；EastMoney 5m 的真实 NETWORK 失败不污染 Sina 5m 的 HEALTHY 状态，也不允许聊天 Agent手工补位成为正式候选。
 - 2026-08-27 的真实 CNINFO、官方日历、5m fallback 与组合故障注入证据由对应 Git/Release 历史和 durable run `lr_mtb4gekw_ff5540ff05d2` 保留；这些增强已随 External Dependency Resilience v0.1.0 通过独立冻结树与远端 Release 门，target 为 `c764e842d3eb1922bc206b7f3cffdd9759c8f1cc`，且不改写 `7bb7288` 的历史发布身份。
+
+## 12. 机构研究的经营、估值与复盘合同
+
+### 冻结假设与经营勾稽
+
+`DriverInputValue` 与现有 Claim/Evidence/DriverTree 共同记录变量、单位、预测期间、来源、认识类型和适用范围。`verification` 承载上下界、失效条件、下一验证事件/日期和反证；反证必须属于冻结证据集合。未来输入只接受预测、估值假设或管理层表述，不能标成已观察事实。旧工件可读；旧输入未声明单位时从同一 DriverTree 取得，不能转换成另一个口径。
+
+`OperatingReconciliation` 用同期间同单位的总额、分项和显式抵销复核分部收入、现金转换或维持/成长资本开支拆分。未提供明细保留信息缺口，不用零补全。量价、份额、费用、营运资本等变量继续使用已有算术 DriverTree；加减的单位须一致，FCFF 的金额单位须一致、税率和利润率须为比例。行业方法沿用既有 operating FCFF、financial residual income、asset NAV、pre-profit scenario，不把银行/保险强行套用工业企业现金流。
+
+FCFF 仍由 Python 复算：`EBIT × (1 − tax) + D&A − capex − Δworking_capital`。DCF 与 mid-cycle 的股东价值桥必须显式给出净债务、现金之外的非经营资产、少数股东权益、其他优先索取权与完全稀释股数；零值需要明确的依据说明，净债务不再默认零。现金已在净债务中处理，不能在非经营资产中重复加回。股权专用方法不凭空构造企业价值。DCF 使用一致的年度现金流和自估值日期起的 ACT/365F 折现时间，季度流量不能作为年度流量直接进入永续估值。
+
+依据：[Damodaran 财务度量定义](https://pages.stern.nyu.edu/~adamodar/New_Home_Page/definitions.html)、[每股价值调整](https://pages.stern.nyu.edu/adamodar/New_Home_Page/littlebook/valuepershare.htm)、[企业现金流估值讲义](https://pages.stern.nyu.edu/adamodar/pdfiles/eqnotes/packet2b.pdf)。具体口径以本项目 schema、数据单位与复算测试为准，不将这些通用讲义视为某家公司事实证据。
+
+### 预期差与敏感性
+
+`InstitutionalDecisionContextDraft.sampled_forecast_artifact_ids` 按需消费已登记的 `SampledForecastAggregate`，核对证券、可见时间、财年、指标和单位；只有 DriverTree 显式输出同口径 EPS 才与采样 EPS 比较，不能用 FCFF/收入替代。记录样本数、机构数、上游来源组及聚合对象 hash；缺口输出 NOT_COMPARABLE，不影响无关结论。券商样本、管理层指引、系统假设和价格隐含预期分别保留，样本均值不是全市场共识。
+
+`driver_sensitivity_requests` 在同一冻结基础情景中改变一个经营输入，重新计算受影响期间的经营图及每股价值。逆向求解使用有界网格与括区间，区分无括区间、多括区间、边界值和平坦不可识别；数值解仅说明被检查区间的局部情况，不证明全局唯一。没有市场价格锚时仍能给敏感性，但不给市场隐含结论。下一验证事件、反向情景与失效信号继续通过原 DecisionContext/Catalyst/持仓复核记录，不另造观点引擎或赋予模型概率配权权限。
+
+### 前提修订与成熟评价
+
+`research-forecast-revision-impact` 是只读影响分析；`research-forecast-invalidate` 是显式前提失效动作。后者沿注册输入 hash 和现有公司检查点仅将受影响的当前 Forecast、Valuation、FundamentalModelBundle、DecisionContext 标记 SUPERSEDED。旧对象不改写，历史 audit 仍可读取；新研究不能重用已失效输入，无关的 Industry/Company/DriverTree 继续复用。输出同时给出现有 HoldingReview 所需的 changed_claim_ids / invalidated_evidence_ids，不新增依赖数据库或后台调度器。
+
+当前输入是否仍可使用由同一 `require_active_institutional_inputs` 祖先检查决定：自动 resolver 同时检查 head 状态，显式 ID、实际 runtime 读取、当前 Committee plan/decide 和正式输出读取均复核失效祖先。正式 verifier 在命中已有成功缓存前也执行此检查，不能从不可变 payload 的旧 READY 值继承当前有效性。新的 head 写入继续在原事务中检查祖先；失效的非 head 版本同样不可复用。历史 runtime/committee audit、旧引用读取与预测 outcome 仍读取原始对象，不因当前前提失效而抹去历史。
+
+`research-forecast-outcome` 从冻结 Forecast/DriverTree 和正式财报认证 reader 取得实际值，只评价同公司、年度、合并口径、单位可转换且实际已公开的期间。尚未成熟、先有实际值后作预测或指标口径不匹配时不计算成功率。输出点误差、相对误差、情景范围覆盖和事前来源；Bull/Base/Bear 范围不冒充校准概率区间。建议价格参考、策略费用后回放、账户账本表现仍是三种独立口径。可选 QuantStats 本轮不加入：现有投影/manifest 已有归属，尚无新增只读展示收益证据，不能用另一报表依赖掩盖净收益来源缺口。
+
+接口和负例：`research/institutional.py`、`research/fundamental_analytics.py`、`research/outcome_feedback.py`、`schemas/institutional_research.py`、`tests/unit/test_institutional_driver_contracts.py`。验收结果只在本轮稳定输入验证后记录。

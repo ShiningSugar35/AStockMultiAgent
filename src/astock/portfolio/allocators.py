@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from astock.portfolio.allocation import AllocationContext, AllocationResult, project_scores
 from astock.portfolio.analytics import (
     AlignedPortfolioData,
     hierarchical_risk_weights,
@@ -48,6 +49,13 @@ class PortfolioAllocatorRegistry:
         except KeyError as exc:
             raise ValueError(f"portfolio allocator is not registered: {method}") from exc
 
+    def allocate(
+        self, method: PortfolioAllocationMethod | str, context: AllocationContext
+    ) -> AllocationResult:
+        name = str(method)
+        plugin = self.get(PortfolioAllocationMethod(name))
+        return project_scores(context, plugin.build_scores(context.aligned), method=name)
+
     def methods(self) -> tuple[PortfolioAllocationMethod, ...]:
         return tuple(sorted(self._plugins, key=lambda item: item.value))
 
@@ -75,6 +83,7 @@ def default_portfolio_allocator_registry() -> PortfolioAllocatorRegistry:
             build_scores=hierarchical_risk_weights,
             model_risk_codes=(
                 "CORRELATION_CLUSTER_ESTIMATION_RISK",
+                "AVERAGE_LINKAGE_TREE_RECURSION_NOT_STANDARD_HRP",
                 "NO_EXPECTED_RETURN_ESTIMATE",
             ),
         )
@@ -117,6 +126,8 @@ def load_portfolio_allocator_policy(path: Path) -> PortfolioAllocatorPolicy:
 
 
 __all__ = [
+    "AllocationContext",
+    "AllocationResult",
     "PortfolioAllocatorPlugin",
     "PortfolioAllocatorPolicy",
     "PortfolioAllocatorRegistry",

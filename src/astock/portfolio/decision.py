@@ -1541,10 +1541,23 @@ class PortfolioDecisionService:
         if implementation_cost_fen is None and turnover > 0:
             warnings.add("TOTAL_IMPLEMENTATION_COST_UNAVAILABLE")
 
+        from astock.portfolio.implementation import assess_transition_implementation
+
+        implementation_assessment = assess_transition_implementation(
+            self.state, self.objects, request, construction, proposal, aligned, target_bands,
+            {symbol: history_by_symbol[symbol].latest_close_fen for symbol in union_symbols},
+            current_weights, target_weights, max_total=max_total, max_single=max_single,
+            max_group=float(self.portfolio.committee_rules.max_industry_exposure),
+            return_basis=(
+                "PARTIAL_GROSS_TOTAL_RETURN"
+                if any(item.corporate_action_release_id for item in histories) else "PRICE_ONLY"
+            ),
+        )
         report_seed = {
             "request": request.model_dump(mode="json", exclude={"created_at"}),
             "current_hash": current_hash,
             "construction_hash": construction_hash,
+            "implementation": implementation_assessment.model_dump(mode="json"),
             "target": target_variant.model_dump(mode="json", exclude={"created_at"}),
             "sources": sorted(source_hashes),
         }
@@ -1560,6 +1573,7 @@ class PortfolioDecisionService:
             hedge_candidates=all_hedges,
             estimated_turnover_weight=turnover,
             estimated_implementation_cost_fen=implementation_cost_fen,
+            implementation_assessment=implementation_assessment,
             warning_codes=sorted(warnings),
             source_artifact_ids=sorted(source_ids),
             source_object_hashes=sorted(source_hashes),

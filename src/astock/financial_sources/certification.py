@@ -77,6 +77,22 @@ _NUMBER_TOKEN_RE = re.compile(
 _HEADER_SCAN_CHARS = 1800
 
 
+def financial_amount_cny(value: Decimal, unit: FinancialUnit) -> Decimal:
+    """Normalize an explicitly monetary unit; share/ratio units are never money."""
+    multiplier = _UNIT_MULTIPLIERS.get(unit)
+    if unit is FinancialUnit.SHARES or multiplier is None or not value.is_finite():
+        raise ValueError("financial amount requires a finite CNY-denominated value")
+    return value * multiplier
+
+
+def _unmatched_value_code(mapping: FinancialFieldMapping, match_count: int) -> str:
+    if match_count == 0:
+        return "OFFICIAL_VALUE_NOT_FOUND"
+    return (
+        "OPTIONAL_OFFICIAL_VALUE_AMBIGUOUS" if mapping.optional else "OFFICIAL_VALUE_AMBIGUOUS"
+    )
+
+
 class FinancialPdfCertifier:
     def __init__(self, state: StateStore, objects: ObjectStore) -> None:
         self.objects = objects
@@ -102,8 +118,10 @@ class FinancialPdfCertifier:
         reasons: list[str] = []
         for mapping in mappings:
             matches = self._exact_matches(report, mapping, period_end, period_type)
+            if not matches and mapping.optional:
+                continue
             if len(matches) != 1:
-                code = "OFFICIAL_VALUE_NOT_FOUND" if not matches else "OFFICIAL_VALUE_AMBIGUOUS"
+                code = _unmatched_value_code(mapping, len(matches))
                 reasons.append(f"{code}:{mapping.field_code.value}")
                 continue
             _page_id, _char_start, _char_end, value, unit = matches[0]
@@ -143,14 +161,16 @@ class FinancialPdfCertifier:
         for mapping in mappings:
             key = (mapping.statement_type, mapping.field_code)
             hint = observed.get(key)
-            if hint is None and not allow_official_only_recovery:
+            if hint is None and not allow_official_only_recovery and not mapping.optional:
                 reasons.append(f"SECONDARY_FIELD_MISSING:{mapping.field_code.value}")
                 continue
             matches = self._exact_matches(report, mapping, basis.period_end, basis.period_type)
+            if not matches and mapping.optional:
+                continue
             if len(matches) != 1:
-                if hint is None:
+                if hint is None and not mapping.optional:
                     reasons.append(f"SECONDARY_FIELD_MISSING:{mapping.field_code.value}")
-                code = "OFFICIAL_VALUE_NOT_FOUND" if not matches else "OFFICIAL_VALUE_AMBIGUOUS"
+                code = _unmatched_value_code(mapping, len(matches))
                 reasons.append(f"{code}:{mapping.field_code.value}")
                 continue
             page_id, char_start, char_end, value, unit = matches[0]
@@ -234,6 +254,10 @@ class FinancialPdfCertifier:
         )
         if header is None:
             return []
+        if mapping.field_code is FinancialFieldCode.CASH_DIVIDENDS_PAID and not (
+            _cash_dividend_header_is_explicit(header_text, period_end, period_type)
+        ):
+            return []
         statement_unit, period_column_count = header
         field_unit = (
             FinancialUnit.SHARES
@@ -244,11 +268,12 @@ class FinancialPdfCertifier:
         matches: list[tuple[str, int, int, Decimal, FinancialUnit]] = []
         for page_id, text, segment_start, segment_end in segments:
             segment_text = text[segment_start:segment_end]
-            for row_start, row_end, value in _logical_row_values(
-                segment_text,
-                label_re,
-                period_column_count,
-            ):
+            rows = (
+                _cash_dividend_rows(segment_text, mapping.official_label, period_column_count)
+                if mapping.field_code is FinancialFieldCode.CASH_DIVIDENDS_PAID
+                else _logical_row_values(segment_text, label_re, period_column_count)
+            )
+            for row_start, row_end, value in rows:
                 absolute_start = segment_start + row_start
                 absolute_end = segment_start + row_end
                 evidence_start = (
@@ -487,6 +512,55 @@ def _field_label_pattern(mapping: FinancialFieldMapping) -> re.Pattern[str]:
             rf"(?<![\u4e00-\u9fff]){label_re}(?![\u4e00-\u9fff])"
         )
     return _label_pattern(mapping.official_label)
+
+
+def _cash_dividend_header_is_explicit(
+    header: str, period_end: date, period_type: FinancialPeriodType,
+) -> bool:
+    if len(_CURRENCY_TOKEN_RE.findall(header)) != 1:
+        return False
+    patterns = _target_period_patterns(
+        period_end, period_type, FinancialStatementType.CASH_FLOW_STATEMENT,
+    )
+    targets: list[re.Match[str]] = []
+    for pattern in patterns:
+        targets = list(pattern.finditer(header))
+        if targets:
+            break
+    if not targets:
+        return False
+    for target in targets:
+        start = header.rfind("\n", 0, target.start()) + 1
+        end = header.find("\n", target.end())
+        line = header[start : end if end >= 0 else len(header)]
+        first_period = _GENERIC_PERIOD_TOKEN_RE.search(line)
+        if first_period is None or first_period.start() != target.start() - start:
+            return False
+    return True
+
+
+def _cash_dividend_rows(
+    text: str, label: str, period_column_count: int,
+) -> list[tuple[int, int, Decimal]]:
+    """Require a complete pure cash-paid row; never borrow a following row's numbers."""
+    label_text = r"[ \t]*".join(re.escape(character) for character in label)
+    row_re = re.compile(
+        rf"^[ \t]*{label_text}[ \t]+(?P<amounts>[0-9,().−\- \t]+)[ \t]*$"
+    )
+    matches = []
+    for line in re.finditer(r"(?m)^.*$", text):
+        matched = row_re.fullmatch(line.group())
+        if matched is None:
+            continue
+        values = [_parse_decimal(token) for token in _NUMBER_TOKEN_RE.findall(
+            matched["amounts"]
+        )]
+        if len(values) != period_column_count or any(value is None for value in values):
+            continue
+        current = values[0]
+        if current is not None and current >= 0:
+            matches.append((line.start(), line.end(), current))
+    return matches
 
 
 def _logical_row_values(

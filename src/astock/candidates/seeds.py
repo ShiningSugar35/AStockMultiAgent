@@ -6,6 +6,7 @@ import json
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -19,6 +20,7 @@ from pydantic import ValidationError
 
 from astock.candidates.discovery_bridge import (
     VERIFIED_DISCOVERY_MARKER,
+    apply_factor_priority_overlay,
     merge_discovery_seed_tranche,
 )
 from astock.candidates.discovery_runtime import (
@@ -1350,7 +1352,10 @@ class ResearchSeedService:
         market_coverage_ratios: dict[Market, float] = {}
         market_reconciliations: dict[Market, MarketCoverageReconciliation] = {}
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(fetch_market, market): market for market in _EQUITY_MARKETS}
+            futures = {
+                executor.submit(copy_context().run, fetch_market, market): market
+                for market in _EQUITY_MARKETS
+            }
             for future in as_completed(futures):
                 market = futures[future]
                 try:
@@ -1593,6 +1598,7 @@ class ResearchSeedService:
                 source_hashes.update(verified_release.source_object_hashes)
                 source_hashes.add(verified_release_hash)
                 cutoff = max(cutoff, verified_release.as_of)
+        seeds = self._apply_feature_priorities(seeds, request, source_hashes, warnings)
         selected_breadth_domain_counts: dict[str, int] = defaultdict(int)
         selected_industry_counts: dict[str, int] = defaultdict(int)
         for seed in seeds:
@@ -1687,6 +1693,97 @@ class ResearchSeedService:
             created_at=request.as_of,
         )
         return self._persist(report)
+
+    def _apply_feature_priorities(
+        self, seeds: list[ResearchSeed], request: ResearchSeedRequest,
+        source_hashes: set[str], warnings: set[str],
+    ) -> list[ResearchSeed]:
+        if request.feature_overlay is None:
+            return seeds
+        from astock.candidates.registered_factor_diagnostics import load_current_factor_members
+        from astock.market_data.official_calendar import load_official_trading_calendar
+
+        specification = request.feature_overlay
+        try:
+            panel, digest, members, excluded = load_current_factor_members(
+                self.state, self.objects, specification.panel_artifact_id,
+                as_of=request.as_of, max_age_hours=specification.max_age_hours,
+                calendar=load_official_trading_calendar(
+                    self.project_root / "configs/official_trading_calendar.yaml"
+                ),
+            )
+            updated = apply_factor_priority_overlay(
+                tuple(seeds), members, specification=specification,
+                panel_hash=digest, factor_id=panel.request.factor_id,
+            )
+        except (AStockError, OSError, RuntimeError, ValueError):
+            warnings.add("FEATURE_PRIORITY_INPUT_UNAVAILABLE_BASELINE_PRESERVED")
+            return seeds
+        source_hashes.update(panel.source_hashes)
+        source_hashes.add(digest)
+        warnings.update("FEATURE_PRIORITY_SUPERSEDED:" + identity for identity in excluded)
+        if not any(seed.feature_priority is not None for seed in updated):
+            warnings.add("FEATURE_PRIORITY_NO_COMPARABLE_NONBLIND_SEEDS")
+        return list(updated)
+
+    def _audit_feature_priorities(
+        self, report: ResearchSeedReport, findings: set[str],
+    ) -> None:
+        from astock.candidates.registered_factor_diagnostics import (
+            DiscoveryFactorPanel,
+            load_factor_panel,
+            validate_factor_priority_window,
+        )
+        from astock.market_data.official_calendar import load_official_trading_calendar
+
+        calendar = load_official_trading_calendar(
+            self.project_root / "configs/official_trading_calendar.yaml"
+        )
+        panels: dict[str, tuple[DiscoveryFactorPanel, str]] = {}
+        for seed in report.seeds:
+            binding = seed.feature_priority
+            if binding is None:
+                continue
+            try:
+                identity = binding.specification.panel_artifact_id
+                if identity not in panels:
+                    panels[identity] = load_factor_panel(self.state, self.objects, identity)
+                panel, digest = panels[identity]
+                selected = set(binding.comparable_member_ids)
+                peers = tuple(item for item in panel.members if item.instrument_id in selected)
+                groups = {item.business_group_id for item in peers}
+                validate_factor_priority_window(
+                    panel, as_of=report.as_of,
+                    max_age_hours=binding.specification.max_age_hours, calendar=calendar,
+                )
+                if (
+                    ResearchSeedOrigin.MARKET in seed.origins
+                    or digest != binding.panel_object_hash
+                    or panel.request.factor_id != binding.factor_id
+                    or digest not in report.source_object_hashes
+                    or not set(panel.source_hashes).issubset(report.source_object_hashes)
+                    or len(peers) != len(selected) or len(groups) != 1
+                ):
+                    raise ValueError("factor priority provenance differs from its frozen panel")
+                base = seed.model_copy(update={
+                    "seed_id": binding.base_seed_id, "feature_priority": None,
+                    "research_priority_score": binding.base_priority,
+                    "reason_codes": [
+                        code for code in seed.reason_codes
+                        if code != "FEATURE_PRIORITY_ONLY_NO_ADDITIONAL_VOTE"
+                    ],
+                })
+                expected = apply_factor_priority_overlay(
+                    (base,), peers, specification=binding.specification,
+                    panel_hash=digest, factor_id=panel.request.factor_id,
+                )[0]
+                if (
+                    expected.feature_priority != binding or expected.seed_id != seed.seed_id
+                    or expected.research_priority_score != seed.research_priority_score
+                ):
+                    raise ValueError("factor priority rank or identity changed")
+            except (AStockError, OSError, RuntimeError, ValueError):
+                findings.add("RESEARCH_SEED_FEATURE_PRIORITY_LINEAGE_DRIFT")
 
     def status(self) -> dict[str, object]:
         checkpoint = self.state.get_checkpoint("research-seeds", "latest")
@@ -1810,6 +1907,7 @@ class ResearchSeedService:
                             not in report.source_object_hashes
                         ):
                             findings.add("RESEARCH_SEED_CANDIDATE_LINEAGE_DRIFT")
+            self._audit_feature_priorities(report, findings)
             if report.recommendation_allowed or report.paper_ledger_write_allowed:
                 findings.add("RESEARCH_SEED_AUTHORITY_DRIFT")
         for input_hash in record["input_hashes"]:
@@ -1871,7 +1969,9 @@ class ResearchSeedService:
         if targets:
             workers = min(max(1, request.market_fetch_workers), len(targets))
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = {executor.submit(fetch, target): target for target in targets}
+                futures = {
+                    executor.submit(copy_context().run, fetch, target): target for target in targets
+                }
                 for future in as_completed(futures):
                     try:
                         domain_id, _board_code, rows, snapshot = future.result()

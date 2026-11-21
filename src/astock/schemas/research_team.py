@@ -145,6 +145,17 @@ class MarketContextPack(AStockModel):
         return self
 
 
+class ResearchCasePosition(AStockModel):
+    """A typed disagreement key bound to an existing case and its registered sources."""
+
+    topic_id: str = Field(min_length=1)
+    kind: Literal["FACT", "ASSUMPTION", "CALCULATION", "STYLE"]
+    material: bool
+    statement: str = Field(min_length=1, max_length=4000)
+    position: str = Field(min_length=1, max_length=1000)
+    evidence_artifact_ids: list[str] = Field(min_length=1, max_length=32)
+
+
 class IndependentBullCase(AStockModel):
     schema_version: str = "independent-bull-case-v1"
     as_of: AwareDatetime
@@ -152,6 +163,7 @@ class IndependentBullCase(AStockModel):
     independent_context_id: str = Field(min_length=1)
     case: str = Field(min_length=1)
     valuation_per_share: Decimal = Field(gt=0)
+    positions: list[ResearchCasePosition] = Field(default_factory=list, max_length=32)
 
 
 class IndependentBearCase(AStockModel):
@@ -161,6 +173,7 @@ class IndependentBearCase(AStockModel):
     independent_context_id: str = Field(min_length=1)
     case: str = Field(min_length=1)
     valuation_per_share: Decimal = Field(gt=0)
+    positions: list[ResearchCasePosition] = Field(default_factory=list, max_length=32)
 
 
 class ModelRiskValidationReport(AStockModel):

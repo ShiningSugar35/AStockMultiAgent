@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: astock-staged-hygiene
+        name: AStock staged files
+        entry: uv run --frozen --no-sync python -B scripts/check_repository.py --staged
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

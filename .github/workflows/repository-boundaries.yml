@@ -1,0 +1,32 @@
+name: Repository boundaries
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.ai-bridge/quality-cache/uv
+      UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.ai-bridge/python
+      PYTHONDONTWRITEBYTECODE: "1"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.13.9"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Install locked development dependencies
+        run: uv sync --locked --group dev
+      - name: Check changed blobs and progressive complexity
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run --frozen --no-sync python -B scripts/run_local_quality.py --timeout-seconds 180 python scripts/check_repository.py --base "$BASE_SHA" --complexity
+      - name: Check declared import boundaries
+        run: uv run --frozen --no-sync python -B scripts/run_local_quality.py --timeout-seconds 180 imports --no-cache --no-logo

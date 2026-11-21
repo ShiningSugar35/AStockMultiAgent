@@ -93,6 +93,7 @@ class TradingClassificationCorporateActionBaseline(AStockModel):
     raw_snapshot_ids: list[str]
     observed_record_count: int = Field(ge=0)
     official_query_snapshot_ids: list[str] = Field(default_factory=list)
+    official_query_artifact_ids: list[str] = Field(default_factory=list)
     candidate_announcement_ids: list[str] = Field(default_factory=list)
     reason_codes: list[str]
     absence_is_officially_certified: bool = False
@@ -103,6 +104,7 @@ class TradingClassificationCorporateActionBaseline(AStockModel):
         for label, values in (
             ("raw snapshot", self.raw_snapshot_ids),
             ("official query snapshot", self.official_query_snapshot_ids),
+            ("official query artifact", self.official_query_artifact_ids),
             ("candidate announcement", self.candidate_announcement_ids),
             ("reason code", self.reason_codes),
         ):

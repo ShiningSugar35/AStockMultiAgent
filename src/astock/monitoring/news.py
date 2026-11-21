@@ -14,11 +14,15 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import httpx
+from httpx import Client as HttpxClient
 
 from astock.core.hashing import content_hash
+from astock.core.network_ownership import owned_network_request
 from astock.core.object_store import ObjectStore
+from astock.core.request_budget import current_request_budget
 from astock.core.source_resilience import SourceCircuitBreaker, classify_source_error
 from astock.core.state import StateStore
+from astock.providers.http_resilience import configure_owned_http_client
 from astock.schemas import FetchStatus, SourceSnapshot
 
 
@@ -85,6 +89,7 @@ class GdeltNewsLeadProvider:
         self.objects = objects
         self.state = state
         self.endpoint = endpoint
+        self.timeout_seconds = timeout_seconds
         self.breaker = SourceCircuitBreaker(state)
         self.client = client or httpx.Client(
             timeout=timeout_seconds,
@@ -184,9 +189,7 @@ class GdeltNewsLeadProvider:
         if not self.breaker.claim_attempt(self.provider_id, self.capability):
             raise RuntimeError("GDELT news capability is temporarily unavailable")
         try:
-            response = self.client.get(
-                self.endpoint,
-                params={
+            response = self._get_response({
                     "query": query,
                     "mode": "artlist",
                     "format": "json",
@@ -194,9 +197,7 @@ class GdeltNewsLeadProvider:
                     "sort": "datedesc",
                     "startdatetime": start.strftime("%Y%m%d%H%M%S"),
                     "enddatetime": end.strftime("%Y%m%d%H%M%S"),
-                },
-                follow_redirects=False,
-            )
+                })
             response.raise_for_status()
             _validate_endpoint(str(response.request.url), allow_query=True)
             snapshot = self._persist(response)
@@ -210,6 +211,23 @@ class GdeltNewsLeadProvider:
             raise
         self.breaker.record_success(self.provider_id, self.capability)
         return receipt
+
+    def _get_response(self, params: dict[str, str]) -> httpx.Response:
+        budget = current_request_budget()
+        timeout = self.timeout_seconds if budget is None else min(
+            self.timeout_seconds, budget.remaining_seconds(),
+        )
+        with owned_network_request(
+            self.state, self.provider_id, self.endpoint, timeout_seconds=timeout,
+        ):
+            if isinstance(self.client, HttpxClient):
+                configure_owned_http_client(self.client)
+                return self.client.get(
+                    self.endpoint, params=params, follow_redirects=False, timeout=timeout,
+                )
+            if budget is not None:
+                budget.reserve_attempt()
+            return self.client.get(self.endpoint, params=params, follow_redirects=False)
 
     def _persist(self, response: httpx.Response) -> SourceSnapshot:
         now = datetime.now(UTC)

@@ -165,7 +165,11 @@ def test_status_cli_does_not_upgrade_recovery_checkpoint_to_ready(
         status="READY",
         object_hash="b" * 64,
     )
-    monkeypatch.setattr(discovery_cli, "_services", lambda: (paths, state, object_store))
+    def read_services(*, read_only: bool = False):
+        assert read_only
+        return paths, state, object_store
+
+    monkeypatch.setattr(discovery_cli, "_services", read_services)
 
     result = CliRunner().invoke(discovery_cli.app, ["status"])
 

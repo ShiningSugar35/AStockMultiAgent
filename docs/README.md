@@ -35,7 +35,7 @@ Markdown 说明目标、边界和取舍；机器合同与运行证据决定实�
 |---|---|
 | 项目/开发 | [README](../README.md)、[规则](../AGENTS.md)、[计划](../开发计划.md)、[机器索引](../planning/work_packages_v1.yaml)、[验收](../进度验收.md) |
 | 投资请求/输出 | [统一编排](architecture/investment-request-orchestration-v1.md)、[公共回复](architecture/public-response-contract-v1.md)、[正式报告](architecture/formal-reporting-v1.md) |
-| 当前数据补证 | [恢复与验证](architecture/adaptive-recovery-and-validation-v1.md)、[Provider](architecture/provider-resilience-v1.md)、[Web线索](architecture/web-discovery-lead-v1.md) |
+| 当前数据补证 | [恢复与验证](architecture/adaptive-recovery-and-validation-v1.md)、[Provider](architecture/provider-resilience-v1.md)、[Web线索](architecture/web-discovery-lead-v1.md)、[来源消费与原件](architecture/source-consumers-v1.md) |
 | 公司与全市场 | [研究团队](architecture/full-market-research-team-v1.md)、[候选发现](architecture/skill-driven-candidate-discovery-v1.md)、[广度/入场/事件](architecture/recommendation-breadth-entry-event-intelligence-v1.md) |
 | 专业方法 | [角色映射](architecture/research-specialist-skills-crosswalk.md)、[Serenity方法](architecture/serenity-method-layer-v1.md)、[技术研究](architecture/technical-research-quality-v1.md) |
 | 组合与市场状态 | [组合/持仓](architecture/portfolio-holding-decision-v1.md)、[状态控制](architecture/market-regime-control-v1.md)、[状态研究内核](architecture/market-regime-research-kernel-v1.md) |

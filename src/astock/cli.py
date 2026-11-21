@@ -147,6 +147,7 @@ from astock.research import (
     validate_registry_open_source_audits,
     verify_open_source_tree,
 )
+from astock.research.data_cli import register_research_data_commands
 from astock.schemas import (
     AdjustmentMode,
     AgentSourceProposal,
@@ -391,6 +392,7 @@ register_local_portfolio_commands(app, _services)
 register_external_capability_commands(app, _services, _emit)
 register_report_commands(app, _services, _emit)
 register_tushare_commands(app, _services, _emit)
+register_research_data_commands(app, _services, _emit)
 register_operations_commands(app, _services, _emit)
 register_research_runtime_commands(
     app,

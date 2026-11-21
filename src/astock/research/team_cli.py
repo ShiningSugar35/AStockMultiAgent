@@ -127,6 +127,8 @@ def register_research_team_commands(
     def research_team_status(plan_id: Annotated[str, typer.Argument()]) -> None:
         emit(team().status(plan_id))
 
+    _register_reviewer_commands(app, team, emit)
+
     @app.command("research-team-role-output")
     def research_team_role_output(
         request_file: Annotated[
@@ -161,6 +163,35 @@ def register_research_team_commands(
         emit(report)
         if not report.full_research_input_ready:
             raise typer.Exit(code=3)
+
+
+def _register_reviewer_commands(
+    app: typer.Typer,
+    team: Callable[[], ResearchTeamService],
+    emit: Callable[[Any], None],
+) -> None:
+    """Keep the bounded reviewer transport separate from role/task registration."""
+
+    @app.command("research-team-reviewer-prepare")
+    def research_team_reviewer_prepare(plan_id: Annotated[str, typer.Argument()]) -> None:
+        """Reserve at most one optional host review; no model is called here."""
+        emit(team().run_dispute_reviewer(plan_id))
+
+    @app.command("research-team-reviewer-complete")
+    def research_team_reviewer_complete(
+        input_artifact_id: Annotated[str, typer.Argument()],
+        operation_id: Annotated[str, typer.Option()],
+        input_hash: Annotated[str, typer.Option()],
+        response_file: Annotated[
+            Path, typer.Argument(exists=True, file_okay=True, dir_okay=False, readable=True)
+        ],
+    ) -> None:
+        if response_file.stat().st_size > 65536:
+            raise typer.BadParameter("reviewer response exceeds bounded input")
+        emit(team().complete_dispute_reviewer(
+            input_artifact_id, operation_id=operation_id, input_hash=input_hash,
+            response=response_file.read_text(encoding="utf-8"),
+        ))
 
 
 __all__ = ["register_research_team_commands"]

@@ -758,3 +758,140 @@ def test_canonical_signal_does_not_read_execution_close_and_limit_down_blocks_ex
     record = state.artifact_record(result.execution_artifact_ids[0])
     execution = json.loads(objects.get_bytes(record["object_hash"]))
     assert execution["fills"][0]["price_fen"] == 901
+
+
+def test_actual_label_information_interval_purges_long_labels():
+    original = request(label_horizon_bars=0, purge_bars=0, embargo_bars=0, min_train_bars=2)
+    ends = list(original.timestamps)
+    # The third training observation reaches the second test fold.
+    ends[2] = original.timestamps[6]
+    plan = make_plan(original.model_copy(update={"label_end_times": tuple(ends)}))
+    assert plan.folds[1].train.stop == 2
+    assert all(
+        original.timestamps[i] < original.timestamps[plan.folds[1].test.start]
+        and ends[i] < original.timestamps[plan.folds[1].test.start]
+        for i in range(plan.folds[1].train.stop)
+    )
+
+
+def test_actual_label_cannot_reach_final_holdout_or_start_in_future():
+    original = request()
+    ends = list(original.timestamps)
+    ends[8] = original.timestamps[original.holdout_start]
+    with pytest.raises(ValueError, match="final holdout"):
+        make_plan(original.model_copy(update={"label_end_times": tuple(ends)}))
+    ends = list(original.timestamps)
+    ends[2] = original.timestamps[0]
+    with pytest.raises(ValueError, match="label intervals"):
+        make_plan(original.model_copy(update={"label_end_times": tuple(ends)}))
+
+
+
+def test_experiment_hypothesis_defaults_are_explicit_and_posthoc_is_not_preregistration():
+    old_request = request().model_dump(mode="json")
+    for key in ("hypothesis", "analysis_timing", "stability_score_tolerance"):
+        old_request.pop(key)
+    plan = make_plan(Request.model_validate(old_request))
+    spy = Spy(plan)
+    report = Coordinator(plan, spy, spy.seal).run()
+    assert report["hypothesis"] is None
+    assert report["hypothesis_status"] == "UNSPECIFIED"
+    assert report["analysis_timing"] == "UNSPECIFIED"
+    posthoc = make_plan(request(
+        hypothesis="Recorded research question", analysis_timing="POST_HOC",
+    ))
+    spy = Spy(posthoc)
+    report = Coordinator(posthoc, spy, spy.seal).run()
+    assert report["analysis_timing"] == "POST_HOC"
+    assert report["timing_basis"] == "CALLER_DECLARATION_NOT_PROOF_OF_UNTOUCHED_ECONOMIC_DATA"
+    with pytest.raises(ValueError, match="nonblank"):
+        request(hypothesis="  ")
+
+
+def test_turnover_and_fixed_fill_cost_summaries_use_period_nav_units():
+    plan = make_plan(request())
+    spy = Spy(plan)
+    report = Coordinator(plan, spy, spy.seal).run()
+    base = report["trials"][0]["metrics"][0]
+    count = plan.folds[0].train.size
+    assert base["turnover_sum"] == count
+    assert base["turnover_mean"] == 1
+    assert base["turnover_maximum"] == 1
+    assert base["fee_return_sum"] == Decimal("0.001") * count
+    assert base["slippage_return_sum"] == Decimal("0.001") * count
+    assert base["turnover_basis"] == "SUM_OF_TRADED_NOTIONAL_OVER_EACH_PERIOD_START_NAV"
+    assert base["cost_summary_basis"] == "SUM_OF_PERIOD_NAV_FRACTIONS_NOT_A_CASH_AMOUNT"
+    query = spy.calls[0]
+    stressed = metrics(
+        evidence(query, plan), Stress(
+            stress_id="higher", fee_multiplier=Decimal(2), extra_slippage_bps=Decimal(10),
+        ),
+    )
+    assert stressed["fee_return_sum"] == Decimal("0.002") * count
+    assert stressed["slippage_return_sum"] == Decimal("0.002") * count
+    assert stressed["turnover_sum"] == base["turnover_sum"]
+
+
+@pytest.mark.parametrize(
+    ("tolerance", "expected"),
+    [(None, None), (Decimal("0.005"), ["a"]), (Decimal("0.02"), ["a", "b"])],
+)
+def test_observed_parameter_regions_require_frozen_tolerance_and_ignore_oos(tolerance, expected):
+    plan = make_plan(request(stability_score_tolerance=tolerance))
+    left, right = Spy(plan, Decimal("0.8")), Spy(plan, Decimal("-0.5"))
+    a = Coordinator(plan, left, left.seal).run()
+    b = Coordinator(plan, right, right.seal).run()
+    assert a["parameter_stability"] == b["parameter_stability"]
+    diagnostic = a["parameter_stability"]
+    assert diagnostic["status"] == "DESCRIPTIVE_TRAINING_ONLY"
+    assert diagnostic["market_robustness_claim"] is False
+    for window in diagnostic["windows"]:
+        assert window["stable_observed_candidate_ids"] == expected
+        assert window["neighbor_score_differences"] == {"b": Decimal("-0.01")}
+        assert window["phase"] in {"TRAIN", "FINAL_TRAIN"}
+        if tolerance is None:
+            assert window["region_reason_code"] == "TOLERANCE_NOT_PREREGISTERED"
+
+
+@pytest.mark.parametrize(
+    ("replacement", "reason"),
+    [
+        ({"strategy_version": "different"}, "HETEROGENEOUS_STRATEGY_OR_PARAMETER_DIMENSIONS"),
+        ({"parameters": {"n": 3, "mode": "categorical"}},
+         "INSUFFICIENT_COMPARABLE_NUMERIC_PARAMETER_POINTS"),
+    ],
+)
+def test_incomparable_parameter_candidates_do_not_get_a_stability_claim(replacement, reason):
+    baseline = request()
+    changed = baseline.candidates[1].model_copy(update=replacement)
+    plan = make_plan(request(candidates=(baseline.candidates[0], changed)))
+    spy = Spy(plan)
+    report = Coordinator(plan, spy, spy.seal).run()
+    assert report["parameter_stability"]["status"] == "UNKNOWN"
+    assert report["parameter_stability"]["reason_code"] == reason
+    assert report["parameter_stability"]["windows"] == []
+
+
+def test_negative_and_nonselected_trials_remain_in_experiment_report():
+    plan = make_plan(request())
+
+    class Negative(Spy):
+        def evaluate(self, query, budget):
+            result = super().evaluate(query, budget)
+            if query.phase in {"TRAIN", "FINAL_TRAIN"}:
+                return result.model_copy(update={
+                    "rows": tuple(
+                        row.model_copy(update={"gross_return": row.gross_return - Decimal("0.05")})
+                        for row in result.rows
+                    ),
+                })
+            return result
+
+    spy = Negative(plan)
+    report = Coordinator(plan, spy, spy.seal).run()
+    training = [trial for trial in report["trials"] if trial["query"]["phase"] in {
+        "TRAIN", "FINAL_TRAIN",
+    }]
+    assert len(training) == 6
+    assert all(trial["score_classification"] == "NON_POSITIVE_EXCESS" for trial in training)
+    assert all(item["nonselected_candidate_ids"] == ["b"] for item in report["selection_outcomes"])

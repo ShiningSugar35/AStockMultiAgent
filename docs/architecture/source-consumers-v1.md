@@ -109,11 +109,11 @@ wave selection 的 `dispatch_id`、Web request 的 `continuation_dispatch_id` �
 
 `WatchCampaignService.recovery_plan()` 是当前 ResearchSubjectRegistry 成员和缺少 Q3 正式 release 的投影，不创建第二份名单。稳定请求身份含 campaign、期间、instrument。
 
-`recover_missing_q3` 必须持有现役 slot 的 owner、round_id、lease_generation；同轮补证复用 ownership 串行化。一次最多 3 个未解决成员、32 次物理 attempt、默认 180 秒（硬参数上限 600 秒），本代 transport 截止不晚于 owner 租约。每次 sync 后重验代际；此约束不改变 campaign 的长期研究期限，后续代可继续同一名单。只调用现有 FinancialSourceService.sync，逐成员重验租约，保留 compact checkpoint，不生成推荐或 portfolio receipt。
+`recover_missing_q3` 必须持有现役 slot 的 owner、round_id、lease_generation；同轮补证复用 ownership 串行化。原来的“每轮最多3家且始终选前三家”会让持续失败的标的饿死剩余名单，现默认一次最多覆盖18家、600秒（调用方显式上限50家/1800秒），物理请求预约随上限相应扩展并继续受真实Tushare源级频率、并发和owner租约限制。每轮仅登记**真正尝试**的成员，在同round下跨lease_generation保留已尝试集合；优先尚未尝试者，遍历一轮后才重试失败者。预算/租约到期只结束本代网络操作，已获取正式原件继续本地认证，不伪报全部来源已经耗尽。只调用既有FinancialSourceService.sync和持久checkpoint，不增加调度器或推荐权限。
 
 最终就绪检查现在读取完整认证 manifest 和原始血缘，修复只从 SQL release 行取 official_lineage_kind 导致误判的问题。失效 owner 的显式 generation checkpoint 也被拒绝。
 
-本轮实际增量补证复用原 campaign `ten-stock-q3-2026` 的成员、schedule bindings 和 continuation child，按真实结果应用 PARTIAL 检查点并释放 owner。限定查询未取得可认证的中文原件，不等于发行人没有披露。实际成员覆盖、尝试次数、正式 release 与 receipt 以现役 checkpoint 和[最近验收](../../进度验收.md)为准。完整投资结论仍必须来自真实证据与正式组合 receipt，不能因源码实现完成而自动宣布业务观察完成。
+2026-11-22 对原 campaign `ten-stock-q3-2026` 全18名成员实测：修复首选Tushare实际排序、CNINFO季度公告检索词过窄，以及沪市报告“人民币审计类型”紧连和利润表标题/金额单位跨页的版式误判后，**18个Tushare结构化来源均取得18项观察，18家均取得CNINFO官方PDF和`CERTIFIED`财务release**。`readiness`严格核验全部原件与字段血缘，返回`q3_ready=true, missing_q3=[]`；其中002001已认证9项字段，其余17家各16项，字段缺口和600641的供应商/官方现金流数值冲突保留供财务质量审计。既有PM轮generation12已应用`COMPLETE`取件checkpoint（18/18），原long-term watcher未被停止、原成员/绑定不变。**`FORMAL_PORTFOLIO_REQUIRED`仍成立**：财报就绪不等于独立多空、委员会、正式RecommendationResearchReceipt和组合/公开发表已经完成；不能虚构推荐或调用交易。具体回执见[最近验收](../../进度验收.md)。
 
 ## 6. 验证与来源
 

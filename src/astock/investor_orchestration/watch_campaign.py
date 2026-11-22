@@ -99,6 +99,30 @@ class CampaignDeltaReport(TypedDict):
     failure_code: NotRequired[str]
 
 
+def _pending_recovery_batch(
+    missing: list[str], previous_checkpoint: str, maximum_members: int,
+) -> tuple[list[str], list[str]]:
+    """Advance through eligible members before retrying a failed first tranche."""
+    try:
+        previous = json.loads(previous_checkpoint)
+    except (TypeError, ValueError):
+        previous = {}
+    history = previous.get("attempted_members", []) if (
+        isinstance(previous, dict)
+        and previous.get("schema_version") == "campaign-q3-delta-v1"
+    ) else []
+    valid = set(missing)
+    attempted = list(dict.fromkeys(
+        member for member in history
+        if isinstance(member, str) and member in valid
+    )) if isinstance(history, list) else []
+    untried = [member for member in missing if member not in set(attempted)]
+    if not untried:
+        # A completed sweep may retry still-missing sources on the next generation.
+        attempted, untried = [], missing
+    return untried[:maximum_members], attempted
+
+
 class WatchCampaignService:
     def __init__(self, database: Path, campaign_id: str) -> None:
         if not database.is_file():
@@ -409,7 +433,7 @@ class WatchCampaignService:
 
     def recover_missing_q3(
         self, *, slot: str, owner: str, round_id: str, lease_generation: int,
-        maximum_members: int = 3, elapsed_budget_seconds: int = 180, live: bool = False,
+        maximum_members: int = 18, elapsed_budget_seconds: int = 600, live: bool = False,
     ) -> dict[str, object]:
         """Acquire unresolved Q3 members once per owned round generation at a time."""
         with schedule_run_ownership(
@@ -427,7 +451,7 @@ class WatchCampaignService:
     ) -> dict[str, object]:
         from astock.schemas import FinancialPeriodType, Market
 
-        if not 1 <= maximum_members <= 3 or not 1 <= elapsed_budget_seconds <= 600:
+        if not 1 <= maximum_members <= 50 or not 1 <= elapsed_budget_seconds <= 1800:
             raise ValueError("campaign recovery exceeds the bounded work envelope")
 
         def require_lease() -> CampaignRound:
@@ -443,18 +467,20 @@ class WatchCampaignService:
         with schedule_run_ownership(self.database, SCOPE, self.campaign_id):
             current = require_lease()
         plan = self.recovery_plan()
-        selected = list(plan["missing_q3"])[:maximum_members]
+        selected, prior_attempted = _pending_recovery_batch(
+            list(plan["missing_q3"]), current.checkpoint, maximum_members,
+        )
         budget = RequestExecutionBudget(
             self.state, f"{round_id}:{lease_generation}:q3-recovery",
             min(current.deadline_at, datetime.now(UTC) + timedelta(seconds=elapsed_budget_seconds)),
-            32,
+            max(32, maximum_members * 6),
         )
         reports: list[CampaignDeltaReport] = []
         service = self._financial_service() if selected else None
         with budget.bind():
             for instrument in selected:
                 require_lease()
-                if budget.remaining_seconds() <= 0:
+                if budget.remaining_seconds() <= 0 or budget.remaining_attempts() <= 0:
                     break
                 market, company = instrument.split(":", 1)
                 assert service is not None
@@ -486,10 +512,15 @@ class WatchCampaignService:
                          "status": item.get("failure_code") or item.get("report", {}).get("status"),
                          "release_id": item.get("report", {}).get("release_id"),
                      } for item in reports],
-                     "missing_q3": readiness["missing_q3"]}, ensure_ascii=False
+                     "missing_q3": readiness["missing_q3"],
+                     "attempted_members": list(dict.fromkeys([
+                         *prior_attempted,
+                         *(item["instrument_id"] for item in reports),
+                     ]))}, ensure_ascii=False
                 ),
                 "completed_units": len(readiness["q3_release_ids"]),
-                "total_units": len(self.members()), "status": "PARTIAL",
+                "total_units": len(self.members()),
+                "status": "COMPLETE" if readiness["q3_ready"] else "PARTIAL",
             }, round_id=round_id, lease_generation=lease_generation,
         )
         return {"campaign_id": self.campaign_id, "attempted": len(reports), "reports": reports,
@@ -640,8 +671,8 @@ def main() -> None:
     )
     parser.add_argument("--input", type=Path)
     parser.add_argument("--receipt-id")
-    parser.add_argument("--maximum-members", type=int, default=3)
-    parser.add_argument("--elapsed-budget-seconds", type=int, default=180)
+    parser.add_argument("--maximum-members", type=int, default=18)
+    parser.add_argument("--elapsed-budget-seconds", type=int, default=600)
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     service = WatchCampaignService(args.database, args.campaign)

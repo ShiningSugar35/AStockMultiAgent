@@ -389,7 +389,8 @@ class OfficialFinancialReportService:
                 start_date=period_end + timedelta(days=1),
                 end_date=date.today(),
                 category=category,
-                keyword=_title_key(period_end, period_type),
+                keyword=("" if period_type is FinancialPeriodType.QUARTERLY
+                         else _title_key(period_end, period_type)),
                 page_size=100,
             )
         )

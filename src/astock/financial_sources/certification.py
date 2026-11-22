@@ -50,8 +50,14 @@ _UNIT_MULTIPLIERS = {
 }
 _TABLE_HEADING_RE = re.compile(
     r"(?m)^[ \t]*(?:\d+\s*[、.．]\s*)?(?P<title>(?:合并|母公司|公司)?"
+    r"(?:年\s*初\s*到\s*报\s*告\s*期\s*末)?"
     r"(?:资产负债表|利润表|现金流量表))[ \t]*$"
 )
+_YTD_HEADING_RE = re.compile(
+    r"(?m)^[ \t]*(?:\d+\s*[、.．]\s*)?合并年\s*初\s*到\s*报\s*告\s*期\s*末"
+    r"(?:利润表|现金流量表)[ \t]*$"
+)
+_YTD_COLUMNS_RE = re.compile(r"本\s*期\s*发\s*生\s*额[\s\S]{0,120}?上\s*期\s*发\s*生\s*额")
 _CURRENCY_TOKEN_RE = re.compile(r"币种\s*[:：]\s*人民币")
 _CURRENCY_DECLARATION_RE = re.compile(r"币种\s*[:：]\s*(?P<currency>[^\s，,；;]+)")
 _UNIT_TOKEN_RE = re.compile(r"单位\s*[:：]\s*(百万元|万元|千元|亿元|元)")
@@ -66,7 +72,7 @@ _NEXT_SUPPLEMENT_SUBSECTION_RE = re.compile(r"(?m)^[ \t]*[（(]\s*2\s*[）)]")
 _GENERIC_PERIOD_TOKEN_RE = re.compile(
     r"\d{4}\s*年\s*(?:"
     r"\d{1,2}\s*月\s*\d{1,2}\s*日|"
-    r"度|半\s*年\s*度|(?:第?[一三123])\s*季\s*度|"
+    r"度|半\s*年\s*度|(?:(?:第|前)\s*)?[一三123]\s*季\s*度|"
     r"1\s*[-－—至]\s*(?:3|6|9|12)\s*月"
     r")"
 )
@@ -75,6 +81,11 @@ _NUMBER_TOKEN_RE = re.compile(
     r"[−-]?[0-9][0-9,]*(?:\.[0-9]+)?)(?![\d.])"
 )
 _HEADER_SCAN_CHARS = 1800
+
+
+def _is_rmb_currency_declaration(value: str) -> bool:
+    """Accept an adjacent audit-type column, but never a different currency."""
+    return re.sub(r"审计类型\s*[:：][^\s，,；;]*$", "", value) == "人民币"
 
 
 def financial_amount_cny(value: Decimal, unit: FinancialUnit) -> Decimal:
@@ -245,7 +256,14 @@ class FinancialPdfCertifier:
         if statement is None:
             return []
         segments, heading_page_id, heading_start = statement
-        header_text = segments[0][1][segments[0][2] :][: _HEADER_SCAN_CHARS]
+        # Some exchange PDFs split a consolidated heading and its unit across pages.
+        # Stay inside the same bounded statement segment, never an adjacent table.
+        header_parts: list[str] = []
+        for _page_id, text, start, end in segments:
+            header_parts.append(text[start:end])
+            if _UNIT_TOKEN_RE.search("\n".join(header_parts)):
+                break
+        header_text = "\n".join(header_parts)[:_HEADER_SCAN_CHARS]
         header = _statement_header_identity(
             header_text,
             period_end,
@@ -332,7 +350,7 @@ def _cash_flow_supplement_matches(
                 continue
             if currency_declarations and (
                 len(currency_declarations) != 1
-                or currency_declarations[0].group("currency") != "人民币"
+                or not _is_rmb_currency_declaration(currency_declarations[0].group("currency"))
             ):
                 continue
             if _CURRENT_PRIOR_AMOUNT_RE.search(segment_text[:_HEADER_SCAN_CHARS]) is None:
@@ -368,7 +386,10 @@ def _statement_segments(
         headings = list(_TABLE_HEADING_RE.finditer(text))
         native.append((page, text, headings))
         for match in headings:
-            if match.group("title") == heading:
+            normalized = re.sub(
+                r"年\s*初\s*到\s*报\s*告\s*期\s*末", "", match.group("title")
+            )
+            if normalized == heading:
                 targets.append((len(native) - 1, match))
     if len(targets) != 1:
         return None
@@ -405,7 +426,7 @@ def _statement_header_identity(
         return None
     if currency_declarations and (
         len(currency_declarations) != 1
-        or currency_declarations[0].group("currency") != "人民币"
+        or not _is_rmb_currency_declaration(currency_declarations[0].group("currency"))
     ):
         return None
     period_patterns = _target_period_patterns(period_end, period_type, statement_type)
@@ -416,6 +437,15 @@ def _statement_header_identity(
             target_matches = found
             break
     if not target_matches:
+        if (
+            statement_type is not FinancialStatementType.BALANCE_SHEET
+            and period_type is FinancialPeriodType.QUARTERLY
+            and _YTD_HEADING_RE.search(header_text[:200])
+            and _YTD_COLUMNS_RE.search(header_text)
+        ):
+            # The exact official Q3 report supplies year/quarter; its consolidated
+            # cumulative table identifies current/prior YTD columns explicitly.
+            return _UNITS[units[0].group(1)], 2
         if statement_type is not FinancialStatementType.BALANCE_SHEET:
             return None
         if _GENERIC_PERIOD_TOKEN_RE.search(header_text) is not None:
@@ -423,7 +453,10 @@ def _statement_header_identity(
         if _BALANCE_RELATIVE_PERIOD_RE.search(header_text) is None:
             return None
         return _UNITS[units[0].group(1)], 2
-    period_column_count = 1
+    period_column_count = (
+        2 if statement_type is FinancialStatementType.BALANCE_SHEET
+        and _BALANCE_RELATIVE_PERIOD_RE.search(header_text) else 1
+    )
     for target in target_matches:
         line_start = header_text.rfind("\n", 0, target.start()) + 1
         line_end = header_text.find("\n", target.end())
@@ -434,6 +467,14 @@ def _statement_header_identity(
             period_column_count,
             len(_GENERIC_PERIOD_TOKEN_RE.findall(line)),
         )
+    # Across a page break the explicit target-period title can be on page N,
+    # with current/prior column labels starting on page N+1.
+    column_header_lines = header_text.splitlines()[:16]
+    period_column_count = max(
+        period_column_count,
+        max((len(_GENERIC_PERIOD_TOKEN_RE.findall(line))
+             for line in column_header_lines), default=1),
+    )
     return _UNITS[units[0].group(1)], period_column_count
 
 
@@ -461,7 +502,7 @@ def _target_period_patterns(
     if statement_type is FinancialStatementType.BALANCE_SHEET:
         return [
             re.compile(
-                rf"{year}\s*年\s*{period_end.month}\s*月\s*{period_end.day}\s*日"
+                rf"{year}\s*年\s*0?{period_end.month}\s*月\s*0?{period_end.day}\s*日"
             )
         ]
     if period_type is FinancialPeriodType.ANNUAL:

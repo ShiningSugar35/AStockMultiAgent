@@ -582,6 +582,62 @@ def test_delta_transport_ends_with_owner_lease_and_cannot_spend_on_next_member(
     assert successor.round_id == current.round_id
 
 
+
+def test_recovery_rotates_unresolved_members_across_owned_generations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One persistently failing first tranche must not starve later companies."""
+    database = tmp_path / "runtime/state.sqlite"
+    InvestorOrchestrationStore(database).initialize()
+    service = WatchCampaignService(database, "rotation-campaign")
+    original = [
+        "XSHE:002001", "XSHE:002475", "XSHE:002595",
+        "XSHE:002897", "XSHE:002901",
+    ]
+    service.initialize(original)
+    members = service.members()
+    monkeypatch.setattr(service, "_verified_q3_release", lambda instrument, row: None)
+    calls: list[str] = []
+
+    def sync(company: str, *args: object, **kwargs: object) -> SimpleNamespace:
+        calls.append(company)
+        return SimpleNamespace(model_dump=lambda **options: {"status": "NEEDS_INFO"})
+
+    monkeypatch.setattr(service, "_financial_service", lambda: SimpleNamespace(sync=sync))
+    expected = [members[:2], members[2:4], members[4:], members[:2]]
+    prior_generation = 0
+    for index, group in enumerate(expected):
+        current = service.begin("pm", "2026-11-22", f"owner-{index}")
+        assert current.lease_acquired
+        assert current.lease_generation == prior_generation + 1
+        prior_generation = current.lease_generation
+        offset = len(calls)
+        result = service.recover_missing_q3(
+            slot="pm", owner=f"owner-{index}", round_id=current.round_id,
+            lease_generation=current.lease_generation, maximum_members=2,
+        )
+        assert calls[offset:] == [member.split(":", 1)[1] for member in group]
+        assert result["attempted"] == len(group)
+        checkpoint = result["checkpoint"]
+        assert isinstance(checkpoint, dict) and checkpoint["checkpoint_applied"] is True
+        assert service.load().rounds["pm"].status == "PARTIAL"
+
+
+def test_recovery_progress_ignores_stale_or_foreign_members() -> None:
+    missing = ["XSHE:002001", "XSHG:600315", "XSHE:002475"]
+    selection, previous = watch_campaign_module._pending_recovery_batch(
+        missing,
+        '{"schema_version":"campaign-q3-delta-v1","attempted_members":'
+        '["XSHE:002001","XSHE:002001","OTHER:000001"]}',
+        2,
+    )
+    assert selection == ["XSHG:600315", "XSHE:002475"]
+    assert previous == ["XSHE:002001"]
+    assert watch_campaign_module._pending_recovery_batch(
+        missing, "invalid historical free-text checkpoint", 2,
+    ) == (missing[:2], [])
+
+
 def test_explicit_generation_also_requires_owning_identity(campaign):
     current = campaign.begin("am", "2026-11-21", "owner")
     result = campaign.checkpoint(

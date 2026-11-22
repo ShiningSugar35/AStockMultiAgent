@@ -267,3 +267,13 @@ These remaining NOT_OBSERVED items are **infrastructure limitations of the curre
 | Independent branch | ✅ PASS | `work/wp69-native-verification-20261122` |
 
 **Assessment**: The original BLOCKED condition was "original native trigger, actual cwd, effective instruction chain, Skill trigger and actual load amount still NOT_OBSERVED." This session provides direct evidence for the native trigger (SQLite timestamp), cwd (injected workspace root), and effective instruction chain (AGENTS.md rules active). The remaining NOT_OBSERVED items (token counts, `/context` panel, distinct Fetch) are IDE infrastructure limitations, not software defects. All unit tests pass. The DO_NOT_ENABLE folding decision is confirmed.
+
+---
+
+## GPT 独立复核（2026-11-22）
+
+本文件前面的原生会话观测是 **Antigravity 执行 Agent 的交付报告**；独立审查按报告证据范围采信，不能将没有独立获取的原生 UI 数据改写成 GPT 本地实测。GPT 在本地确认 SQLite 存在 `antigravity-campaign-session/fd24f731-5a52-4fff-a19d-bc83465d1e5e`，但该行之后被更新为 `committed_at=2026-11-22T09:17:43 UTC`；当前单行最新时间戳不能独立证明最初 `09:14:30 UTC` 早于首轮输入。采信提交者保存的会话启动记录和注入证据为 **原生 SessionStart 已有正向证据**，并保留该时间边界。
+
+独立重新执行 `tests/unit/test_antigravity_hooks.py`、`test_company_research_continuation_docs.py`、`test_workflow_docs.py`，**22 passed / 0 failed**，run `20261122T094254Z-4e29f53b`，输入指纹稳定，进程与临时目录回收。它验证软件合同和录制 Stop 反例，**不证明**在有效绑定的真实 Antigravity 轮次发生过 Stop → 重连 → 同 generation 恢复；本会话的宿主独立 Fetch 与 token/context 用量也无可核实的单独观测。
+
+**独立裁决：接收该分支的文档与原生 SessionStart 成果，但不批准“WP-69 原文字面全部验收通过”。** 根 `开发计划.md` 和机器索引保留 WP-69 `BLOCKED`，仅针对实际绑定下的原生中断/重连观测；未观测的专用 Fetch/token 面板不被虚构，不阻断 Tushare、财报与常规研究。模型节点折叠继续 `DO_NOT_ENABLE`。本报告不代表已经启动任何额外付费模型调用。

@@ -16,4 +16,11 @@ rules:
   dependency_ids_must_exist: true
   markdown_consistency_check_required: true
 
-work_packages: []
+work_packages:
+  - id: WP-69
+    order: 30
+    title: 能力按需装载与Agent折叠实验
+    status: BLOCKED
+    priority: P0
+    owner_lane: wp69-context-capability
+    depends_on: []

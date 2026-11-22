@@ -10,7 +10,7 @@ import json
 import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from pydantic import Field
 
@@ -25,6 +25,9 @@ from astock.investor_orchestration.models import StrictModel
 from astock.investor_orchestration.run_ownership import schedule_run_ownership
 from astock.investor_orchestration.store import InvestorOrchestrationStore
 from astock.investor_orchestration.subjects import ResearchSubjectRegistryService
+
+if TYPE_CHECKING:
+    from astock.financial_sources import FinancialSourceService
 
 SCOPE = "watch-campaign"
 # Compatibility default for owner takeover, independent of any host activation limit.
@@ -133,6 +136,8 @@ class WatchCampaignService:
             InvestorOrchestrationStore(self.database)
         )
         self.campaign_id = Campaign(campaign_id=campaign_id).campaign_id
+        # One configured provider service per invocation, not one per portfolio member.
+        self._financial_service_instance: FinancialSourceService | None = None
 
     def load(self) -> Campaign:
         row = self.state.get_checkpoint(SCOPE, self.campaign_id)
@@ -378,17 +383,19 @@ class WatchCampaignService:
             and str(row.get("release_id") or "").strip()
         )
 
-    def _financial_service(self):
-        from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
+    def _financial_service(self) -> FinancialSourceService:
+        if self._financial_service_instance is None:
+            from astock.financial_sources import FinancialSourceParquetStore, FinancialSourceService
 
-        root = self.database.parent.parent
-        return FinancialSourceService(
-            self.state, ObjectStore(self.database.parent / "objects" / "sha256"),
-            FinancialSourceParquetStore(
-                self.database.parent / "data" / "parquet" / "financial_sources"
-            ),
-            root,
-        )
+            root = self.database.parent.parent
+            self._financial_service_instance = FinancialSourceService(
+                self.state, ObjectStore(self.database.parent / "objects" / "sha256"),
+                FinancialSourceParquetStore(
+                    self.database.parent / "data" / "parquet" / "financial_sources"
+                ),
+                root,
+            )
+        return self._financial_service_instance
 
     def _verified_q3_release(self, instrument_id: str, row: dict[str, object] | None) -> str | None:
         if row is None:

@@ -58,6 +58,12 @@ The CLI-equivalent recovery path remains durable through `research-current-conti
 - BaseCase and frozen specialist outputs remain shared inputs. New method Skills do not reread or fork the raw corpus when their upstream typed profile is already available.
 - The formal full-market funnel retains policy-bounded breadth (`max_total_seeds=40`, resource-class deep-candidate limits and controlled provider/Agent worker counts) rather than expanding every company into the full institutional DAG.
 
+### Campaign Q3 readiness: reuse configuration, never reuse certification verdicts (2026-11-22)
+
+`WatchCampaignService` now constructs its existing `FinancialSourceService` lazily once per service instance, instead of reconstructing provider/config objects for each missing-or-certified member in the `finalization_readiness()` loop. A new CLI invocation still gets a new service. Each member still goes through the sole `read_certified_release()` verifier, repository read, manifest identity, official lineage and immutable Parquet facts/observations; no cache of a `CERTIFIED` judgment or global financial-source singleton is introduced. The same instance is also available to `recover_missing_q3()` without introducing a second scheduler or relaxing the owner lease.
+
+On the same 18-member canonical campaign, isolated real read-only `watch_campaign readiness` calls completed in **60.725s before** and **15.098s after** the change; both returned `q3_ready=true`, the identical set of 18 `q3_release_ids`, `missing_q3=[]` and `FORMAL_PORTFOLIO_REQUIRED`. This is a paired local observation, not a population latency estimate or token claim. The added red/green unit test asserts one service initialization per campaign instance and a fresh initialization for another instance. Platform automation enabled state and a formal research receipt are separate from source readiness; neither is inferred from this performance improvement.
+
 ## Multi-Agent method coverage
 
 The six new canonical Skills bind directly to existing Research Team tasks, output contracts and readiness checks:

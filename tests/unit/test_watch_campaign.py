@@ -645,3 +645,24 @@ def test_explicit_generation_also_requires_owning_identity(campaign):
         round_id=current.round_id, lease_generation=current.lease_generation,
     )
     assert not result.checkpoint_applied
+
+
+def test_financial_source_initializes_once_per_campaign_service(
+    campaign: WatchCampaignService, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Readiness of an N-member campaign must not reload provider configs N times."""
+    import astock.financial_sources as financial_sources
+
+    created: list[object] = []
+
+    def fake_financial_service(*_args: object) -> object:
+        instance = object()
+        created.append(instance)
+        return instance
+
+    monkeypatch.setattr(financial_sources, "FinancialSourceService", fake_financial_service)
+    first = campaign._financial_service()
+    assert campaign._financial_service() is first
+    separate_invocation = WatchCampaignService(campaign.database, campaign.campaign_id)
+    assert separate_invocation._financial_service() is not first
+    assert len(created) == 2

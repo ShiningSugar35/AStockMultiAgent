@@ -536,7 +536,7 @@ def test_delta_recovery_only_fetches_missing_member_and_releases_same_generation
     current = campaign.begin("pm", "2026-11-21", "recovery-owner")
     result = campaign.recover_missing_q3(
         slot="pm", owner="recovery-owner", round_id=current.round_id,
-        lease_generation=current.lease_generation, maximum_members=1,
+        lease_generation=current.lease_generation,
     )
     assert calls == [members[1].split(":")[1]]
     assert result["attempted"] == 1 and not result["readiness"]["ready"]
@@ -574,7 +574,7 @@ def test_delta_transport_ends_with_owner_lease_and_cannot_spend_on_next_member(
     monkeypatch.setattr(campaign, "_financial_service", lambda: SimpleNamespace(sync=sync))
     result = campaign.recover_missing_q3(
         slot="pm", owner="short-owner", round_id=current.round_id,
-        lease_generation=current.lease_generation, maximum_members=2, elapsed_budget_seconds=180,
+        lease_generation=current.lease_generation, elapsed_budget_seconds=180,
     )
     assert len(calls) == 1 and not result["checkpoint"]["checkpoint_applied"]
     successor = campaign.begin("pm", "2026-11-21", "new-owner")
@@ -601,12 +601,20 @@ def test_recovery_rotates_unresolved_members_across_owned_generations(
 
     def sync(company: str, *args: object, **kwargs: object) -> SimpleNamespace:
         calls.append(company)
+        remaining[0] -= 1
         return SimpleNamespace(model_dump=lambda **options: {"status": "NEEDS_INFO"})
 
     monkeypatch.setattr(service, "_financial_service", lambda: SimpleNamespace(sync=sync))
+    # Test exhaustion of the existing transport budget, not an arbitrary member cap.
+    remaining = [0]
+    monkeypatch.setattr(
+        watch_campaign_module.RequestExecutionBudget,
+        "remaining_attempts", lambda self: remaining[0],
+    )
     expected = [members[:2], members[2:4], members[4:], members[:2]]
     prior_generation = 0
     for index, group in enumerate(expected):
+        remaining[0] = len(group)
         current = service.begin("pm", "2026-11-22", f"owner-{index}")
         assert current.lease_acquired
         assert current.lease_generation == prior_generation + 1
@@ -614,7 +622,7 @@ def test_recovery_rotates_unresolved_members_across_owned_generations(
         offset = len(calls)
         result = service.recover_missing_q3(
             slot="pm", owner=f"owner-{index}", round_id=current.round_id,
-            lease_generation=current.lease_generation, maximum_members=2,
+            lease_generation=current.lease_generation,
         )
         assert calls[offset:] == [member.split(":", 1)[1] for member in group]
         assert result["attempted"] == len(group)
@@ -629,13 +637,16 @@ def test_recovery_progress_ignores_stale_or_foreign_members() -> None:
         missing,
         '{"schema_version":"campaign-q3-delta-v1","attempted_members":'
         '["XSHE:002001","XSHE:002001","OTHER:000001"]}',
-        2,
     )
     assert selection == ["XSHG:600315", "XSHE:002475"]
-    assert previous == ["XSHE:002001"]
+    assert previous == "XSHE:002001"
     assert watch_campaign_module._pending_recovery_batch(
-        missing, "invalid historical free-text checkpoint", 2,
-    ) == (missing[:2], [])
+        missing, "invalid historical free-text checkpoint",
+    ) == (missing, None)
+    assert watch_campaign_module._pending_recovery_batch(
+        ["XSHE:002001", "XSHE:002475", "XSHG:600315"],
+        '{"schema_version":"campaign-q3-delta-v2","last_attempted_member":"XSHE:002475"}',
+    ) == (["XSHG:600315", "XSHE:002001", "XSHE:002475"], "XSHE:002475")
 
 
 def test_explicit_generation_also_requires_owning_identity(campaign):
@@ -666,3 +677,63 @@ def test_financial_source_initializes_once_per_campaign_service(
     separate_invocation = WatchCampaignService(campaign.database, campaign.campaign_id)
     assert separate_invocation._financial_service() is not first
     assert len(created) == 2
+
+
+def test_recovery_does_not_cap_missing_members_at_eighteen_or_fifty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every eligible company is attempted while the actual lease/budget remains valid."""
+    database = tmp_path / "runtime/state.sqlite"
+    InvestorOrchestrationStore(database).initialize()
+    service = WatchCampaignService(database, "unbounded-q3-campaign")
+    members = [f"XSHE:{100000 + index:06d}" for index in range(65)]
+    service.initialize(members)
+    monkeypatch.setattr(service, "_verified_q3_release", lambda instrument, row: None)
+    attempts: list[str] = []
+
+    def sync(company: str, *args: object, **kwargs: object) -> SimpleNamespace:
+        attempts.append(company)
+        return SimpleNamespace(model_dump=lambda **options: {"status": "NEEDS_INFO"})
+
+    monkeypatch.setattr(service, "_financial_service", lambda: SimpleNamespace(sync=sync))
+    lease = service.begin("pm", "2026-11-22", "all-missing-owner")
+    result = service.recover_missing_q3(
+        slot="pm", owner="all-missing-owner", round_id=lease.round_id,
+        lease_generation=lease.lease_generation,
+    )
+    assert result["attempted"] == len(members)
+    assert attempts == [item.split(":", 1)[1] for item in members]
+    checkpoint = result["checkpoint"]
+    readiness = result["readiness"]
+    assert isinstance(checkpoint, dict) and checkpoint["checkpoint_applied"] is True
+    assert isinstance(readiness, dict) and readiness["missing_q3"] == members
+    assert len(service.load().rounds["pm"].checkpoint) < 12000
+
+
+def test_historical_maximum_members_cli_flag_does_not_limit_recovery(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Previously saved scheduler commands must remain executable without a cap."""
+    import json
+    import sys
+
+    observed: dict[str, object] = {}
+
+    class FakeCampaign:
+        def __init__(self, database: Path, campaign_id: str) -> None:
+            observed["campaign"] = campaign_id
+
+        def recover_missing_q3(self, **kwargs: object) -> dict[str, int]:
+            observed.update(kwargs)
+            return {"attempted": 65}
+
+    monkeypatch.setattr(watch_campaign_module, "WatchCampaignService", FakeCampaign)
+    monkeypatch.setattr(sys, "argv", [
+        "watch_campaign.py", "recover-q3", "--slot", "pm", "--owner", "cli-owner",
+        "--round-id", "round-1", "--lease-generation", "1",
+        "--maximum-members", "3",
+    ])
+    watch_campaign_module.main()
+    assert observed["campaign"] == "ten-stock-q3-2026"
+    assert "maximum_members" not in observed
+    assert json.loads(capsys.readouterr().out)["attempted"] == 65

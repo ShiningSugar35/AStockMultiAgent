@@ -64,6 +64,8 @@ The CLI-equivalent recovery path remains durable through `research-current-conti
 
 On the same 18-member canonical campaign, isolated real read-only `watch_campaign readiness` calls completed in **60.725s before** and **15.098s after** the change; both returned `q3_ready=true`, the identical set of 18 `q3_release_ids`, `missing_q3=[]` and `FORMAL_PORTFOLIO_REQUIRED`. This is a paired local observation, not a population latency estimate or token claim. The added red/green unit test asserts one service initialization per campaign instance and a fresh initialization for another instance. Platform automation enabled state and a formal research receipt are separate from source readiness; neither is inferred from this performance improvement.
 
+`recover-q3` now takes the complete registered missing-company set without a per-round `maximum_members` argument or a 50-company campaign ceiling. A compact v2 checkpoint records the last actually attempted identity; rotation remains compatible with v1 attempted-member checkpoints and avoids any checkpoint string proportional to the number of companies. Finite wall-time, transport-attempt budget, source circuit/rate limits and generation-scoped owner leases continue to bound physical work. This quantity-limit removal does **not** grant more model-worker concurrency, waive financial certification, resume paused platform tasks, or imply the formal 18-company portfolio is ready.
+
 ## Multi-Agent method coverage
 
 The six new canonical Skills bind directly to existing Research Team tasks, output contracts and readiness checks:

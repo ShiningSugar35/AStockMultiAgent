@@ -69,7 +69,7 @@ class Campaign(StrictModel):
     # Member identities are projected from ResearchSubjectRegistry, not copied here.
     bindings: dict[str, str] = Field(default_factory=dict, max_length=8)
     rounds: dict[str, CampaignRound] = Field(default_factory=dict, max_length=2)
-    q3_release_ids: dict[str, str] = Field(default_factory=dict, max_length=50)
+    q3_release_ids: dict[str, str] = Field(default_factory=dict)
     final_recommendation_receipt_id: str | None = None
     lifecycle: Literal["OBSERVING", "PORTFOLIO_MONITORING"] = "OBSERVING"
 
@@ -103,27 +103,38 @@ class CampaignDeltaReport(TypedDict):
 
 
 def _pending_recovery_batch(
-    missing: list[str], previous_checkpoint: str, maximum_members: int,
-) -> tuple[list[str], list[str]]:
-    """Advance through eligible members before retrying a failed first tranche."""
+    missing: list[str], previous_checkpoint: str,
+) -> tuple[list[str], str | None]:
+    """Visit all still-missing members in rotating order; never impose a count cap.
+
+    v2 stores only the last attempted identity, so checkpoints cannot grow with
+    the number of companies. Existing v1 attempted-member checkpoints remain
+    readable; untried members from that checkpoint are scheduled first.
+    """
     try:
         previous = json.loads(previous_checkpoint)
     except (TypeError, ValueError):
         previous = {}
-    history = previous.get("attempted_members", []) if (
-        isinstance(previous, dict)
-        and previous.get("schema_version") == "campaign-q3-delta-v1"
-    ) else []
-    valid = set(missing)
-    attempted = list(dict.fromkeys(
-        member for member in history
-        if isinstance(member, str) and member in valid
-    )) if isinstance(history, list) else []
-    untried = [member for member in missing if member not in set(attempted)]
-    if not untried:
-        # A completed sweep may retry still-missing sources on the next generation.
-        attempted, untried = [], missing
-    return untried[:maximum_members], attempted
+    if not isinstance(previous, dict) or not missing:
+        return missing, None
+    if previous.get("schema_version") == "campaign-q3-delta-v1":
+        history = previous.get("attempted_members", [])
+        valid = set(missing)
+        attempted = (
+            [item for item in history if isinstance(item, str) and item in valid]
+            if isinstance(history, list) else []
+        )
+        outstanding = [item for item in missing if item not in set(attempted)]
+        return (outstanding or missing), (attempted[-1] if attempted else None)
+    if previous.get("schema_version") != "campaign-q3-delta-v2":
+        return missing, None
+    cursor = previous.get("last_attempted_member")
+    if not isinstance(cursor, str) or not cursor:
+        return missing, None
+    # Members are projected in stable sorted order. A previously successful
+    # cursor may now be absent from `missing`; use its sort position anyway.
+    pivot = next((idx for idx, item in enumerate(missing) if item > cursor), len(missing))
+    return missing[pivot:] + missing[:pivot], cursor
 
 
 class WatchCampaignService:
@@ -154,8 +165,8 @@ class WatchCampaignService:
         )
 
     def initialize(self, members: list[str]) -> Campaign:
-        if not members or len(members) > 50 or len(set(members)) != len(members):
-            raise ValueError("require unique bounded instrument identities")
+        if not members or len(set(members)) != len(members):
+            raise ValueError("require unique instrument identities")
         if any(
             not re.fullmatch(r"(?:XSHG|XSHE):[0-9]{6}", value) for value in members
         ):
@@ -440,7 +451,7 @@ class WatchCampaignService:
 
     def recover_missing_q3(
         self, *, slot: str, owner: str, round_id: str, lease_generation: int,
-        maximum_members: int = 18, elapsed_budget_seconds: int = 600, live: bool = False,
+        elapsed_budget_seconds: int = 600, live: bool = False,
     ) -> dict[str, object]:
         """Acquire unresolved Q3 members once per owned round generation at a time."""
         with schedule_run_ownership(
@@ -448,18 +459,17 @@ class WatchCampaignService:
         ):
             return self._recover_missing_q3(
                 slot=slot, owner=owner, round_id=round_id, lease_generation=lease_generation,
-                maximum_members=maximum_members,
                 elapsed_budget_seconds=elapsed_budget_seconds, live=live,
             )
 
     def _recover_missing_q3(
         self, *, slot: str, owner: str, round_id: str, lease_generation: int,
-        maximum_members: int, elapsed_budget_seconds: int, live: bool,
+        elapsed_budget_seconds: int, live: bool,
     ) -> dict[str, object]:
         from astock.schemas import FinancialPeriodType, Market
 
-        if not 1 <= maximum_members <= 50 or not 1 <= elapsed_budget_seconds <= 1800:
-            raise ValueError("campaign recovery exceeds the bounded work envelope")
+        if not 1 <= elapsed_budget_seconds <= 1800:
+            raise ValueError("campaign recovery exceeds the bounded time envelope")
 
         def require_lease() -> CampaignRound:
             current = self.load().rounds.get(slot)
@@ -474,13 +484,13 @@ class WatchCampaignService:
         with schedule_run_ownership(self.database, SCOPE, self.campaign_id):
             current = require_lease()
         plan = self.recovery_plan()
-        selected, prior_attempted = _pending_recovery_batch(
-            list(plan["missing_q3"]), current.checkpoint, maximum_members,
+        selected, previous_cursor = _pending_recovery_batch(
+            list(plan["missing_q3"]), current.checkpoint,
         )
         budget = RequestExecutionBudget(
             self.state, f"{round_id}:{lease_generation}:q3-recovery",
             min(current.deadline_at, datetime.now(UTC) + timedelta(seconds=elapsed_budget_seconds)),
-            max(32, maximum_members * 6),
+            max(32, len(selected) * 6),
         )
         reports: list[CampaignDeltaReport] = []
         service = self._financial_service() if selected else None
@@ -513,17 +523,12 @@ class WatchCampaignService:
         checkpoint = self.checkpoint(
             slot, owner, {
                 "checkpoint": json.dumps(
-                    {"schema_version": "campaign-q3-delta-v1",
-                     "reports": [{
-                         "instrument_id": item["instrument_id"],
-                         "status": item.get("failure_code") or item.get("report", {}).get("status"),
-                         "release_id": item.get("report", {}).get("release_id"),
-                     } for item in reports],
-                     "missing_q3": readiness["missing_q3"],
-                     "attempted_members": list(dict.fromkeys([
-                         *prior_attempted,
-                         *(item["instrument_id"] for item in reports),
-                     ]))}, ensure_ascii=False
+                    {"schema_version": "campaign-q3-delta-v2",
+                     "last_attempted_member": (
+                         reports[-1]["instrument_id"] if reports else previous_cursor
+                     ),
+                     "attempted_count": len(reports),
+                     "missing_count": len(readiness["missing_q3"])}, ensure_ascii=False
                 ),
                 "completed_units": len(readiness["q3_release_ids"]),
                 "total_units": len(self.members()),
@@ -678,7 +683,9 @@ def main() -> None:
     )
     parser.add_argument("--input", type=Path)
     parser.add_argument("--receipt-id")
-    parser.add_argument("--maximum-members", type=int, default=18)
+    # Historical scheduled commands may still supply this flag. Accept it as a
+    # hidden no-op so removing the member cap does not break those invocations.
+    parser.add_argument("--maximum-members", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--elapsed-budget-seconds", type=int, default=600)
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
@@ -716,7 +723,7 @@ def main() -> None:
             parser.error("recover-q3 requires the existing round and lease generation")
         result = service.recover_missing_q3(
             slot=args.slot or "", owner=args.owner or "", round_id=args.round_id,
-            lease_generation=args.lease_generation, maximum_members=args.maximum_members,
+            lease_generation=args.lease_generation,
             elapsed_budget_seconds=args.elapsed_budget_seconds, live=args.live,
         )
     elif args.action == "readiness":

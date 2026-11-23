@@ -1,6 +1,6 @@
 schema_version: "1.0"
-registry_version: "financial-rules-m3.2-v1"
-compatible_engine_version: "financial-deterministic-m3.2.0"
+registry_version: "financial-rules-m3.2-v2"
+compatible_engine_version: "financial-deterministic-m3.2.1"
 rules:
   - rule_id: balance_sheet_identity
     formula_version: "1.0.0"
@@ -46,6 +46,8 @@ rules:
     applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: []
     required_fields: [NET_PROFIT_INCOME, NET_PROFIT_CASH_FLOW]
+    conditional_missing_periods: [QUARTERLY]
+    conditional_missing_fields: [NET_PROFIT_CASH_FLOW]
     minimum_periods: 1
     threshold_source: REPORTING_UNIT_ROUNDING_POLICY
     calibration_status: DETERMINISTIC
@@ -65,6 +67,7 @@ rules:
     applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: []
     required_fields: [NET_CASH_OPERATING, NET_PROFIT_INCOME]
+    conditional_missing_periods: [ANNUAL, SEMIANNUAL, QUARTERLY]
     minimum_periods: 1
     threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
     calibration_status: NOT_CALIBRATED
@@ -85,6 +88,7 @@ rules:
     applicable_industries: [GENERAL_INDUSTRIAL, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: [BANK, INSURANCE]
     required_fields: [ACCOUNTS_RECEIVABLE, REVENUE]
+    conditional_missing_periods: [ANNUAL, SEMIANNUAL, QUARTERLY]
     minimum_periods: 1
     threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
     calibration_status: NOT_CALIBRATED
@@ -105,6 +109,7 @@ rules:
     applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: [BANK, INSURANCE, SECURITIES]
     required_fields: [INVENTORY, OPERATING_COST]
+    conditional_missing_periods: [ANNUAL, SEMIANNUAL, QUARTERLY]
     minimum_periods: 1
     threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
     calibration_status: NOT_CALIBRATED
@@ -125,6 +130,7 @@ rules:
     applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: [BANK, INSURANCE, SECURITIES]
     required_fields: [PREPAYMENTS, TOTAL_ASSETS]
+    conditional_missing_periods: [ANNUAL, SEMIANNUAL, QUARTERLY]
     minimum_periods: 1
     threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
     calibration_status: NOT_CALIBRATED
@@ -145,6 +151,7 @@ rules:
     applicable_industries: [GENERAL_INDUSTRIAL, REAL_ESTATE, EARLY_BIOTECH, OTHER]
     excluded_industries: [BANK, INSURANCE, SECURITIES]
     required_fields: [OTHER_RECEIVABLES, TOTAL_ASSETS]
+    conditional_missing_periods: [ANNUAL, SEMIANNUAL, QUARTERLY]
     minimum_periods: 1
     threshold_source: M3_1_METRIC_ONLY_NO_FLAG_THRESHOLD
     calibration_status: NOT_CALIBRATED

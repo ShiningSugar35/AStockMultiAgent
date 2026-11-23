@@ -145,6 +145,7 @@ class FinancialFindingStatus(StrEnum):
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
     CONFLICTED = "CONFLICTED"
     NOT_APPLICABLE = "NOT_APPLICABLE"
+    NOT_EVALUATED = "NOT_EVALUATED"
 
 
 class FinancialGapType(StrEnum):
@@ -461,6 +462,10 @@ class FinancialRuleDefinition(AStockModel):
     applicable_industries: list[FinancialIndustryProfile]
     excluded_industries: list[FinancialIndustryProfile] = Field(default_factory=list)
     required_fields: list[FinancialFieldCode]
+    # Conditional inputs are audited when verified, but their absence alone is not a blocker.
+    conditional_missing_periods: list[FinancialPeriodType] = Field(default_factory=list)
+    # None means all required fields are conditionally observational in those periods.
+    conditional_missing_fields: list[FinancialFieldCode] | None = None
     minimum_periods: int = Field(default=1, ge=1)
     threshold_source: str
     calibration_status: FinancialCalibrationStatus
@@ -480,6 +485,19 @@ class FinancialRuleDefinition(AStockModel):
             raise ValueError(f"industry cannot be both applicable and excluded: {sorted(overlap)}")
         if len(self.required_fields) != len(set(self.required_fields)):
             raise ValueError("required_fields must be unique")
+        if len(self.conditional_missing_periods) != len(set(self.conditional_missing_periods)):
+            raise ValueError("conditional_missing_periods must be unique")
+        if self.conditional_missing_periods and (
+            self.implementation_status is not FinancialImplementationStatus.IMPLEMENTED_M3_1
+        ):
+            raise ValueError("conditional inputs only supported by deterministic M3.1 rules")
+        if self.conditional_missing_fields is not None:
+            if not self.conditional_missing_periods:
+                raise ValueError("conditional fields require conditional periods")
+            if not set(self.conditional_missing_fields).issubset(self.required_fields):
+                raise ValueError("conditional fields must be declared required fields")
+            if len(self.conditional_missing_fields) != len(set(self.conditional_missing_fields)):
+                raise ValueError("conditional_missing_fields must be unique")
         return self
 
 
@@ -635,17 +653,31 @@ class FinancialRuleFinding(AStockModel):
     unit: FinancialUnit | None = None
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_gap_ids: list[str] = Field(default_factory=list)
+    # No verified input for a conditional rule is NOT proof of non-disclosure.
+    not_evaluated_fields: list[FinancialFieldCode] = Field(default_factory=list)
     applicability_reason_code: str | None = None
 
     @model_validator(mode="after")
     def validate_support(self) -> FinancialRuleFinding:
         if "FRAUD" in self.message_code.upper() or "造假" in self.message_code:
             raise ValueError("financial findings cannot assert fraud")
-        if self.status is FinancialFindingStatus.NOT_APPLICABLE:
+        if self.status in {
+            FinancialFindingStatus.NOT_APPLICABLE,
+            FinancialFindingStatus.NOT_EVALUATED,
+        }:
             if self.applicability_reason_code is None:
-                raise ValueError("NOT_APPLICABLE requires an applicability reason")
+                raise ValueError("a skipped rule requires an applicability reason")
+            if self.status is FinancialFindingStatus.NOT_EVALUATED:
+                if self.actual_value is not None or self.evidence_gap_ids:
+                    raise ValueError("NOT_EVALUATED cannot contain a value or blocking gap")
+                if not self.not_evaluated_fields:
+                    raise ValueError("NOT_EVALUATED requires the unverified field list")
         elif not self.evidence_ids and not self.evidence_gap_ids:
             raise ValueError("a financial finding requires evidence or an explicit evidence gap")
+        if self.status is not FinancialFindingStatus.NOT_EVALUATED and self.not_evaluated_fields:
+            raise ValueError("only NOT_EVALUATED may carry missing conditional fields")
+        if len(self.not_evaluated_fields) != len(set(self.not_evaluated_fields)):
+            raise ValueError("not_evaluated_fields must be unique")
         return self
 
 

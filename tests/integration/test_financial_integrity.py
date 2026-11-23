@@ -92,7 +92,9 @@ def test_identity_mismatch_is_flagged_without_accusing_fraud(state, object_store
     assert "造假" not in serialized
 
 
-def test_missing_fact_is_not_fabricated_and_creates_manual_task(state, object_store) -> None:
+def test_missing_optional_inventory_metric_is_not_fabricated_or_blocking(
+    state, object_store
+) -> None:
     request = make_financial_request(state, object_store)
     request = request.model_copy(
         update={
@@ -104,15 +106,20 @@ def test_missing_fact_is_not_fabricated_and_creates_manual_task(state, object_st
         }
     )
     pack = _service(state, object_store).run(request).pack
-    assert pack.status is RunStatus.NEEDS_INFO
-    assert pack.coverage_status is FinancialCoverageStatus.PARTIAL
+    assert pack.status is RunStatus.SUCCEEDED
+    assert pack.coverage_status is FinancialCoverageStatus.COMPLETE
     assert all(
         number.field_code is not FinancialFieldCode.INVENTORY
         for number in pack.verified_numbers
     )
-    missing = [gap for gap in pack.evidence_gaps if gap.gap_type is FinancialGapType.MISSING_FACT]
-    assert any(FinancialFieldCode.INVENTORY in gap.field_codes for gap in missing)
-    assert any(task.reason_code == "MISSING_FACT" for task in pack.manual_tasks)
+    skipped = next(
+        item for item in pack.rule_findings
+        if item.rule_id == "inventory_operating_cost_ratio"
+    )
+    assert skipped.status is FinancialFindingStatus.NOT_EVALUATED
+    assert skipped.not_evaluated_fields == [FinancialFieldCode.INVENTORY]
+    assert not pack.evidence_gaps
+    assert not pack.manual_tasks
     assert not any(
         metric.rule_id == "inventory_operating_cost_ratio"
         for metric in pack.recalculated_metrics

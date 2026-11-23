@@ -32,8 +32,8 @@ def test_financial_rule_registry_has_required_audit_metadata() -> None:
         PROJECT_ROOT / "configs" / "financial_industry_profiles.yaml"
     )
     validate_financial_config(rules, profiles)
-    assert rules.registry_version == "financial-rules-m3.2-v1"
-    assert rules.compatible_engine_version == "financial-deterministic-m3.2.0"
+    assert rules.registry_version == "financial-rules-m3.2-v2"
+    assert rules.compatible_engine_version == "financial-deterministic-m3.2.1"
     assert len(rules.rules) == 13
     for rule in rules.rules:
         assert rule.formula_version

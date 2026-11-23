@@ -19,6 +19,7 @@ class FinancialFieldMapping:
     unit: FinancialUnit
     provider_units: dict[str, FinancialUnit] = field(default_factory=dict)
     optional: bool = False
+    official_label_aliases: tuple[str, ...] = ()  # Only reviewed, exact report-row synonyms.
 
     def provider_unit(self, provider_id: str) -> FinancialUnit:
         return self.provider_units.get(provider_id, self.unit)
@@ -53,6 +54,20 @@ def load_financial_field_mappings(path: Path) -> list[FinancialFieldMapping]:
         optional = raw.get("optional", False)
         if not isinstance(optional, bool):
             raise ValueError("Financial field optional flag must be boolean")
+        official_label = raw.get("official_label")
+        if not isinstance(official_label, str) or not official_label.strip():
+            raise ValueError("Financial official label must be non-empty text")
+        raw_aliases = raw.get("official_label_aliases", [])
+        if not isinstance(raw_aliases, list) or any(
+            not isinstance(value, str) or not value.strip() or value != value.strip()
+            for value in raw_aliases
+        ):
+            raise ValueError("Official financial label aliases must be a list of non-empty labels")
+        aliases = tuple(raw_aliases)
+        if len(aliases) != len(set(aliases)) or official_label in aliases:
+            raise ValueError("Official financial label aliases must be unique and noncanonical")
+        if raw_code == FinancialFieldCode.CASH_DIVIDENDS_PAID.value and aliases:
+            raise ValueError("Cash dividend official label aliases are not supported")
         provider_fields = raw.get("provider_fields")
         if not isinstance(provider_fields, dict) or (not provider_fields and not optional):
             raise ValueError("Required financial field provider mappings must be non-empty")
@@ -73,15 +88,26 @@ def load_financial_field_mappings(path: Path) -> list[FinancialFieldMapping]:
             FinancialFieldMapping(
                 field_code=FinancialFieldCode(str(raw_code)),
                 statement_type=FinancialStatementType(str(raw["statement_type"])),
-                official_label=str(raw["official_label"]),
+                official_label=official_label,
                 provider_fields=normalized_fields,
                 unit=FinancialUnit(str(raw["unit"])),
                 provider_units=provider_units,
                 optional=optional,
+                official_label_aliases=aliases,
             )
         )
     if len({item.field_code for item in mappings}) != len(mappings):
         raise ValueError("Financial field codes must be unique")
+    # An approved alias must never collide with a different financial field in
+    # the same table, including a canonical label with whitespace differences.
+    labels: dict[tuple[FinancialStatementType, str], FinancialFieldCode] = {}
+    for mapping in mappings:
+        for label in (mapping.official_label, *mapping.official_label_aliases):
+            key = (mapping.statement_type, "".join(label.split()))
+            previous = labels.get(key)
+            if previous is not None and previous is not mapping.field_code:
+                raise ValueError("Official financial label aliases overlap across field codes")
+            labels[key] = mapping.field_code
     return mappings
 
 

@@ -528,7 +528,7 @@ def _label_pattern(label: str) -> re.Pattern[str]:
 
 def _field_label_pattern(mapping: FinancialFieldMapping) -> re.Pattern[str]:
     if mapping.field_code is FinancialFieldCode.TOTAL_EQUITY:
-        return re.compile(
+        canonical = re.compile(
             r"(?<![\u4e00-\u9fff])"
             r"所\s*有\s*者\s*权\s*益"
             r"(?:\s*[（(]\s*或\s*股\s*东\s*权"
@@ -537,22 +537,33 @@ def _field_label_pattern(mapping: FinancialFieldMapping) -> re.Pattern[str]:
             r"\s*合\s*计"
             r"(?![\u4e00-\u9fff])"
         )
-    interleaved_cash_flow_fields = {
-        FinancialFieldCode.NET_CASH_OPERATING,
-        FinancialFieldCode.NET_CASH_INVESTING,
-        FinancialFieldCode.NET_CASH_FINANCING,
-        FinancialFieldCode.EXCHANGE_EFFECT,
-        FinancialFieldCode.CASH_BEGINNING,
-        FinancialFieldCode.CASH_ENDING,
-    }
-    if mapping.field_code in interleaved_cash_flow_fields:
-        label_re = r"[\s\d,().（）−\-]*".join(
-            re.escape(character) for character in mapping.official_label
-        )
-        return re.compile(
-            rf"(?<![\u4e00-\u9fff]){label_re}(?![\u4e00-\u9fff])"
-        )
-    return _label_pattern(mapping.official_label)
+    else:
+        interleaved_cash_flow_fields = {
+            FinancialFieldCode.NET_CASH_OPERATING,
+            FinancialFieldCode.NET_CASH_INVESTING,
+            FinancialFieldCode.NET_CASH_FINANCING,
+            FinancialFieldCode.EXCHANGE_EFFECT,
+            FinancialFieldCode.CASH_BEGINNING,
+            FinancialFieldCode.CASH_ENDING,
+        }
+        if mapping.field_code in interleaved_cash_flow_fields:
+            label_re = r"[\s\d,().（）−\-]*".join(
+                re.escape(character) for character in mapping.official_label
+            )
+            canonical = re.compile(
+                rf"(?<![\u4e00-\u9fff]){label_re}(?![\u4e00-\u9fff])"
+            )
+        else:
+            canonical = _label_pattern(mapping.official_label)
+    if not mapping.official_label_aliases:
+        return canonical
+    # Literal, reviewed aliases only. Multiple matching rows remain ambiguous
+    # and are rejected by the existing exact-one-match certification gate.
+    patterns = [
+        canonical.pattern,
+        *(_label_pattern(label).pattern for label in mapping.official_label_aliases),
+    ]
+    return re.compile("|".join(f"(?:{pattern})" for pattern in patterns))
 
 
 def _cash_dividend_header_is_explicit(

@@ -35,13 +35,16 @@ Primary skill: `$financial-integrity-audit` with `$evidence-investigation` for u
    - Recalculate balance/cash identities and approved ratios from frozen evidence.
    - Apply industry-conditioned rules only when the company profile supports them.
 
-6. **Classify gaps correctly**
-   - Missing official value/document → `NEEDS_INFO`, not zero.
-   - Provider schema drift → provider/normalization diagnostic, not an accounting finding.
-   - Open official conflict → explicit unresolved conflict; do not choose the more convenient value.
+6. **Classify gaps by actual accounting obligation and report period**
+   - Missing an official report, invalid issuer/period/statement unit, unusable source lineage, a required core identity field, or a disputed official value remains `NEEDS_INFO`; it is never zero or a presumed PASS.
+   - The active versioned `configs/financial_rules.yaml` owns each rule's applicability. `conditional_missing_periods` plus optional `conditional_missing_fields` specify report-period-specific *nonblocking absences*, not which facts an LLM may fabricate. When a conditional field is not verified, emit `NOT_EVALUATED` with `not_evaluated_fields` and an explicit reason; this does **not** assert that the issuer omitted the disclosure, and is not a successful check. Verified inputs always run the original formula, including high-severity accounting discrepancies. An explicitly requested rule always requires its own inputs.
+   - Balance-sheet and cash-flow identities retain strict numerical reconciliation when all required verified inputs are available; missing a core field is not silently replaced by zero or waived. Descriptive ratios (e.g. receivables, inventory, prepayments) may remain unevaluated when they lack an optional input; this cannot suppress other factual gaps.
+   - Provider schema drift or a changed PDF layout is a provider/normalization diagnostic, not automatically company misconduct. Use `configs/financial_field_mappings.yaml` with explicit **reviewed exact official-label aliases**, including their original value/period/unit evidence, rather than writing an ever-looser regex. Aliases are distinct from fuzzy search: conflicting label matches, duplicate equivalent rows, wrong currency or scope remain unadmitted. The dividend cash-paid field cannot accept generic dividend-plus-interest aliases.
+   - An open genuine official conflict remains unresolved; do not choose the convenient value. A secondary-vendor-to-official disagreement remains a source quality review signal even when the official number is certified and used for deterministic equations.
 
 7. **Feed formal research**
-   - Only a valid FinancialIntegrity artifact can become the formal financial input of the company/Committee chain.
+   - Only an ObjectStore-verified `FinancialIntegrityEvidencePack` with `status=SUCCEEDED / coverage_status=COMPLETE` and the separately required typed accounting-quality evidence can pass the formal financial input gate. COMPLETE here means that *applicable required checks* have no unresolved blocking gaps, **not** that every optional ratio, footnote or anomaly method ran.
+   - An LLM may identify missing sources, propose a new field synonym or choose an industry-specific research method, but may not declare a source verified, change the financial period, override a real accounting discrepancy, or publish a recommendation without the existing independent research/Committee/Portfolio publication conditions.
    - Secondary hints may still support provisional investor explanation when clearly labelled and independently corroborated, but cannot masquerade as certified FinancialIntegrity.
 
 ## Output

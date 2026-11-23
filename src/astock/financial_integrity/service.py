@@ -195,7 +195,7 @@ class _GapCollector:
 
 
 class FinancialIntegrityService:
-    ENGINE_VERSION = "financial-deterministic-m3.2.0"
+    ENGINE_VERSION = "financial-deterministic-m3.2.1"
 
     def __init__(
         self,
@@ -861,6 +861,27 @@ class FinancialIntegrityService:
                     }
                 missing = [field for field in rule.required_fields if field not in values]
                 if missing:
+                    if (
+                        period_type in rule.conditional_missing_periods
+                        and rule.rule_id not in request.requested_rule_ids
+                        and (
+                            rule.conditional_missing_fields is None
+                            or set(missing).issubset(rule.conditional_missing_fields)
+                        )
+                    ):
+                        # The input was not verified; do not claim the disclosure
+                        # is absent, fabricate a value, or suppress a real conflict.
+                        findings.append(
+                            self._finding(
+                                rule, period_end, FinancialFindingStatus.NOT_EVALUATED,
+                                FinancialSeverity.INFO,
+                                "CONDITIONAL_RULE_INPUTS_NOT_VERIFIED",
+                                applicability_reason_code="CONDITIONAL_INPUTS_NOT_VERIFIED",
+                                not_evaluated_fields=missing,
+                                created_at=created_at,
+                            )
+                        )
+                        continue
                     gap = gaps.add(
                         FinancialGapType.MISSING_FACT,
                         "RULE_REQUIRED_FIELDS_UNAVAILABLE",
@@ -1869,6 +1890,7 @@ class FinancialIntegrityService:
         evidence_ids: list[str] | None = None,
         evidence_gap_ids: list[str] | None = None,
         applicability_reason_code: str | None = None,
+        not_evaluated_fields: list[FinancialFieldCode] | None = None,
         created_at: datetime,
     ) -> FinancialRuleFinding:
         identity = {
@@ -1882,6 +1904,7 @@ class FinancialIntegrityService:
             "evidence_ids": sorted(evidence_ids or []),
             "evidence_gap_ids": sorted(evidence_gap_ids or []),
             "applicability_reason_code": applicability_reason_code,
+            "not_evaluated_fields": sorted(field.value for field in not_evaluated_fields or []),
         }
         return FinancialRuleFinding(
             finding_id=f"financial-finding:{sha256_bytes(canonical_json_bytes(identity))}",
@@ -1897,6 +1920,7 @@ class FinancialIntegrityService:
             evidence_ids=sorted(evidence_ids or []),
             evidence_gap_ids=sorted(evidence_gap_ids or []),
             applicability_reason_code=applicability_reason_code,
+            not_evaluated_fields=sorted(not_evaluated_fields or [], key=lambda f: f.value),
             created_at=created_at,
         )
 

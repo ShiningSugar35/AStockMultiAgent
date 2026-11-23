@@ -31,7 +31,8 @@ AS_OF = datetime(2026, 11, 23, tzinfo=UTC)
 
 
 def _audit(state, object_store, *, values=None, period_type=FinancialPeriodType.QUARTERLY,
-           requested_rule_ids=None, evidence_grade=EvidenceGrade.PRIMARY_OFFICIAL):
+           requested_rule_ids=None, evidence_grade=EvidenceGrade.PRIMARY_OFFICIAL,
+           industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL):
     facts = make_financial_facts(
         state, object_store,
         source_suffix="period-aware:" + period_type.value,
@@ -49,13 +50,29 @@ def _audit(state, object_store, *, values=None, period_type=FinancialPeriodType.
     )
     return service.run(FinancialAuditRequest(
         company_id="000001", as_of=AS_OF,
-        industry_profile=FinancialIndustryProfile.GENERAL_INDUSTRIAL,
+        industry_profile=industry_profile,
         facts=facts, requested_rule_ids=requested_rule_ids or [],
     )).pack
 
 
 def _finding(pack, rule_id):
     return next(x for x in pack.rule_findings if x.rule_id == rule_id)
+
+
+def test_resource_mining_does_not_skip_core_accounting_equations(state, object_store) -> None:
+    complete = _audit(
+        state, object_store, industry_profile=FinancialIndustryProfile.RESOURCE_MINING,
+    )
+    assert _finding(complete, "balance_sheet_identity").status is FinancialFindingStatus.PASS
+    assert _finding(complete, "cash_flow_identity").status is FinancialFindingStatus.PASS
+
+    changed = dict(FINANCIAL_GOLDEN_VALUES)
+    changed[FinancialFieldCode.TOTAL_ASSETS] = Decimal("1200")
+    disputed = _audit(
+        state, object_store, values=changed,
+        industry_profile=FinancialIndustryProfile.RESOURCE_MINING,
+    )
+    assert _finding(disputed, "balance_sheet_identity").status is FinancialFindingStatus.FLAG
 
 
 def test_quarterly_optional_cashflow_note_missing_does_not_block_core_identity(

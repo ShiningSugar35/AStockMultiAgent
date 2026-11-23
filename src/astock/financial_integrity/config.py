@@ -9,7 +9,9 @@ import yaml
 from astock.schemas import (
     FinancialAnomalyModelRegistry,
     FinancialIndustryProfileRegistry,
+    FinancialRuleOutputType,
     FinancialRuleRegistry,
+    FinancialSeverity,
 )
 
 
@@ -31,13 +33,34 @@ def validate_financial_config(
 ) -> None:
     rule_ids = {rule.rule_id for rule in rules.rules}
     known_profiles = {profile.profile_id for profile in profiles.profiles}
+    # Core equation coverage is determined from rule metadata, not stock codes,
+    # report titles, or a hard-coded list of industry names.
+    core_identities = {
+        rule.rule_id for rule in rules.rules
+        if rule.default_enabled
+        and rule.output_type is FinancialRuleOutputType.IDENTITY
+        and rule.severity is FinancialSeverity.HIGH
+    }
     for rule in rules.rules:
         unknown_profiles = set(rule.applicable_industries) - known_profiles
         unknown_profiles.update(set(rule.excluded_industries) - known_profiles)
         if unknown_profiles:
             values = ", ".join(sorted(profile.value for profile in unknown_profiles))
             raise ValueError(f"rule {rule.rule_id} references unknown profiles: {values}")
+        if rule.rule_id in core_identities and (
+            set(rule.applicable_industries) != known_profiles or rule.excluded_industries
+        ):
+            raise ValueError(
+                f"core accounting identity {rule.rule_id} must cover all registered industries"
+            )
     for profile in profiles.profiles:
+        forbidden = sorted(set(profile.excluded_rule_ids) & core_identities)
+        if forbidden:
+            names = ", ".join(forbidden)
+            raise ValueError(
+                f"industry profile {profile.profile_id.value} cannot exclude "
+                f"core accounting identity: {names}"
+            )
         unknown_rules = sorted(set(profile.excluded_rule_ids) - rule_ids)
         if unknown_rules:
             raise ValueError(

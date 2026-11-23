@@ -487,6 +487,13 @@ class FinancialRuleDefinition(AStockModel):
             raise ValueError("required_fields must be unique")
         if len(self.conditional_missing_periods) != len(set(self.conditional_missing_periods)):
             raise ValueError("conditional_missing_periods must be unique")
+        if (
+            self.output_type is FinancialRuleOutputType.IDENTITY
+            and self.severity is FinancialSeverity.HIGH
+            and self.conditional_missing_periods
+        ):
+            # A high-severity accounting identity may not be made optional by config.
+            raise ValueError("high-severity accounting identity cannot be conditional")
         if self.conditional_missing_periods and (
             self.implementation_status is not FinancialImplementationStatus.IMPLEMENTED_M3_1
         ):

@@ -1,11 +1,11 @@
 schema_version: "1.0"
-registry_version: "financial-rules-m3.2-v2"
+registry_version: "financial-rules-m3.2-v3"
 compatible_engine_version: "financial-deterministic-m3.2.1"
 rules:
   - rule_id: balance_sheet_identity
     formula_version: "1.0.0"
     source_reference: PRC_ACCOUNTING_IDENTITY_ASSETS_LIABILITIES_EQUITY
-    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, RESOURCE_MINING, EARLY_BIOTECH, OTHER]
     excluded_industries: []
     required_fields: [TOTAL_ASSETS, TOTAL_LIABILITIES, TOTAL_EQUITY]
     minimum_periods: 1
@@ -24,7 +24,7 @@ rules:
   - rule_id: cash_flow_identity
     formula_version: "1.0.0"
     source_reference: PRC_CASH_FLOW_NET_CHANGE_IDENTITY
-    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, EARLY_BIOTECH, OTHER]
+    applicable_industries: [GENERAL_INDUSTRIAL, BANK, INSURANCE, SECURITIES, REAL_ESTATE, RESOURCE_MINING, EARLY_BIOTECH, OTHER]
     excluded_industries: []
     required_fields: [CASH_BEGINNING, NET_CASH_OPERATING, NET_CASH_INVESTING, NET_CASH_FINANCING, EXCHANGE_EFFECT, CASH_ENDING]
     minimum_periods: 1

@@ -32,7 +32,7 @@ def test_financial_rule_registry_has_required_audit_metadata() -> None:
         PROJECT_ROOT / "configs" / "financial_industry_profiles.yaml"
     )
     validate_financial_config(rules, profiles)
-    assert rules.registry_version == "financial-rules-m3.2-v2"
+    assert rules.registry_version == "financial-rules-m3.2-v3"
     assert rules.compatible_engine_version == "financial-deterministic-m3.2.1"
     assert len(rules.rules) == 13
     for rule in rules.rules:
@@ -55,6 +55,46 @@ def test_financial_rule_registry_has_required_audit_metadata() -> None:
         "sloan_accrual_ratio",
         "dupont_decomposition",
     }
+
+
+def test_high_severity_accounting_identites_apply_to_every_registered_industry() -> None:
+    rules = load_financial_rule_registry(PROJECT_ROOT / "configs" / "financial_rules.yaml")
+    profiles = load_financial_industry_profiles(
+        PROJECT_ROOT / "configs" / "financial_industry_profiles.yaml"
+    )
+    all_industries = {profile.profile_id for profile in profiles.profiles}
+    high_identities = [
+        rule for rule in rules.rules
+        if rule.default_enabled and rule.output_type.value == "IDENTITY"
+        and rule.severity is FinancialSeverity.HIGH
+    ]
+    assert len(high_identities) >= 2
+    for rule in high_identities:
+        assert set(rule.applicable_industries) == all_industries
+        assert not rule.excluded_industries
+        assert not rule.conditional_missing_periods
+
+
+def test_high_severity_identity_cannot_become_optional_through_rule_config() -> None:
+    rules = load_financial_rule_registry(PROJECT_ROOT / "configs" / "financial_rules.yaml")
+    identity = next(rule for rule in rules.rules if rule.rule_id == "balance_sheet_identity")
+    payload = identity.model_dump(mode="python")
+    payload["conditional_missing_periods"] = ["QUARTERLY"]
+    payload["conditional_missing_fields"] = ["TOTAL_EQUITY"]
+    with pytest.raises(ValidationError, match="high-severity accounting identity"):
+        type(identity).model_validate(payload)
+
+
+def test_industry_profile_cannot_silently_exclude_accounting_identity() -> None:
+    rules = load_financial_rule_registry(PROJECT_ROOT / "configs" / "financial_rules.yaml")
+    profiles = load_financial_industry_profiles(
+        PROJECT_ROOT / "configs" / "financial_industry_profiles.yaml"
+    )
+    altered = profiles.model_copy(deep=True)
+    bank = next(profile for profile in altered.profiles if profile.profile_id.value == "BANK")
+    bank.excluded_rule_ids.append("balance_sheet_identity")
+    with pytest.raises(ValueError, match="core accounting identity"):
+        validate_financial_config(rules, altered)
 
 
 def test_financial_audit_request_accepts_empty_facts_for_explicit_needs_info() -> None:

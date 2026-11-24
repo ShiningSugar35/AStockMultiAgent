@@ -40,6 +40,8 @@ from astock.financial_integrity.config import (
     validate_financial_config,
 )
 from astock.financial_integrity.repository import FinancialIntegrityRepository
+from astock.financial_integrity.standard_admission import verify_standard_admission
+from astock.financial_integrity.standard_policies import load_financial_standard_policies
 from astock.schemas import (
     EvidenceGrade,
     FactStatus,
@@ -76,6 +78,7 @@ from astock.schemas import (
     RunStatus,
     VerifiedFinancialNumber,
 )
+from astock.schemas.financial_presentation import FinancialStandardAdmission
 
 _UNIT_MULTIPLIERS: dict[FinancialUnit, Decimal] = {
     FinancialUnit.CNY: Decimal("1"),
@@ -210,6 +213,9 @@ class FinancialIntegrityService:
         self.repository = FinancialIntegrityRepository(state, object_store)
         self.evidence_repository = EvidenceRepository(state)
         self.rule_registry = load_financial_rule_registry(rule_config_path)
+        self.standard_policy_path = (
+            rule_config_path.parent / "financial_presentation_standards.yaml"
+        )
         self.profile_registry = load_financial_industry_profiles(industry_profile_path)
         validate_financial_config(self.rule_registry, self.profile_registry)
         if self.rule_registry.compatible_engine_version != self.ENGINE_VERSION:
@@ -225,7 +231,8 @@ class FinancialIntegrityService:
         profile = self._profiles.get(request.industry_profile)
         if profile is None:
             raise ValueError(f"unknown financial industry profile: {request.industry_profile}")
-        selected_rules = self._select_rules(request, profile)
+        standard_selection = self._verified_standard_admission(request)
+        selected_rules = self._select_rules(request, profile, standard_selection)
         semantic_request = self._semantic_request(request)
         request_hash = sha256_bytes(canonical_json_bytes(semantic_request))
         request_object = self.object_store.put_json(semantic_request)
@@ -347,6 +354,10 @@ class FinancialIntegrityService:
                 rule_versions={rule.rule_id: rule.formula_version for rule in selected_rules},
                 model_versions={
                     "deterministic_engine": self.ENGINE_VERSION,
+                    **({
+                        "presentation_standard": standard_selection.policy_id,
+                        "presentation_policy_registry": standard_selection.policy_registry_version,
+                    } if standard_selection is not None else {}),
                     "time_series_models": "M3_2_DECIMAL_SERIES_V1",
                     "peer_models": "M3_2_MIDRANK_PERCENTILE_V1",
                     "anomaly_engine": FinancialAnomalyEngine.ENGINE_VERSION,
@@ -482,10 +493,19 @@ class FinancialIntegrityService:
             self.repository.fail(audit_run_id, attempt_id, type(exc).__name__)
             raise
 
+    def _verified_standard_admission(
+        self, request: FinancialAuditRequest,
+    ) -> FinancialStandardAdmission | None:
+        return verify_standard_admission(
+            self.state, self.object_store, self.rule_registry,
+            self.standard_policy_path, request,
+        )
+
     def _select_rules(
         self,
         request: FinancialAuditRequest,
         profile: FinancialIndustryProfileDefinition,
+        admission: FinancialStandardAdmission | None = None,
     ) -> list[FinancialRuleDefinition]:
         unknown = sorted(set(request.requested_rule_ids) - set(self._rules))
         if unknown:
@@ -493,6 +513,12 @@ class FinancialIntegrityService:
         selected_ids = {rule.rule_id for rule in self.rule_registry.rules if rule.default_enabled}
         selected_ids.update(request.requested_rule_ids)
         selected_ids.update(profile.excluded_rule_ids)
+        if admission is not None:
+            policies = load_financial_standard_policies(
+                self.standard_policy_path, self.rule_registry,
+            )
+            policy = next(p for p in policies.profiles if p.standard_id == admission.policy_id)
+            selected_ids.update(policy.noncore_rule_ids)
         return [rule for rule in self.rule_registry.rules if rule.rule_id in selected_ids]
 
     def _semantic_request(self, request: FinancialAuditRequest) -> dict[str, Any]:
@@ -508,6 +534,8 @@ class FinancialIntegrityService:
             "industry_profile": request.industry_profile.value,
             "facts": facts,
             "requested_rule_ids": sorted(request.requested_rule_ids),
+            **({"standard_admission_id": request.standard_admission_id}
+               if request.standard_admission_id is not None else {}),
             "series_requests": [
                 item.model_dump(mode="json", exclude={"created_at"})
                 for item in sorted(request.series_requests, key=lambda value: value.request_id)

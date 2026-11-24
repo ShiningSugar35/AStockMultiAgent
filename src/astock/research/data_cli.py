@@ -15,6 +15,12 @@ def register_research_data_commands(
     app: typer.Typer, services: Callable[[], tuple[ProjectPaths, Any, Any]],
     emit: Callable[[Any], None],
 ) -> None:
+    # Keep WP-78 commands on the existing research-data CLI route. The root CLI
+    # remains byte-identical to the independently audited Serenity adapter.
+    from astock.financial_sources.presentation_cli import register_financial_presentation_commands
+
+    register_financial_presentation_commands(app, services, emit)
+
     @app.command("forecast-sample-capture")
     def forecast_sample_capture(
         company_id: str, market: str, start: str, end: str,

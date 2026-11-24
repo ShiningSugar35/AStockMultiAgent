@@ -408,6 +408,9 @@ class FinancialAuditRequest(AStockModel):
     industry_profile: FinancialIndustryProfile
     facts: list[FinancialFact] = Field(default_factory=list)
     requested_rule_ids: list[str] = Field(default_factory=list)
+    standard_admission_id: str | None = Field(
+        default=None, pattern=r"^financial-standard-admission:[0-9a-f]{64}$"
+    )
     series_requests: list[FinancialSeriesRequest] = Field(default_factory=list)
     peer_cohorts: list[FinancialPeerCohort] = Field(default_factory=list)
     anomaly_dataset: FinancialAnomalyDataset | None = None

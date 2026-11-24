@@ -43,6 +43,7 @@ Markdown 说明目标、边界和取舍；机器合同与运行证据决定实�
 | 外部能力资格 | [依赖韧性](architecture/external-dependency-resilience-v1.md)；来源配置/正式资格报告拥有准入结论 |
 | 执行工作流 | [Workflow索引](workflows/README.md)、[Skill目录](../skills/README.md)、[业务问题矩阵](acceptance/business-question-capability-matrix-v1.md) |
 | 架构决策 | [ADR索引](adr/README.md)、[文档即代码](adr/0001-documentation-as-code-with-machine-contracts.md)、[市场状态风险覆盖层](adr/0002-market-regime-as-risk-overlay.md) |
+| 财报语义与CAS30版本路由（WP-78） | [列报语义、官方认证与逐发行人生产准入](architecture/financial-presentation-semantics-v1.md)、[Financial Integrity工作流](workflows/workflow-financial-integrity.md)；LLM原文提案仍为影子，只有独立复核的正式准则采用可选现役计算规则，不自动颁发事实/荐股权限 |
 | 本轮外部实践核查 | [优化来源证据](scouting/2026-11-21-system-optimization-evidence.md)，其余 scouting 仅在具体方法/审计引用时读取 |
 
 ## 代码合同导航

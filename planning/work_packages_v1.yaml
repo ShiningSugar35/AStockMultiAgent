@@ -1,7 +1,7 @@
 schema_version: project-work-package-manifest-v1
 plan_id: investor-orchestration-and-regime-plan-v1
 status: CURRENT
-updated_on: 2026-11-22
+updated_on: 2026-11-23
 
 authority:
   machine_index: planning/work_packages_v1.yaml
@@ -23,4 +23,11 @@ work_packages:
     status: BLOCKED
     priority: P0
     owner_lane: wp69-context-capability
+    depends_on: []
+  - id: WP-78
+    order: 40
+    title: 财报语义识别与会计准则动态适配
+    status: IN_PROGRESS
+    priority: P1
+    owner_lane: wp78-financial-presentation
     depends_on: []

@@ -702,6 +702,7 @@ class FinancialSourceService:
         as_of: datetime,
         industry_profile: FinancialIndustryProfile,
         requested_rule_ids: list[str] | None = None,
+        standard_admission_id: str | None = None,
     ) -> FinancialAuditRequest:
         row = self.repository.get(
             company_id, period_end.isoformat(), period_type.value, as_of=as_of
@@ -719,6 +720,7 @@ class FinancialSourceService:
             industry_profile=industry_profile,
             facts=facts,
             requested_rule_ids=requested_rule_ids or [],
+            standard_admission_id=standard_admission_id,
         )
 
     def run_audit(
@@ -730,6 +732,7 @@ class FinancialSourceService:
         as_of: datetime,
         industry_profile: FinancialIndustryProfile,
         requested_rule_ids: list[str] | None = None,
+        standard_admission_id: str | None = None,
     ) -> Any:
         request = self.build_audit_request(
             company_id,
@@ -738,6 +741,7 @@ class FinancialSourceService:
             as_of=as_of,
             industry_profile=industry_profile,
             requested_rule_ids=requested_rule_ids,
+            standard_admission_id=standard_admission_id,
         )
         return (
             FinancialIntegrityService(

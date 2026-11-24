@@ -1,0 +1,33 @@
+schema_version: financial-presentation-standards-v1
+registry_version: financial-presentation-standards-2026-11-24-v1
+production_enabled: true
+# Activates version-aware routing ONLY for independently approved, issuer-bound official
+# adoption evidence. It NEVER enables a new arithmetic formula by itself.
+profiles:
+  - standard_id: PRC_ASBE_CAS30_2014
+    framework: PRC_ASBE
+    standard_version: CAS30-2014
+    first_possible_adoption: 2014-07-01
+    eligible_for_certified_a_share: true
+    official_reference: https://m.mof.gov.cn/zcfb/201401/t20140128_1040393.htm
+    accounting_core_rule_ids: [balance_sheet_identity, cash_flow_identity]
+    noncore_rule_ids: []
+    admission: INDEPENDENT_ISSUER_EVIDENCE
+  - standard_id: PRC_ASBE_CAS30_2026
+    framework: PRC_ASBE
+    standard_version: CAS30-2026
+    first_possible_adoption: 2026-07-24
+    eligible_for_certified_a_share: true
+    official_reference: https://app.mof.gov.cn/mofmobile2026/zcfb/202608/t20260805_3999529.htm
+    accounting_core_rule_ids: [balance_sheet_identity, cash_flow_identity]
+    noncore_rule_ids: []
+    admission: INDEPENDENT_ISSUER_EVIDENCE
+  - standard_id: IFRS_18
+    framework: IFRS
+    standard_version: IFRS18-2024
+    first_possible_adoption: 2024-04-01
+    eligible_for_certified_a_share: false
+    official_reference: https://www.ifrs.org/issued-standards/list-of-standards/ifrs-18-presentation-and-disclosure-in-financial-statements/
+    accounting_core_rule_ids: [balance_sheet_identity, cash_flow_identity]
+    noncore_rule_ids: []
+    admission: UNSUPPORTED_A_SHARE_FORMAL_SOURCE

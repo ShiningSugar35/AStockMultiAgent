@@ -1,7 +1,7 @@
 schema_version: project-work-package-manifest-v1
 plan_id: investor-orchestration-and-regime-plan-v1
 status: CURRENT
-updated_on: 2026-11-23
+updated_on: 2026-11-28
 
 authority:
   machine_index: planning/work_packages_v1.yaml
@@ -31,3 +31,52 @@ work_packages:
     priority: P1
     owner_lane: wp78-financial-presentation
     depends_on: []
+  - id: WP-87
+    order: 50
+    title: 数据集新鲜度、完整性与指标口径补强
+    status: PLANNED
+    priority: P0
+    owner_lane: wp87-dataset-metric-contracts
+    depends_on: []
+  - id: WP-82
+    order: 60
+    title: 宿主无关的证据上下文与最小返修
+    status: PLANNED
+    priority: P0
+    owner_lane: wp82-evidence-context
+    depends_on: []
+  - id: WP-81
+    order: 70
+    title: 证券交易单位正确性与有界离散实施优化
+    status: PLANNED
+    priority: P0
+    owner_lane: wp81-instrument-implementation
+    depends_on: []
+  - id: WP-84
+    order: 80
+    title: 量化试验接线审计与验证口径补全
+    status: PLANNED
+    priority: P0
+    owner_lane: wp84-validation-wiring
+    depends_on: [WP-87]
+  - id: WP-83
+    order: 90
+    title: 政策兑现与行业传导证据增强
+    status: PLANNED
+    priority: P1
+    owner_lane: wp83-policy-industry-evidence
+    depends_on: [WP-87, WP-82]
+  - id: WP-79
+    order: 100
+    title: 既有市场状态内核的流动性特征影子评估
+    status: PLANNED
+    priority: P1
+    owner_lane: wp79-liquidity-shadow
+    depends_on: [WP-87, WP-84]
+  - id: WP-80
+    order: 110
+    title: Seed持久流动性与策略分流对照
+    status: PLANNED
+    priority: P1
+    owner_lane: wp80-seed-liquidity
+    depends_on: [WP-87, WP-84]
